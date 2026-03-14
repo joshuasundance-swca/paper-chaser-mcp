@@ -52,6 +52,7 @@ class SemanticSearchResponse(ApiModel):
 
     total: int = 0
     offset: int = 0
+    next: int | None = None
     data: list[Paper] = Field(default_factory=list)
 
 
@@ -103,8 +104,16 @@ class BatchAuthorResponse(RootModel[list[AuthorProfile]]):
 
 
 class PaperListResponse(ApiModel):
-    """Provider response containing a list of papers under `data`."""
+    """Provider response containing a list of papers under `data`.
 
+    The ``offset`` and ``next`` fields mirror what Semantic Scholar returns for
+    offset-paginated sub-resource endpoints (citations, references, author papers).
+    ``next`` is the offset to pass in the following call; if absent the current
+    page is the last one.
+    """
+
+    offset: int = 0
+    next: int | None = None
     data: list[Paper] = Field(default_factory=list)
 
 

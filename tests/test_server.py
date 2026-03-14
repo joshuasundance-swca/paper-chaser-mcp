@@ -995,3 +995,213 @@ def test_snippet_result_model_preserves_nested_snippet() -> None:
     assert result.snippet.section == "Introduction"
     assert result.paper is not None
     assert result.paper.paper_id == "abc123"
+
+
+# ---------------------------------------------------------------------------
+# Pagination metadata tests
+# ---------------------------------------------------------------------------
+
+
+def test_semantic_search_response_preserves_next_field() -> None:
+    """SemanticSearchResponse must propagate the next offset returned by the API."""
+    from scholar_search_mcp.models import SemanticSearchResponse
+
+    raw = {
+        "total": 500,
+        "offset": 10,
+        "next": 20,
+        "data": [{"paperId": "p1", "title": "Paper One"}],
+    }
+    parsed = SemanticSearchResponse.model_validate(raw)
+    dumped = parsed.model_dump(by_alias=True)
+
+    assert dumped["next"] == 20
+    assert dumped["offset"] == 10
+    assert dumped["total"] == 500
+
+
+def test_semantic_search_response_next_is_none_when_absent() -> None:
+    """next must be None when the API omits it (last page)."""
+    from scholar_search_mcp.models import SemanticSearchResponse
+
+    raw = {"total": 5, "offset": 0, "data": [{"paperId": "p1"}]}
+    parsed = SemanticSearchResponse.model_validate(raw)
+
+    assert parsed.next is None
+
+
+def test_paper_list_response_preserves_offset_and_next() -> None:
+    """PaperListResponse must carry the offset and next fields from SS sub-resources."""
+    from scholar_search_mcp.models import PaperListResponse
+
+    raw = {
+        "offset": 100,
+        "next": 200,
+        "data": [{"paperId": "citing-1"}],
+    }
+    parsed = PaperListResponse.model_validate(raw)
+    dumped = parsed.model_dump(by_alias=True)
+
+    assert dumped["offset"] == 100
+    assert dumped["next"] == 200
+    assert len(dumped["data"]) == 1
+
+
+def test_paper_list_response_next_is_none_on_last_page() -> None:
+    """next must default to None when the API omits it (last page)."""
+    from scholar_search_mcp.models import PaperListResponse
+
+    raw = {"offset": 900, "data": [{"paperId": "last-paper"}]}
+    parsed = PaperListResponse.model_validate(raw)
+
+    assert parsed.next is None
+    assert parsed.offset == 900
+
+
+@pytest.mark.asyncio
+async def test_get_paper_citations_response_includes_pagination(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """get_paper_citations end-to-end: pagination fields must survive the full path."""
+
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    class PaginatingAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def request(self, **kwargs):
+            return DummyResponse(
+                status_code=200,
+                payload={
+                    "offset": 0,
+                    "next": 100,
+                    "data": [{"paperId": "citing-paper-1", "title": "Citing paper"}],
+                },
+            )
+
+    monkeypatch.setattr(
+        server.httpx, "AsyncClient", lambda timeout: PaginatingAsyncClient()
+    )
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    sc = server.SemanticScholarClient()
+    result = await sc.get_paper_citations("paper-xyz", limit=100)
+
+    assert result["offset"] == 0
+    assert result["next"] == 100
+    assert result["data"][0]["paperId"] == "citing-paper-1"
+
+
+@pytest.mark.asyncio
+async def test_get_author_papers_response_includes_pagination(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """get_author_papers end-to-end: pagination fields must survive the full path."""
+
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    class PaginatingAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def request(self, **kwargs):
+            return DummyResponse(
+                status_code=200,
+                payload={
+                    "offset": 50,
+                    "next": 100,
+                    "data": [{"paperId": "author-paper-1", "title": "Author paper"}],
+                },
+            )
+
+    monkeypatch.setattr(
+        server.httpx, "AsyncClient", lambda timeout: PaginatingAsyncClient()
+    )
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    sc = server.SemanticScholarClient()
+    result = await sc.get_author_papers("author-abc", limit=50, offset=50)
+
+    assert result["offset"] == 50
+    assert result["next"] == 100
+    assert result["data"][0]["paperId"] == "author-paper-1"
+
+
+@pytest.mark.asyncio
+async def test_search_papers_response_includes_next(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """search_papers end-to-end: the next field must be preserved in the response."""
+
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    class NextPageAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def request(self, **kwargs):
+            return DummyResponse(
+                status_code=200,
+                payload={
+                    "total": 300,
+                    "offset": 10,
+                    "next": 20,
+                    "data": [{"paperId": "s2-page2-1", "title": "Result"}],
+                },
+            )
+
+    monkeypatch.setattr(
+        server.httpx, "AsyncClient", lambda timeout: NextPageAsyncClient()
+    )
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    sc = server.SemanticScholarClient()
+    result = await sc.search_papers("transformers", limit=10, offset=10)
+
+    assert result["total"] == 300
+    assert result["offset"] == 10
+    assert result["next"] == 20
+
+
+def test_tool_descriptions_document_next_for_paginated_tools() -> None:
+    """Paginated tool descriptions must explain the next field and how to use it."""
+    from scholar_search_mcp.tools import TOOL_DESCRIPTIONS
+
+    paginated_tools = [
+        "search_papers",
+        "get_paper_citations",
+        "get_paper_references",
+        "get_paper_authors",
+        "get_author_papers",
+        "search_authors",
+    ]
+    for name in paginated_tools:
+        desc = TOOL_DESCRIPTIONS[name]
+        assert "next" in desc, (
+            f"Tool '{name}' description should mention the 'next' pagination field"
+        )
+        assert "offset" in desc, (
+            f"Tool '{name}' description should mention 'offset'"
+        )
+
+
+def test_bulk_search_description_documents_token_pagination() -> None:
+    """search_papers_bulk description must explain token-based continuation."""
+    from scholar_search_mcp.tools import TOOL_DESCRIPTIONS
+
+    desc = TOOL_DESCRIPTIONS["search_papers_bulk"]
+    assert "token" in desc
+    assert "next call" in desc
