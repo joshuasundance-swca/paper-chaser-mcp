@@ -32,7 +32,8 @@ def run_server(
         logger.info("CORE API key set (search tries CORE first with higher limits)")
     else:
         logger.info(
-            "No CORE API key; search still tries CORE first (subject to rate limits), then S2/arXiv"
+            "No CORE API key; search still tries CORE first "
+            "(subject to rate limits), then S2/arXiv"
         )
 
     async def arun() -> None:

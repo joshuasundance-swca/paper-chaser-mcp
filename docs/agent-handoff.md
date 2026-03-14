@@ -25,7 +25,13 @@ This document is the current working handoff for the fork. It is intended to giv
 
 ## Validation Commands
 
-Run these commands from the project root inside the repository virtual environment:
+From the project root, install the package with development extras and then run the validation commands inside the repository virtual environment:
+
+```bash
+pip install -e .[dev]
+```
+
+Then run:
 
 ```bash
 pre-commit run --all-files
@@ -46,14 +52,14 @@ python -m bandit -c pyproject.toml -r scholar_search_mcp
 
 - `CoreApiClient._result_to_paper()` remains the densest parsing logic and should keep getting defensive tests before behavior changes.
 - The compatibility contract in `scholar_search_mcp/server.py` is now important. Future cleanup should avoid removing re-exported symbols that tests and downstream imports still rely on.
+- `pyproject.toml` is the single source of truth for Python dependencies; no parallel runtime dependency file should be reintroduced casually.
 - Dependency version ranges remain intentionally loose.
 
 ## Suggested Next Steps
 
 1. Add more negative tests for CORE schema drift, especially malformed author shapes, journal fields, and URL containers.
-2. Decide whether `requirements.txt` should remain alongside `pyproject.toml` or be removed as a duplicated dependency source.
-3. Consider moving from per-request `httpx.AsyncClient` creation to shared clients if connection reuse becomes important.
-4. Decide whether the compatibility facade in `scholar_search_mcp/server.py` should remain broad or be narrowed with an explicit supported surface.
+2. Consider moving from per-request `httpx.AsyncClient` creation to shared clients if connection reuse becomes important.
+3. Decide whether the compatibility facade in `scholar_search_mcp/server.py` should remain broad or be narrowed with an explicit supported surface.
 
 ## Commit Hygiene
 

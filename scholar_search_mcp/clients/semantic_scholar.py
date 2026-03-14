@@ -3,7 +3,12 @@
 import logging
 from typing import Any, Optional
 
-from ..constants import API_BASE_URL, DEFAULT_AUTHOR_FIELDS, DEFAULT_PAPER_FIELDS, MAX_429_RETRIES
+from ..constants import (
+    API_BASE_URL,
+    DEFAULT_AUTHOR_FIELDS,
+    DEFAULT_PAPER_FIELDS,
+    MAX_429_RETRIES,
+)
 from ..transport import asyncio, httpx
 
 logger = logging.getLogger("scholar-search-mcp")

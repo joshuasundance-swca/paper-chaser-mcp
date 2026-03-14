@@ -8,7 +8,10 @@ def get_tool_definitions() -> list[Tool]:
     return [
         Tool(
             name="search_papers",
-            description="Search academic papers by keyword. Optional filters: year, venue.",
+            description=(
+                "Search academic papers by keyword. Optional filters: "
+                "year, venue."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -38,7 +41,10 @@ def get_tool_definitions() -> list[Tool]:
         ),
         Tool(
             name="get_paper_details",
-            description="Get paper details. Supports DOI, ArXiv ID, Semantic Scholar ID, or URL.",
+            description=(
+                "Get paper details. Supports DOI, ArXiv ID, "
+                "Semantic Scholar ID, or URL."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {

@@ -130,6 +130,8 @@ Install the package with development extras:
 pip install -e .[dev]
 ```
 
+Project dependencies are declared in `pyproject.toml`; there is no separate runtime `requirements.txt` to keep in sync.
+
 Run the local test suite:
 
 ```bash
@@ -144,7 +146,9 @@ pre-commit run --all-files
 ```
 
 The development extras now include `pytest`, `pytest-asyncio`, `ruff`, `mypy`,
-`bandit`, `black`, and `pre-commit`.
+`bandit`, `types-defusedxml`, and `pre-commit`.
+
+GitHub dependency automation is configured for both Python packages and GitHub Actions via Dependabot, with pull requests checked by the dependency review workflow.
 
 For maintainer orientation after the module split, start with `docs/agent-handoff.md`. The public MCP surface stays in `scholar_search_mcp/server.py`, while implementation now lives in `scholar_search_mcp/dispatch.py`, `scholar_search_mcp/search.py`, `scholar_search_mcp/tools.py`, `scholar_search_mcp/runtime.py`, and `scholar_search_mcp/clients/`.
 

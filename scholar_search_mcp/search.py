@@ -105,7 +105,8 @@ async def search_papers_with_fallback(
                 logger.info("search_papers: using Semantic Scholar results")
         except Exception as exc:
             logger.info(
-                "search_papers: Semantic Scholar failed (%s), falling back to next channel",
+                "search_papers: Semantic Scholar failed (%s), "
+                "falling back to next channel",
                 exc,
             )
 
