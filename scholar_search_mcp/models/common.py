@@ -59,23 +59,19 @@ class Paper(ApiModel):
 
 
 class SearchResponse(ApiModel):
-    """Unified response used by the search tool."""
+    """Unified response for the ``search_papers`` tool.
+
+    ``search_papers`` is a best-effort convenience tool that tries multiple
+    providers in order.  It does **not** support cursor-based pagination because
+    different providers use incompatible continuation mechanisms; mixing pages
+    from different backends would produce incorrect results.  For paginated
+    retrieval use ``search_papers_bulk`` (Semantic Scholar) or other
+    provider-specific tools.
+    """
 
     total: int = 0
     offset: int = 0
-    next: int | None = None
     data: list[Paper] = Field(default_factory=list)
-    pagination: Pagination = Field(
-        default_factory=lambda: Pagination(has_more=False),
-    )
-
-    @model_validator(mode="after")
-    def _compute_pagination(self) -> "SearchResponse":
-        self.pagination = Pagination(
-            has_more=self.next is not None,
-            next_cursor=str(self.next) if self.next is not None else None,
-        )
-        return self
 
 
 class SemanticSearchResponse(ApiModel):

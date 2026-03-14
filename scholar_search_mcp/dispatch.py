@@ -12,16 +12,22 @@ ToolArgBuilder = Callable[[dict[str, Any]], dict[str, Any]]
 def _cursor_to_offset(cursor: str | None) -> int | None:
     """Decode an opaque pagination cursor to an integer offset.
 
-    Returns ``None`` (start from beginning) when *cursor* is ``None`` or cannot
-    be parsed as an integer.  The cursor value is the string-encoded ``next``
-    integer returned by Semantic Scholar's offset-based endpoints.
+    Returns ``None`` when *cursor* is ``None`` (start from the beginning).
+    Raises ``ValueError`` for any non-``None`` string that is not a valid
+    integer so that stale, mis-typed, or cross-tool cursors produce an
+    explicit error instead of silently restarting pagination.
+    The cursor value is the string-encoded ``next`` integer returned by
+    Semantic Scholar's offset-based endpoints.
     """
     if cursor is None:
         return None
     try:
         return int(cursor)
     except (ValueError, TypeError):
-        return None
+        raise ValueError(
+            f"Invalid pagination cursor {cursor!r}: expected an integer string "
+            "produced by a previous response's pagination.nextCursor."
+        )
 
 
 NON_SEARCH_TOOL_HANDLERS: dict[str, tuple[str, ToolArgBuilder]] = {
@@ -182,7 +188,6 @@ async def dispatch_tool(
             year=validated_arguments.year,
             fields=validated_arguments.fields,
             venue=validated_arguments.venue,
-            offset=_cursor_to_offset(validated_arguments.cursor),
             publication_date_or_year=validated_arguments.publication_date_or_year,
             fields_of_study=validated_arguments.fields_of_study,
             publication_types=validated_arguments.publication_types,

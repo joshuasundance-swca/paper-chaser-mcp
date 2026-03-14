@@ -17,7 +17,6 @@ def _dump_search_response(response: SearchResponse) -> dict[str, Any]:
     return {
         "total": response.total,
         "offset": response.offset,
-        "pagination": response.pagination.model_dump(by_alias=True),
         "data": [
             paper.model_dump(by_alias=True, exclude_none=True, exclude_defaults=True)
             for paper in response.data
@@ -90,7 +89,6 @@ async def search_papers_with_fallback(
     core_client: Any,
     semantic_client: Any,
     arxiv_client: Any,
-    offset: Optional[int] = None,
     publication_date_or_year: Optional[str] = None,
     fields_of_study: Optional[str] = None,
     publication_types: Optional[str] = None,
@@ -99,15 +97,19 @@ async def search_papers_with_fallback(
 ) -> dict[str, Any]:
     """Execute the CORE -> Semantic Scholar -> arXiv search fallback chain.
 
-    CORE is skipped when any Semantic Scholar-only filter is requested (``offset``,
-    ``publicationDateOrYear``, ``fieldsOfStudy``, ``publicationTypes``,
+    CORE is skipped when any Semantic Scholar-only filter is requested
+    (``publicationDateOrYear``, ``fieldsOfStudy``, ``publicationTypes``,
     ``openAccessPdf``, ``minCitationCount``) because CORE does not support those
-    parameters, and silently returning page-1 un-filtered CORE results would
-    violate the caller's intent.
+    parameters, and silently returning un-filtered CORE results would violate the
+    caller's intent.
+
+    Pagination is intentionally not supported here: each provider uses a different
+    continuation mechanism and mixing pages from different backends would produce
+    incorrect results.  For paginated retrieval use ``search_papers_bulk``
+    (Semantic Scholar) or other provider-specific tools.
     """
     has_ss_only_filter = any(
         (
-            offset is not None and offset > 0,
             publication_date_or_year is not None,
             fields_of_study is not None,
             publication_types is not None,
@@ -147,7 +149,6 @@ async def search_papers_with_fallback(
                 fields=fields,
                 year=year,
                 venue=venue,
-                offset=offset,
                 publication_date_or_year=publication_date_or_year,
                 fields_of_study=fields_of_study,
                 publication_types=publication_types,
@@ -159,7 +160,6 @@ async def search_papers_with_fallback(
                 result = SearchResponse(
                     total=semantic_search.total or len(semantic_search.data),
                     offset=semantic_search.offset,
-                    next=semantic_search.next,
                     data=[
                         paper.model_copy(
                             update={"source": paper.source or "semantic_scholar"}

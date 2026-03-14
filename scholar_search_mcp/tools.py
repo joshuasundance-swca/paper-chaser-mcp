@@ -6,66 +6,48 @@ from .models import TOOL_INPUT_MODELS
 
 TOOL_DESCRIPTIONS = {
     "search_papers": (
-        "Search academic papers by keyword. Optional filters: year, venue, "
-        "publicationDateOrYear, fieldsOfStudy, publicationTypes, "
-        "openAccessPdf, minCitationCount. "
-        "The response includes a pagination object with hasMore (bool) and "
-        "nextCursor (string or null). Pass nextCursor as cursor in the next "
-        "call to retrieve the following page; if hasMore is false all results "
-        "have been retrieved."
+        "Best-effort paper search that tries CORE → Semantic Scholar → arXiv in "
+        "order. Optional filters: year, venue, publicationDateOrYear, "
+        "fieldsOfStudy, publicationTypes, openAccessPdf, minCitationCount. "
+        "Returns a single page of results (no pagination). For large paginated "
+        "retrieval use search_papers_bulk."
     ),
     "search_papers_bulk": (
-        "Bulk paper search using advanced boolean query syntax. Supports "
-        "sorting and up to 1,000 papers per call. "
-        "The response includes a pagination object with hasMore (bool) and "
-        "nextCursor (string or null). Pass nextCursor as cursor in the next "
-        "call to continue; if hasMore is false all results have been retrieved."
+        "Paginated bulk paper search (Semantic Scholar) with advanced boolean "
+        "query syntax. Supports sorting and up to 1,000 papers per call. "
+        "Example first call: {query: 'transformers', limit: 100}. "
+        "Use cursor=pagination.nextCursor from the response to fetch the next "
+        "page; hasMore signals when more results exist."
     ),
     "search_papers_match": (
         "Find the single paper whose title best matches the query string."
     ),
     "paper_autocomplete": (
-        "Return paper title completions for a partial query string. Designed for "
-        "typeahead or interactive search UI."
+        "Return paper title completions for a partial query string."
     ),
     "get_paper_details": (
         "Get paper details. Supports DOI, ArXiv ID, Semantic Scholar ID, or URL."
     ),
     "get_paper_citations": (
-        "Get list of papers that cite this paper. "
-        "The response includes a pagination object with hasMore (bool) and "
-        "nextCursor (string or null). Pass nextCursor as cursor in the next "
-        "call to retrieve the following page; if hasMore is false all results "
-        "have been retrieved."
+        "Get papers that cite this paper. "
+        "Pass cursor=pagination.nextCursor to continue; hasMore signals more pages."
     ),
     "get_paper_references": (
-        "Get list of references of this paper. "
-        "The response includes a pagination object with hasMore (bool) and "
-        "nextCursor (string or null). Pass nextCursor as cursor in the next "
-        "call to retrieve the following page; if hasMore is false all results "
-        "have been retrieved."
+        "Get references of this paper. "
+        "Pass cursor=pagination.nextCursor to continue; hasMore signals more pages."
     ),
     "get_paper_authors": (
-        "Get the list of authors for a given paper. "
-        "The response includes a pagination object with hasMore (bool) and "
-        "nextCursor (string or null). Pass nextCursor as cursor in the next "
-        "call to retrieve the following page; if hasMore is false all results "
-        "have been retrieved."
+        "Get authors of a paper. "
+        "Pass cursor=pagination.nextCursor to continue; hasMore signals more pages."
     ),
     "get_author_info": "Get author details.",
     "get_author_papers": (
-        "Get papers by author. "
-        "The response includes a pagination object with hasMore (bool) and "
-        "nextCursor (string or null). Pass nextCursor as cursor in the next "
-        "call to retrieve the following page; if hasMore is false all results "
-        "have been retrieved."
+        "Get papers by an author. "
+        "Pass cursor=pagination.nextCursor to continue; hasMore signals more pages."
     ),
     "search_authors": (
         "Search for authors by name. "
-        "The response includes a pagination object with hasMore (bool) and "
-        "nextCursor (string or null). Pass nextCursor as cursor in the next "
-        "call to retrieve the following page; if hasMore is false all results "
-        "have been retrieved."
+        "Pass cursor=pagination.nextCursor to continue; hasMore signals more pages."
     ),
     "batch_get_authors": "Get details for multiple authors at once (up to 1,000).",
     "search_snippets": (
@@ -74,8 +56,7 @@ TOOL_DESCRIPTIONS = {
     ),
     "get_paper_recommendations": "Get similar paper recommendations for a paper.",
     "get_paper_recommendations_post": (
-        "Get paper recommendations from positive and negative seed sets. More "
-        "flexible than the single-seed GET route."
+        "Get paper recommendations from positive and negative seed sets."
     ),
     "batch_get_papers": "Get details for multiple papers (up to 500).",
 }

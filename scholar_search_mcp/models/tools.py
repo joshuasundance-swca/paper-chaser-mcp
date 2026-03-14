@@ -27,13 +27,6 @@ class SearchPapersArgs(ToolArgsModel):
         default=None,
         description="Venue names to filter",
     )
-    cursor: str | None = Field(
-        default=None,
-        description=(
-            "Opaque pagination cursor from a previous response's "
-            "pagination.nextCursor. Omit or pass null to start from the beginning."
-        ),
-    )
     publication_date_or_year: str | None = Field(
         default=None,
         alias="publicationDateOrYear",
