@@ -1,8 +1,11 @@
 import json
 import xml.etree.ElementTree as ET
+from typing import Any
 
 import pytest
 
+import scholar_search_mcp
+import scholar_search_mcp.__main__ as server_main
 from scholar_search_mcp import server
 
 
@@ -41,6 +44,51 @@ class DummyAsyncClient:
         response = self._responses[self.calls]
         self.calls += 1
         return response
+
+
+class RecordingSemanticClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    async def search_papers(self, **kwargs) -> dict:
+        self.calls.append(("search_papers", kwargs))
+        return kwargs.pop(
+            "_response",
+            {"total": 1, "offset": 0, "data": [{"paperId": "semantic-1"}]},
+        )
+
+    async def get_paper_details(self, **kwargs) -> dict:
+        self.calls.append(("get_paper_details", kwargs))
+        return {"paperId": kwargs["paper_id"]}
+
+    async def get_paper_citations(self, **kwargs) -> dict:
+        self.calls.append(("get_paper_citations", kwargs))
+        return {"data": [{"paperId": kwargs["paper_id"]}]}
+
+    async def get_paper_references(self, **kwargs) -> dict:
+        self.calls.append(("get_paper_references", kwargs))
+        return {"data": [{"paperId": kwargs["paper_id"]}]}
+
+    async def get_author_info(self, **kwargs) -> dict:
+        self.calls.append(("get_author_info", kwargs))
+        return {"authorId": kwargs["author_id"]}
+
+    async def get_author_papers(self, **kwargs) -> dict:
+        self.calls.append(("get_author_papers", kwargs))
+        return {"data": [{"authorId": kwargs["author_id"]}]}
+
+    async def get_recommendations(self, **kwargs) -> dict:
+        self.calls.append(("get_recommendations", kwargs))
+        return {"recommendedPapers": [{"paperId": kwargs["paper_id"]}]}
+
+    async def batch_get_papers(self, **kwargs) -> list[dict[str, str]]:
+        self.calls.append(("batch_get_papers", kwargs))
+        return [{"paperId": paper_id} for paper_id in kwargs["paper_ids"]]
+
+
+def _payload(response: list) -> Any:
+    assert len(response) == 1
+    return json.loads(response[0].text)
 
 
 def test_arxiv_id_from_url_strips_version_suffix() -> None:
@@ -155,6 +203,156 @@ def test_core_result_to_paper_returns_none_without_required_fields() -> None:
         is None
     )
     assert client._result_to_paper({"title": "Missing url"}) is None
+
+
+@pytest.mark.asyncio
+async def test_list_tools_returns_expected_public_contract() -> None:
+    tools = await server.list_tools()
+
+    assert len(tools) == 8
+    tool_map = {tool.name: tool for tool in tools}
+    assert set(tool_map) == {
+        "search_papers",
+        "get_paper_details",
+        "get_paper_citations",
+        "get_paper_references",
+        "get_author_info",
+        "get_author_papers",
+        "get_paper_recommendations",
+        "batch_get_papers",
+    }
+    assert tool_map["search_papers"].inputSchema["required"] == ["query"]
+    assert set(tool_map["search_papers"].inputSchema["properties"]) == {
+        "query",
+        "limit",
+        "fields",
+        "year",
+        "venue",
+    }
+    assert tool_map["batch_get_papers"].inputSchema["required"] == ["paper_ids"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_name", "arguments", "expected_call", "expected_payload"),
+    [
+        (
+            "get_paper_details",
+            {"paper_id": "paper-1", "fields": ["title"]},
+            ("get_paper_details", {"paper_id": "paper-1", "fields": ["title"]}),
+            {"paperId": "paper-1"},
+        ),
+        (
+            "get_paper_citations",
+            {"paper_id": "paper-2"},
+            (
+                "get_paper_citations",
+                {"paper_id": "paper-2", "limit": 100, "fields": None},
+            ),
+            {"data": [{"paperId": "paper-2"}]},
+        ),
+        (
+            "get_paper_references",
+            {"paper_id": "paper-3", "limit": 12, "fields": ["authors"]},
+            (
+                "get_paper_references",
+                {"paper_id": "paper-3", "limit": 12, "fields": ["authors"]},
+            ),
+            {"data": [{"paperId": "paper-3"}]},
+        ),
+        (
+            "get_author_info",
+            {"author_id": "author-1"},
+            ("get_author_info", {"author_id": "author-1", "fields": None}),
+            {"authorId": "author-1"},
+        ),
+        (
+            "get_author_papers",
+            {"author_id": "author-2", "limit": 25},
+            (
+                "get_author_papers",
+                {"author_id": "author-2", "limit": 25, "fields": None},
+            ),
+            {"data": [{"authorId": "author-2"}]},
+        ),
+        (
+            "get_paper_recommendations",
+            {"paper_id": "paper-4"},
+            (
+                "get_recommendations",
+                {"paper_id": "paper-4", "limit": 10, "fields": None},
+            ),
+            {"recommendedPapers": [{"paperId": "paper-4"}]},
+        ),
+        (
+            "batch_get_papers",
+            {"paper_ids": ["p1", "p2"], "fields": ["title"]},
+            (
+                "batch_get_papers",
+                {"paper_ids": ["p1", "p2"], "fields": ["title"]},
+            ),
+            [{"paperId": "p1"}, {"paperId": "p2"}],
+        ),
+    ],
+)
+async def test_call_tool_routes_non_search_tools(
+    monkeypatch: pytest.MonkeyPatch,
+    tool_name: str,
+    arguments: dict,
+    expected_call: tuple[str, dict],
+    expected_payload: dict | list,
+) -> None:
+    fake_client = RecordingSemanticClient()
+    monkeypatch.setattr(server, "client", fake_client)
+
+    payload = _payload(await server.call_tool(tool_name, arguments))
+
+    assert fake_client.calls == [expected_call]
+    assert payload == expected_payload
+
+
+@pytest.mark.asyncio
+async def test_search_papers_forwards_clamped_semantic_arguments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_client = RecordingSemanticClient()
+
+    monkeypatch.setattr(server, "enable_core", False)
+    monkeypatch.setattr(server, "enable_semantic_scholar", True)
+    monkeypatch.setattr(server, "enable_arxiv", False)
+    monkeypatch.setattr(server, "client", fake_client)
+
+    payload = _payload(
+        await server.call_tool(
+            "search_papers",
+            {
+                "query": "graph neural networks",
+                "limit": 999,
+                "fields": ["title", "year"],
+                "year": "2022",
+                "venue": ["NeurIPS"],
+            },
+        )
+    )
+
+    assert fake_client.calls == [
+        (
+            "search_papers",
+            {
+                "query": "graph neural networks",
+                "limit": 100,
+                "fields": ["title", "year"],
+                "year": "2022",
+                "venue": ["NeurIPS"],
+            },
+        )
+    ]
+    assert payload["data"][0]["source"] == "semantic_scholar"
+
+
+def test_package_entrypoints_stay_aligned() -> None:
+    assert scholar_search_mcp.main is server.main
+    assert server_main.main is server.main
 
 
 def test_merge_search_results_deduplicates_arxiv_entries() -> None:

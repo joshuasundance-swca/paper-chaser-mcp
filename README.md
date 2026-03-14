@@ -146,6 +146,8 @@ pre-commit run --all-files
 The development extras now include `pytest`, `pytest-asyncio`, `ruff`, `mypy`,
 `bandit`, `black`, and `pre-commit`.
 
+For maintainer orientation after the module split, start with `docs/agent-handoff.md`. The public MCP surface stays in `scholar_search_mcp/server.py`, while implementation now lives in `scholar_search_mcp/dispatch.py`, `scholar_search_mcp/search.py`, `scholar_search_mcp/tools.py`, `scholar_search_mcp/runtime.py`, and `scholar_search_mcp/clients/`.
+
 ## Guides
 
 - [Agent Handoff](docs/agent-handoff.md) - current repo status, validation commands, and next recommended work for follow-on agents.
