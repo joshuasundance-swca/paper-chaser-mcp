@@ -126,11 +126,28 @@ class SnippetPaper(ApiModel):
     url: str | None = None
 
 
+class SnippetObject(ApiModel):
+    """The `snippet` sub-object returned by ``/snippet/search``.
+
+    Per the API guide the snippet result wraps snippet text inside a nested
+    ``snippet`` object that can include ``text``, ``snippetKind``, ``section``,
+    and annotation data.  Modelling it as a sub-object (instead of hoisting
+    ``text`` to the top level) preserves all returned fields.
+    """
+
+    text: str | None = None
+    snippet_kind: str | None = Field(default=None, alias="snippetKind")
+    section: str | None = None
+
+
 class SnippetResult(ApiModel):
-    """One result from `/snippet/search`."""
+    """One result from ``/snippet/search``.
+
+    The API returns ``{"snippet": {...}, "score": ..., "paper": {...}}``.
+    """
 
     score: float | None = None
-    text: str | None = None
+    snippet: SnippetObject | None = None
     paper: SnippetPaper | None = None
 
 

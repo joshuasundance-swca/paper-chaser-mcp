@@ -524,7 +524,10 @@ async def test_semantic_scholar_request_retries_after_429(
 
     assert result == {"data": [{"paperId": "ok"}]}
     assert dummy_client.calls == 2
-    assert sleep_calls == [1.0]
+    assert 1.0 in sleep_calls  # the 429 back-off delay was honored
+    # _pace() fires before every attempt, so there must be a second sleep
+    # for the pacing guard on the retry.
+    assert len(sleep_calls) == 2
 
 
 @pytest.mark.asyncio
@@ -803,3 +806,192 @@ async def test_search_papers_exposes_new_filter_params(
     assert kwargs["publication_date_or_year"] == "2020:2023"
     assert kwargs["fields_of_study"] == "Computer Science"
     assert kwargs["min_citation_count"] == 5
+
+
+# ---------------------------------------------------------------------------
+# Tests addressing review issues
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_search_papers_skips_core_when_ss_only_filter_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CORE must be bypassed whenever a Semantic Scholar-only filter is used.
+
+    Regression guard for the issue where CORE would be called first and return
+    page-1 un-filtered results despite the caller requesting offset or a
+    Semantic Scholar-specific filter.
+    """
+
+    class SpyCoreClient:
+        def __init__(self) -> None:
+            self.called = False
+
+        async def search(self, **kwargs) -> dict:
+            self.called = True
+            return {
+                "total": 1,
+                "entries": [
+                    {
+                        "paperId": "core-1",
+                        "title": "Core result",
+                        "url": "https://example.com",
+                    }
+                ],
+            }
+
+    class SuccessSemanticClient:
+        async def search_papers(self, **kwargs) -> dict:
+            return {
+                "total": 1,
+                "offset": kwargs.get("offset", 0),
+                "data": [{"paperId": "s2-page2"}],
+            }
+
+    spy_core = SpyCoreClient()
+
+    monkeypatch.setattr(server, "enable_core", True)
+    monkeypatch.setattr(server, "enable_semantic_scholar", True)
+    monkeypatch.setattr(server, "enable_arxiv", False)
+    monkeypatch.setattr(server, "core_client", spy_core)
+    monkeypatch.setattr(server, "client", SuccessSemanticClient())
+
+    # Use offset > 0, which is a Semantic Scholar-only capability.
+    response = await server.call_tool(
+        "search_papers",
+        {"query": "neural nets", "offset": 10},
+    )
+    payload = json.loads(response[0].text)
+
+    assert not spy_core.called, "CORE should have been skipped for offset-based query"
+    assert payload["data"][0]["paperId"] == "s2-page2"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "extra_filter",
+    [
+        {"publicationDateOrYear": "2020:2023"},
+        {"fieldsOfStudy": "Computer Science"},
+        {"publicationTypes": "JournalArticle"},
+        {"openAccessPdf": True},
+        {"minCitationCount": 10},
+        {"offset": 20},
+    ],
+)
+async def test_search_papers_ss_filters_always_bypass_core(
+    monkeypatch: pytest.MonkeyPatch,
+    extra_filter: dict,
+) -> None:
+    """Each individual SS-only filter independently causes CORE to be bypassed."""
+
+    class SpyCoreClient:
+        def __init__(self) -> None:
+            self.called = False
+
+        async def search(self, **kwargs) -> dict:
+            self.called = True
+            return {"total": 0, "entries": []}
+
+    class SemanticClient:
+        async def search_papers(self, **kwargs) -> dict:
+            return {"total": 0, "offset": 0, "data": []}
+
+    spy_core = SpyCoreClient()
+    monkeypatch.setattr(server, "enable_core", True)
+    monkeypatch.setattr(server, "enable_semantic_scholar", True)
+    monkeypatch.setattr(server, "enable_arxiv", False)
+    monkeypatch.setattr(server, "core_client", spy_core)
+    monkeypatch.setattr(server, "client", SemanticClient())
+
+    await server.call_tool("search_papers", {"query": "test", **extra_filter})
+
+    assert not spy_core.called, (
+        f"CORE should be skipped when filter {extra_filter} is set"
+    )
+
+
+@pytest.mark.asyncio
+async def test_semantic_scholar_request_repaces_on_429_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pacing guard must fire before every attempt, including 429 retries."""
+    responses = [
+        DummyResponse(status_code=429, headers={"Retry-After": "0"}),
+        DummyResponse(status_code=200, payload={"data": [{"paperId": "ok"}]}),
+    ]
+    dummy_client = DummyAsyncClient(responses)
+    pace_calls: list[str] = []
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleep_calls.append(delay)
+
+    original_pace = server.SemanticScholarClient._pace
+
+    async def recording_pace(self: server.SemanticScholarClient) -> None:
+        pace_calls.append("pace")
+        await original_pace(self)
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: dummy_client)
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(server.SemanticScholarClient, "_pace", recording_pace)
+
+    sc = server.SemanticScholarClient(api_key="test-key")
+    result = await sc._request("GET", "paper/search", params={"query": "test"})
+
+    assert result == {"data": [{"paperId": "ok"}]}
+    # _pace must be called once for the initial attempt and once for the retry.
+    assert len(pace_calls) == 2, (
+        f"Expected 2 _pace calls (initial + retry), got {len(pace_calls)}"
+    )
+    # The 429 back-off sleep and the pacing sleep for the retry must both fire.
+    assert 1.0 in sleep_calls, "429 back-off sleep was not honoured"
+    assert len(sleep_calls) == 2, (
+        f"Expected 2 sleep calls (429 back-off + pacing), got {len(sleep_calls)}"
+    )
+
+
+def test_batch_get_papers_rejects_oversized_list() -> None:
+    """batch_get_papers must raise a validation error for lists > 500."""
+    from pydantic import ValidationError
+
+    from scholar_search_mcp.models.tools import BatchGetPapersArgs
+
+    with pytest.raises(ValidationError, match="500"):
+        BatchGetPapersArgs(paper_ids=[f"p{i}" for i in range(501)])
+
+
+def test_batch_get_authors_rejects_oversized_list() -> None:
+    """batch_get_authors must raise a validation error for lists > 1000."""
+    from pydantic import ValidationError
+
+    from scholar_search_mcp.models.tools import BatchGetAuthorsArgs
+
+    with pytest.raises(ValidationError, match="1000"):
+        BatchGetAuthorsArgs(author_ids=[f"a{i}" for i in range(1001)])
+
+
+def test_snippet_result_model_preserves_nested_snippet() -> None:
+    """SnippetResult must keep the snippet sub-object, not hoist text to the top."""
+    from scholar_search_mcp.models import SnippetResult
+
+    raw = {
+        "score": 0.95,
+        "snippet": {
+            "text": "deep learning has transformed",
+            "snippetKind": "result",
+            "section": "Introduction",
+        },
+        "paper": {"paperId": "abc123", "title": "DL Survey"},
+    }
+    result = SnippetResult.model_validate(raw)
+
+    assert result.score == 0.95
+    assert result.snippet is not None
+    assert result.snippet.text == "deep learning has transformed"
+    assert result.snippet.snippet_kind == "result"
+    assert result.snippet.section == "Introduction"
+    assert result.paper is not None
+    assert result.paper.paper_id == "abc123"

@@ -219,6 +219,15 @@ class BatchGetAuthorsArgs(ToolArgsModel):
     author_ids: list[str] = Field(description="List of author IDs (up to 1000)")
     fields: list[str] | None = Field(default=None, description="Fields to return")
 
+    @field_validator("author_ids")
+    @classmethod
+    def validate_author_ids(cls, value: list[str]) -> list[str]:
+        if len(value) > 1000:
+            raise ValueError(
+                f"Maximum 1000 author IDs per batch request, got {len(value)}"
+            )
+        return value
+
 
 class SnippetSearchArgs(ToolArgsModel):
     query: str = Field(description="Text snippet to search for")
@@ -286,8 +295,17 @@ class PostRecommendationsArgs(ToolArgsModel):
 
 
 class BatchGetPapersArgs(ToolArgsModel):
-    paper_ids: list[str] = Field(description="List of paper IDs")
+    paper_ids: list[str] = Field(description="List of paper IDs (up to 500)")
     fields: list[str] | None = Field(default=None, description="Fields to return")
+
+    @field_validator("paper_ids")
+    @classmethod
+    def validate_paper_ids(cls, value: list[str]) -> list[str]:
+        if len(value) > 500:
+            raise ValueError(
+                f"Maximum 500 paper IDs per batch request, got {len(value)}"
+            )
+        return value
 
 
 TOOL_INPUT_MODELS: dict[str, type[ToolArgsModel]] = {

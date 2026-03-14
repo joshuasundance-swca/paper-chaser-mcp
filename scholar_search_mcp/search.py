@@ -96,9 +96,27 @@ async def search_papers_with_fallback(
     open_access_pdf: Optional[bool] = None,
     min_citation_count: Optional[int] = None,
 ) -> dict[str, Any]:
-    """Execute the CORE -> Semantic Scholar -> arXiv search fallback chain."""
+    """Execute the CORE -> Semantic Scholar -> arXiv search fallback chain.
+
+    CORE is skipped when any Semantic Scholar-only filter is requested (``offset``,
+    ``publicationDateOrYear``, ``fieldsOfStudy``, ``publicationTypes``,
+    ``openAccessPdf``, ``minCitationCount``) because CORE does not support those
+    parameters, and silently returning page-1 un-filtered CORE results would
+    violate the caller's intent.
+    """
+    has_ss_only_filter = any(
+        (
+            offset is not None and offset > 0,
+            publication_date_or_year is not None,
+            fields_of_study is not None,
+            publication_types is not None,
+            open_access_pdf is not None,
+            min_citation_count is not None,
+        )
+    )
+
     result: SearchResponse | None = None
-    if enable_core:
+    if enable_core and not has_ss_only_filter:
         try:
             core_response = await core_client.search(
                 query=query,

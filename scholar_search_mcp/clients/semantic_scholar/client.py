@@ -74,15 +74,19 @@ class SemanticScholarClient:
         max_retries: int = 4,
         base_delay: float = 1.0,
     ) -> Any:
-        """Send HTTP request with rate pacing and exponential backoff on 429."""
+        """Send HTTP request with rate pacing and exponential backoff on 429.
+
+        ``_pace()`` is called before *every* attempt (including retries after
+        a 429) so that the shared cross-endpoint rate limit is honoured even
+        when a previous attempt was rejected.
+        """
         resolved_base = base_url if base_url is not None else API_BASE_URL
         url = f"{resolved_base}/{endpoint}"
         total_attempts = max(max_retries, MAX_429_RETRIES) + 1
 
-        await self._pace()
-
         async with httpx.AsyncClient(timeout=30.0) as client:
             for attempt in range(total_attempts):
+                await self._pace()
                 response = await client.request(
                     method=method,
                     url=url,
