@@ -27,9 +27,12 @@ class SearchPapersArgs(ToolArgsModel):
         default=None,
         description="Venue names to filter",
     )
-    offset: int | None = Field(
+    cursor: str | None = Field(
         default=None,
-        description="Pagination offset (default 0)",
+        description=(
+            "Opaque pagination cursor from a previous response's "
+            "pagination.nextCursor. Omit or pass null to start from the beginning."
+        ),
     )
     publication_date_or_year: str | None = Field(
         default=None,
@@ -73,9 +76,12 @@ class BulkSearchPapersArgs(ToolArgsModel):
         )
     )
     fields: list[str] | None = Field(default=None, description="Fields to return")
-    token: str | None = Field(
+    cursor: str | None = Field(
         default=None,
-        description="Continuation token from a previous bulk search response",
+        description=(
+            "Opaque pagination cursor from a previous response's "
+            "pagination.nextCursor. Omit or pass null to start a new search."
+        ),
     )
     sort: str | None = Field(
         default=None,
@@ -142,9 +148,12 @@ class PaperListArgs(PaperLookupArgs):
         default=100,
         description="Max results (default 100, max 1000)",
     )
-    offset: int | None = Field(
+    cursor: str | None = Field(
         default=None,
-        description="Pagination offset (default 0)",
+        description=(
+            "Opaque pagination cursor from a previous response's "
+            "pagination.nextCursor. Omit or pass null to start from the beginning."
+        ),
     )
 
     @field_validator("limit", mode="before")
@@ -160,9 +169,12 @@ class PaperAuthorsArgs(ToolArgsModel):
         default=100,
         description="Max results (default 100, max 1000)",
     )
-    offset: int | None = Field(
+    cursor: str | None = Field(
         default=None,
-        description="Pagination offset (default 0)",
+        description=(
+            "Opaque pagination cursor from a previous response's "
+            "pagination.nextCursor. Omit or pass null to start from the beginning."
+        ),
     )
 
     @field_validator("limit", mode="before")
@@ -181,9 +193,12 @@ class AuthorPapersArgs(AuthorInfoArgs):
         default=100,
         description="Max results (default 100, max 1000)",
     )
-    offset: int | None = Field(
+    cursor: str | None = Field(
         default=None,
-        description="Pagination offset (default 0)",
+        description=(
+            "Opaque pagination cursor from a previous response's "
+            "pagination.nextCursor. Omit or pass null to start from the beginning."
+        ),
     )
     publication_date_or_year: str | None = Field(
         default=None,
@@ -204,9 +219,12 @@ class AuthorSearchArgs(ToolArgsModel):
         default=10,
         description="Max results (default 10, max 1000)",
     )
-    offset: int | None = Field(
+    cursor: str | None = Field(
         default=None,
-        description="Pagination offset (default 0)",
+        description=(
+            "Opaque pagination cursor from a previous response's "
+            "pagination.nextCursor. Omit or pass null to start from the beginning."
+        ),
     )
 
     @field_validator("limit", mode="before")

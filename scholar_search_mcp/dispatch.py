@@ -9,13 +9,28 @@ from .search import search_papers_with_fallback
 ToolArgBuilder = Callable[[dict[str, Any]], dict[str, Any]]
 
 
+def _cursor_to_offset(cursor: str | None) -> int | None:
+    """Decode an opaque pagination cursor to an integer offset.
+
+    Returns ``None`` (start from beginning) when *cursor* is ``None`` or cannot
+    be parsed as an integer.  The cursor value is the string-encoded ``next``
+    integer returned by Semantic Scholar's offset-based endpoints.
+    """
+    if cursor is None:
+        return None
+    try:
+        return int(cursor)
+    except (ValueError, TypeError):
+        return None
+
+
 NON_SEARCH_TOOL_HANDLERS: dict[str, tuple[str, ToolArgBuilder]] = {
     "search_papers_bulk": (
         "search_papers_bulk",
         lambda a: {
             "query": a["query"],
             "fields": a.get("fields"),
-            "token": a.get("token"),
+            "token": a.get("cursor"),
             "sort": a.get("sort"),
             "limit": a.get("limit", 100),
             "year": a.get("year"),
@@ -50,7 +65,7 @@ NON_SEARCH_TOOL_HANDLERS: dict[str, tuple[str, ToolArgBuilder]] = {
             "paper_id": a["paper_id"],
             "limit": a.get("limit", 100),
             "fields": a.get("fields"),
-            "offset": a.get("offset"),
+            "offset": _cursor_to_offset(a.get("cursor")),
         },
     ),
     "get_paper_references": (
@@ -59,7 +74,7 @@ NON_SEARCH_TOOL_HANDLERS: dict[str, tuple[str, ToolArgBuilder]] = {
             "paper_id": a["paper_id"],
             "limit": a.get("limit", 100),
             "fields": a.get("fields"),
-            "offset": a.get("offset"),
+            "offset": _cursor_to_offset(a.get("cursor")),
         },
     ),
     "get_paper_authors": (
@@ -68,7 +83,7 @@ NON_SEARCH_TOOL_HANDLERS: dict[str, tuple[str, ToolArgBuilder]] = {
             "paper_id": a["paper_id"],
             "limit": a.get("limit", 100),
             "fields": a.get("fields"),
-            "offset": a.get("offset"),
+            "offset": _cursor_to_offset(a.get("cursor")),
         },
     ),
     "get_author_info": (
@@ -84,7 +99,7 @@ NON_SEARCH_TOOL_HANDLERS: dict[str, tuple[str, ToolArgBuilder]] = {
             "author_id": a["author_id"],
             "limit": a.get("limit", 100),
             "fields": a.get("fields"),
-            "offset": a.get("offset"),
+            "offset": _cursor_to_offset(a.get("cursor")),
             "publication_date_or_year": a.get("publication_date_or_year"),
         },
     ),
@@ -94,7 +109,7 @@ NON_SEARCH_TOOL_HANDLERS: dict[str, tuple[str, ToolArgBuilder]] = {
             "query": a["query"],
             "limit": a.get("limit", 10),
             "fields": a.get("fields"),
-            "offset": a.get("offset"),
+            "offset": _cursor_to_offset(a.get("cursor")),
         },
     ),
     "batch_get_authors": (
@@ -167,7 +182,7 @@ async def dispatch_tool(
             year=validated_arguments.year,
             fields=validated_arguments.fields,
             venue=validated_arguments.venue,
-            offset=validated_arguments.offset,
+            offset=_cursor_to_offset(validated_arguments.cursor),
             publication_date_or_year=validated_arguments.publication_date_or_year,
             fields_of_study=validated_arguments.fields_of_study,
             publication_types=validated_arguments.publication_types,

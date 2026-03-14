@@ -2,13 +2,32 @@
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel
+from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
 
 class ApiModel(BaseModel):
     """Base model that preserves unknown provider fields during normalization."""
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+
+class Pagination(BaseModel):
+    """Unified pagination envelope present on every list response.
+
+    ``has_more`` tells the caller whether additional pages exist.
+    ``next_cursor`` is an opaque token to pass as ``cursor`` in the next tool
+    call to retrieve the following page.  Its internal encoding is
+    provider-specific and may change between releases; treat it as a black box.
+
+    ``extra="ignore"`` is intentional: the parent model's ``model_validator``
+    always recomputes this object from typed fields (``next`` / ``token``), so
+    any leftover camelCase keys that arrive when a dict is round-tripped through
+    ``dump_jsonable`` are safely discarded without raising.
+    """
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    has_more: bool = Field(default=False, serialization_alias="hasMore")
+    next_cursor: str | None = Field(default=None, serialization_alias="nextCursor")
 
 
 class Author(ApiModel):
@@ -44,7 +63,19 @@ class SearchResponse(ApiModel):
 
     total: int = 0
     offset: int = 0
+    next: int | None = None
     data: list[Paper] = Field(default_factory=list)
+    pagination: Pagination = Field(
+        default_factory=lambda: Pagination(has_more=False),
+    )
+
+    @model_validator(mode="after")
+    def _compute_pagination(self) -> "SearchResponse":
+        self.pagination = Pagination(
+            has_more=self.next is not None,
+            next_cursor=str(self.next) if self.next is not None else None,
+        )
+        return self
 
 
 class SemanticSearchResponse(ApiModel):
@@ -54,6 +85,17 @@ class SemanticSearchResponse(ApiModel):
     offset: int = 0
     next: int | None = None
     data: list[Paper] = Field(default_factory=list)
+    pagination: Pagination = Field(
+        default_factory=lambda: Pagination(has_more=False),
+    )
+
+    @model_validator(mode="after")
+    def _compute_pagination(self) -> "SemanticSearchResponse":
+        self.pagination = Pagination(
+            has_more=self.next is not None,
+            next_cursor=str(self.next) if self.next is not None else None,
+        )
+        return self
 
 
 class BulkSearchResponse(ApiModel):
@@ -62,6 +104,17 @@ class BulkSearchResponse(ApiModel):
     total: int = 0
     token: str | None = None
     data: list[Paper] = Field(default_factory=list)
+    pagination: Pagination = Field(
+        default_factory=lambda: Pagination(has_more=False),
+    )
+
+    @model_validator(mode="after")
+    def _compute_pagination(self) -> "BulkSearchResponse":
+        self.pagination = Pagination(
+            has_more=self.token is not None,
+            next_cursor=self.token,
+        )
+        return self
 
 
 class CoreSearchResponse(ApiModel):
@@ -97,6 +150,17 @@ class AuthorListResponse(ApiModel):
     offset: int = 0
     next: int | None = None
     data: list[AuthorProfile] = Field(default_factory=list)
+    pagination: Pagination = Field(
+        default_factory=lambda: Pagination(has_more=False),
+    )
+
+    @model_validator(mode="after")
+    def _compute_pagination(self) -> "AuthorListResponse":
+        self.pagination = Pagination(
+            has_more=self.next is not None,
+            next_cursor=str(self.next) if self.next is not None else None,
+        )
+        return self
 
 
 class BatchAuthorResponse(RootModel[list[AuthorProfile]]):
@@ -115,6 +179,17 @@ class PaperListResponse(ApiModel):
     offset: int = 0
     next: int | None = None
     data: list[Paper] = Field(default_factory=list)
+    pagination: Pagination = Field(
+        default_factory=lambda: Pagination(has_more=False),
+    )
+
+    @model_validator(mode="after")
+    def _compute_pagination(self) -> "PaperListResponse":
+        self.pagination = Pagination(
+            has_more=self.next is not None,
+            next_cursor=str(self.next) if self.next is not None else None,
+        )
+        return self
 
 
 class PaperAuthorListResponse(ApiModel):
@@ -124,6 +199,17 @@ class PaperAuthorListResponse(ApiModel):
     offset: int = 0
     next: int | None = None
     data: list[AuthorProfile] = Field(default_factory=list)
+    pagination: Pagination = Field(
+        default_factory=lambda: Pagination(has_more=False),
+    )
+
+    @model_validator(mode="after")
+    def _compute_pagination(self) -> "PaperAuthorListResponse":
+        self.pagination = Pagination(
+            has_more=self.next is not None,
+            next_cursor=str(self.next) if self.next is not None else None,
+        )
+        return self
 
 
 class SnippetPaper(ApiModel):

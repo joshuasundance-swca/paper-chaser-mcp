@@ -154,6 +154,7 @@ def test_core_response_to_merged_preserves_total_and_limit() -> None:
     assert result == {
         "total": 10,
         "offset": 0,
+        "pagination": {"hasMore": False, "nextCursor": None},
         "data": [{"paperId": "1", "title": "One", "url": "https://example.com/1"}],
     }
 
@@ -268,7 +269,7 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "fields",
         "year",
         "venue",
-        "offset",
+        "cursor",
         "publicationDateOrYear",
         "fieldsOfStudy",
         "publicationTypes",
@@ -760,7 +761,7 @@ async def test_call_tool_routes_new_tools(
 
 
 @pytest.mark.asyncio
-async def test_search_papers_bulk_passes_token_and_sort(
+async def test_search_papers_bulk_passes_cursor_as_token_and_sort(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_client = RecordingSemanticClient()
@@ -768,12 +769,13 @@ async def test_search_papers_bulk_passes_token_and_sort(
 
     await server.call_tool(
         "search_papers_bulk",
-        {"query": "language models", "token": "tok-abc", "sort": "citationCount"},
+        {"query": "language models", "cursor": "tok-abc", "sort": "citationCount"},
     )
 
     assert len(fake_client.calls) == 1
     method, kwargs = fake_client.calls[0]
     assert method == "search_papers_bulk"
+    # cursor is decoded to token in the SS client call
     assert kwargs["token"] == "tok-abc"
     assert kwargs["sort"] == "citationCount"
 
@@ -792,7 +794,7 @@ async def test_search_papers_exposes_new_filter_params(
         "search_papers",
         {
             "query": "ml",
-            "offset": 10,
+            "cursor": "10",
             "publicationDateOrYear": "2020:2023",
             "fieldsOfStudy": "Computer Science",
             "minCitationCount": 5,
@@ -802,6 +804,7 @@ async def test_search_papers_exposes_new_filter_params(
     assert len(fake_client.calls) == 1
     method, kwargs = fake_client.calls[0]
     assert method == "search_papers"
+    # cursor "10" is decoded to offset 10 before reaching the SS client
     assert kwargs["offset"] == 10
     assert kwargs["publication_date_or_year"] == "2020:2023"
     assert kwargs["fields_of_study"] == "Computer Science"
@@ -857,14 +860,14 @@ async def test_search_papers_skips_core_when_ss_only_filter_set(
     monkeypatch.setattr(server, "core_client", spy_core)
     monkeypatch.setattr(server, "client", SuccessSemanticClient())
 
-    # Use offset > 0, which is a Semantic Scholar-only capability.
+    # Use cursor (decoded to offset > 0), which is a Semantic Scholar-only capability.
     response = await server.call_tool(
         "search_papers",
-        {"query": "neural nets", "offset": 10},
+        {"query": "neural nets", "cursor": "10"},
     )
     payload = json.loads(response[0].text)
 
-    assert not spy_core.called, "CORE should have been skipped for offset-based query"
+    assert not spy_core.called, "CORE should have been skipped for cursor-based query"
     assert payload["data"][0]["paperId"] == "s2-page2"
 
 
@@ -877,7 +880,7 @@ async def test_search_papers_skips_core_when_ss_only_filter_set(
         {"publicationTypes": "JournalArticle"},
         {"openAccessPdf": True},
         {"minCitationCount": 10},
-        {"offset": 20},
+        {"cursor": "20"},
     ],
 )
 async def test_search_papers_ss_filters_always_bypass_core(
@@ -1003,7 +1006,7 @@ def test_snippet_result_model_preserves_nested_snippet() -> None:
 
 
 def test_semantic_search_response_preserves_next_field() -> None:
-    """SemanticSearchResponse must propagate the next offset returned by the API."""
+    """SemanticSearchResponse must propagate the next offset and pagination envelope."""
     from scholar_search_mcp.models import SemanticSearchResponse
 
     raw = {
@@ -1018,20 +1021,23 @@ def test_semantic_search_response_preserves_next_field() -> None:
     assert dumped["next"] == 20
     assert dumped["offset"] == 10
     assert dumped["total"] == 500
+    assert dumped["pagination"] == {"hasMore": True, "nextCursor": "20"}
 
 
 def test_semantic_search_response_next_is_none_when_absent() -> None:
-    """next must be None when the API omits it (last page)."""
+    """next must be None and hasMore False when the API omits it (last page)."""
     from scholar_search_mcp.models import SemanticSearchResponse
 
     raw = {"total": 5, "offset": 0, "data": [{"paperId": "p1"}]}
     parsed = SemanticSearchResponse.model_validate(raw)
 
     assert parsed.next is None
+    assert parsed.pagination.has_more is False
+    assert parsed.pagination.next_cursor is None
 
 
 def test_paper_list_response_preserves_offset_and_next() -> None:
-    """PaperListResponse must carry the offset and next fields from SS sub-resources."""
+    """PaperListResponse must carry offset, next, and the pagination envelope."""
     from scholar_search_mcp.models import PaperListResponse
 
     raw = {
@@ -1045,10 +1051,11 @@ def test_paper_list_response_preserves_offset_and_next() -> None:
     assert dumped["offset"] == 100
     assert dumped["next"] == 200
     assert len(dumped["data"]) == 1
+    assert dumped["pagination"] == {"hasMore": True, "nextCursor": "200"}
 
 
 def test_paper_list_response_next_is_none_on_last_page() -> None:
-    """next must default to None when the API omits it (last page)."""
+    """next must default to None and hasMore False on the last page."""
     from scholar_search_mcp.models import PaperListResponse
 
     raw = {"offset": 900, "data": [{"paperId": "last-paper"}]}
@@ -1056,6 +1063,7 @@ def test_paper_list_response_next_is_none_on_last_page() -> None:
 
     assert parsed.next is None
     assert parsed.offset == 900
+    assert parsed.pagination.has_more is False
 
 
 @pytest.mark.asyncio
@@ -1095,6 +1103,9 @@ async def test_get_paper_citations_response_includes_pagination(
     assert result["offset"] == 0
     assert result["next"] == 100
     assert result["data"][0]["paperId"] == "citing-paper-1"
+    # Uniform pagination envelope must be present
+    assert result["pagination"]["hasMore"] is True
+    assert result["pagination"]["nextCursor"] == "100"
 
 
 @pytest.mark.asyncio
@@ -1134,6 +1145,9 @@ async def test_get_author_papers_response_includes_pagination(
     assert result["offset"] == 50
     assert result["next"] == 100
     assert result["data"][0]["paperId"] == "author-paper-1"
+    # Uniform pagination envelope must be present
+    assert result["pagination"]["hasMore"] is True
+    assert result["pagination"]["nextCursor"] == "100"
 
 
 @pytest.mark.asyncio
@@ -1174,14 +1188,18 @@ async def test_search_papers_response_includes_next(
     assert result["total"] == 300
     assert result["offset"] == 10
     assert result["next"] == 20
+    # Uniform pagination envelope must be present
+    assert result["pagination"]["hasMore"] is True
+    assert result["pagination"]["nextCursor"] == "20"
 
 
-def test_tool_descriptions_document_next_for_paginated_tools() -> None:
-    """Paginated tool descriptions must explain the next field and how to use it."""
+def test_tool_descriptions_document_cursor_pagination_uniformly() -> None:
+    """All paginated tool descriptions must explain the cursor / pagination pattern."""
     from scholar_search_mcp.tools import TOOL_DESCRIPTIONS
 
     paginated_tools = [
         "search_papers",
+        "search_papers_bulk",
         "get_paper_citations",
         "get_paper_references",
         "get_paper_authors",
@@ -1190,18 +1208,195 @@ def test_tool_descriptions_document_next_for_paginated_tools() -> None:
     ]
     for name in paginated_tools:
         desc = TOOL_DESCRIPTIONS[name]
-        assert "next" in desc, (
-            f"Tool '{name}' description should mention the 'next' pagination field"
+        assert "pagination" in desc, (
+            f"Tool '{name}' description should mention the 'pagination' object"
         )
-        assert "offset" in desc, (
-            f"Tool '{name}' description should mention 'offset'"
+        assert "cursor" in desc, (
+            f"Tool '{name}' description should mention the 'cursor' parameter"
+        )
+        assert "hasMore" in desc or "nextCursor" in desc, (
+            f"Tool '{name}' description should mention hasMore or nextCursor"
         )
 
 
-def test_bulk_search_description_documents_token_pagination() -> None:
-    """search_papers_bulk description must explain token-based continuation."""
-    from scholar_search_mcp.tools import TOOL_DESCRIPTIONS
+# ---------------------------------------------------------------------------
+# Unified cursor abstraction tests
+# ---------------------------------------------------------------------------
 
-    desc = TOOL_DESCRIPTIONS["search_papers_bulk"]
-    assert "token" in desc
-    assert "next call" in desc
+
+def test_pagination_model_camelcase_serialization() -> None:
+    """Pagination fields must serialize to camelCase for API consistency."""
+    from scholar_search_mcp.models import Pagination
+
+    p = Pagination(has_more=True, next_cursor="42")
+    dumped = p.model_dump(by_alias=True)
+
+    assert dumped == {"hasMore": True, "nextCursor": "42"}
+
+
+def test_pagination_model_has_more_false_when_no_cursor() -> None:
+    """Pagination with no cursor must have hasMore=False."""
+    from scholar_search_mcp.models import Pagination
+
+    p = Pagination(has_more=False)
+    assert p.has_more is False
+    assert p.next_cursor is None
+
+
+def test_bulk_search_response_pagination_uses_token() -> None:
+    """BulkSearchResponse pagination must encode the token as nextCursor."""
+    from scholar_search_mcp.models import BulkSearchResponse
+
+    raw = {"total": 5000, "token": "tok-abc123", "data": []}
+    parsed = BulkSearchResponse.model_validate(raw)
+
+    assert parsed.pagination.has_more is True
+    assert parsed.pagination.next_cursor == "tok-abc123"
+
+
+def test_bulk_search_response_no_token_means_last_page() -> None:
+    """BulkSearchResponse without a token means hasMore=False."""
+    from scholar_search_mcp.models import BulkSearchResponse
+
+    raw = {"total": 100, "data": [{"paperId": "p1"}]}
+    parsed = BulkSearchResponse.model_validate(raw)
+
+    assert parsed.pagination.has_more is False
+    assert parsed.pagination.next_cursor is None
+
+
+def test_cursor_to_offset_decoding() -> None:
+    """_cursor_to_offset must decode string cursors to integers."""
+    from scholar_search_mcp.dispatch import _cursor_to_offset
+
+    assert _cursor_to_offset("42") == 42
+    assert _cursor_to_offset("0") == 0
+    assert _cursor_to_offset(None) is None
+    assert _cursor_to_offset("not-a-number") is None
+
+
+@pytest.mark.asyncio
+async def test_search_papers_cursor_decoded_to_offset_for_ss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """cursor='20' must arrive at the SS client as offset=20."""
+    fake_client = RecordingSemanticClient()
+    monkeypatch.setattr(server, "enable_core", False)
+    monkeypatch.setattr(server, "enable_semantic_scholar", True)
+    monkeypatch.setattr(server, "enable_arxiv", False)
+    monkeypatch.setattr(server, "client", fake_client)
+
+    await server.call_tool("search_papers", {"query": "ml", "cursor": "20"})
+
+    assert len(fake_client.calls) == 1
+    method, kwargs = fake_client.calls[0]
+    assert method == "search_papers"
+    assert kwargs["offset"] == 20
+
+
+@pytest.mark.asyncio
+async def test_bulk_search_cursor_decoded_to_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """cursor='tok-xyz' must arrive at the SS client as token='tok-xyz'."""
+    fake_client = RecordingSemanticClient()
+    monkeypatch.setattr(server, "client", fake_client)
+
+    await server.call_tool(
+        "search_papers_bulk",
+        {"query": "deep learning", "cursor": "tok-xyz"},
+    )
+
+    assert len(fake_client.calls) == 1
+    method, kwargs = fake_client.calls[0]
+    assert method == "search_papers_bulk"
+    assert kwargs["token"] == "tok-xyz"
+
+
+@pytest.mark.asyncio
+async def test_get_paper_citations_cursor_decoded_to_offset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """cursor='100' in get_paper_citations must reach the SS client as offset=100."""
+    fake_client = RecordingSemanticClient()
+    monkeypatch.setattr(server, "client", fake_client)
+
+    await server.call_tool(
+        "get_paper_citations",
+        {"paper_id": "paper-1", "cursor": "100"},
+    )
+
+    assert len(fake_client.calls) == 1
+    method, kwargs = fake_client.calls[0]
+    assert method == "get_paper_citations"
+    assert kwargs["offset"] == 100
+
+
+@pytest.mark.asyncio
+async def test_search_papers_response_includes_pagination_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """search_papers must include pagination envelope when SS returns more results."""
+
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    class PagedAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def request(self, **kwargs):
+            return DummyResponse(
+                status_code=200,
+                payload={
+                    "total": 500,
+                    "offset": 0,
+                    "next": 10,
+                    "data": [{"paperId": "s2-1", "title": "First page"}],
+                },
+            )
+
+    monkeypatch.setattr(
+        server.httpx, "AsyncClient", lambda timeout: PagedAsyncClient()
+    )
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(server, "enable_core", False)
+    monkeypatch.setattr(server, "enable_semantic_scholar", True)
+    monkeypatch.setattr(server, "enable_arxiv", False)
+    monkeypatch.setattr(server, "client", server.SemanticScholarClient())
+
+    response = await server.call_tool("search_papers", {"query": "transformers"})
+    payload = json.loads(response[0].text)
+
+    assert payload["pagination"]["hasMore"] is True
+    assert payload["pagination"]["nextCursor"] == "10"
+
+
+@pytest.mark.asyncio
+async def test_search_papers_pagination_has_more_false_for_core_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """search_papers via CORE must return hasMore=False (CORE has no cursor support)."""
+
+    class CoreClient:
+        async def search(self, **kwargs) -> dict:
+            return {
+                "total": 3,
+                "entries": [
+                    {"paperId": "core-1", "title": "C1", "url": "https://x.com/1"},
+                ],
+            }
+
+    monkeypatch.setattr(server, "enable_core", True)
+    monkeypatch.setattr(server, "enable_semantic_scholar", False)
+    monkeypatch.setattr(server, "enable_arxiv", False)
+    monkeypatch.setattr(server, "core_client", CoreClient())
+
+    response = await server.call_tool("search_papers", {"query": "test"})
+    payload = json.loads(response[0].text)
+
+    assert payload["pagination"]["hasMore"] is False
+    assert payload["pagination"]["nextCursor"] is None

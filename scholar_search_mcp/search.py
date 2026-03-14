@@ -17,6 +17,7 @@ def _dump_search_response(response: SearchResponse) -> dict[str, Any]:
     return {
         "total": response.total,
         "offset": response.offset,
+        "pagination": response.pagination.model_dump(by_alias=True),
         "data": [
             paper.model_dump(by_alias=True, exclude_none=True, exclude_defaults=True)
             for paper in response.data
@@ -158,6 +159,7 @@ async def search_papers_with_fallback(
                 result = SearchResponse(
                     total=semantic_search.total or len(semantic_search.data),
                     offset=semantic_search.offset,
+                    next=semantic_search.next,
                     data=[
                         paper.model_copy(
                             update={"source": paper.source or "semantic_scholar"}
