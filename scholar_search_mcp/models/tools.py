@@ -72,8 +72,8 @@ class BulkSearchPapersArgs(ToolArgsModel):
     cursor: str | None = Field(
         default=None,
         description=(
-            "Opaque pagination cursor from a previous response's "
-            "pagination.nextCursor. Omit or pass null to start a new search."
+            "Continuation cursor from a previous response's pagination.nextCursor "
+            "(a provider-issued token for bulk search). Omit to start a new search."
         ),
     )
     sort: str | None = Field(
@@ -144,8 +144,9 @@ class PaperListArgs(PaperLookupArgs):
     cursor: str | None = Field(
         default=None,
         description=(
-            "Opaque pagination cursor from a previous response's "
-            "pagination.nextCursor. Omit or pass null to start from the beginning."
+            "Continuation cursor from a previous response's "
+            "pagination.nextCursor (a stringified integer offset). "
+            "Omit to start from the beginning."
         ),
     )
 
@@ -165,8 +166,9 @@ class PaperAuthorsArgs(ToolArgsModel):
     cursor: str | None = Field(
         default=None,
         description=(
-            "Opaque pagination cursor from a previous response's "
-            "pagination.nextCursor. Omit or pass null to start from the beginning."
+            "Continuation cursor from a previous response's "
+            "pagination.nextCursor (a stringified integer offset). "
+            "Omit to start from the beginning."
         ),
     )
 
@@ -189,8 +191,9 @@ class AuthorPapersArgs(AuthorInfoArgs):
     cursor: str | None = Field(
         default=None,
         description=(
-            "Opaque pagination cursor from a previous response's "
-            "pagination.nextCursor. Omit or pass null to start from the beginning."
+            "Continuation cursor from a previous response's "
+            "pagination.nextCursor (a stringified integer offset). "
+            "Omit to start from the beginning."
         ),
     )
     publication_date_or_year: str | None = Field(
@@ -215,8 +218,9 @@ class AuthorSearchArgs(ToolArgsModel):
     cursor: str | None = Field(
         default=None,
         description=(
-            "Opaque pagination cursor from a previous response's "
-            "pagination.nextCursor. Omit or pass null to start from the beginning."
+            "Continuation cursor from a previous response's "
+            "pagination.nextCursor (a stringified integer offset). "
+            "Omit to start from the beginning."
         ),
     )
 

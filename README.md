@@ -6,13 +6,13 @@ The package now uses Pydantic for tool inputs, settings, and normalized provider
 
 ## Features
 
-- **Search papers** – Keyword search with **fallback chain**: tries **CORE API** first (no key required; set `CORE_API_KEY` for higher limits), then **Semantic Scholar**, then **arXiv**; optional year, venue, and advanced filters (venue/fieldsOfStudy/publicationTypes/openAccessPdf/minCitationCount apply to Semantic Scholar only)
-- **Bulk paper search** – Boolean-syntax search via `/paper/search/bulk` with token-based pagination (up to 1,000 papers/call)
+- **Search papers** – Keyword search with **fallback chain**: tries **CORE API** first (no key required; set `CORE_API_KEY` for higher limits), then **Semantic Scholar**, then **arXiv**; optional year, venue, and advanced filters (fieldsOfStudy/publicationTypes/openAccessPdf/minCitationCount apply to Semantic Scholar only). Returns a single best-effort page — not paginated.
+- **Bulk paper search** – Boolean-syntax search via `/paper/search/bulk` with cursor-based pagination (up to 1,000 papers/call); pass `pagination.nextCursor` as `cursor` for subsequent pages
 - **Best-match / autocomplete** – Single best title match and typeahead completions
 - **Paper details** – Full metadata (title, authors, abstract, citations, etc.)
-- **Citations & references** – Papers that cite or are cited by a given paper
-- **Paper authors** – Author listing for a specific paper with offset pagination
-- **Author search & batch** – Search authors by name, or fetch up to 1,000 author profiles in one call
+- **Citations & references** – Papers that cite or are cited by a given paper; pass `pagination.nextCursor` as `cursor` for subsequent pages
+- **Paper authors** – Author listing for a specific paper; pass `pagination.nextCursor` as `cursor` for subsequent pages
+- **Author search & batch** – Search authors by name with cursor pagination, or fetch up to 1,000 author profiles in one call
 - **Snippet search** – Quote-like text snippet search returning snippet text, paper metadata, and score
 - **Batch lookup** – Fetch up to 500 papers in one call
 - **Recommendations** – Similar papers via single-seed GET or multi-seed POST
@@ -112,17 +112,17 @@ Example: CORE and arXiv only (skip Semantic Scholar):
 
 | Tool                             | Description                                                                                              |
 | -------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `search_papers`                  | Search by query; optional `limit`, `fields`, `year`, `venue`, `offset`, `publicationDateOrYear`, `fieldsOfStudy`, `publicationTypes`, `openAccessPdf`, `minCitationCount` |
-| `search_papers_bulk`             | Bulk paper search with advanced boolean query syntax and token-based pagination (up to 1,000 papers/call) |
+| `search_papers`                  | Single-page best-effort search (CORE → Semantic Scholar → arXiv). Optional filters: `limit`, `fields`, `year`, `venue`, `publicationDateOrYear`, `fieldsOfStudy`, `publicationTypes`, `openAccessPdf`, `minCitationCount`. No pagination — for paginated retrieval use `search_papers_bulk`. |
+| `search_papers_bulk`             | Paginated bulk paper search (Semantic Scholar) with advanced boolean query syntax (up to 1,000 papers/call). Pass `cursor=pagination.nextCursor` for subsequent pages; `pagination.hasMore` signals more results. |
 | `search_papers_match`            | Find the single paper whose title best matches the query string                                          |
 | `paper_autocomplete`             | Return paper title completions for a partial query (typeahead)                                           |
 | `get_paper_details`              | Get one paper by ID (DOI, ArXiv ID, S2 ID, or URL)                                                      |
-| `get_paper_citations`            | Papers that cite the given paper; supports `offset` pagination                                           |
-| `get_paper_references`           | References of the given paper; supports `offset` pagination                                              |
-| `get_paper_authors`              | Authors of the given paper; supports `offset` pagination                                                 |
+| `get_paper_citations`            | Papers that cite the given paper; pass `cursor=pagination.nextCursor` for subsequent pages               |
+| `get_paper_references`           | References of the given paper; pass `cursor=pagination.nextCursor` for subsequent pages                  |
+| `get_paper_authors`              | Authors of the given paper; pass `cursor=pagination.nextCursor` for subsequent pages                     |
 | `get_author_info`                | Author profile by ID                                                                                     |
-| `get_author_papers`              | Papers by author; supports `offset` and `publicationDateOrYear`                                         |
-| `search_authors`                 | Search for authors by name; supports `offset` pagination                                                 |
+| `get_author_papers`              | Papers by author; pass `cursor=pagination.nextCursor` for subsequent pages; supports `publicationDateOrYear` |
+| `search_authors`                 | Search for authors by name; pass `cursor=pagination.nextCursor` for subsequent pages                     |
 | `batch_get_authors`              | Details for up to 1,000 author IDs in one call                                                           |
 | `search_snippets`                | Search for matching text snippets across papers; returns snippet text, paper metadata, and score         |
 | `get_paper_recommendations`      | Similar papers for a given paper (GET single-seed)                                                       |
