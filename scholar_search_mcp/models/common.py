@@ -92,11 +92,19 @@ class SearchResponse(ApiModel):
     from different backends would produce incorrect results.  For paginated
     retrieval use ``search_papers_bulk`` (Semantic Scholar) or other
     provider-specific tools.
+
+    ``broker_metadata`` is populated by the broker when results are returned;
+    it is ``None`` only for internal helper paths that do not go through the
+    full broker fallback chain.
     """
 
     total: int = 0
     offset: int = 0
     data: list[Paper] = Field(default_factory=list)
+    broker_metadata: BrokerMetadata | None = Field(
+        default=None,
+        serialization_alias="brokerMetadata",
+    )
 
 
 class SemanticSearchResponse(ApiModel):

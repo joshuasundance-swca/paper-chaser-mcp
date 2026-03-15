@@ -14,10 +14,7 @@ from .models import (
 logger = logging.getLogger("scholar-search-mcp")
 
 
-def _dump_search_response(
-    response: SearchResponse,
-    broker_metadata: BrokerMetadata | None = None,
-) -> dict[str, Any]:
+def _dump_search_response(response: SearchResponse) -> dict[str, Any]:
     result: dict[str, Any] = {
         "total": response.total,
         "offset": response.offset,
@@ -26,8 +23,8 @@ def _dump_search_response(
             for paper in response.data
         ],
     }
-    if broker_metadata is not None:
-        result["brokerMetadata"] = broker_metadata.model_dump(by_alias=True)
+    if response.broker_metadata is not None:
+        result["brokerMetadata"] = response.broker_metadata.model_dump(by_alias=True)
     return result
 
 
@@ -126,7 +123,6 @@ async def search_papers_with_fallback(
     )
 
     result: SearchResponse | None = None
-    provider_used: str | None = None
     if enable_core and not has_ss_only_filter:
         try:
             core_response = await core_client.search(
@@ -141,8 +137,8 @@ async def search_papers_with_fallback(
                     total=core_search.total or len(core_search.entries),
                     offset=0,
                     data=core_search.entries[:limit],
+                    broker_metadata=BrokerMetadata(provider_used="core"),
                 )
-                provider_used = "core"
                 logger.info("search_papers: using CORE API results")
         except Exception as exc:
             logger.info(
@@ -175,8 +171,8 @@ async def search_papers_with_fallback(
                         )
                         for paper in semantic_search.data[:limit]
                     ],
+                    broker_metadata=BrokerMetadata(provider_used="semantic_scholar"),
                 )
-                provider_used = "semantic_scholar"
                 logger.info("search_papers: using Semantic Scholar results")
         except Exception as exc:
             logger.info(
@@ -197,20 +193,14 @@ async def search_papers_with_fallback(
                 total=arxiv_search.total_results,
                 offset=0,
                 data=arxiv_search.entries[:limit],
+                broker_metadata=BrokerMetadata(provider_used="arxiv"),
             )
-            provider_used = "arxiv"
             logger.info("search_papers: using arXiv results")
 
     if result is None:
-        broker_metadata = BrokerMetadata(
-            mode="brokered_single_page",
-            provider_used="none",
-            continuation_supported=False,
+        return _dump_search_response(
+            SearchResponse(
+                broker_metadata=BrokerMetadata(provider_used="none"),
+            )
         )
-        return _dump_search_response(SearchResponse(), broker_metadata=broker_metadata)
-    broker_metadata = BrokerMetadata(
-        mode="brokered_single_page",
-        provider_used=provider_used or "none",
-        continuation_supported=False,
-    )
-    return _dump_search_response(result, broker_metadata=broker_metadata)
+    return _dump_search_response(result)
