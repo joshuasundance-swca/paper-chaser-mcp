@@ -156,4 +156,26 @@ async def test_fastmcp_resource_and_prompt_support_agent_onboarding() -> None:
     )
     assert any(prompt.name == "plan_scholar_search" for prompt in prompts)
     assert "search_papers_bulk" in guide[0].text
+    assert "Quick literature discovery" in guide[0].text
+    assert "cited-by expansion" in guide[0].text
+    assert "Known-item lookup" in guide[0].text
+    assert "search_snippets" in guide[0].text
     assert "pagination.nextCursor" in plan.messages[0].content.text
+    assert "known-item lookup" in plan.messages[0].content.text
+    assert "get_paper_citations for cited-by expansion" in plan.messages[0].content.text
+    assert "search_snippets only as a special-purpose recovery tool" in (
+        plan.messages[0].content.text
+    )
+
+
+def test_primary_workflow_tool_descriptions_encode_intended_use() -> None:
+    from scholar_search_mcp.tools import TOOL_DESCRIPTIONS
+
+    assert "quick literature discovery" in TOOL_DESCRIPTIONS["search_papers"]
+    assert "exhaustive retrieval" in TOOL_DESCRIPTIONS["search_papers_bulk"]
+    assert "Known-item lookup" in TOOL_DESCRIPTIONS["search_papers_match"]
+    assert "Known-item lookup" in TOOL_DESCRIPTIONS["get_paper_details"]
+    assert "cite this paper (cited by)" in TOOL_DESCRIPTIONS["get_paper_citations"]
+    assert "references this paper cites" in TOOL_DESCRIPTIONS["get_paper_references"]
+    assert "author-centric workflow" in TOOL_DESCRIPTIONS["get_author_papers"].lower()
+    assert "special-purpose recovery tool" in TOOL_DESCRIPTIONS["search_snippets"].lower()
