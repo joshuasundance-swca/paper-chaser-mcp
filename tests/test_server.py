@@ -1710,3 +1710,246 @@ def test_encode_then_decode_roundtrip() -> None:
         version=1,
         context_hash=None,
     )
+
+
+# ---------------------------------------------------------------------------
+# Full stream-binding validation tests (provider, version, context_hash)
+# ---------------------------------------------------------------------------
+
+
+def test_cursor_to_offset_rejects_wrong_provider() -> None:
+    """_cursor_to_offset must reject a cursor with an unexpected provider."""
+    import base64
+    import json
+
+    from scholar_search_mcp.dispatch import _cursor_to_offset
+
+    payload = {
+        "tool": "get_paper_citations",
+        "provider": "arxiv",  # wrong provider
+        "offset": 100,
+        "version": 1,
+    }
+    encoded = base64.urlsafe_b64encode(
+        json.dumps(payload).encode()
+    ).decode("ascii")
+
+    with pytest.raises(ValueError, match="INVALID_CURSOR"):
+        _cursor_to_offset(encoded, "get_paper_citations")
+
+
+def test_cursor_to_offset_rejects_unsupported_version() -> None:
+    """_cursor_to_offset must reject a cursor with an unsupported schema version."""
+    import base64
+    import json
+
+    from scholar_search_mcp.dispatch import _cursor_to_offset
+
+    payload = {
+        "tool": "get_paper_citations",
+        "provider": "semantic_scholar",
+        "offset": 100,
+        "version": 99,  # future unsupported version
+    }
+    encoded = base64.urlsafe_b64encode(
+        json.dumps(payload).encode()
+    ).decode("ascii")
+
+    with pytest.raises(ValueError, match="INVALID_CURSOR"):
+        _cursor_to_offset(encoded, "get_paper_citations")
+
+
+def test_cursor_to_offset_rejects_context_hash_mismatch() -> None:
+    """_cursor_to_offset must reject a cursor whose context_hash doesn't match."""
+    from scholar_search_mcp.dispatch import _cursor_to_offset
+    from scholar_search_mcp.utils.cursor import cursor_from_offset
+
+    # Cursor was issued for paper-1
+    encoded = cursor_from_offset(
+        "get_paper_citations",
+        100,
+        context_hash="aabbccdd11223344",
+    )
+    # Current request is for paper-2 (different context hash)
+    with pytest.raises(ValueError, match="INVALID_CURSOR"):
+        _cursor_to_offset(
+            encoded,
+            "get_paper_citations",
+            context_hash="deadbeeffeedface",
+        )
+
+
+def test_cursor_to_offset_accepts_matching_context_hash() -> None:
+    """_cursor_to_offset must accept a cursor with a matching context_hash."""
+    from scholar_search_mcp.dispatch import _cursor_to_offset
+    from scholar_search_mcp.utils.cursor import cursor_from_offset
+
+    ctx = "aabbccdd11223344"
+    encoded = cursor_from_offset("search_authors", 50, context_hash=ctx)
+    result = _cursor_to_offset(encoded, "search_authors", context_hash=ctx)
+    assert result == 50
+
+
+def test_cursor_to_offset_accepts_cursor_without_context_hash() -> None:
+    """A cursor without a context_hash must be accepted even when context is provided.
+
+    This covers structured cursors that predate context-hash binding (forward-compat).
+    """
+    from scholar_search_mcp.dispatch import _cursor_to_offset
+    from scholar_search_mcp.utils.cursor import cursor_from_offset
+
+    # Cursor with no context_hash (context_hash=None)
+    encoded = cursor_from_offset("get_author_papers", 200, context_hash=None)
+    result = _cursor_to_offset(
+        encoded,
+        "get_author_papers",
+        context_hash="some-current-hash",
+    )
+    assert result == 200
+
+
+def test_compute_context_hash_is_deterministic() -> None:
+    """compute_context_hash must return the same value for the same arguments."""
+    from scholar_search_mcp.utils.cursor import compute_context_hash
+
+    h1 = compute_context_hash("get_paper_citations", {"paper_id": "abc123"})
+    h2 = compute_context_hash("get_paper_citations", {"paper_id": "abc123"})
+    assert h1 == h2
+    assert h1 is not None
+    assert len(h1) == 16
+
+
+def test_compute_context_hash_differs_for_different_args() -> None:
+    """compute_context_hash must differ when the stream-defining argument changes."""
+    from scholar_search_mcp.utils.cursor import compute_context_hash
+
+    h1 = compute_context_hash("get_paper_citations", {"paper_id": "paper-1"})
+    h2 = compute_context_hash("get_paper_citations", {"paper_id": "paper-2"})
+    assert h1 != h2
+
+
+def test_compute_context_hash_ignores_cursor_and_limit() -> None:
+    """compute_context_hash must produce the same hash regardless of cursor/limit."""
+    from scholar_search_mcp.utils.cursor import compute_context_hash
+
+    base = {"paper_id": "p1"}
+    with_cursor = {"paper_id": "p1", "cursor": "100", "limit": 50}
+    assert compute_context_hash("get_paper_citations", base) == compute_context_hash(
+        "get_paper_citations", with_cursor
+    )
+
+
+def test_cursor_from_offset_embeds_context_hash() -> None:
+    """cursor_from_offset must embed the context_hash when provided."""
+    import base64
+    import json
+
+    from scholar_search_mcp.utils.cursor import cursor_from_offset
+
+    ctx = "deadbeeffeedface"
+    encoded = cursor_from_offset("search_authors", 30, context_hash=ctx)
+    payload = json.loads(base64.urlsafe_b64decode(encoded))
+    assert payload["context_hash"] == ctx
+
+
+def test_cursor_from_offset_omits_context_hash_when_none() -> None:
+    """cursor_from_offset must omit context_hash key when not provided."""
+    import base64
+    import json
+
+    from scholar_search_mcp.utils.cursor import cursor_from_offset
+
+    encoded = cursor_from_offset("search_authors", 30)
+    payload = json.loads(base64.urlsafe_b64decode(encoded))
+    assert "context_hash" not in payload
+
+
+@pytest.mark.asyncio
+async def test_context_hash_mismatch_rejects_cursor_on_different_paper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cursor issued for paper-1 must be rejected when used for paper-2."""
+    import json
+
+    class PaginatedSemanticClient(RecordingSemanticClient):
+        async def get_paper_citations(self, **kwargs):
+            self.calls.append(("get_paper_citations", kwargs))
+            from scholar_search_mcp.models.common import (
+                PaperListResponse,
+                dump_jsonable,
+            )
+
+            return dump_jsonable(
+                PaperListResponse.model_validate(
+                    {
+                        "data": [{"paperId": kwargs["paper_id"]}],
+                        "offset": 0,
+                        "next": 100,
+                    }
+                )
+            )
+
+    fake_client = PaginatedSemanticClient()
+    monkeypatch.setattr(server, "client", fake_client)
+
+    # Get cursor for paper-1
+    result1 = await server.call_tool("get_paper_citations", {"paper_id": "paper-1"})
+    page1 = json.loads(result1[0].text)
+    cursor = page1["pagination"]["nextCursor"]
+
+    # Use that cursor for paper-2 – must fail due to context_hash mismatch
+    with pytest.raises(ValueError, match="INVALID_CURSOR"):
+        await server.call_tool(
+            "get_paper_citations",
+            {"paper_id": "paper-2", "cursor": cursor},
+        )
+
+
+@pytest.mark.asyncio
+async def test_context_hash_same_paper_accepts_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cursor issued for paper-1 must be accepted when reused for paper-1."""
+    import json
+
+    call_count = 0
+
+    class PaginatedSemanticClient(RecordingSemanticClient):
+        async def get_paper_citations(self, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            self.calls.append(("get_paper_citations", kwargs))
+            from scholar_search_mcp.models.common import (
+                PaperListResponse,
+                dump_jsonable,
+            )
+
+            if call_count == 1:
+                return dump_jsonable(
+                    PaperListResponse.model_validate(
+                        {"data": [{"paperId": "p1"}], "offset": 0, "next": 100}
+                    )
+                )
+            return dump_jsonable(
+                PaperListResponse.model_validate(
+                    {"data": [{"paperId": "p2"}], "offset": 100, "next": None}
+                )
+            )
+
+    fake_client = PaginatedSemanticClient()
+    monkeypatch.setattr(server, "client", fake_client)
+
+    # Page 1
+    result1 = await server.call_tool("get_paper_citations", {"paper_id": "paper-1"})
+    page1 = json.loads(result1[0].text)
+    cursor = page1["pagination"]["nextCursor"]
+
+    # Page 2 – same paper, same context, must succeed
+    result2 = await server.call_tool(
+        "get_paper_citations",
+        {"paper_id": "paper-1", "cursor": cursor},
+    )
+    page2 = json.loads(result2[0].text)
+    assert page2["pagination"]["hasMore"] is False
+    _, second_kwargs = fake_client.calls[1]
+    assert second_kwargs["offset"] == 100
