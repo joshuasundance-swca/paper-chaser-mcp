@@ -92,6 +92,26 @@ def test_app_settings_parses_http_transport_configuration() -> None:
     assert settings.http_path == "/api/mcp"
 
 
-def test_env_bool_parses_common_false_values(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SCHOLAR_TEST_BOOL", "false")
+@pytest.mark.parametrize("value", ["false", "0", "no", "off"])
+def test_env_bool_parses_common_false_values(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("SCHOLAR_TEST_BOOL", value)
+
     assert server._env_bool("SCHOLAR_TEST_BOOL", True) is False
+
+
+@pytest.mark.parametrize("value", ["true", "1", "yes"])
+def test_env_bool_treats_other_common_values_as_true(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("SCHOLAR_TEST_BOOL", value)
+
+    assert server._env_bool("SCHOLAR_TEST_BOOL", False) is True
+
+
+def test_env_bool_uses_default_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SCHOLAR_TEST_BOOL", raising=False)
+
+    assert server._env_bool("SCHOLAR_TEST_BOOL", True) is True
+    assert server._env_bool("SCHOLAR_TEST_BOOL", False) is False
