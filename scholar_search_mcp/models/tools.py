@@ -64,8 +64,7 @@ def _normalize_provider_name(value: object) -> SearchProvider:
     except KeyError as exc:
         raise ValueError(
             f"Unsupported provider {value!r}. Supported values: "
-            f"{_supported_provider_names()}. "
-            "Use `serpapi` or `serpapi_google_scholar` for the SerpApi provider."
+            f"{_supported_provider_names()}."
         ) from exc
 
 

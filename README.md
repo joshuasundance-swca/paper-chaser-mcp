@@ -162,7 +162,7 @@ When SerpApi supplies the results, the response looks like:
 
 #### Provider order and filter-based skipping
 
-Provider order controls *which providers are eligible and in what order they are attempted*, but compatibility rules still apply. If you request Semantic Scholar-only filters such as `publicationDateOrYear`, `fieldsOfStudy`, `publicationTypes`, `openAccessPdf`, or `minCitationCount`, the broker will skip `core` and `serpapi(_google_scholar)` even if they appear earlier in `providerOrder`. Example: `providerOrder=["core","arxiv"]` with `publicationDateOrYear="2020:2024"` will skip CORE and continue to arXiv because CORE cannot honor that filter.
+Provider order controls *which providers are eligible and in what order they are attempted*, but compatibility rules still apply. If you request Semantic Scholar-only filters such as `publicationDateOrYear`, `fieldsOfStudy`, `publicationTypes`, `openAccessPdf`, or `minCitationCount`, the broker will skip `core` and `serpapi(_google_scholar)` even if they appear earlier in `providerOrder`. Example: `providerOrder=["core","semantic_scholar","arxiv"]` with `publicationDateOrYear="2020:2024"` will skip CORE and continue to Semantic Scholar because CORE cannot honor that filter.
 
 ### Enable/disable search channels
 
