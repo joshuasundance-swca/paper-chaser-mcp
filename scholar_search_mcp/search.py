@@ -5,6 +5,7 @@ from typing import Any, Optional
 
 from .models import (
     ArxivSearchResponse,
+    BrokerMetadata,
     CoreSearchResponse,
     SearchResponse,
     SemanticSearchResponse,
@@ -14,7 +15,7 @@ logger = logging.getLogger("scholar-search-mcp")
 
 
 def _dump_search_response(response: SearchResponse) -> dict[str, Any]:
-    return {
+    result: dict[str, Any] = {
         "total": response.total,
         "offset": response.offset,
         "data": [
@@ -22,6 +23,9 @@ def _dump_search_response(response: SearchResponse) -> dict[str, Any]:
             for paper in response.data
         ],
     }
+    if response.broker_metadata is not None:
+        result["brokerMetadata"] = response.broker_metadata.model_dump(by_alias=True)
+    return result
 
 
 def _merge_search_results(
@@ -133,6 +137,7 @@ async def search_papers_with_fallback(
                     total=core_search.total or len(core_search.entries),
                     offset=0,
                     data=core_search.entries[:limit],
+                    broker_metadata=BrokerMetadata(provider_used="core"),
                 )
                 logger.info("search_papers: using CORE API results")
         except Exception as exc:
@@ -166,6 +171,7 @@ async def search_papers_with_fallback(
                         )
                         for paper in semantic_search.data[:limit]
                     ],
+                    broker_metadata=BrokerMetadata(provider_used="semantic_scholar"),
                 )
                 logger.info("search_papers: using Semantic Scholar results")
         except Exception as exc:
@@ -187,9 +193,14 @@ async def search_papers_with_fallback(
                 total=arxiv_search.total_results,
                 offset=0,
                 data=arxiv_search.entries[:limit],
+                broker_metadata=BrokerMetadata(provider_used="arxiv"),
             )
             logger.info("search_papers: using arXiv results")
 
     if result is None:
-        return _dump_search_response(SearchResponse())
+        return _dump_search_response(
+            SearchResponse(
+                broker_metadata=BrokerMetadata(provider_used="none"),
+            )
+        )
     return _dump_search_response(result)

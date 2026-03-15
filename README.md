@@ -87,6 +87,25 @@ Add an MCP server in Cursor settings with the same `command`, `args`, and `env` 
 2. **Semantic Scholar** – Used if CORE fails; works without a key with lower limits. Set `SEMANTIC_SCHOLAR_API_KEY` for higher limits.
 3. **arXiv** – Used as last fallback; no key required.
 
+`search_papers` is a **brokered single-page search**: it returns results from the first provider that succeeds and does **not** support cursor-based pagination. Every response includes a `brokerMetadata` field that makes this contract explicit:
+
+```json
+{
+  "data": [...],
+  "brokerMetadata": {
+    "mode": "brokered_single_page",
+    "providerUsed": "semantic_scholar",
+    "continuationSupported": false
+  }
+}
+```
+
+| Field                  | Description                                                                                          |
+| ---------------------- | ---------------------------------------------------------------------------------------------------- |
+| `mode`                 | Always `"brokered_single_page"` for `search_papers`.                                                 |
+| `providerUsed`         | Which provider supplied the results: `core`, `semantic_scholar`, `arxiv`, or `none` if no provider returned results. |
+| `continuationSupported`| Always `false` — use `search_papers_bulk` for paginated retrieval.                                   |
+
 ### Enable/disable search channels
 
 Control which sources are used in the `search_papers` fallback chain via environment variables (default: all enabled):

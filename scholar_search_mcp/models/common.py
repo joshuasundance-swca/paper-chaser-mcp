@@ -58,6 +58,31 @@ class Paper(ApiModel):
     source: str | None = None
 
 
+class BrokerMetadata(BaseModel):
+    """Metadata describing the brokered nature of a ``search_papers`` response.
+
+    ``mode`` is always ``"brokered_single_page"`` for ``search_papers``,
+    indicating the response is a single-page best-effort result rather than a
+    provider-native continuation stream.
+
+    ``provider_used`` identifies which provider supplied the returned results.
+    Possible values are ``"core"``, ``"semantic_scholar"``, ``"arxiv"``, or
+    ``"none"`` when no provider returned results.
+
+    ``continuation_supported`` is always ``False`` for ``search_papers``; for
+    paginated retrieval use ``search_papers_bulk`` or other provider-specific
+    tools.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+    mode: str = Field(default="brokered_single_page", serialization_alias="mode")
+    provider_used: str = Field(serialization_alias="providerUsed")
+    continuation_supported: bool = Field(
+        default=False,
+        serialization_alias="continuationSupported",
+    )
+
+
 class SearchResponse(ApiModel):
     """Unified response for the ``search_papers`` tool.
 
@@ -67,11 +92,19 @@ class SearchResponse(ApiModel):
     from different backends would produce incorrect results.  For paginated
     retrieval use ``search_papers_bulk`` (Semantic Scholar) or other
     provider-specific tools.
+
+    ``broker_metadata`` is populated by the broker when results are returned;
+    it is ``None`` only for internal helper paths that do not go through the
+    full broker fallback chain.
     """
 
     total: int = 0
     offset: int = 0
     data: list[Paper] = Field(default_factory=list)
+    broker_metadata: BrokerMetadata | None = Field(
+        default=None,
+        serialization_alias="brokerMetadata",
+    )
 
 
 class SemanticSearchResponse(ApiModel):
