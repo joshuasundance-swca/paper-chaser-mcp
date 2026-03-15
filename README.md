@@ -304,6 +304,17 @@ Run the local test suite:
 pytest
 ```
 
+### GitHub Agentic Workflow smoke test
+
+The repository now includes an agentic regression workflow source at
+`.github/workflows/test-scholar-search.md` and its compiled lock file at
+`.github/workflows/test-scholar-search.lock.yml`. After editing the Markdown
+workflow, recompile it so the checked-in lock file stays in sync:
+
+```bash
+gh aw compile test-scholar-search --dir .github/workflows
+```
+
 Install and run the configured pre-commit hooks:
 
 ```bash

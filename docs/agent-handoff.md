@@ -17,6 +17,9 @@ This document is the current working handoff for the fork. It is intended to giv
 - `.github/copilot-instructions.md` now gives GitHub-native guidance for Copilot
   and the GitHub cloud coding agent so repo planning expectations are durable
   outside the runtime MCP surface.
+- `.github/workflows/test-scholar-search.md` now defines a GitHub Agentic
+  Workflow smoke test for the MCP server, with the compiled workflow checked in
+  as `.github/workflows/test-scholar-search.lock.yml`.
 
 ## Module Map
 
@@ -48,6 +51,13 @@ python -m mypy --config-file pyproject.toml
 python -m bandit -c pyproject.toml -r scholar_search_mcp
 ```
 
+If you edit `.github/workflows/test-scholar-search.md`, recompile it before
+finishing:
+
+```bash
+gh aw compile test-scholar-search --dir .github/workflows
+```
+
 ## What Was Added In This Pass
 
 - `Paper.scholarResultId` is now a first-class model field (not just an extra). This
@@ -74,6 +84,9 @@ python -m bandit -c pyproject.toml -r scholar_search_mcp
   passed in this environment after installing `.[dev]`.
 - The current pass keeps runtime behavior stable and focuses on schema discoverability,
   structured hints, and tighter agent guidance.
+- The repo now carries a checked-in agentic workflow source/lock pair for
+  high-level MCP smoke testing, covering quick discovery, pagination, provider
+  spot checks, and no-result behavior.
 
 ## Known Hotspots
 
@@ -90,6 +103,8 @@ python -m bandit -c pyproject.toml -r scholar_search_mcp
 4. Revisit `.github/copilot-instructions.md` whenever the cloud-coding workflow,
    validation stack, or durable planning docs materially change.
 5. Add a success-metric test that asserts `brokerMetadata.nextStepHint` is visible in responses and varies by provider.
+6. Expand the agentic workflow once stable secrets are available for deeper
+   provider-specific assertions (for example, optional SerpApi coverage).
 
 ## Commit Hygiene
 
