@@ -212,4 +212,3 @@ def cursor_from_offset(
     if context_hash is not None:
         payload["context_hash"] = context_hash
     return encode_cursor(payload)
-
