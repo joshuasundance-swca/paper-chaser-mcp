@@ -309,7 +309,8 @@ pytest
 The repository now includes an agentic regression workflow source at
 `.github/workflows/test-scholar-search.md` and its compiled lock file at
 `.github/workflows/test-scholar-search.lock.yml`. After editing the Markdown
-workflow, recompile it so the checked-in lock file stays in sync:
+workflow, recompile it and then run the normal validation stack so pre-commit
+can normalize the generated lock file:
 
 ```bash
 gh aw compile test-scholar-search --dir .github/workflows

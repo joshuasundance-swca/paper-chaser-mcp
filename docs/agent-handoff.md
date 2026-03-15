@@ -52,7 +52,8 @@ python -m bandit -c pyproject.toml -r scholar_search_mcp
 ```
 
 If you edit `.github/workflows/test-scholar-search.md`, recompile it before
-finishing:
+finishing and then rerun the standard validation stack so pre-commit can
+normalize the generated lock file:
 
 ```bash
 gh aw compile test-scholar-search --dir .github/workflows
