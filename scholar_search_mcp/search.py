@@ -5,6 +5,7 @@ from typing import Any, Optional
 
 from .models import (
     ArxivSearchResponse,
+    BrokerMetadata,
     CoreSearchResponse,
     SearchResponse,
     SemanticSearchResponse,
@@ -13,8 +14,11 @@ from .models import (
 logger = logging.getLogger("scholar-search-mcp")
 
 
-def _dump_search_response(response: SearchResponse) -> dict[str, Any]:
-    return {
+def _dump_search_response(
+    response: SearchResponse,
+    broker_metadata: BrokerMetadata | None = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
         "total": response.total,
         "offset": response.offset,
         "data": [
@@ -22,6 +26,9 @@ def _dump_search_response(response: SearchResponse) -> dict[str, Any]:
             for paper in response.data
         ],
     }
+    if broker_metadata is not None:
+        result["brokerMetadata"] = broker_metadata.model_dump(by_alias=True)
+    return result
 
 
 def _merge_search_results(
@@ -119,6 +126,7 @@ async def search_papers_with_fallback(
     )
 
     result: SearchResponse | None = None
+    provider_used: str | None = None
     if enable_core and not has_ss_only_filter:
         try:
             core_response = await core_client.search(
@@ -134,6 +142,7 @@ async def search_papers_with_fallback(
                     offset=0,
                     data=core_search.entries[:limit],
                 )
+                provider_used = "core"
                 logger.info("search_papers: using CORE API results")
         except Exception as exc:
             logger.info(
@@ -167,6 +176,7 @@ async def search_papers_with_fallback(
                         for paper in semantic_search.data[:limit]
                     ],
                 )
+                provider_used = "semantic_scholar"
                 logger.info("search_papers: using Semantic Scholar results")
         except Exception as exc:
             logger.info(
@@ -188,8 +198,19 @@ async def search_papers_with_fallback(
                 offset=0,
                 data=arxiv_search.entries[:limit],
             )
+            provider_used = "arxiv"
             logger.info("search_papers: using arXiv results")
 
     if result is None:
-        return _dump_search_response(SearchResponse())
-    return _dump_search_response(result)
+        broker_metadata = BrokerMetadata(
+            mode="brokered_single_page",
+            provider_used="none",
+            continuation_supported=False,
+        )
+        return _dump_search_response(SearchResponse(), broker_metadata=broker_metadata)
+    broker_metadata = BrokerMetadata(
+        mode="brokered_single_page",
+        provider_used=provider_used or "none",
+        continuation_supported=False,
+    )
+    return _dump_search_response(result, broker_metadata=broker_metadata)

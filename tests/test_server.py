@@ -1366,4 +1366,120 @@ async def test_search_papers_response_has_no_pagination_key(
     payload = json.loads(response[0].text)
 
     assert "pagination" not in payload
-    assert set(payload.keys()) == {"total", "offset", "data"}
+    assert set(payload.keys()) == {"total", "offset", "data", "brokerMetadata"}
+    broker_meta = payload["brokerMetadata"]
+    assert broker_meta["mode"] == "brokered_single_page"
+    assert broker_meta["providerUsed"] == "core"
+    assert broker_meta["continuationSupported"] is False
+
+
+# ---------------------------------------------------------------------------
+# Broker metadata tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_search_papers_broker_metadata_present_for_semantic_scholar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """search_papers response includes brokerMetadata when Semantic Scholar is used."""
+
+    class SemanticClient:
+        async def search_papers(self, **kwargs) -> dict:
+            return {
+                "total": 1,
+                "offset": 0,
+                "data": [{"paperId": "s2-1", "title": "Test"}],
+            }
+
+    monkeypatch.setattr(server, "enable_core", False)
+    monkeypatch.setattr(server, "enable_semantic_scholar", True)
+    monkeypatch.setattr(server, "enable_arxiv", False)
+    monkeypatch.setattr(server, "client", SemanticClient())
+
+    response = await server.call_tool("search_papers", {"query": "test"})
+    payload = json.loads(response[0].text)
+
+    assert "brokerMetadata" in payload
+    broker_meta = payload["brokerMetadata"]
+    assert broker_meta["mode"] == "brokered_single_page"
+    assert broker_meta["providerUsed"] == "semantic_scholar"
+    assert broker_meta["continuationSupported"] is False
+
+
+@pytest.mark.asyncio
+async def test_search_papers_broker_metadata_present_for_arxiv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """search_papers response includes brokerMetadata when arXiv is used."""
+
+    class ArxivClient:
+        async def search(self, **kwargs) -> dict:
+            return {
+                "totalResults": 1,
+                "entries": [
+                    {
+                        "paperId": "arxiv-1",
+                        "title": "arXiv paper",
+                        "url": "https://arxiv.org/abs/arxiv-1",
+                        "source": "arxiv",
+                    }
+                ],
+            }
+
+    monkeypatch.setattr(server, "enable_core", False)
+    monkeypatch.setattr(server, "enable_semantic_scholar", False)
+    monkeypatch.setattr(server, "enable_arxiv", True)
+    monkeypatch.setattr(server, "arxiv_client", ArxivClient())
+
+    response = await server.call_tool("search_papers", {"query": "test"})
+    payload = json.loads(response[0].text)
+
+    assert "brokerMetadata" in payload
+    broker_meta = payload["brokerMetadata"]
+    assert broker_meta["mode"] == "brokered_single_page"
+    assert broker_meta["providerUsed"] == "arxiv"
+    assert broker_meta["continuationSupported"] is False
+
+
+@pytest.mark.asyncio
+async def test_search_papers_broker_metadata_present_when_no_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """search_papers response includes brokerMetadata even when all channels disabled."""
+
+    monkeypatch.setattr(server, "enable_core", False)
+    monkeypatch.setattr(server, "enable_semantic_scholar", False)
+    monkeypatch.setattr(server, "enable_arxiv", False)
+
+    response = await server.call_tool("search_papers", {"query": "test"})
+    payload = json.loads(response[0].text)
+
+    assert "brokerMetadata" in payload
+    broker_meta = payload["brokerMetadata"]
+    assert broker_meta["mode"] == "brokered_single_page"
+    assert broker_meta["continuationSupported"] is False
+
+
+@pytest.mark.asyncio
+async def test_search_papers_broker_metadata_continuation_always_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """continuationSupported must always be False in search_papers brokerMetadata."""
+
+    class CoreClient:
+        async def search(self, **kwargs) -> dict:
+            return {
+                "total": 1,
+                "entries": [{"paperId": "c1", "title": "Core paper"}],
+            }
+
+    monkeypatch.setattr(server, "enable_core", True)
+    monkeypatch.setattr(server, "enable_semantic_scholar", False)
+    monkeypatch.setattr(server, "enable_arxiv", False)
+    monkeypatch.setattr(server, "core_client", CoreClient())
+
+    response = await server.call_tool("search_papers", {"query": "test"})
+    payload = json.loads(response[0].text)
+
+    assert payload["brokerMetadata"]["continuationSupported"] is False
