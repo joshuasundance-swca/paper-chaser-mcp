@@ -62,11 +62,11 @@ class Paper(ApiModel):
         default=None,
         alias="scholarResultId",
         description=(
-            "SerpApi Google Scholar result_id for this paper. Present only on "
-            "serpapi_google_scholar results. Pass as result_id to "
-            "get_paper_citation_formats to retrieve MLA, APA, BibTeX, and other "
-            "export formats. Use this field — not sourceId — because sourceId may "
-            "be a cluster_id or cites_id when result_id is absent."
+            "SerpApi Google Scholar result_id for this paper. Set only on "
+            "serpapi_google_scholar results; None otherwise. Pass as result_id "
+            "to get_paper_citation_formats to retrieve MLA, APA, BibTeX, and "
+            "other export formats. Use this field — not sourceId — because "
+            "sourceId may be a cluster_id or cites_id when result_id is absent."
         ),
     )
 

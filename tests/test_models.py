@@ -181,6 +181,16 @@ def test_paper_scholar_result_id_is_first_class_field() -> None:
         "scholarResultId must be a first-class field in the Paper model schema "
         "so agents can discover it without reading long tool descriptions."
     )
+    field_schema = props["scholarResultId"]
+    description = field_schema.get("description", "")
+    assert description, (
+        "scholarResultId must have a non-empty description in the schema "
+        "so agents understand when to use it and which tool to pass it to."
+    )
+    assert "get_paper_citation_formats" in description, (
+        "scholarResultId description must mention get_paper_citation_formats "
+        "so agents can follow the citation export golden path."
+    )
 
 
 def test_paper_scholar_result_id_set_for_serpapi_results() -> None:
