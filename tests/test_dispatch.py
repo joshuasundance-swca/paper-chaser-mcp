@@ -3,7 +3,6 @@ import pytest
 import scholar_search_mcp
 import scholar_search_mcp.__main__ as server_main
 from scholar_search_mcp import server
-
 from tests.helpers import RecordingSemanticClient, _payload
 
 

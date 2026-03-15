@@ -3,7 +3,6 @@ from typing import Any
 import pytest
 
 from scholar_search_mcp import server
-
 from tests.helpers import RecordingSemanticClient, _streamable_http_event_payload
 
 

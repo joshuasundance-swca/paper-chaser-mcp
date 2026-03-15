@@ -1,7 +1,6 @@
 import pytest
 
 from scholar_search_mcp import server
-
 from tests.helpers import DummyAsyncClient, DummyResponse
 
 
