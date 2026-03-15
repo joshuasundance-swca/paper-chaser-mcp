@@ -14,6 +14,9 @@ This document is the current working handoff for the fork. It is intended to giv
   citation chasing, known-item lookup, and author pivots.
 - `docs/golden-paths.md` records the primary personas, golden paths, and success
   signals for future agent work.
+- `.github/copilot-instructions.md` now gives GitHub-native guidance for Copilot
+  and the GitHub cloud coding agent so repo planning expectations are durable
+  outside the runtime MCP surface.
 
 ## Module Map
 
@@ -57,6 +60,9 @@ python -m bandit -c pyproject.toml -r scholar_search_mcp
   and snippet paths for agents.
 - `docs/golden-paths.md` now captures planning assumptions, workflow success
   signals, and future workflow-oriented follow-up work.
+- `.github/copilot-instructions.md` now tells GitHub Copilot / cloud coding
+  agents which docs to read first, which workflows to preserve, and which
+  validation commands to run.
 
 ## Progress Snapshot
 
@@ -65,6 +71,8 @@ python -m bandit -c pyproject.toml -r scholar_search_mcp
   passed in this environment after installing `.[dev]`.
 - The current pass keeps runtime behavior stable and focuses on agent guidance,
   documentation, and tests for tool-selection intent.
+- GitHub-native agent instructions should now be kept in sync with runtime
+  onboarding guidance whenever workflow defaults change.
 
 ## Known Hotspots
 
@@ -82,6 +90,8 @@ python -m bandit -c pyproject.toml -r scholar_search_mcp
    one concrete user request and tool sequence.
 5. Consider whether workflow-specific tags or annotations should be added to the
    FastMCP tool metadata for even stronger progressive disclosure in IDE agents.
+6. Revisit `.github/copilot-instructions.md` whenever the cloud-coding workflow,
+   validation stack, or durable planning docs materially change.
 
 ## Commit Hygiene
 

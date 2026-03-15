@@ -181,3 +181,18 @@ def test_tool_descriptions_include_workflow_guidance() -> None:
     assert "special-purpose recovery tool" in TOOL_DESCRIPTIONS[
         "search_snippets"
     ].lower()
+
+
+def test_github_copilot_instructions_align_with_repo_workflow_docs() -> None:
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parent.parent
+    instructions = (repo_root / ".github" / "copilot-instructions.md").read_text()
+
+    assert "GitHub cloud coding agent" in instructions
+    assert "docs/golden-paths.md" in instructions
+    assert "docs/agent-handoff.md" in instructions
+    assert "search_papers` for quick literature discovery" in instructions
+    assert "search_papers_bulk` for exhaustive or paginated retrieval" in instructions
+    assert "python -m pytest" in instructions
+    assert "python -m ruff check ." in instructions
