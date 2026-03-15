@@ -323,6 +323,25 @@ class BatchGetPapersArgs(ToolArgsModel):
         return value
 
 
+class GetCitationFormatsArgs(ToolArgsModel):
+    result_id: str = Field(
+        description=(
+            "Scholar result_id for the paper. "
+            "Use paper.scholarResultId (not paper.sourceId) from a "
+            "serpapi_google_scholar search_papers result — "
+            "paper.scholarResultId is the raw Scholar result_id and is the "
+            "correct identifier for this tool. "
+            "paper.sourceId may be a cluster_id or cites_id instead of a "
+            "result_id when result_id was absent, so it cannot be used here. "
+            "If paper.scholarResultId is absent the paper cannot be used with "
+            "this tool. "
+            "This is a paid SerpApi request (cached for 1 hour by SerpApi). "
+            "Only works when SCHOLAR_SEARCH_ENABLE_SERPAPI=true and "
+            "SERPAPI_API_KEY is set."
+        ),
+    )
+
+
 TOOL_INPUT_MODELS: dict[str, type[ToolArgsModel]] = {
     "search_papers": SearchPapersArgs,
     "search_papers_bulk": BulkSearchPapersArgs,
@@ -340,4 +359,5 @@ TOOL_INPUT_MODELS: dict[str, type[ToolArgsModel]] = {
     "get_paper_recommendations": RecommendationArgs,
     "get_paper_recommendations_post": PostRecommendationsArgs,
     "batch_get_papers": BatchGetPapersArgs,
+    "get_paper_citation_formats": GetCitationFormatsArgs,
 }
