@@ -1,5 +1,6 @@
 import pytest
 
+from scholar_search_mcp import server
 from scholar_search_mcp.settings import AppSettings
 
 
@@ -47,7 +48,6 @@ def test_search_papers_args_accept_serpapi_alias() -> None:
 
 def test_app_settings_serpapi_disabled_by_default() -> None:
     """SerpApi must be disabled by default to protect users from surprise costs."""
-    from scholar_search_mcp.settings import AppSettings
 
     settings = AppSettings.from_env({})  # empty env
     assert settings.enable_serpapi is False
@@ -56,7 +56,6 @@ def test_app_settings_serpapi_disabled_by_default() -> None:
 
 def test_app_settings_serpapi_enabled_via_env() -> None:
     """SCHOLAR_SEARCH_ENABLE_SERPAPI=true must enable the provider."""
-    from scholar_search_mcp.settings import AppSettings
 
     settings = AppSettings.from_env(
         {
@@ -69,8 +68,6 @@ def test_app_settings_serpapi_enabled_via_env() -> None:
 
 
 def test_app_settings_transport_defaults_to_stdio() -> None:
-    from scholar_search_mcp.settings import AppSettings
-
     settings = AppSettings.from_env({})
 
     assert settings.transport == "stdio"
@@ -80,8 +77,6 @@ def test_app_settings_transport_defaults_to_stdio() -> None:
 
 
 def test_app_settings_parses_http_transport_configuration() -> None:
-    from scholar_search_mcp.settings import AppSettings
-
     settings = AppSettings.from_env(
         {
             "SCHOLAR_SEARCH_TRANSPORT": "streamable-http",
@@ -95,3 +90,8 @@ def test_app_settings_parses_http_transport_configuration() -> None:
     assert settings.http_host == "0.0.0.0"
     assert settings.http_port == 9000
     assert settings.http_path == "/api/mcp"
+
+
+def test_env_bool_parses_common_false_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SCHOLAR_TEST_BOOL", "false")
+    assert server._env_bool("SCHOLAR_TEST_BOOL", True) is False
