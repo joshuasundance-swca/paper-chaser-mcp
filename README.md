@@ -7,11 +7,11 @@ The package now uses FastMCP for tool/resource/prompt registration, Pydantic for
 ## Features
 
 - **Search papers** – Keyword search with **fallback chain**: tries **CORE API** first (no key required; set `CORE_API_KEY` for higher limits), then **Semantic Scholar**, then optionally **SerpApi Google Scholar** (opt-in paid), then **arXiv**; optional year, venue, and advanced filters (fieldsOfStudy/publicationTypes/openAccessPdf/minCitationCount apply to Semantic Scholar only). Returns a single best-effort page — not paginated.
-- **Bulk paper search** – Boolean-syntax search via `/paper/search/bulk` with cursor-based pagination (up to 1,000 papers/call); pass `pagination.nextCursor` as `cursor` for subsequent pages
+- **Bulk paper search** – Boolean-syntax search via `/paper/search/bulk` with cursor-based pagination (up to 1,000 papers/call); treat `pagination.nextCursor` as opaque and pass it back unchanged as `cursor`
 - **Best-match / autocomplete** – Single best title match and typeahead completions
 - **Paper details** – Full metadata (title, authors, abstract, citations, etc.)
-- **Citations & references** – Papers that cite or are cited by a given paper; pass `pagination.nextCursor` as `cursor` for subsequent pages
-- **Paper authors** – Author listing for a specific paper; pass `pagination.nextCursor` as `cursor` for subsequent pages
+- **Citations & references** – Papers that cite or are cited by a given paper; treat `pagination.nextCursor` as opaque and pass it back unchanged as `cursor`
+- **Paper authors** – Author listing for a specific paper; treat `pagination.nextCursor` as opaque and pass it back unchanged as `cursor`
 - **Author search & batch** – Search authors by name with cursor pagination, or fetch up to 1,000 author profiles in one call
 - **Snippet search** – Quote-like text snippet search returning snippet text, paper metadata, and score
 - **Batch lookup** – Fetch up to 500 papers in one call
@@ -81,6 +81,19 @@ The next example is also valid JSON. It enables all three search providers and s
 ### Cursor
 
 Add an MCP server in Cursor settings with the same `command`, `args`, and `env` as above.
+
+### Pagination cursor contract
+
+For every paginated tool:
+
+- `pagination.nextCursor` is an **opaque** server-issued token
+- pass it back as `cursor` **exactly as returned**
+- do **not** derive, edit, increment, or fabricate it
+- do **not** reuse it across a different tool or different query flow
+
+The server validates those boundaries and returns an actionable `INVALID_CURSOR`
+error if a cursor is malformed, cross-tool, or stale for the current query
+context.
 
 ### API keys (optional)
 
@@ -174,7 +187,7 @@ Example: CORE and arXiv only (skip Semantic Scholar):
 
 ### Transport configuration
 
-The server defaults to local **stdio** transport, which is the recommended mode for desktop MCP clients. FastMCP also supports remote HTTP deployment:
+The server defaults to local **stdio** transport, which is the recommended mode for desktop MCP clients. FastMCP also supports HTTP-compatible transports for local development, integration testing, and controlled deployments:
 
 | Variable | Default | Description |
 | --- | --- | --- |
@@ -183,7 +196,18 @@ The server defaults to local **stdio** transport, which is the recommended mode 
 | `SCHOLAR_SEARCH_HTTP_PORT` | `8000` | Port to bind when using an HTTP transport |
 | `SCHOLAR_SEARCH_HTTP_PATH` | `/mcp` | MCP endpoint path when using an HTTP transport |
 
-Example remote run:
+> [!IMPORTANT]
+> HTTP transport compatibility is available, but this repository does **not**
+> yet ship a hardened public deployment profile. Before exposing the server
+> beyond localhost, add Origin validation/allowlisting, authentication, and
+> TLS in front of the ASGI app. This follows the MCP HTTP transport guidance
+> confirmed via Context7: servers must validate `Origin` and should implement
+> authentication for HTTP transports.
+
+Use `scholar_search_mcp.server.build_http_app(...)` if you need to inject
+deployment-specific Starlette middleware around the FastMCP ASGI app.
+
+Example local/integration HTTP run:
 
 ```bash
 SCHOLAR_SEARCH_TRANSPORT=streamable-http \
@@ -198,16 +222,16 @@ python -m scholar_search_mcp
 | Tool                             | Description                                                                                              |
 | -------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | `search_papers`                  | Single-page best-effort search (CORE → Semantic Scholar → SerpApi Google Scholar → arXiv). Optional filters: `limit`, `fields`, `year`, `venue`, `publicationDateOrYear`, `fieldsOfStudy`, `publicationTypes`, `openAccessPdf`, `minCitationCount`. No pagination — for paginated retrieval use `search_papers_bulk`. |
-| `search_papers_bulk`             | Paginated bulk paper search (Semantic Scholar) with advanced boolean query syntax (up to 1,000 papers/call). Pass `cursor=pagination.nextCursor` for subsequent pages; `pagination.hasMore` signals more results. |
+| `search_papers_bulk`             | Paginated bulk paper search (Semantic Scholar) with advanced boolean query syntax (up to 1,000 papers/call). Treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and do not derive/edit/fabricate it; `pagination.hasMore` signals more results. |
 | `search_papers_match`            | Find the single paper whose title best matches the query string                                          |
 | `paper_autocomplete`             | Return paper title completions for a partial query (typeahead)                                           |
 | `get_paper_details`              | Get one paper by ID (DOI, ArXiv ID, S2 ID, or URL)                                                      |
-| `get_paper_citations`            | Papers that cite the given paper; pass `cursor=pagination.nextCursor` for subsequent pages               |
-| `get_paper_references`           | References of the given paper; pass `cursor=pagination.nextCursor` for subsequent pages                  |
-| `get_paper_authors`              | Authors of the given paper; pass `cursor=pagination.nextCursor` for subsequent pages                     |
+| `get_paper_citations`            | Papers that cite the given paper; treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and keep it scoped to the same tool/query flow |
+| `get_paper_references`           | References of the given paper; treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and keep it scoped to the same tool/query flow |
+| `get_paper_authors`              | Authors of the given paper; treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and keep it scoped to the same tool/query flow |
 | `get_author_info`                | Author profile by ID                                                                                     |
-| `get_author_papers`              | Papers by author; pass `cursor=pagination.nextCursor` for subsequent pages; supports `publicationDateOrYear` |
-| `search_authors`                 | Search for authors by name; pass `cursor=pagination.nextCursor` for subsequent pages                     |
+| `get_author_papers`              | Papers by author; treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and keep it scoped to the same tool/query flow; supports `publicationDateOrYear` |
+| `search_authors`                 | Search for authors by name; treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and keep it scoped to the same tool/query flow |
 | `batch_get_authors`              | Details for up to 1,000 author IDs in one call                                                           |
 | `search_snippets`                | Search for matching text snippets across papers; returns snippet text, paper metadata, and score         |
 | `get_paper_recommendations`      | Similar papers for a given paper (GET single-seed)                                                       |

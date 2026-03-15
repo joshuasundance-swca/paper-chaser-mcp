@@ -123,6 +123,13 @@ def _payload(response: list) -> Any:
     return json.loads(response[0].text)
 
 
+def _streamable_http_event_payload(body: str) -> dict[str, Any]:
+    for line in body.splitlines():
+        if line.startswith("data: "):
+            return json.loads(line.removeprefix("data: "))
+    raise AssertionError(f"No SSE data payload found in response: {body!r}")
+
+
 def test_arxiv_id_from_url_strips_version_suffix() -> None:
     assert (
         server._arxiv_id_from_url("https://arxiv.org/abs/2201.00978v1")
@@ -1211,6 +1218,15 @@ def test_tool_descriptions_document_cursor_pagination_uniformly() -> None:
         assert "hasMore" in desc or "nextCursor" in desc, (
             f"Tool '{name}' description should mention hasMore or nextCursor"
         )
+        assert "opaque" in desc, (
+            f"Tool '{name}' description should describe nextCursor as opaque"
+        )
+        assert "exactly as returned" in desc, (
+            f"Tool '{name}' description should tell clients to reuse cursors unchanged"
+        )
+        assert "do not derive, edit, or fabricate" in desc, (
+            f"Tool '{name}' description should tell clients not to synthesize cursors"
+        )
 
     # search_papers is non-paginated; its description must NOT mention cursor
     # but it should explain the limitation and point to the bulk alternative
@@ -1328,12 +1344,16 @@ async def test_invalid_cursor_raises_tool_error_on_offset_tool(
     fake_client = RecordingSemanticClient()
     monkeypatch.setattr(server, "client", fake_client)
 
-    with pytest.raises(ValueError, match="Invalid pagination cursor"):
+    with pytest.raises(ValueError, match="Invalid pagination cursor") as exc_info:
         await server.call_tool(
             "get_paper_citations",
             {"paper_id": "paper-1", "cursor": "tok-bulk-token"},
         )
 
+    message = str(exc_info.value)
+    assert "pagination.nextCursor" in message
+    assert "exactly as returned" in message
+    assert "derive, edit, or fabricate" in message
     assert fake_client.calls == [], "SS client must not be called for an invalid cursor"
 
 
@@ -1758,11 +1778,16 @@ async def test_cross_tool_cursor_reuse_raises_error(
     citations_cursor = payload["pagination"]["nextCursor"]
 
     # Try to use it with references tool – must fail
-    with pytest.raises(ValueError, match="INVALID_CURSOR"):
+    with pytest.raises(ValueError, match="INVALID_CURSOR") as exc_info:
         await server.call_tool(
             "get_paper_references",
             {"paper_id": "paper-1", "cursor": citations_cursor},
         )
+
+    message = str(exc_info.value)
+    assert "pagination.nextCursor" in message
+    assert "exactly as returned" in message
+    assert "different tool" in message
 
 
 @pytest.mark.asyncio
@@ -2020,11 +2045,16 @@ async def test_context_hash_mismatch_rejects_cursor_on_different_paper(
     cursor = page1["pagination"]["nextCursor"]
 
     # Use that cursor for paper-2 – must fail due to context_hash mismatch
-    with pytest.raises(ValueError, match="INVALID_CURSOR"):
+    with pytest.raises(ValueError, match="INVALID_CURSOR") as exc_info:
         await server.call_tool(
             "get_paper_citations",
             {"paper_id": "paper-2", "cursor": cursor},
         )
+
+    message = str(exc_info.value)
+    assert "pagination.nextCursor" in message
+    assert "exactly as returned" in message
+    assert "different query context" in message
 
 
 @pytest.mark.asyncio
@@ -2956,6 +2986,114 @@ def test_app_settings_parses_http_transport_configuration() -> None:
     assert settings.http_host == "0.0.0.0"
     assert settings.http_port == 9000
     assert settings.http_path == "/api/mcp"
+
+
+def test_build_http_app_uses_requested_path() -> None:
+    app = server.build_http_app(path="/custom-mcp", transport="streamable-http")
+    route_paths = [route.path for route in app.routes]
+
+    assert "/custom-mcp" in route_paths
+
+
+def test_run_server_uses_http_transport_settings() -> None:
+    from scholar_search_mcp.runtime import run_server
+    from scholar_search_mcp.settings import AppSettings
+
+    calls: list[dict[str, Any]] = []
+
+    class DummyApp:
+        def run(self, **kwargs: Any) -> None:
+            calls.append(kwargs)
+
+    class DummyLogger:
+        def info(self, *args: Any, **kwargs: Any) -> None:
+            return None
+
+        def warning(self, *args: Any, **kwargs: Any) -> None:
+            return None
+
+    run_server(
+        app=DummyApp(),
+        logger=DummyLogger(),
+        settings=AppSettings.from_env(
+            {
+                "SCHOLAR_SEARCH_TRANSPORT": "streamable-http",
+                "SCHOLAR_SEARCH_HTTP_HOST": "0.0.0.0",
+                "SCHOLAR_SEARCH_HTTP_PORT": "9000",
+                "SCHOLAR_SEARCH_HTTP_PATH": "/custom-mcp",
+            }
+        ),
+    )
+
+    assert calls == [
+        {
+            "transport": "streamable-http",
+            "host": "0.0.0.0",
+            "port": 9000,
+            "path": "/custom-mcp",
+        }
+    ]
+
+
+def test_streamable_http_app_handles_initialize_and_tool_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from starlette.testclient import TestClient
+
+    semantic = RecordingSemanticClient()
+    monkeypatch.setattr(server, "client", semantic)
+
+    headers = {"accept": "application/json, text/event-stream"}
+    with TestClient(server.http_app) as client:
+        initialize = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "test-client", "version": "1.0"},
+            },
+        }
+        init_response = client.post("/mcp", json=initialize, headers=headers)
+        session_id = init_response.headers["mcp-session-id"]
+        init_payload = _streamable_http_event_payload(init_response.text)
+
+        initialized = {"jsonrpc": "2.0", "method": "notifications/initialized"}
+        initialized_response = client.post(
+            "/mcp",
+            json=initialized,
+            headers={**headers, "mcp-session-id": session_id},
+        )
+
+        call = {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "search_papers_match",
+                "arguments": {"query": "transformers"},
+            },
+        }
+        call_response = client.post(
+            "/mcp",
+            json=call,
+            headers={**headers, "mcp-session-id": session_id},
+        )
+        call_payload = _streamable_http_event_payload(call_response.text)
+
+    assert init_response.status_code == 200
+    assert initialized_response.status_code == 202
+    instructions = init_payload["result"]["instructions"]
+    assert "pagination.nextCursor" in instructions
+    assert "opaque" in instructions
+    assert "do not derive, edit, or fabricate" in instructions
+    assert call_response.status_code == 200
+    assert call_payload["result"]["structuredContent"] == {
+        "paperId": "match-1",
+        "title": "Best match",
+    }
+    assert call_payload["result"]["isError"] is False
 
 
 @pytest.mark.asyncio

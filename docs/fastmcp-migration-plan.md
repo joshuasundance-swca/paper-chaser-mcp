@@ -6,7 +6,7 @@ This document ties the recommended FastMCP design directly to the current reposi
 
 - **FastMCP server framework**: Context7-confirmed FastMCP patterns support `FastMCP(...)`, `@mcp.tool`, `@mcp.resource`, `@mcp.prompt`, `mcp.run(...)`, `mcp.http_app(...)`, in-memory client testing with `Client(server)`, and middleware such as `TimingMiddleware`.
 - **Structured tool output**: Context7-confirmed FastMCP tools can return dictionaries or typed models and FastMCP will expose structured content to clients instead of forcing agents to parse JSON blobs from text.
-- **Transport guidance**: Context7-confirmed MCP transport guidance still centers on `stdio` for local subprocess use and Streamable HTTP for remote deployment. The MCP spec also warns that HTTP servers should validate `Origin`, bind locally when appropriate, and use proper authentication.
+- **Transport guidance**: Context7-confirmed MCP transport guidance still centers on `stdio` for local subprocess use and Streamable HTTP for remote deployment. The MCP spec also warns that HTTP servers should validate `Origin`, bind locally when appropriate, and use proper authentication, so this repo should describe HTTP support as local/dev/integration-friendly until those deployment controls are added explicitly.
 - **Prompt/resource discoverability**: Context7-confirmed FastMCP prompts and resources are first-class, parameter-validated server components that are useful when you want reusable guidance in addition to tools.
 
 ## Current repository architecture analysis
@@ -46,7 +46,7 @@ This document ties the recommended FastMCP design directly to the current reposi
 - Add `TimingMiddleware` for basic observability with minimal code.
 - Expose a resource (`guide://scholar-search/agent-workflows`) and prompt (`plan_scholar_search`) to reduce agent discovery friction.
 - Expand `brokerMetadata` to include `attemptedProviders`, `semanticScholarOnlyFilters`, and `recommendedPaginationTool`.
-- Add transport settings so the same codebase supports stdio and HTTP-oriented deployment paths.
+- Add transport settings so the same codebase supports stdio and HTTP-oriented deployment paths, while keeping the default messaging scoped to local/dev/integration use.
 
 ## Migration plan in phases
 
@@ -66,7 +66,7 @@ This document ties the recommended FastMCP design directly to the current reposi
 
 ### Phase 3 - production deployment hardening
 
-- Prefer `stdio` for desktop/local clients and Streamable HTTP for remote deployment.
+- Prefer `stdio` for desktop/local clients and keep HTTP transport support scoped to local/dev/integration use until origin/auth/TLS guidance is wired into a recommended deployment story.
 - Add optional auth middleware or a deployment-layer auth integration before advertising public multi-tenant HTTP use.
 - Validate `Origin` and front the ASGI app with standard HTTP controls when exposed remotely, consistent with the MCP transport guidance confirmed through Context7.
 

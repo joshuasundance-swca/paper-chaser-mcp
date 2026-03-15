@@ -41,8 +41,9 @@ logger = logging.getLogger("scholar-search-mcp")
 SERVER_INSTRUCTIONS = """
 Use `search_papers` for a quick, brokered single page of candidate papers.
 Use `search_papers_bulk` when you need exhaustive retrieval or pagination.
-For every paginated tool, pass `pagination.nextCursor` back as `cursor`
-exactly as returned.
+For every paginated tool, treat `pagination.nextCursor` as opaque: pass it
+back as `cursor` exactly as returned, do not derive, edit, or fabricate it,
+and do not reuse it across a different tool or query flow.
 Inspect `brokerMetadata` on `search_papers` responses to see which
 providers were attempted, which one produced the results, and whether
 Semantic Scholar-only filters narrowed the route.
@@ -55,7 +56,8 @@ AGENT_WORKFLOW_GUIDE = """
 - If you need pagination or exhaustive retrieval, switch to `search_papers_bulk`.
 - Follow `brokerMetadata.providerUsed` to understand where results came from.
 - Follow `brokerMetadata.attemptedProviders` to see skipped, failed, or empty providers.
-- For paginated tools, treat `pagination.nextCursor` as opaque and reuse it unchanged.
+- For paginated tools, treat `pagination.nextCursor` as opaque, pass it back
+  exactly as returned, and do not derive, edit, fabricate, or cross-reuse it.
 - Use `get_paper_details`, `get_paper_citations`, `get_paper_references`,
   and `get_paper_authors` to expand from a paper you already found.
 - Use `search_authors`, `get_author_info`, and `get_author_papers`
@@ -87,6 +89,7 @@ __all__ = [
     "httpx",
     "app",
     "http_app",
+    "build_http_app",
     "settings",
     "api_key",
     "core_api_key",
@@ -239,7 +242,9 @@ def plan_scholar_search(
         f"You are planning a scholar-search workflow about '{topic}'. Goal: {goal}. "
         "Start with search_papers for quick discovery, inspect brokerMetadata, use "
         "search_papers_bulk when pagination or exhaustive retrieval is needed, and "
-        "reuse pagination.nextCursor exactly as returned."
+        "treat pagination.nextCursor as opaque: reuse it exactly as returned, do "
+        "not edit or fabricate it, and keep it scoped to the tool/query flow that "
+        "produced it."
     )
 
 
@@ -247,7 +252,23 @@ http_app_transport = cast(
     Literal["http", "streamable-http", "sse"],
     settings.transport if settings.transport != "stdio" else "streamable-http",
 )
-http_app = app.http_app(path=settings.http_path, transport=http_app_transport)
+
+
+def build_http_app(
+    *,
+    path: str | None = None,
+    transport: Literal["http", "streamable-http", "sse"] | None = None,
+    middleware: list[Any] | None = None,
+) -> Any:
+    """Build an ASGI app for local/dev HTTP use or custom deployment hardening."""
+    return app.http_app(
+        path=path or settings.http_path,
+        transport=transport or http_app_transport,
+        middleware=middleware,
+    )
+
+
+http_app = build_http_app()
 
 
 async def list_tools() -> list[Tool]:

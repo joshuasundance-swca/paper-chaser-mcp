@@ -4,6 +4,8 @@ from typing import Any
 
 from .settings import AppSettings
 
+LOCAL_HTTP_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
 
 def run_server(*, app: Any, logger: Any, settings: AppSettings) -> None:
     """Run the MCP server over the configured FastMCP transport."""
@@ -44,6 +46,19 @@ def run_server(*, app: Any, logger: Any, settings: AppSettings) -> None:
     if settings.transport == "stdio":
         app.run(transport="stdio")
         return
+
+    logger.info(
+        "HTTP transports are currently intended for local/dev/integration use. "
+        "Before exposing the server remotely, add Origin validation, "
+        "authentication, and TLS via scholar_search_mcp.server.build_http_app(...) "
+        "or an enclosing ASGI app."
+    )
+    if settings.http_host not in LOCAL_HTTP_HOSTS:
+        logger.warning(
+            "Binding HTTP transport to %s. MCP HTTP guidance expects Origin "
+            "validation and recommends authentication before remote exposure.",
+            settings.http_host,
+        )
 
     logger.info(
         "Serving MCP over %s at http://%s:%s%s",
