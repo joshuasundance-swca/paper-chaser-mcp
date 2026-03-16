@@ -17,7 +17,9 @@ from .utils.cursor import (
     PROVIDER,
     SUPPORTED_VERSIONS,
     compute_context_hash,
+    cursor_from_token,
     cursor_from_offset,
+    decode_bulk_cursor,
     decode_cursor,
     is_legacy_offset,
 )
@@ -139,23 +141,79 @@ def _encode_next_cursor(
     return result
 
 
+def _cursor_to_bulk_token(
+    cursor: str | None,
+    *,
+    tool: str,
+    context_hash: str | None = None,
+) -> str | None:
+    """Decode a structured bulk cursor to its provider token."""
+    if cursor is None:
+        return None
+    try:
+        state = decode_bulk_cursor(cursor)
+    except ValueError:
+        raise ValueError(
+            f"Invalid pagination cursor {cursor!r}: cannot be decoded. "
+            "code=INVALID_CURSOR. "
+            f"{CURSOR_REUSE_HINT} Restart the request without a cursor."
+        )
+    if state.provider != PROVIDER:
+        raise ValueError(
+            f"Invalid pagination cursor: cursor provider {state.provider!r} does not "
+            f"match expected provider {PROVIDER!r}. "
+            "code=INVALID_CURSOR. "
+            f"{CURSOR_REUSE_HINT} Restart the request without a cursor."
+        )
+    if state.version not in SUPPORTED_VERSIONS:
+        raise ValueError(
+            f"Invalid pagination cursor: cursor version {state.version} is not "
+            f"supported (supported: {sorted(SUPPORTED_VERSIONS)}). "
+            "code=INVALID_CURSOR. "
+            f"{CURSOR_REUSE_HINT} Restart the request without a cursor."
+        )
+    if state.tool != tool:
+        raise ValueError(
+            f"Invalid pagination cursor: cursor was issued by tool {state.tool!r} "
+            f"but is being used with tool {tool!r}. "
+            "code=INVALID_CURSOR. "
+            f"{CURSOR_REUSE_HINT} Restart the request without a cursor."
+        )
+    if (
+        context_hash is not None
+        and state.context_hash is not None
+        and state.context_hash != context_hash
+    ):
+        raise ValueError(
+            "Invalid pagination cursor: cursor was issued for a different query "
+            "context and cannot be reused here. "
+            "code=INVALID_CURSOR. "
+            f"{CURSOR_REUSE_HINT} Restart the request without a cursor."
+        )
+    return state.token
+
+
+def _encode_next_bulk_cursor(
+    result: dict[str, Any],
+    tool: str,
+    context_hash: str | None = None,
+) -> dict[str, Any]:
+    """Wrap a raw bulk provider token in a structured server-issued cursor."""
+    pagination = result.get("pagination")
+    if not isinstance(pagination, dict):
+        return result
+    raw_cursor = pagination.get("nextCursor")
+    if not isinstance(raw_cursor, str) or not raw_cursor:
+        return result
+    pagination["nextCursor"] = cursor_from_token(
+        tool,
+        raw_cursor,
+        context_hash=context_hash,
+    )
+    return result
+
+
 NON_SEARCH_TOOL_HANDLERS: dict[str, tuple[str, ToolArgBuilder]] = {
-    "search_papers_bulk": (
-        "search_papers_bulk",
-        lambda a: {
-            "query": a["query"],
-            "fields": a.get("fields"),
-            "token": a.get("cursor"),
-            "sort": a.get("sort"),
-            "limit": a.get("limit", 100),
-            "year": a.get("year"),
-            "publication_date_or_year": a.get("publication_date_or_year"),
-            "fields_of_study": a.get("fields_of_study"),
-            "publication_types": a.get("publication_types"),
-            "open_access_pdf": a.get("open_access_pdf"),
-            "min_citation_count": a.get("min_citation_count"),
-        },
-    ),
     "search_papers_match": (
         "search_papers_match",
         lambda a: {
@@ -420,6 +478,31 @@ async def dispatch_tool(
             ],
         )
         return dump_jsonable(response)
+
+    if name == "search_papers_bulk":
+        validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
+        args_dict = validated_payload.model_dump(by_alias=False)
+        ctx_hash = compute_context_hash(name, args_dict)
+        method = getattr(client, "search_papers_bulk")
+        result = await method(
+            query=args_dict["query"],
+            fields=args_dict.get("fields"),
+            token=_cursor_to_bulk_token(
+                args_dict.get("cursor"),
+                tool=name,
+                context_hash=ctx_hash,
+            ),
+            sort=args_dict.get("sort"),
+            limit=args_dict.get("limit", 100),
+            year=args_dict.get("year"),
+            publication_date_or_year=args_dict.get("publication_date_or_year"),
+            fields_of_study=args_dict.get("fields_of_study"),
+            publication_types=args_dict.get("publication_types"),
+            open_access_pdf=args_dict.get("open_access_pdf"),
+            min_citation_count=args_dict.get("min_citation_count"),
+        )
+        serialized = dump_jsonable(result)
+        return _encode_next_bulk_cursor(serialized, name, context_hash=ctx_hash)
 
     try:
         method_name, build_args = NON_SEARCH_TOOL_HANDLERS[name]
