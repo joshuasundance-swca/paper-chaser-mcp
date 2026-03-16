@@ -27,6 +27,9 @@ This document is the current working handoff for the fork. It is intended to giv
 - That workflow now targets the primary golden paths explicitly: quick
   discovery, known-item lookup, pagination, citation chasing, author pivot,
   and optional SerpApi citation export when credentials are available.
+- The GitHub Agentic Workflow MCP config for `scholar-search` must stay
+  containerized. Current `gh-aw` MCP Gateway releases reject legacy stdio
+  `command`/`args` server definitions and require `container`-based config.
 
 ## Module Map
 
@@ -118,6 +121,9 @@ gh aw compile test-scholar-search --dir .github/workflows
   high-level MCP smoke testing, covering quick discovery, known-item lookup,
   pagination, provider spot checks, author pivot, optional citation export,
   and no-result behavior.
+- The agentic workflow now runs `scholar-search` through a `python:3.12`
+  container mounted to `${GITHUB_WORKSPACE}` so the generated MCP Gateway
+  config matches the current schema.
 
 ## Follow-up Completed
 
