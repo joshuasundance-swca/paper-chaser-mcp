@@ -1,5 +1,7 @@
 # Scholar Search MCP
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/joshuasundance-swca/scholar-search-mcp)
+
 A FastMCP-based MCP server that integrates the [CORE API v3](https://api.core.ac.uk/docs/v3), [Semantic Scholar API](https://www.semanticscholar.org/product/api), [arXiv API](https://info.arxiv.org/help/api/user-manual.html), and optionally [SerpApi Google Scholar](https://serpapi.com/google-scholar-api) so AI assistants (e.g. Claude, Cursor) can search and fetch academic paper metadata.
 
 The package now uses FastMCP for tool/resource/prompt registration, Pydantic for strict tool inputs and normalized provider payloads, and provider clients organized as expandable subpackages under `scholar_search_mcp/clients/`.
