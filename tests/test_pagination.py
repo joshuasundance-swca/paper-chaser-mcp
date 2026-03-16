@@ -1,27 +1,54 @@
 import pytest
 
 from scholar_search_mcp import server
+from scholar_search_mcp.models.common import BulkSearchResponse, dump_jsonable
 from tests.helpers import RecordingSemanticClient
 
 
 @pytest.mark.asyncio
-async def test_search_papers_bulk_passes_cursor_as_token_and_sort(
+async def test_search_papers_bulk_returns_structured_next_cursor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fake_client = RecordingSemanticClient()
+    import json
+
+    class PaginatedBulkClient(RecordingSemanticClient):
+        async def search_papers_bulk(self, **kwargs) -> dict:
+            self.calls.append(("search_papers_bulk", kwargs))
+            return dump_jsonable(
+                BulkSearchResponse.model_validate(
+                    {
+                        "total": 2,
+                        "token": "tok-next",
+                        "data": [{"paperId": "bulk-1"}],
+                    }
+                )
+            )
+
+    fake_client = PaginatedBulkClient()
     monkeypatch.setattr(server, "client", fake_client)
 
-    await server.call_tool(
+    result = await server.call_tool(
         "search_papers_bulk",
-        {"query": "language models", "cursor": "tok-abc", "sort": "citationCount"},
+        {"query": "language models", "sort": "citationCount"},
     )
+    payload = json.loads(result[0].text)
 
     assert len(fake_client.calls) == 1
     method, kwargs = fake_client.calls[0]
     assert method == "search_papers_bulk"
-    # cursor is decoded to token in the SS client call
-    assert kwargs["token"] == "tok-abc"
+    assert kwargs["token"] is None
     assert kwargs["sort"] == "citationCount"
+    cursor = payload["pagination"]["nextCursor"]
+    assert cursor is not None
+    assert cursor != "tok-next"
+
+    from scholar_search_mcp.utils.cursor import decode_bulk_cursor
+
+    decoded = decode_bulk_cursor(cursor)
+    assert decoded.tool == "search_papers_bulk"
+    assert decoded.provider == "semantic_scholar"
+    assert decoded.token == "tok-next"
+    assert decoded.context_hash is not None
 
 
 def test_tool_descriptions_document_cursor_pagination_uniformly() -> None:
@@ -79,22 +106,98 @@ def test_cursor_to_offset_decoding() -> None:
 
 
 @pytest.mark.asyncio
-async def test_bulk_search_cursor_decoded_to_token(
+async def test_bulk_search_cursor_round_trips_for_same_query(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """cursor='tok-xyz' must arrive at the SS client as token='tok-xyz'."""
-    fake_client = RecordingSemanticClient()
+    """A bulk cursor from page 1 must be accepted for page 2 of the same query."""
+    import json
+
+    call_count = 0
+
+    class PaginatedBulkClient(RecordingSemanticClient):
+        async def search_papers_bulk(self, **kwargs) -> dict:
+            nonlocal call_count
+            call_count += 1
+            self.calls.append(("search_papers_bulk", kwargs))
+            if call_count == 1:
+                return dump_jsonable(
+                    BulkSearchResponse.model_validate(
+                        {
+                            "total": 2,
+                            "token": "tok-page-2",
+                            "data": [{"paperId": "bulk-1"}],
+                        }
+                    )
+                )
+            return dump_jsonable(
+                BulkSearchResponse.model_validate(
+                    {"total": 2, "token": None, "data": [{"paperId": "bulk-2"}]}
+                )
+            )
+
+    fake_client = PaginatedBulkClient()
     monkeypatch.setattr(server, "client", fake_client)
 
-    await server.call_tool(
+    first_page = await server.call_tool(
         "search_papers_bulk",
-        {"query": "deep learning", "cursor": "tok-xyz"},
+        {"query": "deep learning"},
     )
+    cursor = json.loads(first_page[0].text)["pagination"]["nextCursor"]
+    assert cursor is not None
 
-    assert len(fake_client.calls) == 1
-    method, kwargs = fake_client.calls[0]
+    second_page = await server.call_tool(
+        "search_papers_bulk",
+        {"query": "deep learning", "cursor": cursor},
+    )
+    payload = json.loads(second_page[0].text)
+
+    assert len(fake_client.calls) == 2
+    method, kwargs = fake_client.calls[1]
     assert method == "search_papers_bulk"
-    assert kwargs["token"] == "tok-xyz"
+    assert kwargs["token"] == "tok-page-2"
+    assert payload["pagination"]["hasMore"] is False
+
+
+@pytest.mark.asyncio
+async def test_bulk_search_cursor_rejects_cross_query_reuse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bulk cursor must be rejected when reused for a different query."""
+    import json
+
+    class PaginatedBulkClient(RecordingSemanticClient):
+        async def search_papers_bulk(self, **kwargs) -> dict:
+            self.calls.append(("search_papers_bulk", kwargs))
+            return dump_jsonable(
+                BulkSearchResponse.model_validate(
+                    {
+                        "total": 2,
+                        "token": "tok-next",
+                        "data": [{"paperId": "bulk-1"}],
+                    }
+                )
+            )
+
+    fake_client = PaginatedBulkClient()
+    monkeypatch.setattr(server, "client", fake_client)
+
+    first_page = await server.call_tool(
+        "search_papers_bulk",
+        {"query": "graph neural networks"},
+    )
+    cursor = json.loads(first_page[0].text)["pagination"]["nextCursor"]
+
+    with pytest.raises(ValueError, match="INVALID_CURSOR") as exc_info:
+        await server.call_tool(
+            "search_papers_bulk",
+            {"query": "transformer architecture", "cursor": cursor},
+        )
+
+    message = str(exc_info.value)
+    assert "pagination.nextCursor" in message
+    assert "exactly as returned" in message
+    assert "different query context" in message
+    assert len(fake_client.calls) == 1
 
 
 @pytest.mark.asyncio

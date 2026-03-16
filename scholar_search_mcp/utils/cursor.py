@@ -1,14 +1,13 @@
-"""Structured server-issued cursor utilities for offset-based pagination.
+"""Structured server-issued cursor utilities for paginated Semantic Scholar tools.
 
 Offset-backed tools (get_paper_citations, get_paper_references, get_paper_authors,
 get_author_papers, search_authors) encode continuation state as URL-safe base64
-JSON cursors instead of raw integer offsets.
+JSON cursors instead of raw integer offsets. ``search_papers_bulk`` similarly wraps
+Semantic Scholar provider tokens in a server-issued cursor envelope before exposing
+them to callers.
 
 This prevents accidental cursor reuse across tools and queries, and aligns with MCP
 best practices for opaque server-issued continuation tokens.
-
-Bulk-search cursors (provider tokens) are NOT processed here; they pass through
-the dispatch layer unchanged.
 """
 
 import base64
@@ -31,10 +30,11 @@ OFFSET_TOOLS: frozenset[str] = frozenset(
     }
 )
 
-# Arguments that uniquely identify the result stream for each offset-backed tool.
+# Arguments that uniquely identify the result stream for each paginated tool.
 # Only these args are included in the context hash; limit/fields/cursor are excluded
 # because they do not change which underlying dataset is being paged through.
 STREAM_CONTEXT_KEYS: dict[str, tuple[str, ...]] = {
+    "search_papers_bulk": ("query",),
     "get_paper_citations": ("paper_id",),
     "get_paper_references": ("paper_id",),
     "get_paper_authors": ("paper_id",),
@@ -66,6 +66,17 @@ class CursorState:
     tool: str
     provider: str
     offset: int
+    version: int = CURSOR_VERSION
+    context_hash: str | None = None
+
+
+@dataclass
+class BulkCursorState:
+    """Decoded state carried inside a structured bulk-search cursor."""
+
+    tool: str
+    provider: str
+    token: str
     version: int = CURSOR_VERSION
     context_hash: str | None = None
 
@@ -149,6 +160,32 @@ def is_legacy_offset(cursor: str) -> bool:
         return False
 
 
+def decode_bulk_cursor(cursor: str) -> BulkCursorState:
+    """Decode a structured bulk-search cursor string."""
+    try:
+        json_bytes = base64.urlsafe_b64decode(cursor.encode("ascii"))
+        payload = json.loads(json_bytes)
+    except Exception as exc:
+        raise ValueError(
+            f"Corrupted pagination cursor {cursor!r}: cannot decode. "
+            "Restart the request without a cursor."
+        ) from exc
+
+    try:
+        return BulkCursorState(
+            tool=payload["tool"],
+            provider=payload["provider"],
+            token=str(payload["token"]),
+            version=int(payload.get("version", CURSOR_VERSION)),
+            context_hash=payload.get("context_hash"),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Corrupted pagination cursor {cursor!r}: missing required fields. "
+            "Restart the request without a cursor."
+        ) from exc
+
+
 def compute_context_hash(tool: str, args: dict) -> str | None:
     """Compute a short hash binding a cursor to the specific result stream.
 
@@ -207,6 +244,23 @@ def cursor_from_offset(
         "tool": tool,
         "provider": PROVIDER,
         "offset": offset,
+        "version": CURSOR_VERSION,
+    }
+    if context_hash is not None:
+        payload["context_hash"] = context_hash
+    return encode_cursor(payload)
+
+
+def cursor_from_token(
+    tool: str,
+    token: str,
+    context_hash: str | None = None,
+) -> str:
+    """Build a structured cursor encoding a provider token for *tool*."""
+    payload: dict = {
+        "tool": tool,
+        "provider": PROVIDER,
+        "token": token,
         "version": CURSOR_VERSION,
     }
     if context_hash is not None:

@@ -230,9 +230,10 @@ class BulkSearchPapersArgs(ToolArgsModel):
         default=None,
         description=(
             "Continuation cursor from a previous response's pagination.nextCursor "
-            "(a provider-issued token for bulk search). Pass it back exactly as "
-            "returned; do not derive, edit, or fabricate it, and do not reuse it "
-            "across a different query flow. Omit to start a new search."
+            "(an opaque server-issued cursor for this bulk-search query). Pass it "
+            "back exactly as returned; do not derive, edit, or fabricate it, and "
+            "do not reuse it across a different query flow. Omit to start a new "
+            "search."
         ),
     )
     sort: str | None = Field(
