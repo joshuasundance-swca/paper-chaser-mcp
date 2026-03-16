@@ -448,6 +448,14 @@ def test_search_papers_match_unwraps_nested_match_payload() -> None:
     assert "data" not in normalized.model_dump(by_alias=True, exclude_none=True)
 
 
+def test_normalize_author_search_query_falls_back_to_original_when_empty() -> None:
+    client = server.SemanticScholarClient()
+
+    normalized = client._normalize_author_search_query('  ""  ')
+
+    assert normalized == '""'
+
+
 @pytest.mark.asyncio
 async def test_search_authors_normalizes_exact_name_punctuation(
     monkeypatch: pytest.MonkeyPatch,

@@ -30,10 +30,10 @@ from ...models import (
 from ...transport import asyncio, httpx
 
 logger = logging.getLogger("scholar-search-mcp")
-_AUTHOR_QUERY_QUOTES_RE = re.compile(r'["“”‘’`]+')
-_AUTHOR_QUERY_PUNCTUATION_RE = re.compile(r"[,;()]+")
-_AUTHOR_QUERY_INITIAL_PERIOD_RE = re.compile(r"(?<=\w)\.(?=\s|$)")
-_AUTHOR_QUERY_WHITESPACE_RE = re.compile(r"\s+")
+_AUTHOR_QUERY_QUOTES_PATTERN = re.compile(r'["“”‘’`]+')
+_AUTHOR_QUERY_PUNCTUATION_PATTERN = re.compile(r"[,;()]+")
+_AUTHOR_QUERY_INITIAL_PERIOD_PATTERN = re.compile(r"(?<=\w)\.(?=\s|$)")
+_AUTHOR_QUERY_WHITESPACE_PATTERN = re.compile(r"\s+")
 
 
 class SemanticScholarClient:
@@ -171,10 +171,10 @@ class SemanticScholarClient:
 
     @staticmethod
     def _normalize_author_search_query(query: str) -> str:
-        normalized = _AUTHOR_QUERY_QUOTES_RE.sub(" ", query.strip())
-        normalized = _AUTHOR_QUERY_PUNCTUATION_RE.sub(" ", normalized)
-        normalized = _AUTHOR_QUERY_INITIAL_PERIOD_RE.sub("", normalized)
-        normalized = _AUTHOR_QUERY_WHITESPACE_RE.sub(" ", normalized).strip()
+        normalized = _AUTHOR_QUERY_QUOTES_PATTERN.sub(" ", query.strip())
+        normalized = _AUTHOR_QUERY_PUNCTUATION_PATTERN.sub(" ", normalized)
+        normalized = _AUTHOR_QUERY_INITIAL_PERIOD_PATTERN.sub("", normalized)
+        normalized = _AUTHOR_QUERY_WHITESPACE_PATTERN.sub(" ", normalized).strip()
         return normalized or query.strip()
 
     @staticmethod
