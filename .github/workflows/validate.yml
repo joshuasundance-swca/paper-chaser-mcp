@@ -19,6 +19,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
+      - name: Install gh-aw
+        if: matrix.python-version == '3.12'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh extension install github/gh-aw
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -30,6 +36,16 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e .[dev]
+
+      - name: Verify agentic workflow lockfile is up to date
+        if: matrix.python-version == '3.12'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh aw compile test-scholar-search --dir .github/workflows
+          pre-commit run --files .github/workflows/test-scholar-search.lock.yml || true
+          pre-commit run --files .github/workflows/test-scholar-search.lock.yml
+          git diff --exit-code -- .github/workflows/test-scholar-search.lock.yml
 
       - name: Run pre-commit
         run: pre-commit run --all-files
