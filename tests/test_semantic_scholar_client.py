@@ -165,10 +165,11 @@ async def test_search_papers_bulk_truncates_provider_oversized_batch(
     ]
     assert result["pagination"]["hasMore"] is True
     assert result["pagination"]["nextCursor"] == "tok-next"
+    assert result["token"] == "tok-next"
 
 
 @pytest.mark.asyncio
-async def test_semantic_scholar_request_repaces_on_429_retry(
+async def test_semantic_scholar_request_retries_with_pacing_on_429(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The pacing guard must fire before every attempt, including 429 retries."""

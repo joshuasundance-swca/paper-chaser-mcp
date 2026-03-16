@@ -42,7 +42,8 @@ SERVER_INSTRUCTIONS = """
 Decision tree for tool selection:
 
 1. QUICK DISCOVERY → search_papers (brokered, single page, returns brokerMetadata)
-2. EXHAUSTIVE / MULTI-PAGE → search_papers_bulk (cursor-paginated, up to 1 000 returned/call)
+2. EXHAUSTIVE / MULTI-PAGE → search_papers_bulk
+   (cursor-paginated, up to 1 000 returned/call)
 3. KNOWN ITEM (messy title) → search_papers_match
 4. KNOWN ITEM (DOI / arXiv / URL) → get_paper_details
 5. CITATION EXPANSION → get_paper_citations (cited-by) or get_paper_references (refs)
