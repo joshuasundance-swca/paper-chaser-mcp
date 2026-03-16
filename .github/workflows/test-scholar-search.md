@@ -3,6 +3,7 @@ description: |
   Exercise the primary Scholar Search MCP golden paths with an agent so the
   repo gets a scheduled, high-level regression check of discovery,
   pagination, author pivot, and optional citation-export workflows.
+  Requires a repository or organization secret named COPILOT_GITHUB_TOKEN.
 
 on:
   workflow_dispatch:
@@ -29,11 +30,17 @@ tools:
 
 mcp-servers:
   scholar-search:
-    command: bash
-    args:
+    type: stdio
+    container: python:3.12
+    entrypoint: sh
+    entrypointArgs:
       - -lc
-      - pip install -e .[dev] >/tmp/scholar-search-agentic-install.log && python -m scholar_search_mcp
+      - cd ${GITHUB_WORKSPACE} && pip install -e .[dev] >/tmp/scholar-search-agentic-install.log && python -m scholar_search_mcp
+    mounts:
+      - ${{ github.workspace }}:${{ github.workspace }}:rw
+      - /tmp:/tmp:rw
     env:
+      GITHUB_WORKSPACE: "${{ github.workspace }}"
       CORE_API_KEY: "${{ secrets.CORE_API_KEY }}"
       SEMANTIC_SCHOLAR_API_KEY: "${{ secrets.SEMANTIC_SCHOLAR_API_KEY }}"
     allowed:
@@ -63,6 +70,14 @@ This workflow is a smoke test for the primary user journeys, not a complete test
 of every MCP tool. Focus on the core paths that should stay reliable for agents:
 quick discovery, known-item lookup, pagination, citation chasing, author pivot,
 and optional citation export when SerpApi is available.
+
+## Prerequisites
+
+- Configure a repository or organization Actions secret named
+  `COPILOT_GITHUB_TOKEN`. The GitHub Agentic Workflow Copilot engine fails in
+  activation before the MCP server starts if this secret is missing.
+- `CORE_API_KEY` and `SEMANTIC_SCHOLAR_API_KEY` remain optional. They improve
+  coverage and rate limits but are not required for the workflow to start.
 
 ## Goals
 

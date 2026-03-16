@@ -337,6 +337,14 @@ How it runs in GitHub:
   are configured, GitHub can run the workflow on its schedule or when manually
   triggered with `workflow_dispatch` from the Actions tab.
 
+Required secrets for this workflow:
+
+- `COPILOT_GITHUB_TOKEN` is required. The GitHub Copilot CLI engine fails in
+  the activation job before the repo checkout or MCP startup steps if this
+  secret is not present.
+- `CORE_API_KEY` is optional.
+- `SEMANTIC_SCHOLAR_API_KEY` is optional.
+
 How to update and use it:
 
 1. Edit `.github/workflows/test-scholar-search.md`.

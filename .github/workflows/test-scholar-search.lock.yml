@@ -24,8 +24,9 @@
 # Exercise the primary Scholar Search MCP golden paths with an agent so the
 # repo gets a scheduled, high-level regression check of discovery,
 # pagination, author pivot, and optional citation-export workflows.
+# Requires a repository or organization secret named COPILOT_GITHUB_TOKEN.
 #
-# gh-aw-metadata: {"schema_version":"v2","frontmatter_hash":"433d6d76e8dbd1b626f4f62c3fe11a6d15e6c7a959b22e71d350b796702f62bc","compiler_version":"v0.58.3","strict":true}
+# gh-aw-metadata: {"schema_version":"v2","frontmatter_hash":"a79929ea8b14c64274df9f7bf21280d1aec22a80b271f29899c87d9dbbd2d14c","compiler_version":"v0.58.3","strict":true}
 
 name: "Test Scholar Search MCP"
 "on":
@@ -306,7 +307,7 @@ jobs:
             const determineAutomaticLockdown = require('/opt/gh-aw/actions/determine_automatic_lockdown.cjs');
             await determineAutomaticLockdown(github, context, core);
       - name: Download container images
-        run: bash /opt/gh-aw/actions/download_docker_images.sh ghcr.io/github/gh-aw-firewall/agent:0.24.1 ghcr.io/github/gh-aw-firewall/api-proxy:0.24.1 ghcr.io/github/gh-aw-firewall/squid:0.24.1 ghcr.io/github/gh-aw-mcpg:v0.1.15 ghcr.io/github/github-mcp-server:v0.32.0 node:lts-alpine
+        run: bash /opt/gh-aw/actions/download_docker_images.sh ghcr.io/github/gh-aw-firewall/agent:0.24.1 ghcr.io/github/gh-aw-firewall/api-proxy:0.24.1 ghcr.io/github/gh-aw-firewall/squid:0.24.1 ghcr.io/github/gh-aw-mcpg:v0.1.15 ghcr.io/github/github-mcp-server:v0.32.0 node:lts-alpine python:3.12
       - name: Write Safe Outputs Config
         run: |
           mkdir -p /opt/gh-aw/safeoutputs
@@ -647,10 +648,15 @@ jobs:
               },
               "scholar-search": {
                 "type": "stdio",
-                "command": "bash",
-                "args": [
+                "container": "python:3.12",
+                "entrypoint": "sh",
+                "entrypointArgs": [
                   "-lc",
-                  "pip install -e .[dev] >/tmp/scholar-search-agentic-install.log && python -m scholar_search_mcp"
+                  "cd ${GITHUB_WORKSPACE} && pip install -e .[dev] >/tmp/scholar-search-agentic-install.log && python -m scholar_search_mcp"
+                ],
+                "mounts": [
+                  "\${GITHUB_WORKSPACE}:\${GITHUB_WORKSPACE}:rw",
+                  "/tmp:/tmp:rw"
                 ],
                 "tools": [
                   "search_papers",
@@ -670,6 +676,7 @@ jobs:
                 ],
                 "env": {
                   "CORE_API_KEY": "\${CORE_API_KEY}",
+                  "GITHUB_WORKSPACE": "\${GITHUB_WORKSPACE}",
                   "SEMANTIC_SCHOLAR_API_KEY": "\${SEMANTIC_SCHOLAR_API_KEY}"
                 }
               }
@@ -893,7 +900,7 @@ jobs:
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
           WORKFLOW_NAME: "Test Scholar Search MCP"
-          WORKFLOW_DESCRIPTION: "Exercise the primary Scholar Search MCP golden paths with an agent so the\nrepo gets a scheduled, high-level regression check of discovery,\npagination, author pivot, and optional citation-export workflows."
+          WORKFLOW_DESCRIPTION: "Exercise the primary Scholar Search MCP golden paths with an agent so the\nrepo gets a scheduled, high-level regression check of discovery,\npagination, author pivot, and optional citation-export workflows.\nRequires a repository or organization secret named COPILOT_GITHUB_TOKEN."
           HAS_PATCH: ${{ steps.collect_output.outputs.has_patch }}
         with:
           script: |
