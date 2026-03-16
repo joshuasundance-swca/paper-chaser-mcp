@@ -2,7 +2,7 @@
 
 import logging
 from collections.abc import Sequence
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from .clients.serpapi import SerpApiKeyMissingError
 from .models import (
@@ -73,6 +73,23 @@ def _dump_search_response(response: SearchResponse) -> dict[str, Any]:
     return result
 
 
+def _result_quality(
+    provider_used: str,
+) -> Literal["strong", "lexical", "unknown"]:
+    """Return a result-quality signal for the given provider.
+
+    - ``"strong"``: Semantic Scholar used semantic/relevance ranking.
+    - ``"lexical"``: CORE or arXiv used keyword-only matching; results may be
+      false positives for unusual or nonsense queries.
+    - ``"unknown"``: SerpApi path or no results — match quality is undetermined.
+    """
+    if provider_used == "semantic_scholar":
+        return "strong"
+    if provider_used in ("core", "arxiv"):
+        return "lexical"
+    return "unknown"
+
+
 def _metadata(
     *,
     provider_used: str,
@@ -99,6 +116,8 @@ def _metadata(
         "a Semantic Scholar-native lookup first. "
     )
 
+    bulk_is_pivot = provider_used != "semantic_scholar"
+
     if provider_used == "semantic_scholar":
         if venue:
             bulk_guidance = (
@@ -119,11 +138,27 @@ def _metadata(
             )
     elif provider_used in provider_labels:
         bulk_guidance = (
-            "If you need many more results, search_papers_bulk is a Semantic Scholar "
-            f"pivot rather than another page from {provider_labels[provider_used]}. "
+            "search_papers_bulk uses Semantic Scholar regardless of which provider "
+            f"search_papers used — calling it now is a provider pivot away from "
+            f"{provider_labels[provider_used]}, not a continuation. "
         )
     else:
         bulk_guidance = ""
+
+    quality = _result_quality(provider_used)
+    if quality == "lexical":
+        quality_guidance = (
+            "brokerMetadata.resultQuality='lexical': results are keyword matches "
+            f"from {provider_labels.get(provider_used, provider_used)} and may "
+            "include false positives — verify topical relevance before proceeding. "
+        )
+    elif quality == "unknown" and provider_used != "none":
+        quality_guidance = (
+            "brokerMetadata.resultQuality='unknown': match quality is not "
+            "determined for this provider — verify topical relevance. "
+        )
+    else:
+        quality_guidance = ""
 
     if provider_used == "serpapi_google_scholar":
         next_step_hint = (
@@ -131,6 +166,7 @@ def _metadata(
             "scholarResultId can be passed to get_paper_citation_formats for "
             "MLA, APA, BibTeX, and other export formats. "
             + portability_guidance
+            + quality_guidance
             + bulk_guidance
             +
             "To expand from a paper use get_paper_citations or get_paper_references."
@@ -148,6 +184,7 @@ def _metadata(
                 if provider_used in {"core", "arxiv"}
                 else ""
             )
+            + quality_guidance
             + bulk_guidance
             +
             "To expand from a paper use get_paper_citations or get_paper_references."
@@ -156,6 +193,8 @@ def _metadata(
         provider_used=provider_used,
         attempted_providers=attempts,
         semantic_scholar_only_filters=ss_only_filters,
+        result_quality=quality,
+        bulk_search_is_provider_pivot=bulk_is_pivot,
         next_step_hint=next_step_hint,
     )
 

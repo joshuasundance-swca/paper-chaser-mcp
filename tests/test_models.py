@@ -247,9 +247,8 @@ def test_broker_metadata_next_step_hint_is_provider_specific() -> None:
     )
     assert "scholarResultId" in serpapi_meta.next_step_hint
     assert "get_paper_citation_formats" in serpapi_meta.next_step_hint
-    assert "pivot rather than another page from SerpApi Google Scholar" in (
-        serpapi_meta.next_step_hint
-    )
+    assert "provider pivot" in serpapi_meta.next_step_hint
+    assert "SerpApi Google Scholar" in serpapi_meta.next_step_hint
 
     none_meta = _metadata(
         provider_used="none",
@@ -281,7 +280,8 @@ def test_broker_metadata_next_step_hint_is_provider_specific() -> None:
         attempts=[],
         ss_only_filters=[],
     )
-    assert "pivot rather than another page from CORE" in core_meta.next_step_hint
+    assert "provider pivot" in core_meta.next_step_hint
+    assert "CORE" in core_meta.next_step_hint
     assert "paper.recommendedExpansionId" in core_meta.next_step_hint
     assert "paper.expansionIdStatus='not_portable'" in core_meta.next_step_hint
 

@@ -698,3 +698,210 @@ async def test_search_papers_broker_metadata_reports_attempts_and_filter_routing
     )
     assert broker_meta["attemptedProviders"][1]["provider"] == "semantic_scholar"
     assert broker_meta["attemptedProviders"][1]["status"] == "returned_results"
+
+
+# ---------------------------------------------------------------------------
+# resultQuality and bulkSearchIsProviderPivot metadata
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_broker_metadata_result_quality_strong_for_semantic_scholar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """resultQuality must be 'strong' when Semantic Scholar supplies results."""
+
+    class SemanticClient:
+        async def search_papers(self, **kwargs: Any) -> dict:
+            return {
+                "total": 1,
+                "offset": 0,
+                "data": [{"paperId": "ss-1", "title": "Semantic paper"}],
+            }
+
+    monkeypatch.setattr(server, "enable_core", False)
+    monkeypatch.setattr(server, "enable_semantic_scholar", True)
+    monkeypatch.setattr(server, "enable_arxiv", False)
+    monkeypatch.setattr(server, "client", SemanticClient())
+
+    payload = _payload(
+        await server.call_tool("search_papers", {"query": "transformers"})
+    )
+    broker_meta = payload["brokerMetadata"]
+
+    assert broker_meta["resultQuality"] == "strong"
+    assert broker_meta["bulkSearchIsProviderPivot"] is False
+
+
+@pytest.mark.asyncio
+async def test_broker_metadata_result_quality_lexical_for_core(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """resultQuality must be 'lexical' when CORE supplies results; a nonsense query
+    that returns CORE results should expose the weak-match signal so agents do not
+    treat keyword overlap as topical relevance."""
+
+    class CoreClient:
+        async def search(self, **kwargs: Any) -> dict:
+            # Simulate CORE returning lexical hits for a nonsense query
+            return {
+                "total": 2,
+                "entries": [
+                    {"paperId": "c-1", "title": "Paper about nonsense research"},
+                    {"paperId": "c-2", "title": "Another nonsense paper"},
+                ],
+            }
+
+    monkeypatch.setattr(server, "enable_core", True)
+    monkeypatch.setattr(server, "enable_semantic_scholar", False)
+    monkeypatch.setattr(server, "enable_arxiv", False)
+    monkeypatch.setattr(server, "enable_serpapi", False)
+    monkeypatch.setattr(server, "core_client", CoreClient())
+
+    # Use a nonsense-style query to mirror the live UX audit scenario
+    payload = _payload(
+        await server.call_tool(
+            "search_papers", {"query": "asdkfjhasdkjfh research paper nonsense"}
+        )
+    )
+    broker_meta = payload["brokerMetadata"]
+
+    assert broker_meta["providerUsed"] == "core"
+    assert broker_meta["resultQuality"] == "lexical"
+    assert broker_meta["bulkSearchIsProviderPivot"] is True
+    # The hint must warn about weak matches
+    assert "lexical" in broker_meta["nextStepHint"].lower()
+    # The hint must describe bulk as a pivot away from CORE
+    assert "provider pivot" in broker_meta["nextStepHint"]
+    assert "CORE" in broker_meta["nextStepHint"]
+
+
+@pytest.mark.asyncio
+async def test_broker_metadata_result_quality_lexical_for_arxiv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """resultQuality must be 'lexical' when arXiv supplies results."""
+
+    class ArxivClient:
+        async def search(self, **kwargs: Any) -> dict:
+            return {
+                "totalResults": 1,
+                "entries": [
+                    {
+                        "paperId": "arxiv-1",
+                        "title": "arXiv paper",
+                        "url": "https://arxiv.org/abs/arxiv-1",
+                        "source": "arxiv",
+                    }
+                ],
+            }
+
+    monkeypatch.setattr(server, "enable_core", False)
+    monkeypatch.setattr(server, "enable_semantic_scholar", False)
+    monkeypatch.setattr(server, "enable_arxiv", True)
+    monkeypatch.setattr(server, "enable_serpapi", False)
+    monkeypatch.setattr(server, "arxiv_client", ArxivClient())
+
+    payload = _payload(await server.call_tool("search_papers", {"query": "quantum"}))
+    broker_meta = payload["brokerMetadata"]
+
+    assert broker_meta["providerUsed"] == "arxiv"
+    assert broker_meta["resultQuality"] == "lexical"
+    assert broker_meta["bulkSearchIsProviderPivot"] is True
+    assert "provider pivot" in broker_meta["nextStepHint"]
+    assert "arXiv" in broker_meta["nextStepHint"]
+
+
+@pytest.mark.asyncio
+async def test_broker_metadata_result_quality_unknown_for_serpapi(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """resultQuality must be 'unknown' when SerpApi supplies results."""
+
+    class FakeSerpApiClient:
+        async def search(self, **kwargs: Any) -> list:
+            return [
+                {
+                    "paperId": None,
+                    "title": "Scholar paper",
+                    "source": "serpapi_google_scholar",
+                    "scholarResultId": "sr-123",
+                }
+            ]
+
+    monkeypatch.setattr(server, "enable_core", False)
+    monkeypatch.setattr(server, "enable_semantic_scholar", False)
+    monkeypatch.setattr(server, "enable_arxiv", False)
+    monkeypatch.setattr(server, "enable_serpapi", True)
+    monkeypatch.setattr(server, "serpapi_client", FakeSerpApiClient())
+
+    payload = _payload(await server.call_tool("search_papers", {"query": "ml"}))
+    broker_meta = payload["brokerMetadata"]
+
+    assert broker_meta["providerUsed"] == "serpapi_google_scholar"
+    assert broker_meta["resultQuality"] == "unknown"
+    assert broker_meta["bulkSearchIsProviderPivot"] is True
+
+
+@pytest.mark.asyncio
+async def test_broker_metadata_result_quality_unknown_for_no_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """resultQuality must be 'unknown' (providerUsed='none') when no provider
+    returns results."""
+
+    monkeypatch.setattr(server, "enable_core", False)
+    monkeypatch.setattr(server, "enable_semantic_scholar", False)
+    monkeypatch.setattr(server, "enable_arxiv", False)
+    monkeypatch.setattr(server, "enable_serpapi", False)
+
+    payload = _payload(
+        await server.call_tool("search_papers", {"query": "asdkfjhasdkjfh"})
+    )
+    broker_meta = payload["brokerMetadata"]
+
+    assert broker_meta["providerUsed"] == "none"
+    assert broker_meta["resultQuality"] == "unknown"
+    # bulk pivot flag defaults to True for the no-result path too
+    assert broker_meta["bulkSearchIsProviderPivot"] is True
+
+
+def test_result_quality_helper_covers_all_providers() -> None:
+    """_result_quality must map every expected provider string without raising."""
+    from scholar_search_mcp.search import _result_quality
+
+    assert _result_quality("semantic_scholar") == "strong"
+    assert _result_quality("core") == "lexical"
+    assert _result_quality("arxiv") == "lexical"
+    assert _result_quality("serpapi_google_scholar") == "unknown"
+    assert _result_quality("none") == "unknown"
+
+
+def test_broker_metadata_fields_serialized() -> None:
+    """resultQuality and bulkSearchIsProviderPivot must appear in serialized output."""
+    from scholar_search_mcp.models.common import SearchResponse
+    from scholar_search_mcp.search import _dump_search_response, _metadata
+
+    meta = _metadata(
+        provider_used="core",
+        attempts=[],
+        ss_only_filters=[],
+    )
+    response = SearchResponse(total=1, offset=0, data=[], broker_metadata=meta)
+    serialized = _dump_search_response(response)
+
+    broker = serialized["brokerMetadata"]
+    assert broker["resultQuality"] == "lexical"
+    assert broker["bulkSearchIsProviderPivot"] is True
+
+    # Also verify Semantic Scholar path
+    meta_ss = _metadata(
+        provider_used="semantic_scholar",
+        attempts=[],
+        ss_only_filters=[],
+    )
+    response_ss = SearchResponse(total=1, offset=0, data=[], broker_metadata=meta_ss)
+    serialized_ss = _dump_search_response(response_ss)
+    broker_ss = serialized_ss["brokerMetadata"]
+    assert broker_ss["resultQuality"] == "strong"
+    assert broker_ss["bulkSearchIsProviderPivot"] is False

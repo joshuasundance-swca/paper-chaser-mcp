@@ -107,6 +107,21 @@ class BrokerMetadata(BaseModel):
     ``continuation_supported`` is always ``False`` for ``search_papers``; for
     paginated retrieval use ``search_papers_bulk`` or other provider-specific
     tools.
+
+    ``result_quality`` characterises the match strength of the returned results:
+    - ``"strong"``: Semantic Scholar used semantic/relevance ranking; results are
+      likely topically relevant.
+    - ``"lexical"``: CORE or arXiv used keyword/lexical matching only; results
+      contain the query terms but may not be topically relevant, especially for
+      unusual or nonsense queries.
+    - ``"unknown"``: SerpApi or no-result path; match quality is not determined.
+
+    ``bulk_search_is_provider_pivot`` is ``True`` when ``provider_used`` is not
+    ``"semantic_scholar"``, meaning that calling ``search_papers_bulk`` next
+    would be a provider pivot to Semantic Scholar rather than a continuation of
+    the same provider used here.  It is ``False`` when Semantic Scholar already
+    supplied the current results, so ``search_papers_bulk`` is the closest
+    continuation path.
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -127,6 +142,28 @@ class BrokerMetadata(BaseModel):
     recommended_pagination_tool: str = Field(
         default="search_papers_bulk",
         serialization_alias="recommendedPaginationTool",
+    )
+    result_quality: Literal["strong", "lexical", "unknown"] = Field(
+        default="unknown",
+        serialization_alias="resultQuality",
+        description=(
+            "Match-strength signal for the returned results. 'strong' means "
+            "Semantic Scholar semantic ranking was used and results are likely "
+            "topically relevant. 'lexical' means keyword-only matching was used "
+            "(CORE or arXiv) — results contain query terms but may not be "
+            "topically relevant, especially for unusual or nonsense queries. "
+            "'unknown' means match quality is not determined (SerpApi path or "
+            "no results)."
+        ),
+    )
+    bulk_search_is_provider_pivot: bool = Field(
+        default=True,
+        serialization_alias="bulkSearchIsProviderPivot",
+        description=(
+            "True when search_papers_bulk would switch to Semantic Scholar "
+            "rather than continuing from the provider that supplied these results. "
+            "False only when Semantic Scholar already supplied the current results."
+        ),
     )
     next_step_hint: str = Field(
         default=(
