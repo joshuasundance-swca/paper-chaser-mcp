@@ -1,6 +1,7 @@
 """OpenAlex API client."""
 
 import logging
+import re
 import time
 from typing import Any, Optional
 
@@ -25,6 +26,7 @@ OPENALEX_AUTHOR_SELECT = (
     "id,display_name,works_count,cited_by_count,summary_stats,"
     "last_known_institutions,orcid,works_api_url"
 )
+_MAILTO_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 class OpenAlexClient:
@@ -40,13 +42,30 @@ class OpenAlexClient:
         base_delay: float = 0.5,
     ):
         self.api_key = api_key
-        self.mailto = mailto.strip() if mailto else None
+        self.mailto = self._normalize_mailto(mailto)
         self.timeout = timeout
         self.min_interval = min_interval
         self.max_retries = max_retries
         self.base_delay = base_delay
         self._rate_lock: Optional[asyncio.Lock] = None
         self._last_request_time: float = 0.0
+
+    @staticmethod
+    def _normalize_mailto(value: str | None) -> str | None:
+        """Return a validated polite-pool email address or ``None``."""
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError(
+                "OPENALEX_MAILTO must be a non-empty email address when it is set."
+            )
+        if not _MAILTO_PATTERN.match(normalized):
+            raise ValueError(
+                "OPENALEX_MAILTO must look like a valid email address, e.g. "
+                "'team@example.com'."
+            )
+        return normalized
 
     def _get_rate_lock(self) -> asyncio.Lock:
         if self._rate_lock is None:
@@ -76,6 +95,7 @@ class OpenAlexClient:
         *,
         params: Optional[dict[str, Any]] = None,
     ) -> Any:
+        """Send one OpenAlex request with light pacing and bounded retries."""
         url = (
             endpoint
             if endpoint.startswith("http")
@@ -227,18 +247,30 @@ class OpenAlexClient:
 
     @staticmethod
     def _year_filters(year: str | None) -> tuple[str | None, str | None]:
+        """Translate supported year syntaxes to OpenAlex date filters.
+
+        Accepted forms:
+        - ``YYYY``
+        - ``YYYY:YYYY``
+        - ``YYYY-YYYY``
+        - ``YYYY-`` (open-ended lower bound)
+        - ``-YYYY`` (open-ended upper bound)
+        """
         if year is None:
             return None, None
         normalized = year.strip()
         if not normalized:
             return None, None
-        if "-" not in normalized:
+        if ":" in normalized:
+            start_raw, end_raw = normalized.split(":", maxsplit=1)
+        elif "-" in normalized:
+            start_raw, end_raw = normalized.split("-", maxsplit=1)
+        else:
             single_year = normalized[:4]
             if single_year.isdigit():
                 return f"publication_year:{single_year}", None
             return None, None
 
-        start_raw, end_raw = normalized.split("-", maxsplit=1)
         start_year = start_raw.strip()[:4]
         end_year = end_raw.strip()[:4]
         return (
@@ -394,6 +426,7 @@ class OpenAlexClient:
         limit: int = 10,
         year: Optional[str] = None,
     ) -> dict[str, Any]:
+        """Search OpenAlex works with one explicit page of normalized results."""
         filters = self._combine_filters(*self._year_filters(year))
         response = await self._request(
             "/works",
@@ -426,6 +459,7 @@ class OpenAlexClient:
         cursor: Optional[str] = None,
         year: Optional[str] = None,
     ) -> dict[str, Any]:
+        """Search OpenAlex works with cursor pagination for multi-page retrieval."""
         filters = self._combine_filters(*self._year_filters(year))
         response = await self._request(
             "/works",
@@ -457,6 +491,7 @@ class OpenAlexClient:
         )
 
     async def get_paper_details(self, paper_id: str) -> dict[str, Any]:
+        """Return one normalized OpenAlex work by DOI or OpenAlex work ID."""
         work = await self._lookup_work_raw(paper_id)
         return dump_jsonable(self._work_to_paper(work, include_abstract=True))
 
@@ -466,6 +501,7 @@ class OpenAlexClient:
         limit: int = 100,
         cursor: Optional[str] = None,
     ) -> dict[str, Any]:
+        """Return citing OpenAlex works using the work's ``cited_by_api_url``."""
         work = await self._lookup_work_raw(paper_id)
         cited_by_api_url = work.get("cited_by_api_url")
         if not isinstance(cited_by_api_url, str) or not cited_by_api_url.strip():
@@ -509,6 +545,7 @@ class OpenAlexClient:
         limit: int = 100,
         offset: int = 0,
     ) -> dict[str, Any]:
+        """Return referenced OpenAlex works using batched ID hydration."""
         work = await self._lookup_work_raw(paper_id)
         raw_referenced_works = work.get("referenced_works")
         referenced_works: list[Any] = (
@@ -538,6 +575,7 @@ class OpenAlexClient:
         limit: int = 10,
         cursor: Optional[str] = None,
     ) -> dict[str, Any]:
+        """Search OpenAlex authors by name with cursor pagination."""
         response = await self._request(
             "/authors",
             params={
@@ -568,6 +606,7 @@ class OpenAlexClient:
         )
 
     async def get_author_info(self, author_id: str) -> dict[str, Any]:
+        """Return one normalized OpenAlex author profile."""
         normalized_author_id = self._normalize_author_id(author_id)
         response = await self._request(
             f"/authors/{normalized_author_id}",
@@ -584,6 +623,10 @@ class OpenAlexClient:
         cursor: Optional[str] = None,
         year: Optional[str] = None,
     ) -> dict[str, Any]:
+        """Return normalized OpenAlex works for one author.
+
+        Supports optional year filtering before cursor-paginated expansion.
+        """
         normalized_author_id = self._normalize_author_id(author_id)
         filters = self._combine_filters(
             f"authorships.author.id:{normalized_author_id}",

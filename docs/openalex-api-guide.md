@@ -31,6 +31,14 @@ because its citation, author, and paging mechanics differ enough from Semantic
 Scholar that squeezing it into the brokered continuation story would be
 misleading.
 
+Current implementation notes:
+
+- OpenAlex tool year inputs currently accept `YYYY`, `YYYY:YYYY`,
+  `YYYY-YYYY`, `YYYY-`, and `-YYYY`
+- `OPENALEX_MAILTO` is validated as an email-shaped string before use
+- the client uses conservative built-in pacing/retry defaults
+  (`min_interval=0.05s`, `max_retries=2`) rather than separate env vars
+
 Primary references:
 
 - Overview: https://developers.openalex.org/

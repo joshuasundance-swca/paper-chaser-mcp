@@ -240,6 +240,11 @@ not require an API key, but you can configure them with:
 | `OPENALEX_API_KEY` | unset | Optional OpenAlex premium API key |
 | `OPENALEX_MAILTO` | unset | Optional contact email for the OpenAlex polite pool; recommended for production use |
 
+OpenAlex tool year inputs currently accept `YYYY`, `YYYY:YYYY`, `YYYY-YYYY`,
+`YYYY-`, and `-YYYY`. The client currently uses conservative built-in pacing
+and retry defaults (`min_interval=0.05s`, `max_retries=2`) rather than extra
+environment variables.
+
 ### Transport configuration
 
 The server defaults to local **stdio** transport, which is the recommended mode for desktop MCP clients. FastMCP also supports HTTP-compatible transports for local development, integration testing, and controlled deployments:

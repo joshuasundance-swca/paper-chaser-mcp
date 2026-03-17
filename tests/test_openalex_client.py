@@ -43,6 +43,66 @@ def test_openalex_work_to_paper_reconstructs_abstract_and_marks_truncation() -> 
     assert paper["authorListTruncated"] is True
 
 
+def test_openalex_client_validates_mailto() -> None:
+    client = server.OpenAlexClient(mailto=" team@example.com ")
+    assert client.mailto == "team@example.com"
+
+    with pytest.raises(ValueError, match="non-empty email address"):
+        server.OpenAlexClient(mailto="   ")
+
+    with pytest.raises(ValueError, match="valid email address"):
+        server.OpenAlexClient(mailto="not-an-email")
+
+
+@pytest.mark.parametrize(
+    ("year", "expected_filter"),
+    [
+        ("2024", "publication_year:2024"),
+        (
+            "2020-2024",
+            "from_publication_date:2020-01-01,to_publication_date:2024-12-31",
+        ),
+        (
+            "2020:2024",
+            "from_publication_date:2020-01-01,to_publication_date:2024-12-31",
+        ),
+        ("2020-", "from_publication_date:2020-01-01"),
+        ("-2024", "to_publication_date:2024-12-31"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_openalex_search_supports_supported_year_syntaxes(
+    monkeypatch: pytest.MonkeyPatch,
+    year: str,
+    expected_filter: str,
+) -> None:
+    captured: list[dict[str, Any]] = []
+
+    class CapturingAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        async def get(self, url: str, **kwargs):
+            captured.append({"url": url, **kwargs})
+            return DummyResponse(
+                status_code=200,
+                payload={"meta": {"count": 0}, "results": []},
+            )
+
+    monkeypatch.setattr(
+        server.httpx,
+        "AsyncClient",
+        lambda timeout: CapturingAsyncClient(),
+    )
+
+    await server.OpenAlexClient().search("alignment", year=year)
+
+    assert captured[0]["params"]["filter"] == expected_filter
+
+
 @pytest.mark.asyncio
 async def test_openalex_search_uses_polite_pool_and_range_filters(
     monkeypatch: pytest.MonkeyPatch,

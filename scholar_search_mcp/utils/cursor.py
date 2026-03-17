@@ -16,6 +16,8 @@ import json
 from dataclasses import dataclass
 
 CURSOR_VERSION = 1
+# Default provider used by the existing Semantic Scholar cursor helpers. OpenAlex
+# callers override the encoded/expected provider explicitly at the dispatch layer.
 PROVIDER = "semantic_scholar"
 SUPPORTED_VERSIONS: frozenset[int] = frozenset({CURSOR_VERSION})
 
