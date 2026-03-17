@@ -48,7 +48,7 @@ This document is the current working handoff for the fork. It is intended to giv
 - The GitHub Agentic Workflow MCP config for `scholar-search` must stay
   containerized. Current `gh-aw` MCP Gateway releases reject legacy stdio
   `command`/`args` server definitions and require `container`-based config.
-- The verifier workflow now runs on `push` to `main` plus `workflow_dispatch`.
+- The verifier workflow now runs on `push` to `master` plus `workflow_dispatch`.
   Concurrency is set to cancel in-progress runs so rapid merges do not queue
   up redundant verifications. The old `pull_request.closed` trigger and the
   6-hourly schedule are not used.

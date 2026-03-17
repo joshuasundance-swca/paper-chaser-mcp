@@ -22,7 +22,7 @@ on:
         type: string
         required: false
   push:
-    branches: [main]
+    branches: [master]
 
 permissions: read-all
 
