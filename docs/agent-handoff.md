@@ -66,6 +66,12 @@ This document is the current working handoff for the fork. It is intended to giv
   assignment contract (`copilot-swe-agent[bot]` plus `agent_assignment`). A
   plain issue assignee write with `Copilot` can log success in Actions while
   leaving the issue unassigned.
+- The assignment workflow should prefer an explicit secret-backed token for the
+  API call (`GH_AW_GITHUB_TOKEN`, then `COPILOT_GITHUB_TOKEN`, then
+  `GITHUB_TOKEN`). In practice some repositories return 403 on the Copilot
+  assignment endpoint when using the default Actions token even with
+  `issues: write`, so the fallback order is part of the durable workflow
+  contract.
 - The workflow emphasizes agent UX evaluation: each test step includes an
   explicit UX check for intuitiveness, unnecessary round trips, missing
   features, confusing contracts, and dead-end responses. A new step 11
