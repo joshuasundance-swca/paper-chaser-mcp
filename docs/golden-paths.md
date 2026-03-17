@@ -44,6 +44,10 @@ search_papers(query="large language model alignment", limit=10)
 - `brokerMetadata.nextStepHint` is readable and tells the agent what to do next.
 - The first response clearly explains where the results came from.
 - The agent can explain whether to broaden, narrow, paginate, or pivot.
+- `brokerMetadata.resultQuality` is `"strong"` for relevant Semantic Scholar
+  results, `"low_relevance"` when distinctive query tokens are absent from all
+  results (treat with caution), `"lexical"` for CORE/arXiv keyword matches, or
+  `"unknown"` for SerpApi / no-result paths.
 
 ### 2. Exhaustive retrieval
 
@@ -250,6 +254,22 @@ as part of the intended agent contract.
   when Semantic Scholar rejects a phrase query or returns a transient 5xx.
 - Agents should prefer `search_papers_match` or `search_papers` before falling
   back to snippet search for quote recovery.
+
+### 7. Nonsense / low-relevance queries now surface an explicit weak-match signal
+
+- `search_papers` with Semantic Scholar now checks whether any distinctive
+  query tokens (length ≥ 6, not a common academic term) appear in the returned
+  result titles and abstracts.
+- When a distinctive token is absent from every result, `brokerMetadata.resultQuality`
+  is set to `"low_relevance"` instead of `"strong"` and `nextStepHint` includes
+  an explicit warning that the results are likely a weak or irrelevant match.
+- Agents must treat `resultQuality="low_relevance"` as a signal to stop the
+  discovery workflow and instead rephrase the query, broaden it, or try a
+  different provider via `providerOrder`.
+- This catches common cases like gibberish tokens (e.g. `asdkfjhasdkjfh`) where
+  Semantic Scholar returns papers that only match the generic words in the query.
+- `resultQuality="strong"` still means Semantic Scholar's semantic ranking was
+  used and all inspected distinctive tokens appear in at least one result.
 
 ## Future Work
 

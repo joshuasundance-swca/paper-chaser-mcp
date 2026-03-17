@@ -709,14 +709,18 @@ async def test_search_papers_broker_metadata_reports_attempts_and_filter_routing
 async def test_broker_metadata_result_quality_strong_for_semantic_scholar(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """resultQuality must be 'strong' when Semantic Scholar supplies results."""
+    """resultQuality must be 'strong' when Semantic Scholar supplies relevant results.
+
+    The mock paper title deliberately contains the query token so that the
+    relevance check does not downgrade the quality to 'low_relevance'.
+    """
 
     class SemanticClient:
         async def search_papers(self, **kwargs: Any) -> dict:
             return {
                 "total": 1,
                 "offset": 0,
-                "data": [{"paperId": "ss-1", "title": "Semantic paper"}],
+                "data": [{"paperId": "ss-1", "title": "Transformers in deep learning"}],
             }
 
     monkeypatch.setattr(server, "enable_core", False)
@@ -731,6 +735,136 @@ async def test_broker_metadata_result_quality_strong_for_semantic_scholar(
 
     assert broker_meta["resultQuality"] == "strong"
     assert broker_meta["bulkSearchIsProviderPivot"] is False
+
+
+@pytest.mark.asyncio
+async def test_broker_metadata_result_quality_low_relevance_for_nonsense_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """resultQuality must be 'low_relevance' when Semantic Scholar returns results
+    that don't contain distinctive query tokens.
+
+    This is the primary regression test for the issue where a nonsense query such
+    as 'asdkfjhasdkjfh research paper nonsense' returned results marked as 'strong'
+    even though the gibberish token did not appear in any result title or abstract.
+    """
+
+    class SemanticClient:
+        async def search_papers(self, **kwargs: Any) -> dict:
+            # Simulate Semantic Scholar matching only the generic words in the
+            # query and ignoring the distinctive gibberish token entirely.
+            return {
+                "total": 2,
+                "offset": 0,
+                "data": [
+                    {
+                        "paperId": "ss-1",
+                        "title": "Relationship Between Science and Nonsense",
+                        "abstract": "A study of nonsense.",
+                    },
+                    {
+                        "paperId": "ss-2",
+                        "title": "New Approaches to the Circle of Nonsense",
+                        "abstract": None,
+                    },
+                ],
+            }
+
+    monkeypatch.setattr(server, "enable_core", False)
+    monkeypatch.setattr(server, "enable_semantic_scholar", True)
+    monkeypatch.setattr(server, "enable_arxiv", False)
+    monkeypatch.setattr(server, "client", SemanticClient())
+
+    payload = _payload(
+        await server.call_tool(
+            "search_papers",
+            {"query": "asdkfjhasdkjfh research paper nonsense"},
+        )
+    )
+    broker_meta = payload["brokerMetadata"]
+
+    # Provider is still Semantic Scholar — just quality is downgraded.
+    assert broker_meta["providerUsed"] == "semantic_scholar"
+    assert broker_meta["resultQuality"] == "low_relevance"
+    assert broker_meta["bulkSearchIsProviderPivot"] is False
+    # The hint must clearly warn that results are weak and not to trust them.
+    hint = broker_meta["nextStepHint"]
+    assert "low_relevance" in hint
+    assert "weak" in hint.lower() or "irrelevant" in hint.lower()
+
+
+@pytest.mark.asyncio
+async def test_broker_metadata_result_quality_low_relevance_with_both_nonsense_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two gibberish tokens in the query both absent from results → low_relevance."""
+
+    class SemanticClient:
+        async def search_papers(self, **kwargs: Any) -> dict:
+            return {
+                "total": 1,
+                "offset": 0,
+                "data": [
+                    {
+                        "paperId": "ss-1",
+                        "title": "A paper about nothing",
+                        "abstract": "Some general content.",
+                    }
+                ],
+            }
+
+    monkeypatch.setattr(server, "enable_core", False)
+    monkeypatch.setattr(server, "enable_semantic_scholar", True)
+    monkeypatch.setattr(server, "enable_arxiv", False)
+    monkeypatch.setattr(server, "client", SemanticClient())
+
+    payload = _payload(
+        await server.call_tool(
+            "search_papers",
+            {"query": "asdkfjhasdkjfh qzxqzxqzx research paper"},
+        )
+    )
+    broker_meta = payload["brokerMetadata"]
+
+    assert broker_meta["providerUsed"] == "semantic_scholar"
+    assert broker_meta["resultQuality"] == "low_relevance"
+
+
+@pytest.mark.asyncio
+async def test_broker_metadata_result_quality_low_relevance_uses_abstract_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When a distinctive token appears in the abstract (not title) the result
+    is still considered relevant and quality stays 'strong'."""
+
+    class SemanticClient:
+        async def search_papers(self, **kwargs: Any) -> dict:
+            return {
+                "total": 1,
+                "offset": 0,
+                "data": [
+                    {
+                        "paperId": "ss-1",
+                        "title": "Advances in neural network training",
+                        # The distinctive token 'transformers' appears in abstract
+                        "abstract": "We study transformers and related architectures.",
+                    }
+                ],
+            }
+
+    monkeypatch.setattr(server, "enable_core", False)
+    monkeypatch.setattr(server, "enable_semantic_scholar", True)
+    monkeypatch.setattr(server, "enable_arxiv", False)
+    monkeypatch.setattr(server, "client", SemanticClient())
+
+    payload = _payload(
+        await server.call_tool("search_papers", {"query": "transformers"})
+    )
+    broker_meta = payload["brokerMetadata"]
+
+    assert broker_meta["providerUsed"] == "semantic_scholar"
+    assert broker_meta["resultQuality"] == "strong"
+
 
 
 @pytest.mark.asyncio
