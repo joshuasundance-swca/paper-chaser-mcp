@@ -456,6 +456,134 @@ async def test_get_author_papers_response_includes_pagination(
 
 
 @pytest.mark.asyncio
+async def test_get_author_papers_normalizes_trailing_hyphen_in_date_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """get_author_papers must normalize 'YYYY-' to 'YYYY:' before calling the API.
+
+    Regression test for the broken golden path that advertised
+    publicationDateOrYear="2022-" (year-parameter style with a trailing hyphen)
+    when the correct open-ended format for publicationDateOrYear is "2022:"
+    (colon separator).  The client should silently normalize the trailing hyphen
+    so that agents using the documented form do not receive a misleading 400.
+    """
+
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    captured_params: list[dict] = []
+
+    class CapturingAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def request(self, **kwargs):
+            captured_params.append(kwargs.get("params", {}))
+            return DummyResponse(
+                status_code=200,
+                payload={
+                    "offset": 0,
+                    "data": [{"paperId": "paper-x", "title": "Recent work"}],
+                },
+            )
+
+    monkeypatch.setattr(
+        server.httpx, "AsyncClient", lambda timeout: CapturingAsyncClient()
+    )
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    sc = server.SemanticScholarClient()
+    result = await sc.get_author_papers(
+        "1751762", limit=5, publication_date_or_year="2022-"
+    )
+
+    # The request should have succeeded and returned paper data.
+    assert result["data"][0]["paperId"] == "paper-x"
+    # The trailing hyphen must have been rewritten to a colon before the call.
+    assert captured_params[0]["publicationDateOrYear"] == "2022:"
+
+
+@pytest.mark.asyncio
+async def test_get_author_papers_400_with_date_filter_mentions_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 400 on get_author_papers with publicationDateOrYear set should blame
+    the filter, not the author ID, so agents are not sent on a dead-end
+    "check your authorId" path when the ID is actually valid.
+    """
+
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    request = httpx.Request(
+        "GET",
+        "https://api.semanticscholar.org/graph/v1/author/1751762/papers",
+    )
+    bad_response = httpx.Response(status_code=400, request=request)
+
+    class RejectingFilterClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def request(self, **kwargs):
+            return bad_response
+
+    monkeypatch.setattr(
+        server.httpx, "AsyncClient", lambda timeout: RejectingFilterClient()
+    )
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    sc = server.SemanticScholarClient()
+    with pytest.raises(ValueError, match="publicationDateOrYear"):
+        await sc.get_author_papers(
+            "1751762", limit=5, publication_date_or_year="bad-filter-value"
+        )
+
+
+@pytest.mark.asyncio
+async def test_get_author_papers_400_without_date_filter_mentions_author_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 400 on get_author_papers without a date filter should still tell the
+    agent to verify the authorId, since that is the most likely cause.
+    """
+
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    request = httpx.Request(
+        "GET",
+        "https://api.semanticscholar.org/graph/v1/author/bad-id/papers",
+    )
+    bad_response = httpx.Response(status_code=400, request=request)
+
+    class RejectingAuthorClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def request(self, **kwargs):
+            return bad_response
+
+    monkeypatch.setattr(
+        server.httpx, "AsyncClient", lambda timeout: RejectingAuthorClient()
+    )
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    sc = server.SemanticScholarClient()
+    with pytest.raises(ValueError, match="search_authors or get_paper_authors"):
+        await sc.get_author_papers("bad-id", limit=5)
+
+
+@pytest.mark.asyncio
 async def test_search_papers_response_includes_next(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

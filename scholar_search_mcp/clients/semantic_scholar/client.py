@@ -690,7 +690,17 @@ class SemanticScholarClient:
         if offset is not None:
             params["offset"] = offset
         if publication_date_or_year:
-            params["publicationDateOrYear"] = publication_date_or_year
+            # publicationDateOrYear uses ':' as the range separator (e.g. "2022:"),
+            # not '-' which is the year-parameter style (e.g. "2022-").
+            # Normalize a single trailing '-' to ':' so the common shorthand
+            # "2022-" or "2022-03-05-" works the same as the API-native
+            # "2022:" or "2022-03-05:".
+            normalized_date = (
+                publication_date_or_year[:-1] + ":"
+                if publication_date_or_year.endswith("-")
+                else publication_date_or_year
+            )
+            params["publicationDateOrYear"] = normalized_date
         try:
             response = await self._request(
                 "GET",
@@ -700,10 +710,18 @@ class SemanticScholarClient:
         except httpx.HTTPStatusError as exc:
             status_code = self._status_code_from_error(exc)
             if status_code == 400:
+                filter_hint = (
+                    f" Check that publicationDateOrYear={publication_date_or_year!r} "
+                    "uses a valid format (e.g. '2022', '2022:', '2022-03-05:', "
+                    "'2020-01-01:2023-12-31'). Open-ended ranges require a trailing "
+                    "colon ('2022:'), not a trailing hyphen."
+                    if publication_date_or_year
+                    else " Use a Semantic Scholar authorId returned by "
+                    "search_authors or get_paper_authors."
+                )
                 raise ValueError(
                     f"Semantic Scholar rejected get_author_papers for author "
-                    f"{author_id!r}. Use a Semantic Scholar authorId returned by "
-                    "search_authors or get_paper_authors."
+                    f"{author_id!r}.{filter_hint}"
                 ) from exc
             if status_code == 404:
                 raise ValueError(
