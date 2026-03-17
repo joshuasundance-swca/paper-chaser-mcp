@@ -504,6 +504,15 @@ class OpenAlexClient:
         """Return citing OpenAlex works using the work's ``cited_by_api_url``."""
         work = await self._lookup_work_raw(paper_id)
         cited_by_api_url = work.get("cited_by_api_url")
+        # OpenAlex omits cited_by_api_url when a select param is used.
+        # Fall back to constructing the URL from the work's own ID.
+        if not isinstance(cited_by_api_url, str) or not cited_by_api_url.strip():
+            work_id = self._extract_openalex_id(work.get("id"), "W")
+            if work_id:
+                cited_by_api_url = (
+                    f"{OPENALEX_API_BASE}/works?filter=cites:{work_id}"
+                )
+        # Guard: construction may also fail if the work has no resolvable ID.
         if not isinstance(cited_by_api_url, str) or not cited_by_api_url.strip():
             return {
                 "total": 0,
