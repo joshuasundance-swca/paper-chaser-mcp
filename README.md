@@ -427,7 +427,11 @@ labeled both `agentic` and `needs-copilot`, unless the issue also carries
 `needs-human`, `blocked`, or `no-agent`. It listens to direct `issues` events
 and to completed `Test Scholar Search MCP` runs so verifier-created issues still
 get assigned even when the original issue event does not fan out into a second
-workflow run.
+workflow run. For the actual Copilot assignment API call it prefers
+`GH_AW_GITHUB_TOKEN`, then falls back to `COPILOT_GITHUB_TOKEN`, then to the
+default Actions token. This avoids 403 failures on repositories where the
+default `GITHUB_TOKEN` cannot perform Copilot issue assignment even though the
+workflow has `issues: write` permissions.
 
 The normal `Validate` workflow now also recompiles `test-scholar-search.md` on
 CI and fails if `.github/workflows/test-scholar-search.lock.yml` is stale, so

@@ -161,6 +161,12 @@ def test_agentic_assign_workflow_catches_workflow_created_issues() -> None:
     assert "state: 'open'" in assign_workflow
     assert "const copilotAssignee = 'copilot-swe-agent[bot]'" in assign_workflow
     assert "agent_assignment:" in assign_workflow
+    assert "github-token:" in assign_workflow
+    expected_token_fallback = (
+        "secrets.GH_AW_GITHUB_TOKEN || "
+        "secrets.COPILOT_GITHUB_TOKEN || github.token"
+    )
+    assert expected_token_fallback in assign_workflow
     assert "target_repo: targetRepo" in assign_workflow
     assert "base_branch: baseBranch" in assign_workflow
     assert "assignees: [copilotAssignee]" in assign_workflow
