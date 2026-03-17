@@ -228,10 +228,15 @@ class SemanticSearchResponse(ApiModel):
 
 
 class BulkSearchResponse(ApiModel):
-    """Semantic Scholar bulk search response (token-paginated)."""
+    """Semantic Scholar bulk search response (token-paginated).
+
+    The raw provider ``token`` is used internally to build the structured
+    ``pagination.nextCursor`` and is excluded from the serialized response.
+    Callers must use ``pagination.nextCursor`` as the single continuation handle.
+    """
 
     total: int = 0
-    token: str | None = None
+    token: str | None = Field(default=None, exclude=True)
     data: list[Paper] = Field(default_factory=list)
     pagination: Pagination = Field(
         default_factory=lambda: Pagination(has_more=False),
