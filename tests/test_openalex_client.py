@@ -210,6 +210,71 @@ async def test_openalex_get_paper_citations_uses_cited_by_api_url(
 
 
 @pytest.mark.asyncio
+async def test_openalex_get_paper_citations_falls_back_when_cited_by_api_url_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """cited_by_api_url is omitted by OpenAlex when select param is used.
+
+    The client must construct the URL from the work's own ID rather than
+    silently returning empty results.
+    """
+    responses = [
+        DummyResponse(
+            status_code=200,
+            # Simulates a real OpenAlex response with select: no cited_by_api_url
+            payload={
+                "id": "https://openalex.org/W3139434170",
+                "display_name": "TransFG paper",
+                # cited_by_api_url intentionally absent
+            },
+        ),
+        DummyResponse(
+            status_code=200,
+            payload={
+                "meta": {"count": 462, "next_cursor": None},
+                "results": [
+                    {
+                        "id": "https://openalex.org/W99",
+                        "display_name": "Citing paper",
+                    }
+                ],
+            },
+        ),
+    ]
+    captured: list[dict[str, Any]] = []
+
+    class QueueAsyncClient:
+        def __init__(self, queued: list[DummyResponse]) -> None:
+            self._queued = queued
+            self.calls = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        async def get(self, url: str, **kwargs):
+            captured.append({"url": url, **kwargs})
+            response = self._queued[self.calls]
+            self.calls += 1
+            return response
+
+    queue = QueueAsyncClient(responses)
+    monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: queue)
+
+    result = await server.OpenAlexClient().get_paper_citations("W3139434170")
+
+    # Must not return empty results; must have constructed the fallback URL
+    assert result["total"] == 462
+    assert result["data"][0]["paperId"] == "W99"
+    assert (
+        captured[1]["url"]
+        == "https://api.openalex.org/works?filter=cites:W3139434170"
+    )
+
+
+@pytest.mark.asyncio
 async def test_openalex_get_paper_references_batches_ids_in_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
