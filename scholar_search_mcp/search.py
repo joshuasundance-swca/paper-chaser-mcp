@@ -1,6 +1,7 @@
 """Search fallback and result-shaping helpers."""
 
 import logging
+import re
 from collections.abc import Sequence
 from typing import Any, Literal, Optional
 
@@ -33,6 +34,99 @@ SEMANTIC_SCHOLAR_ONLY_FILTER_ALIASES = {
     field_name: SearchPapersArgs.model_fields[field_name].alias or field_name
     for field_name in SEMANTIC_SCHOLAR_ONLY_FIELDS
 }
+
+# Common academic/research terms that should not count as distinctive query
+# tokens when checking result relevance.  Short tokens (<6 chars) are already
+# excluded by the length threshold, so only longer common words are listed here.
+_RELEVANCE_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "across",
+        "analysis",
+        "another",
+        "approach",
+        "article",
+        "authors",
+        "before",
+        "between",
+        "beyond",
+        "dataset",
+        "during",
+        "enable",
+        "every",
+        "findings",
+        "further",
+        "general",
+        "however",
+        "improve",
+        "including",
+        "information",
+        "learning",
+        "methods",
+        "models",
+        "neural",
+        "novel",
+        "number",
+        "obtain",
+        "papers",
+        "perform",
+        "present",
+        "problem",
+        "proposed",
+        "provide",
+        "recent",
+        "report",
+        "research",
+        "results",
+        "review",
+        "should",
+        "significant",
+        "specific",
+        "studies",
+        "system",
+        "technique",
+        "through",
+        "towards",
+        "training",
+        "various",
+        "within",
+        "without",
+        "would",
+    }
+)
+
+
+def _distinctive_query_tokens(query: str) -> list[str]:
+    """Return lowercase tokens from *query* that are long and non-trivial.
+
+    A token is considered distinctive when it is at least 6 characters long
+    and not in the academic stopword list.  Short common words and well-known
+    academic filler terms are excluded so that only tokens capable of
+    meaningfully constraining the result set are returned.
+    """
+    tokens = re.findall(r"[a-z0-9]+", query.lower())
+    return [t for t in tokens if len(t) >= 6 and t not in _RELEVANCE_STOPWORDS]
+
+
+def _has_unmatched_distinctive_tokens(query: str, papers: list[Paper]) -> bool:
+    """Return True if any distinctive query token appears in no result text.
+
+    A "distinctive" token is at least 6 characters long and not in the
+    academic stopword list (see ``_distinctive_query_tokens``).  When such a
+    token is absent from every returned paper's title *and* abstract the
+    results are likely a weak match for that part of the query — e.g. when a
+    gibberish token appears in the query but Semantic Scholar returns papers
+    that only match the generic words around it.
+
+    Returns False when there are no distinctive tokens (short or all-stopword
+    query) or when all distinctive tokens appear in at least one result.
+    """
+    distinctive = _distinctive_query_tokens(query)
+    if not distinctive:
+        return False
+    result_text = " ".join(
+        " ".join(filter(None, [p.title, p.abstract])) for p in papers
+    ).lower()
+    return any(token not in result_text for token in distinctive)
 
 
 def _enrich_ss_paper(paper: Paper) -> Paper:
@@ -75,10 +169,13 @@ def _dump_search_response(response: SearchResponse) -> dict[str, Any]:
 
 def _result_quality(
     provider_used: str,
-) -> Literal["strong", "lexical", "unknown"]:
+) -> Literal["strong", "low_relevance", "lexical", "unknown"]:
     """Return a result-quality signal for the given provider.
 
     - ``"strong"``: Semantic Scholar used semantic/relevance ranking.
+    - ``"low_relevance"``: Semantic Scholar returned results but distinctive
+      query tokens were absent from all result titles/abstracts; the caller
+      should apply the low-relevance override separately via ``_metadata``.
     - ``"lexical"``: CORE or arXiv used keyword-only matching; results may be
       false positives for unusual or nonsense queries.
     - ``"unknown"``: SerpApi path or no results — match quality is undetermined.
@@ -98,8 +195,15 @@ def _metadata(
     venue: Sequence[str] | None = None,
     preferred_provider: SearchProvider | None = None,
     provider_order: Sequence[SearchProvider] | None = None,
+    low_relevance: bool = False,
 ) -> BrokerMetadata:
-    """Build consistent broker metadata for ``search_papers`` responses."""
+    """Build consistent broker metadata for ``search_papers`` responses.
+
+    When *low_relevance* is True and the provider is Semantic Scholar, the
+    result quality is downgraded from ``"strong"`` to ``"low_relevance"`` and
+    the ``nextStepHint`` includes an explicit warning so agents do not treat
+    the results as a healthy discovery set.
+    """
     routing_steered = preferred_provider is not None or provider_order is not None
     provider_labels = {
         "core": "CORE",
@@ -146,7 +250,17 @@ def _metadata(
         bulk_guidance = ""
 
     quality = _result_quality(provider_used)
-    if quality == "lexical":
+    if low_relevance and quality == "strong":
+        quality = "low_relevance"
+        quality_guidance = (
+            "brokerMetadata.resultQuality='low_relevance': one or more distinctive "
+            "query tokens were not found in any returned result title or abstract — "
+            "the results are likely a weak or irrelevant match for the full query. "
+            "Do not treat these as a trustworthy discovery set. "
+            "Consider rephrasing the query, broadening it, or trying a different "
+            "provider via providerOrder. "
+        )
+    elif quality == "lexical":
         quality_guidance = (
             "brokerMetadata.resultQuality='lexical': results are keyword matches "
             f"from {provider_labels.get(provider_used, provider_used)} and may "
@@ -545,6 +659,10 @@ async def search_papers_with_fallback(
             for provider in effective_order[processed_providers:]
         )
         if result is not None:
+            low_relevance = (
+                provider_used == "semantic_scholar"
+                and _has_unmatched_distinctive_tokens(query, result.data)
+            )
             result.broker_metadata = _metadata(
                 provider_used=provider_used,
                 attempts=attempts,
@@ -552,6 +670,7 @@ async def search_papers_with_fallback(
                 venue=venue,
                 preferred_provider=preferred_provider,
                 provider_order=provider_order,
+                low_relevance=low_relevance,
             )
 
     if result is None:

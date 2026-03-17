@@ -111,6 +111,10 @@ class BrokerMetadata(BaseModel):
     ``result_quality`` characterises the match strength of the returned results:
     - ``"strong"``: Semantic Scholar used semantic/relevance ranking; results are
       likely topically relevant.
+    - ``"low_relevance"``: Semantic Scholar returned results but one or more
+      distinctive query tokens were absent from all result titles and abstracts,
+      suggesting the results may not be relevant to the full query. Treat with
+      caution; consider rephrasing or trying a different provider.
     - ``"lexical"``: CORE or arXiv used keyword/lexical matching only; results
       contain the query terms but may not be topically relevant, especially for
       unusual or nonsense queries.
@@ -143,13 +147,16 @@ class BrokerMetadata(BaseModel):
         default="search_papers_bulk",
         serialization_alias="recommendedPaginationTool",
     )
-    result_quality: Literal["strong", "lexical", "unknown"] = Field(
+    result_quality: Literal["strong", "low_relevance", "lexical", "unknown"] = Field(
         default="unknown",
         serialization_alias="resultQuality",
         description=(
             "Match-strength signal for the returned results. 'strong' means "
             "Semantic Scholar semantic ranking was used and results are likely "
-            "topically relevant. 'lexical' means keyword-only matching was used "
+            "topically relevant. 'low_relevance' means Semantic Scholar was used "
+            "but distinctive query tokens were absent from all returned results — "
+            "results may be weakly relevant; verify before trusting. "
+            "'lexical' means keyword-only matching was used "
             "(CORE or arXiv) — results contain query terms but may not be "
             "topically relevant, especially for unusual or nonsense queries. "
             "'unknown' means match quality is not determined (SerpApi path or "
