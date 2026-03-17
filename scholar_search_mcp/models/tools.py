@@ -412,7 +412,13 @@ class AuthorPapersArgs(AuthorInfoArgs):
     publication_date_or_year: str | None = Field(
         default=None,
         alias="publicationDateOrYear",
-        description="Date or date-range filter",
+        description=(
+            "Date or date-range filter. Supported formats: '2022' (single year), "
+            "'2022-05-15' (specific date), '2022:' or '2022-' (from year onward, "
+            "open-ended right), ':2023' (up to year), '2020:2023' (closed range). "
+            "Trailing-dash open-ended form (e.g. '2022-') is automatically "
+            "normalized to the colon form ('2022:') before the API call."
+        ),
     )
 
     @field_validator("limit", mode="before")
