@@ -390,9 +390,9 @@ How it runs in GitHub:
 - `gh aw compile ...` generates `.github/workflows/test-scholar-search.lock.yml`,
   which is the Actions workflow file GitHub actually runs.
 - Once both files are committed to the default branch and the required secrets
-  are configured, GitHub runs the workflow on `push` to `main` or when
+  are configured, GitHub runs the workflow on `push` to `master` or when
   manually triggered with `workflow_dispatch` from the Actions tab. Concurrent
-  runs on `main` are cancelled so rapid merges don't queue up redundant
+  runs on `master` are cancelled so rapid merges don't queue up redundant
   verification runs.
 - Manual dispatches can select `smoke`, `comprehensive`, or `feature_probe`
   mode and optionally pass a free-form focus prompt.

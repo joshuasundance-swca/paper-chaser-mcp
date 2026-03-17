@@ -160,3 +160,21 @@ def test_agentic_assign_workflow_catches_workflow_created_issues() -> None:
     assert "labels: Array.from(requiredLabels).join(',')" in assign_workflow
     assert "state: 'open'" in assign_workflow
     assert "assignees: ['Copilot']" in assign_workflow
+
+
+def test_verifier_workflow_triggers_on_default_branch() -> None:
+    """Regression test: workflow push trigger must match the repo default branch (master).
+
+    If the trigger branch is wrong, merging a Copilot fix PR never re-runs the
+    verifier, which breaks the agentic feedback loop.
+    """
+    repo_root = Path(__file__).resolve().parent.parent
+    workflow_md = (
+        repo_root / ".github" / "workflows" / "test-scholar-search.md"
+    ).read_text()
+
+    assert "branches: [master]" in workflow_md, (
+        "test-scholar-search.md must trigger on push to 'master' (the repo default "
+        "branch). If this is 'main', merged Copilot fix PRs will not re-run the "
+        "verifier and the agentic feedback loop will be silently broken."
+    )

@@ -36,7 +36,7 @@ name: "Test Scholar Search MCP"
 "on":
   push:
     branches:
-    - main
+    - master
   workflow_dispatch:
     inputs:
       focus_prompt:
