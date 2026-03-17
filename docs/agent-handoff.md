@@ -62,11 +62,12 @@ This document is the current working handoff for the fork. It is intended to giv
   both `agentic` and `needs-copilot` labels but not `needs-human`, `blocked`,
   or `no-agent`. This separates assignment from verification to avoid event
   storms.
-- The workflow now runs the GPT-5.4 model (configured via `model: gpt-5.4` in
-  the frontmatter) and emphasizes agent UX evaluation: each test step includes
-  an explicit UX check for intuitiveness, unnecessary round trips, missing
-  features, confusing contracts, and dead-end responses. A new step 11 produces
-  a structured "UX friction summary" before issue creation.
+- The workflow emphasizes agent UX evaluation: each test step includes an
+  explicit UX check for intuitiveness, unnecessary round trips, missing
+  features, confusing contracts, and dead-end responses. A new step 11
+  produces a structured "UX friction summary" before issue creation. The
+  model can be configured via the `GH_AW_MODEL_AGENT_COPILOT` Actions
+  variable (e.g., set to `gpt-5.4` to use GPT-5.4).
 
 ## Module Map
 

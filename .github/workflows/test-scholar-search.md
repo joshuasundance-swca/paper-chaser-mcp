@@ -30,8 +30,6 @@ network: defaults
 
 engine: copilot
 
-model: gpt-5.4
-
 timeout-minutes: 20
 
 safe-outputs:
@@ -119,7 +117,7 @@ as functional pass/fail results.
 
 - Requested mode: `${{ inputs.mode }}`
 - Requested focus prompt: `${{ inputs.focus_prompt }}`
-- Scheduled runs do not supply manual inputs; when the mode is blank, treat this
+- Push-triggered runs do not supply manual inputs; when the mode is blank, treat this
   run as `smoke`.
 - When a focus prompt is present, restate it in your notes and use it to choose
   the deeper probes after the baseline checks.

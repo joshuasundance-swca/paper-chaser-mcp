@@ -367,9 +367,9 @@ gh aw compile test-scholar-search --dir .github/workflows
 
 What this workflow does:
 
-- Runs GPT-5.4 (configured via `model: gpt-5.4` in the workflow frontmatter)
-  as the agent against the local `scholar-search` MCP server inside GitHub
-  Actions.
+- Runs the agent against the local `scholar-search` MCP server inside GitHub
+  Actions. Set the `GH_AW_MODEL_AGENT_COPILOT` Actions variable to `gpt-5.4`
+  (or another model) to control which model is used.
 - Exercises the primary golden paths instead of every tool: quick discovery,
   known-item lookup, bulk pagination, citation chasing, author pivot, and
   optional SerpApi citation export.
@@ -402,9 +402,9 @@ Required secrets and variables for this workflow:
 - `COPILOT_GITHUB_TOKEN` is required. The GitHub Copilot CLI engine fails in
   the activation job before the repo checkout or MCP startup steps if this
   secret is not present.
-- `GH_AW_MODEL_AGENT_COPILOT` (Actions variable, optional): overrides the
-  agent model. Set to `gpt-5.4` to use GPT-5.4. If unset, the `model:
-  gpt-5.4` frontmatter key controls the default.
+- `GH_AW_MODEL_AGENT_COPILOT` (Actions variable, optional): controls the
+  agent model. Set to `gpt-5.4` to use GPT-5.4. If unset, the engine uses
+  its default model.
 - `CORE_API_KEY` is optional.
 - `SEMANTIC_SCHOLAR_API_KEY` is optional.
 
