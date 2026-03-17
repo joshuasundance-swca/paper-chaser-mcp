@@ -652,6 +652,201 @@ async def test_search_papers_match_returns_structured_no_match_payload_after_fal
     ]
 
 
+@pytest.mark.asyncio
+async def test_search_papers_match_primary_success_includes_match_found_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successful 200 from the primary match endpoint must include matchFound=True
+    and matchStrategy='exact_title' so agents can distinguish it from a no-match."""
+
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    class SuccessfulMatchAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def request(self, **kwargs):
+            return httpx.Response(
+                status_code=200,
+                request=httpx.Request(
+                    "GET",
+                    "https://api.semanticscholar.org/graph/v1/paper/search/match",
+                ),
+                json={
+                    "paperId": "204e3073870fae3d05bcbc2f6a8e263d9b72e776",
+                    "title": "Attention is All you Need",
+                },
+            )
+
+    monkeypatch.setattr(
+        server.httpx,
+        "AsyncClient",
+        lambda timeout: SuccessfulMatchAsyncClient(),
+    )
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    sc = server.SemanticScholarClient()
+    result = await sc.search_papers_match("Attention Is All You Need")
+
+    assert result["matchFound"] is True
+    assert result["matchStrategy"] == "exact_title"
+    assert result["paperId"] == "204e3073870fae3d05bcbc2f6a8e263d9b72e776"
+    assert result["title"] == "Attention is All you Need"
+
+
+@pytest.mark.asyncio
+async def test_search_papers_match_200_null_paper_triggers_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 200 response with paperId=null (empty data) must trigger the fallback
+    so agents never receive a confusing null-paper payload instead of a
+    structured no-match with recovery hints."""
+
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    responses = [
+        httpx.Response(
+            status_code=200,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
+            ),
+            json={"paperId": None, "title": None, "data": []},
+        ),
+        httpx.Response(
+            status_code=200,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
+            ),
+            json={
+                "total": 1,
+                "offset": 0,
+                "data": [
+                    {
+                        "paperId": "204e3073870fae3d05bcbc2f6a8e263d9b72e776",
+                        "title": "Attention is All you Need",
+                    }
+                ],
+            },
+        ),
+    ]
+
+    class SequencedAsyncClient:
+        def __init__(self, queued_responses: list[httpx.Response]) -> None:
+            self._responses = queued_responses
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def request(self, **kwargs):
+            return self._responses.pop(0)
+
+    monkeypatch.setattr(
+        server.httpx,
+        "AsyncClient",
+        lambda timeout: SequencedAsyncClient(responses),
+    )
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    sc = server.SemanticScholarClient()
+    result = await sc.search_papers_match("Attention Is All You Need")
+
+    assert result["matchFound"] is True
+    assert result["matchStrategy"] == "fuzzy_search"
+    assert result["paperId"] == "204e3073870fae3d05bcbc2f6a8e263d9b72e776"
+
+
+@pytest.mark.asyncio
+async def test_search_papers_match_fallback_finds_famous_paper_by_exact_title(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fuzzy-search fallback must find a famous paper like 'Attention Is All
+    You Need' when the primary match endpoint returns 404 but search_papers
+    returns the canonical paper in its result set."""
+
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    responses = [
+        httpx.Response(
+            status_code=404,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
+            ),
+        ),
+        httpx.Response(
+            status_code=200,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
+            ),
+            json={
+                "total": 5,
+                "offset": 0,
+                "data": [
+                    {"paperId": "other-1", "title": "Deep Residual Learning"},
+                    {"paperId": "other-2", "title": "ImageNet Classification"},
+                    {
+                        "paperId": "204e3073870fae3d05bcbc2f6a8e263d9b72e776",
+                        "title": "Attention is All you Need",
+                    },
+                    {"paperId": "other-3", "title": "BERT Pre-training"},
+                    {"paperId": "other-4", "title": "GPT Language Models"},
+                ],
+            },
+        ),
+    ]
+
+    class SequencedAsyncClient:
+        def __init__(self, queued_responses: list[httpx.Response]) -> None:
+            self._responses = queued_responses
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def request(self, **kwargs):
+            return self._responses.pop(0)
+
+    monkeypatch.setattr(
+        server.httpx,
+        "AsyncClient",
+        lambda timeout: SequencedAsyncClient(responses),
+    )
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    sc = server.SemanticScholarClient()
+    result = await sc.search_papers_match("Attention Is All You Need")
+
+    assert result["matchFound"] is True
+    assert result["matchStrategy"] == "fuzzy_search"
+    assert result["paperId"] == "204e3073870fae3d05bcbc2f6a8e263d9b72e776"
+    assert result["title"] == "Attention is All you Need"
+
+
+def test_search_papers_match_no_match_message_mentions_get_paper_details() -> None:
+    """The no-match message must suggest get_paper_details as a recovery path.
+
+    This is a regression guard for the smoke-run finding that the no-match
+    response left agents stranded with no mention of the identifier-based
+    recovery tool.
+    """
+    import inspect
+
+    source = inspect.getsource(
+        server.SemanticScholarClient._search_papers_match_fallback,
+    )
+    assert "get_paper_details" in source
+
+
 def test_normalize_author_search_query_falls_back_to_original_when_empty() -> None:
     client = server.SemanticScholarClient()
 
