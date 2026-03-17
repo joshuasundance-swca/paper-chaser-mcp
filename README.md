@@ -390,10 +390,10 @@ How it runs in GitHub:
 - `gh aw compile ...` generates `.github/workflows/test-scholar-search.lock.yml`,
   which is the Actions workflow file GitHub actually runs.
 - Once both files are committed to the default branch and the required secrets
-  are configured, GitHub runs the workflow on `push` to `main`, on the
-  6-hourly schedule, or when manually triggered with `workflow_dispatch` from
-  the Actions tab. Concurrent runs on `main` are cancelled so rapid merges
-  don't queue up redundant verification runs.
+  are configured, GitHub runs the workflow on `push` to `main` or when
+  manually triggered with `workflow_dispatch` from the Actions tab. Concurrent
+  runs on `main` are cancelled so rapid merges don't queue up redundant
+  verification runs.
 - Manual dispatches can select `smoke`, `comprehensive`, or `feature_probe`
   mode and optionally pass a free-form focus prompt.
 
@@ -416,10 +416,10 @@ How to update and use it:
    lock file.
 4. Commit both the `.md` source and `.lock.yml` output together.
 5. Push the branch, then run `Test Scholar Search MCP` from the GitHub Actions
-   UI or wait for the scheduled run on the default branch. For on-demand UX
-   reviews, use `workflow_dispatch` inputs to choose the run mode and provide an
-   optional focus prompt such as a new feature, a provider-specific flow, or a
-   confusing agent interaction to probe.
+   UI or wait for a `push`-triggered run on the default branch. For on-demand
+   UX reviews, use `workflow_dispatch` inputs to choose the run mode and
+   provide an optional focus prompt such as a new feature, a provider-specific
+   flow, or a confusing agent interaction to probe.
 
 The repository also includes `.github/workflows/agentic-assign.yml`, a
 lightweight workflow that triggers on `issues: types: [opened, reopened,

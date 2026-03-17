@@ -1,10 +1,10 @@
 ---
 description: |
   Exercise the primary Scholar Search MCP golden paths with an agent so the
-  repo gets a scheduled, high-level regression check of discovery,
-  pagination, author pivot, and optional citation-export workflows. Evaluates
-  agent UX quality: intuitiveness, unnecessary round trips, missing features,
-  and friction points that make common workflows harder than they should be.
+  repo gets a high-level regression check of discovery, pagination, author
+  pivot, and optional citation-export workflows. Evaluates agent UX quality:
+  intuitiveness, unnecessary round trips, missing features, and friction
+  points that make common workflows harder than they should be.
   Manual runs can switch between smoke, comprehensive, and feature-probe UX
   review modes with an optional focus prompt.
   Requires a repository or organization secret named COPILOT_GITHUB_TOKEN.
@@ -21,7 +21,6 @@ on:
         description: Optional feature, workflow, or UX hypothesis to probe.
         type: string
         required: false
-  schedule: every 6 hours
   push:
     branches: [main]
 
