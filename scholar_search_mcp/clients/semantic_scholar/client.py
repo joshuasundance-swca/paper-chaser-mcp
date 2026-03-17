@@ -41,9 +41,10 @@ _TITLE_LOOKUP_KEY_PATTERN = re.compile(r"[^0-9a-z]+")
 # Keep fuzzy-title recovery conservative: exact normalized matches win, and
 # otherwise require very high similarity to avoid promoting unrelated papers.
 _TITLE_MATCH_SIMILARITY_THRESHOLD = 0.92
-# Fallback only needs a small relevance-ranked window because we re-score titles
-# locally and want to keep degraded exact-match recovery cheap.
-_TITLE_MATCH_FALLBACK_LIMIT = 10
+# Fallback search window: use a larger window so that famous papers (e.g.
+# "Attention Is All You Need") are more likely to appear in the candidate list
+# even when relevance ranking places them below position 10.
+_TITLE_MATCH_FALLBACK_LIMIT = 30
 # Regex for a bare arXiv ID (new format YYMM.NNNNN or YYMM.NNNN, optional vN,
 # or old category/NNNNNNN format) without any prefix.
 _BARE_ARXIV_ID_PATTERN = re.compile(
@@ -356,10 +357,13 @@ class SemanticScholarClient:
             "matchStrategy": "none",
             "normalizedQueriesTried": candidate_queries,
             "message": (
-                "No Semantic Scholar title match was found. This query may refer to "
-                "a dissertation, software release, report, or other output outside "
-                "the indexed paper surface. Try search_papers, search_authors, or "
-                "external verification."
+                "No Semantic Scholar title match was found. If you have a DOI, "
+                "arXiv ID, or URL for this item, use get_paper_details instead "
+                "(e.g. get_paper_details(paper_id='arXiv:1706.03762')). "
+                "Otherwise this query may refer to a dissertation, software "
+                "release, report, or other output outside the indexed paper "
+                "surface. Try search_papers or search_authors for broader "
+                "discovery."
             ),
         }
 
@@ -462,6 +466,9 @@ class SemanticScholarClient:
         """Best title-match paper search (``/paper/search/match``).
 
         Returns the single paper whose title most closely matches *query*.
+        Adds ``matchFound`` and ``matchStrategy`` fields to the response so
+        agents can distinguish a confirmed match from the structured no-match
+        payload returned by the fallback path.
         """
         params: dict[str, Any] = {
             "query": query,
@@ -474,7 +481,17 @@ class SemanticScholarClient:
             if status_code in {400, 404}:
                 return await self._search_papers_match_fallback(query, fields=fields)
             raise
-        return dump_jsonable(self._normalize_match_response(response))
+        paper = self._normalize_match_response(response)
+        if paper.paper_id is None:
+            # Primary endpoint returned a 200 but no usable paper (e.g. empty
+            # data array or a response with all-null identifier fields).  Fall
+            # back to the fuzzy-search path so agents always receive either a
+            # confirmed match or a structured no-match with recovery hints.
+            return await self._search_papers_match_fallback(query, fields=fields)
+        result = dump_jsonable(paper)
+        result["matchFound"] = True
+        result["matchStrategy"] = "exact_title"
+        return result
 
     async def paper_autocomplete(self, query: str) -> dict[str, Any]:
         """Query completion for paper titles (``/paper/autocomplete``).
