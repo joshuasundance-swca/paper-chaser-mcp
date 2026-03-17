@@ -31,6 +31,14 @@ AUTHOR_SEARCH_QUERY_DESCRIPTION = (
     "Author name to search for. Plain-text only; initials and exact-name "
     "punctuation may be normalized before the upstream request."
 )
+OPENALEX_WORK_ID_DESCRIPTION = (
+    "OpenAlex work identifier for OpenAlex-specific tools. Accepts an OpenAlex "
+    "W-id, OpenAlex work URL, or DOI."
+)
+OPENALEX_AUTHOR_ID_DESCRIPTION = (
+    "OpenAlex author identifier for OpenAlex-specific tools. Accepts an OpenAlex "
+    "A-id or OpenAlex author URL."
+)
 SEMANTIC_SCHOLAR_EXPANSION_PAPER_ID_DESCRIPTION = (
     "Paper identifier for Semantic Scholar expansion tools. Prefer "
     "paper.recommendedExpansionId when brokered search results provide it. If "
@@ -220,6 +228,19 @@ class SemanticProviderSearchPapersArgs(SearchPapersBaseArgs):
     """Semantic Scholar single-source search arguments."""
 
 
+class OpenAlexBulkSearchPapersArgs(BasicSearchPapersArgs):
+    limit: int = Field(default=100, description="Max results (default 100, max 200)")
+    cursor: str | None = Field(
+        default=None,
+        description=OPAQUE_CURSOR_FIELD_DESCRIPTION,
+    )
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def clamp_limit(cls, value: int | None) -> int:
+        return _clamp_limit(value, 100, 200)
+
+
 class BulkSearchPapersArgs(ToolArgsModel):
     query: str = Field(
         description=(
@@ -303,6 +324,26 @@ class PaperLookupArgs(ToolArgsModel):
     fields: list[str] | None = Field(default=None, description="Fields to return")
 
 
+class OpenAlexPaperLookupArgs(ToolArgsModel):
+    paper_id: str = Field(description=OPENALEX_WORK_ID_DESCRIPTION)
+
+
+class OpenAlexPaperListArgs(OpenAlexPaperLookupArgs):
+    limit: int = Field(
+        default=100,
+        description="Max results (default 100, max 200)",
+    )
+    cursor: str | None = Field(
+        default=None,
+        description=OPAQUE_CURSOR_FIELD_DESCRIPTION,
+    )
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def clamp_limit(cls, value: int | None) -> int:
+        return _clamp_limit(value, 100, 200)
+
+
 class PaperListArgs(PaperLookupArgs):
     paper_id: str = Field(description=SEMANTIC_SCHOLAR_EXPANSION_PAPER_ID_DESCRIPTION)
     limit: int = Field(
@@ -380,6 +421,30 @@ class AuthorPapersArgs(AuthorInfoArgs):
         return _clamp_limit(value, 100, 1000)
 
 
+class OpenAlexAuthorInfoArgs(ToolArgsModel):
+    author_id: str = Field(description=OPENALEX_AUTHOR_ID_DESCRIPTION)
+
+
+class OpenAlexAuthorPapersArgs(OpenAlexAuthorInfoArgs):
+    limit: int = Field(
+        default=100,
+        description="Max results (default 100, max 200)",
+    )
+    cursor: str | None = Field(
+        default=None,
+        description=OPAQUE_CURSOR_FIELD_DESCRIPTION,
+    )
+    year: str | None = Field(
+        default=None,
+        description="Year filter, e.g. '2020-2023' or '2023'",
+    )
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def clamp_limit(cls, value: int | None) -> int:
+        return _clamp_limit(value, 100, 200)
+
+
 class AuthorSearchArgs(ToolArgsModel):
     query: str = Field(description=AUTHOR_SEARCH_QUERY_DESCRIPTION)
     fields: list[str] | None = Field(
@@ -404,6 +469,23 @@ class AuthorSearchArgs(ToolArgsModel):
     @classmethod
     def validate_fields(cls, value: list[str] | None) -> list[str] | None:
         return _validate_author_fields(value)
+
+
+class OpenAlexAuthorSearchArgs(ToolArgsModel):
+    query: str = Field(description="Author name to search in OpenAlex.")
+    limit: int = Field(
+        default=10,
+        description="Max results (default 10, max 200)",
+    )
+    cursor: str | None = Field(
+        default=None,
+        description=OPAQUE_CURSOR_FIELD_DESCRIPTION,
+    )
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def clamp_limit(cls, value: int | None) -> int:
+        return _clamp_limit(value, 10, 200)
 
 
 class BatchGetAuthorsArgs(ToolArgsModel):
@@ -532,16 +614,24 @@ TOOL_INPUT_MODELS: dict[str, type[ToolArgsModel]] = {
     "search_papers_semantic_scholar": SemanticProviderSearchPapersArgs,
     "search_papers_serpapi": MinimalProviderSearchPapersArgs,
     "search_papers_arxiv": MinimalProviderSearchPapersArgs,
+    "search_papers_openalex": MinimalProviderSearchPapersArgs,
+    "search_papers_openalex_bulk": OpenAlexBulkSearchPapersArgs,
     "search_papers_bulk": BulkSearchPapersArgs,
     "search_papers_match": PaperMatchArgs,
     "paper_autocomplete": PaperAutocompleteArgs,
     "get_paper_details": PaperLookupArgs,
+    "get_paper_details_openalex": OpenAlexPaperLookupArgs,
     "get_paper_citations": PaperListArgs,
+    "get_paper_citations_openalex": OpenAlexPaperListArgs,
     "get_paper_references": PaperListArgs,
+    "get_paper_references_openalex": OpenAlexPaperListArgs,
     "get_paper_authors": PaperAuthorsArgs,
     "get_author_info": AuthorInfoArgs,
+    "get_author_info_openalex": OpenAlexAuthorInfoArgs,
     "get_author_papers": AuthorPapersArgs,
+    "get_author_papers_openalex": OpenAlexAuthorPapersArgs,
     "search_authors": AuthorSearchArgs,
+    "search_authors_openalex": OpenAlexAuthorSearchArgs,
     "batch_get_authors": BatchGetAuthorsArgs,
     "search_snippets": SnippetSearchArgs,
     "get_paper_recommendations": RecommendationArgs,

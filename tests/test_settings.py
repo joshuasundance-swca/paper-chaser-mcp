@@ -52,6 +52,9 @@ def test_app_settings_serpapi_disabled_by_default() -> None:
     settings = AppSettings.from_env({})  # empty env
     assert settings.enable_serpapi is False
     assert settings.serpapi_api_key is None
+    assert settings.enable_openalex is True
+    assert settings.openalex_api_key is None
+    assert settings.openalex_mailto is None
 
 
 def test_app_settings_serpapi_enabled_via_env() -> None:
@@ -65,6 +68,20 @@ def test_app_settings_serpapi_enabled_via_env() -> None:
     )
     assert settings.enable_serpapi is True
     assert settings.serpapi_api_key == "my-api-key"
+
+
+def test_app_settings_openalex_enabled_with_optional_mailto_and_key() -> None:
+    settings = AppSettings.from_env(
+        {
+            "SCHOLAR_SEARCH_ENABLE_OPENALEX": "true",
+            "OPENALEX_API_KEY": "openalex-key",
+            "OPENALEX_MAILTO": "team@example.com",
+        }
+    )
+
+    assert settings.enable_openalex is True
+    assert settings.openalex_api_key == "openalex-key"
+    assert settings.openalex_mailto == "team@example.com"
 
 
 def test_app_settings_transport_defaults_to_stdio() -> None:

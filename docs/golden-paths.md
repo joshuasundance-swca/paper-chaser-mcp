@@ -164,6 +164,11 @@ search_authors(query="Yoshua Bengio", limit=5)
 
 - **Quote or snippet validation**: use `search_snippets` only when title or
   keyword search is weak.
+- **Explicit OpenAlex workflows**: use `search_papers_openalex` for one
+  OpenAlex page, `search_papers_openalex_bulk` for OpenAlex cursor traversal,
+  `get_paper_details_openalex` for OpenAlex W-id/DOI lookup, and the OpenAlex
+  citation/author tools when the task explicitly needs OpenAlex-native DOI/ID,
+  author, or paging semantics instead of the default broker.
 - **Citation export**: use `get_paper_citation_formats` after SerpApi discovery
   when a result exposes `paper.scholarResultId` (a first-class field, `None`
   for non-SerpApi results). Pass `result_id=paper.scholarResultId`, not
@@ -207,6 +212,9 @@ as part of the intended agent contract.
 
 - `search_papers_core`, `search_papers_serpapi`, and `search_papers_arxiv`
    expose only `query`, `limit`, and `year`.
+- `search_papers_openalex` also keeps its single-page contract explicit with
+  only `query`, `limit`, and `year`, while `search_papers_openalex_bulk`
+  exposes OpenAlex cursor pagination as a separate tool.
 - `search_papers_semantic_scholar` continues to expose the wider Semantic
    Scholar-compatible filter set.
 

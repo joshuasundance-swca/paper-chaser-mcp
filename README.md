@@ -2,7 +2,7 @@
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/joshuasundance-swca/scholar-search-mcp)
 
-A FastMCP-based MCP server that integrates the [CORE API v3](https://api.core.ac.uk/docs/v3), [Semantic Scholar API](https://www.semanticscholar.org/product/api), [arXiv API](https://info.arxiv.org/help/api/user-manual.html), and optionally [SerpApi Google Scholar](https://serpapi.com/google-scholar-api) so AI assistants (e.g. Claude, Cursor) can search and fetch academic paper metadata.
+A FastMCP-based MCP server that integrates the [CORE API v3](https://api.core.ac.uk/docs/v3), [Semantic Scholar API](https://www.semanticscholar.org/product/api), [OpenAlex API](https://developers.openalex.org/), [arXiv API](https://info.arxiv.org/help/api/user-manual.html), and optionally [SerpApi Google Scholar](https://serpapi.com/google-scholar-api) so AI assistants (e.g. Claude, Cursor) can search and fetch academic paper metadata.
 
 The package now uses FastMCP for tool/resource/prompt registration, Pydantic for strict tool inputs and normalized provider payloads, and provider clients organized as expandable subpackages under `scholar_search_mcp/clients/`.
 
@@ -19,6 +19,7 @@ The package now uses FastMCP for tool/resource/prompt registration, Pydantic for
 - **Batch lookup** – Fetch up to 500 papers in one call
 - **Recommendations** – Similar papers via single-seed GET or multi-seed POST
 - **Citation formats** – Get MLA, APA, BibTeX, and other citation export formats for a Google Scholar paper (requires SerpApi)
+- **OpenAlex-native workflows** – Explicit OpenAlex search, cursor-paginated retrieval, work lookup by DOI/OpenAlex ID, cited-by/reference traversal, and author pivots without forcing OpenAlex into the brokered Semantic-Scholar-shaped flow
 - **Shared rate limiter** – One 1 req/s pacing lock shared across all Semantic Scholar endpoints
 - **Structured FastMCP outputs** – Tools return structured content instead of JSON blobs embedded in text
 - **Agent onboarding aids** – Ships a workflow guide resource and a planning prompt alongside the tools
@@ -227,6 +228,18 @@ Example: prefer Semantic Scholar first, then arXiv for this deployment:
 }
 ```
 
+### OpenAlex configuration
+
+OpenAlex is exposed through the explicit `*_openalex` tools rather than the
+default `search_papers` broker. The OpenAlex tools are enabled by default and do
+not require an API key, but you can configure them with:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `SCHOLAR_SEARCH_ENABLE_OPENALEX` | `true` | Enable or disable the explicit OpenAlex tool family |
+| `OPENALEX_API_KEY` | unset | Optional OpenAlex premium API key |
+| `OPENALEX_MAILTO` | unset | Optional contact email for the OpenAlex polite pool; recommended for production use |
+
 ### Transport configuration
 
 The server defaults to local **stdio** transport, which is the recommended mode for desktop MCP clients. FastMCP also supports HTTP-compatible transports for local development, integration testing, and controlled deployments:
@@ -268,6 +281,8 @@ Primary defaults for agents:
 - Use `search_papers_match` or `get_paper_details` for known-item lookup.
 - Expand with `get_paper_citations`, `get_paper_references`, and `search_authors`
   once you have a paper or author anchor.
+- Use the `*_openalex` tools when you explicitly want OpenAlex-native DOI/ID
+  lookup, OpenAlex cursor pagination, or OpenAlex author/citation semantics.
 - Reach for `search_snippets` only when quote or phrase recovery is needed.
 
 
@@ -278,16 +293,24 @@ Primary defaults for agents:
 | `search_papers_semantic_scholar` | Single-page Semantic Scholar-only search with the same normalized response shape as `search_papers`. Exposes the Semantic Scholar-compatible inputs: `query`, `limit`, `fields`, `year`, `venue`, `publicationDateOrYear`, `fieldsOfStudy`, `publicationTypes`, `openAccessPdf`, and `minCitationCount`. |
 | `search_papers_serpapi`          | Single-page SerpApi Google Scholar-only search. **Requires SerpApi** (`SCHOLAR_SEARCH_ENABLE_SERPAPI=true` + `SERPAPI_API_KEY`). Exposes only the inputs SerpApi actually honors: `query`, `limit`, and `year`. |
 | `search_papers_arxiv`            | Single-page arXiv-only search with the same normalized response shape as `search_papers`. Exposes only the inputs arXiv actually honors: `query`, `limit`, and `year`. |
+| `search_papers_openalex`         | Single-page OpenAlex-only search with the same normalized top-level response shape as `search_papers`. Exposes only the inputs OpenAlex explicitly honors here: `query`, `limit`, and `year`. |
+| `search_papers_openalex_bulk`    | Cursor-paginated OpenAlex search for explicit OpenAlex retrieval flows. Treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and keep it scoped to the same tool/query flow; supports `query`, `limit`, and `year`. |
 | `search_papers_bulk`             | Primary exhaustive retrieval tool. Paginated bulk paper search (Semantic Scholar) with advanced boolean query syntax (up to 1,000 returned papers/call). The upstream bulk endpoint may ignore small `limit` values internally, so this server truncates returned data to the requested limit; prefer `search_papers` or `search_papers_semantic_scholar` for small targeted pages. Treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and do not derive/edit/fabricate it; `pagination.hasMore` signals more results. |
 | `search_papers_match`            | Known-item lookup for messy or partial titles; finds the single paper whose title best matches the query string, falls back to fuzzy Semantic Scholar title search on exact-match 400/404 misses, and returns a structured no-match payload when the item still cannot be recovered |
 | `paper_autocomplete`             | Return paper title completions for a partial query (typeahead)                                           |
 | `get_paper_details`              | Known-item lookup by identifier: get one paper by DOI, ArXiv ID, S2 ID, or URL                         |
+| `get_paper_details_openalex`     | Known-item lookup using OpenAlex semantics: get one work by OpenAlex W-id, OpenAlex work URL, or DOI, with abstract reconstruction from OpenAlex's `abstract_inverted_index` when possible |
 | `get_paper_citations`            | Citation chasing outward: papers that cite the given paper (`cited by`); for Semantic Scholar expansion prefer `paper.recommendedExpansionId`, and if `paper.expansionIdStatus` is `not_portable` resolve the paper through DOI or a Semantic Scholar-native lookup before expanding; treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and keep it scoped to the same tool/query flow |
+| `get_paper_citations_openalex`   | OpenAlex cited-by expansion using the work's `cited_by_api_url`; treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and keep it scoped to the same tool/query flow |
 | `get_paper_references`           | Citation chasing backward: references behind the given paper; for Semantic Scholar expansion prefer `paper.recommendedExpansionId`, and if `paper.expansionIdStatus` is `not_portable` resolve the paper through DOI or a Semantic Scholar-native lookup before expanding; treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and keep it scoped to the same tool/query flow |
+| `get_paper_references_openalex`  | OpenAlex backward-reference expansion that hydrates `referenced_works` through batched OpenAlex ID lookups and returns an opaque server-issued cursor for the next slice |
 | `get_paper_authors`              | Authors of the given paper; for this Semantic Scholar expansion path prefer `paper.recommendedExpansionId`, and if `paper.expansionIdStatus` is `not_portable` resolve the paper through DOI or a Semantic Scholar-native lookup before expanding; treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and keep it scoped to the same tool/query flow |
 | `get_author_info`                | Author profile by Semantic Scholar author ID (typically from `search_authors` or `get_paper_authors`)   |
+| `get_author_info_openalex`       | OpenAlex author profile by OpenAlex A-id or OpenAlex author URL                                          |
 | `get_author_papers`              | Papers by author; requires a Semantic Scholar author ID; treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and keep it scoped to the same tool/query flow; supports `publicationDateOrYear` |
 | `search_authors`                 | Search for authors by name using a plain-text query; the server normalizes exact-name punctuation before calling Semantic Scholar, and common-name workflows should add affiliation, coauthor, venue, or topic clues before confirming the best candidate; treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and keep it scoped to the same tool/query flow |
+| `search_authors_openalex`        | Search OpenAlex authors by name for an explicit OpenAlex author workflow; confirm common-name matches with affiliation or profile metadata before expanding papers; treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and keep it scoped to the same tool/query flow |
+| `get_author_papers_openalex`     | Papers by OpenAlex author with optional `year` filtering and OpenAlex cursor pagination; this keeps the two-step OpenAlex author flow explicit: `search_authors_openalex`/`get_author_info_openalex` first, then expand papers |
 | `batch_get_authors`              | Details for up to 1,000 author IDs in one call                                                           |
 | `search_snippets`                | Special-purpose recovery tool for quote or phrase validation when title/keyword search is weak; returns snippet text, paper metadata, and score, and degrades provider 4xx/5xx failures to an empty result with retry guidance |
 | `get_paper_recommendations`      | Similar papers for a given paper (GET single-seed)                                                       |
@@ -401,7 +424,7 @@ For maintainer orientation after the module split, start with `docs/agent-handof
 - [GitHub Copilot Instructions](.github/copilot-instructions.md) - repo-specific guidance for GitHub Copilot and the GitHub cloud coding agent, including workflow defaults and durable planning expectations.
 - [Agent Handoff](docs/agent-handoff.md) - current repo status, validation commands, and next recommended work for follow-on agents.
 - [Scholar Search Golden Paths](docs/golden-paths.md) - primary personas, workflow defaults, success signals, and future workflow-oriented follow-up work.
-- [OpenAlex API Guide](docs/openalex-api-guide.md) - integration-focused guidance for evaluating OpenAlex as a future provider, including authentication, credit-based limits, paging, `/works` semantics, and normalization caveats.
+- [OpenAlex API Guide](docs/openalex-api-guide.md) - implementation-focused guidance for the repo's explicit OpenAlex MCP surface, including authentication, credit-based limits, paging, `/works` semantics, and normalization caveats.
 - [Semantic Scholar API Guide](docs/semantic-scholar-api-guide.md) - practical guidance for respectful and effective Semantic Scholar API usage with async rate limiting, retries, and `.env`-based local development.
 
 ## License

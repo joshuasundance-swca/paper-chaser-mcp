@@ -111,6 +111,71 @@ class RecordingSemanticClient:
         return [{"paperId": paper_id} for paper_id in kwargs["paper_ids"]]
 
 
+class RecordingOpenAlexClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    async def search(self, **kwargs) -> dict:
+        self.calls.append(("search", kwargs))
+        return {
+            "total": 1,
+            "offset": 0,
+            "data": [{"paperId": "W1", "source": "openalex"}],
+        }
+
+    async def search_bulk(self, **kwargs) -> dict:
+        self.calls.append(("search_bulk", kwargs))
+        return {
+            "total": 1,
+            "data": [{"paperId": "W1", "source": "openalex"}],
+            "pagination": {"hasMore": True, "nextCursor": "oa-next"},
+        }
+
+    async def get_paper_details(self, **kwargs) -> dict:
+        self.calls.append(("get_paper_details", kwargs))
+        return {"paperId": kwargs["paper_id"], "source": "openalex"}
+
+    async def get_paper_citations(self, **kwargs) -> dict:
+        self.calls.append(("get_paper_citations", kwargs))
+        return {
+            "total": 1,
+            "offset": 0,
+            "data": [{"paperId": "W2", "source": "openalex"}],
+            "pagination": {"hasMore": True, "nextCursor": "oa-cites"},
+        }
+
+    async def get_paper_references(self, **kwargs) -> dict:
+        self.calls.append(("get_paper_references", kwargs))
+        return {
+            "total": 1,
+            "offset": kwargs.get("offset", 0),
+            "data": [{"paperId": "W3", "source": "openalex"}],
+            "pagination": {"hasMore": True, "nextCursor": "25"},
+        }
+
+    async def search_authors(self, **kwargs) -> dict:
+        self.calls.append(("search_authors", kwargs))
+        return {
+            "total": 1,
+            "offset": 0,
+            "data": [{"authorId": "A1", "name": "OpenAlex Author"}],
+            "pagination": {"hasMore": True, "nextCursor": "oa-authors"},
+        }
+
+    async def get_author_info(self, **kwargs) -> dict:
+        self.calls.append(("get_author_info", kwargs))
+        return {"authorId": kwargs["author_id"], "name": "OpenAlex Author"}
+
+    async def get_author_papers(self, **kwargs) -> dict:
+        self.calls.append(("get_author_papers", kwargs))
+        return {
+            "total": 1,
+            "offset": 0,
+            "data": [{"paperId": "W4", "source": "openalex"}],
+            "pagination": {"hasMore": True, "nextCursor": "oa-author-papers"},
+        }
+
+
 def _payload(response: list) -> Any:
     assert len(response) == 1
     return json.loads(response[0].text)

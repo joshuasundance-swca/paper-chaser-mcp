@@ -11,7 +11,7 @@ from mcp.types import TextContent, Tool, ToolAnnotations
 from pydantic import Field
 from pydantic.fields import PydanticUndefined
 
-from .clients import ArxivClient, CoreApiClient, SemanticScholarClient
+from .clients import ArxivClient, CoreApiClient, OpenAlexClient, SemanticScholarClient
 from .clients.serpapi import SerpApiScholarClient
 from .constants import (
     API_BASE_URL,
@@ -49,6 +49,8 @@ Decision tree for tool selection:
 5. CITATION EXPANSION → get_paper_citations (cited-by) or get_paper_references (refs)
 6. AUTHOR PIVOT → search_authors → get_author_info → get_author_papers
 7. PHRASE / QUOTE RECOVERY → search_snippets (last resort)
+8. OPENALEX-SPECIFIC PATHS → use the *_openalex tools when you explicitly need
+   OpenAlex-native DOI/ID lookup, OpenAlex cursor paging, or OpenAlex author pivots
 
 After search_papers: read brokerMetadata.nextStepHint for the recommended next move.
 For Semantic Scholar expansion tools, prefer paper.recommendedExpansionId when
@@ -63,7 +65,9 @@ To steer the broker: use preferredProvider (try-first) or providerOrder (full ov
 Provider names: core, semantic_scholar, arxiv, serpapi / serpapi_google_scholar.
 Provider-specific search inputs: search_papers_core, search_papers_serpapi, and
 search_papers_arxiv only accept query/limit/year; search_papers_semantic_scholar
-supports the wider Semantic Scholar filter set.
+supports the wider Semantic Scholar filter set. OpenAlex is available through
+explicit *_openalex tools instead of the broker because its citation, author,
+and pagination semantics differ from Semantic Scholar.
 Continuation rule: search_papers_bulk is the closest continuation path only for
 Semantic Scholar-style retrieval; from CORE, arXiv, or SerpApi results it is a
 Semantic Scholar pivot rather than another page from the same provider.
@@ -111,6 +115,10 @@ AGENT_WORKFLOW_GUIDE = """
 - **Citation export**: `get_paper_citation_formats` — pass
   `result_id=paper.scholarResultId` (not `paper.sourceId`) from any
   `serpapi_google_scholar` result to get MLA, APA, BibTeX, etc.
+- **OpenAlex-specific workflows**: use `search_papers_openalex` for one explicit
+  OpenAlex page, `search_papers_openalex_bulk` for cursor-paginated OpenAlex
+  traversal, `get_paper_details_openalex` for OpenAlex ID/DOI lookup, and the
+  OpenAlex citation/author tools when you want OpenAlex-native semantics.
 
 ## Provider steering
 
@@ -123,6 +131,8 @@ call. Use `search_papers_core`, `search_papers_semantic_scholar`,
 
 - `search_papers_core`, `search_papers_serpapi`, and `search_papers_arxiv`
     expose only `query`, `limit`, and `year`.
+- `search_papers_openalex` exposes one explicit OpenAlex page, while
+    `search_papers_openalex_bulk` exposes OpenAlex cursor pagination.
 - `search_papers_semantic_scholar` exposes the wider Semantic Scholar-compatible
     filter set.
 
@@ -158,6 +168,7 @@ __all__ = [
     "SEMANTIC_SCHOLAR_MIN_INTERVAL",
     "SemanticScholarClient",
     "CoreApiClient",
+    "OpenAlexClient",
     "ArxivClient",
     "SerpApiScholarClient",
     "_arxiv_id_from_url",
@@ -174,12 +185,16 @@ __all__ = [
     "api_key",
     "core_api_key",
     "serpapi_api_key",
+    "openalex_api_key",
+    "openalex_mailto",
     "enable_core",
     "enable_semantic_scholar",
+    "enable_openalex",
     "enable_arxiv",
     "enable_serpapi",
     "client",
     "core_client",
+    "openalex_client",
     "arxiv_client",
     "serpapi_client",
     "list_tools",
@@ -207,6 +222,16 @@ def _tool_tags(name: str) -> set[str]:
             "provider:serpapi_google_scholar",
         },
         "search_papers_arxiv": {"search", "provider-specific", "provider:arxiv"},
+        "search_papers_openalex": {
+            "search",
+            "provider-specific",
+            "provider:openalex",
+        },
+        "search_papers_openalex_bulk": {
+            "search",
+            "provider-specific",
+            "provider:openalex",
+        },
     }
     if name in provider_tags:
         return provider_tags[name]
@@ -282,9 +307,11 @@ async def _execute_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         arguments,
         client=client,
         core_client=core_client,
+        openalex_client=openalex_client,
         arxiv_client=arxiv_client,
         enable_core=enable_core,
         enable_semantic_scholar=enable_semantic_scholar,
+        enable_openalex=enable_openalex,
         enable_arxiv=enable_arxiv,
         serpapi_client=serpapi_client,
         enable_serpapi=enable_serpapi,
@@ -295,14 +322,18 @@ async def _execute_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
 settings = AppSettings.from_env()
 api_key = settings.semantic_scholar_api_key
 core_api_key = settings.core_api_key
+openalex_api_key = settings.openalex_api_key
+openalex_mailto = settings.openalex_mailto
 serpapi_api_key = settings.serpapi_api_key
 enable_core = settings.enable_core
 enable_semantic_scholar = settings.enable_semantic_scholar
+enable_openalex = settings.enable_openalex
 enable_arxiv = settings.enable_arxiv
 enable_serpapi = settings.enable_serpapi
 provider_order = list(settings.provider_order)
 client = SemanticScholarClient(api_key=api_key)
 core_client = CoreApiClient(api_key=core_api_key)
+openalex_client = OpenAlexClient(api_key=openalex_api_key, mailto=openalex_mailto)
 arxiv_client = ArxivClient()
 serpapi_client = SerpApiScholarClient(api_key=serpapi_api_key)
 
@@ -350,6 +381,9 @@ def plan_scholar_search(
         "collection, use search_papers_bulk. For small targeted pages, prefer "
         "search_papers or search_papers_semantic_scholar because the upstream "
         "bulk endpoint may ignore small limit values internally. "
+        "If the task explicitly needs OpenAlex-native DOI/ID lookup, OpenAlex "
+        "cursor pagination, or OpenAlex author/citation semantics, use the "
+        "dedicated *_openalex tools instead of the default broker. "
         "If the task is known-item lookup, use search_papers_match for messy titles "
         "and get_paper_details for DOI, arXiv ID, URL, or canonical IDs. Treat a "
         "structured no-match from search_papers_match as a hint that the item may "

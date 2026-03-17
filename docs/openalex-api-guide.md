@@ -1,9 +1,10 @@
 # OpenAlex API Guide
 
-This guide describes how to use the OpenAlex API effectively when evaluating it
-as a future provider for this MCP server.
+This guide describes how the repo now uses the OpenAlex API and what still
+matters when extending that support safely.
 
-It focuses on the parts that matter most for integration work in this repo:
+It focuses on the parts that matter most for the explicit OpenAlex MCP surface
+in this repo:
 
 - `/works` as the main paper-search and paper-detail surface
 - authentication, rate limits, and polite-pool etiquette
@@ -11,6 +12,24 @@ It focuses on the parts that matter most for integration work in this repo:
 - search and filter semantics that differ from the existing providers here
 - provider-specific payload nuances that affect normalization into MCP-friendly
   paper, citation, and author flows
+
+## Current MCP Mapping
+
+The repo now exposes OpenAlex through dedicated tools rather than the default
+`search_papers` broker:
+
+- `search_papers_openalex` for one explicit OpenAlex page
+- `search_papers_openalex_bulk` for OpenAlex cursor pagination
+- `get_paper_details_openalex` for OpenAlex W-id / DOI lookup
+- `get_paper_citations_openalex` and `get_paper_references_openalex` for
+  OpenAlex-native citation chasing
+- `search_authors_openalex`, `get_author_info_openalex`, and
+  `get_author_papers_openalex` for the two-step OpenAlex author flow
+
+This separation is intentional: OpenAlex remains outside the default broker
+because its citation, author, and paging mechanics differ enough from Semantic
+Scholar that squeezing it into the brokered continuation story would be
+misleading.
 
 Primary references:
 
@@ -380,8 +399,8 @@ defaults:
 
 ## Bottom Line
 
-OpenAlex looks promising as a future provider for this repo because it is open,
-metadata-rich, and strong at ID-based filtering and entity pivots.
+OpenAlex is now a first-class explicit provider surface in this repo because it
+is open, metadata-rich, and strong at ID-based filtering and entity pivots.
 
 The main integration traps are not authentication but **semantic mismatch**:
 
@@ -391,6 +410,6 @@ The main integration traps are not authentication but **semantic mismatch**:
 - two-step related-entity workflows
 - citation and paging mechanics that differ from Semantic Scholar
 
-If we add it later, the best result will come from a provider-specific MCP
-surface that is explicit about those differences rather than trying to squeeze
-OpenAlex into an existing provider contract it does not quite match.
+The current implementation follows that recommendation: keep OpenAlex explicit,
+provider-specific, and honest about where its semantics differ from the default
+brokered Semantic-Scholar-shaped flow.

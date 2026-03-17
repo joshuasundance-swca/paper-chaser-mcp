@@ -36,6 +36,7 @@ def _cursor_to_offset(
     cursor: str | None,
     tool: str | None = None,
     context_hash: str | None = None,
+    expected_provider: str = PROVIDER,
 ) -> int | None:
     """Decode an opaque pagination cursor to an integer offset.
 
@@ -77,10 +78,10 @@ def _cursor_to_offset(
             "code=INVALID_CURSOR. "
             f"{CURSOR_REUSE_HINT} Restart the request without a cursor."
         )
-    if state.provider != PROVIDER:
+    if state.provider != expected_provider:
         raise ValueError(
             f"Invalid pagination cursor: cursor provider {state.provider!r} does not "
-            f"match expected provider {PROVIDER!r}. "
+            f"match expected provider {expected_provider!r}. "
             "code=INVALID_CURSOR. "
             f"{CURSOR_REUSE_HINT} Restart the request without a cursor."
         )
@@ -116,6 +117,7 @@ def _encode_next_cursor(
     result: dict[str, Any],
     tool: str,
     context_hash: str | None = None,
+    provider: str = PROVIDER,
 ) -> dict[str, Any]:
     """Re-encode a plain integer ``nextCursor`` in *result* as a structured cursor.
 
@@ -136,7 +138,10 @@ def _encode_next_cursor(
         return result
     if is_legacy_offset(raw_cursor):
         pagination["nextCursor"] = cursor_from_offset(
-            tool, int(raw_cursor), context_hash=context_hash
+            tool,
+            int(raw_cursor),
+            context_hash=context_hash,
+            provider=provider,
         )
     return result
 
@@ -146,6 +151,7 @@ def _cursor_to_bulk_token(
     *,
     tool: str,
     context_hash: str | None = None,
+    expected_provider: str = PROVIDER,
 ) -> str | None:
     """Decode a structured bulk cursor to its provider token."""
     if cursor is None:
@@ -158,10 +164,10 @@ def _cursor_to_bulk_token(
             "code=INVALID_CURSOR. "
             f"{CURSOR_REUSE_HINT} Restart the request without a cursor."
         )
-    if state.provider != PROVIDER:
+    if state.provider != expected_provider:
         raise ValueError(
             f"Invalid pagination cursor: cursor provider {state.provider!r} does not "
-            f"match expected provider {PROVIDER!r}. "
+            f"match expected provider {expected_provider!r}. "
             "code=INVALID_CURSOR. "
             f"{CURSOR_REUSE_HINT} Restart the request without a cursor."
         )
@@ -197,6 +203,7 @@ def _encode_next_bulk_cursor(
     result: dict[str, Any],
     tool: str,
     context_hash: str | None = None,
+    provider: str = PROVIDER,
 ) -> dict[str, Any]:
     """Wrap a raw bulk provider token in a structured server-issued cursor."""
     pagination = result.get("pagination")
@@ -209,6 +216,7 @@ def _encode_next_bulk_cursor(
         tool,
         raw_cursor,
         context_hash=context_hash,
+        provider=provider,
     )
     return result
 
@@ -365,9 +373,11 @@ async def dispatch_tool(
     *,
     client: Any,
     core_client: Any,
+    openalex_client: Any,
     arxiv_client: Any,
     enable_core: bool,
     enable_semantic_scholar: bool,
+    enable_openalex: bool,
     enable_arxiv: bool,
     serpapi_client: Any = None,
     enable_serpapi: bool = False,
@@ -400,6 +410,48 @@ async def dispatch_tool(
             semantic_client=client,
             arxiv_client=arxiv_client,
             serpapi_client=serpapi_client,
+        )
+
+    if name == "search_papers_openalex":
+        if not enable_openalex:
+            raise ValueError(
+                "search_papers_openalex requires OpenAlex, which is disabled. "
+                "Set SCHOLAR_SEARCH_ENABLE_OPENALEX=true to use this tool."
+            )
+        validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
+        args_dict = validated_payload.model_dump(by_alias=False)
+        return await openalex_client.search(
+            query=args_dict["query"],
+            limit=args_dict.get("limit", 10),
+            year=args_dict.get("year"),
+        )
+
+    if name == "search_papers_openalex_bulk":
+        if not enable_openalex:
+            raise ValueError(
+                "search_papers_openalex_bulk requires OpenAlex, which is disabled. "
+                "Set SCHOLAR_SEARCH_ENABLE_OPENALEX=true to use this tool."
+            )
+        validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
+        args_dict = validated_payload.model_dump(by_alias=False)
+        ctx_hash = compute_context_hash(name, args_dict)
+        result = await openalex_client.search_bulk(
+            query=args_dict["query"],
+            limit=args_dict.get("limit", 100),
+            cursor=_cursor_to_bulk_token(
+                args_dict.get("cursor"),
+                tool=name,
+                context_hash=ctx_hash,
+                expected_provider="openalex",
+            ),
+            year=args_dict.get("year"),
+        )
+        serialized = dump_jsonable(result)
+        return _encode_next_bulk_cursor(
+            serialized,
+            name,
+            context_hash=ctx_hash,
+            provider="openalex",
         )
 
     if name in PROVIDER_SEARCH_TOOLS:
@@ -503,6 +555,112 @@ async def dispatch_tool(
         )
         serialized = dump_jsonable(result)
         return _encode_next_bulk_cursor(serialized, name, context_hash=ctx_hash)
+
+    if not enable_openalex and name.endswith("_openalex"):
+        raise ValueError(
+            f"{name} requires OpenAlex, which is disabled. "
+            "Set SCHOLAR_SEARCH_ENABLE_OPENALEX=true to use this tool."
+        )
+
+    if name == "get_paper_details_openalex":
+        validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
+        args_dict = validated_payload.model_dump(by_alias=False)
+        return await openalex_client.get_paper_details(paper_id=args_dict["paper_id"])
+
+    if name == "get_paper_citations_openalex":
+        validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
+        args_dict = validated_payload.model_dump(by_alias=False)
+        ctx_hash = compute_context_hash(name, args_dict)
+        result = await openalex_client.get_paper_citations(
+            paper_id=args_dict["paper_id"],
+            limit=args_dict.get("limit", 100),
+            cursor=_cursor_to_bulk_token(
+                args_dict.get("cursor"),
+                tool=name,
+                context_hash=ctx_hash,
+                expected_provider="openalex",
+            ),
+        )
+        serialized = dump_jsonable(result)
+        return _encode_next_bulk_cursor(
+            serialized,
+            name,
+            context_hash=ctx_hash,
+            provider="openalex",
+        )
+
+    if name == "get_paper_references_openalex":
+        validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
+        args_dict = validated_payload.model_dump(by_alias=False)
+        ctx_hash = compute_context_hash(name, args_dict)
+        result = await openalex_client.get_paper_references(
+            paper_id=args_dict["paper_id"],
+            limit=args_dict.get("limit", 100),
+            offset=_cursor_to_offset(
+                args_dict.get("cursor"),
+                name,
+                context_hash=ctx_hash,
+                expected_provider="openalex",
+            )
+            or 0,
+        )
+        serialized = dump_jsonable(result)
+        return _encode_next_cursor(
+            serialized,
+            name,
+            context_hash=ctx_hash,
+            provider="openalex",
+        )
+
+    if name == "search_authors_openalex":
+        validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
+        args_dict = validated_payload.model_dump(by_alias=False)
+        ctx_hash = compute_context_hash(name, args_dict)
+        result = await openalex_client.search_authors(
+            query=args_dict["query"],
+            limit=args_dict.get("limit", 10),
+            cursor=_cursor_to_bulk_token(
+                args_dict.get("cursor"),
+                tool=name,
+                context_hash=ctx_hash,
+                expected_provider="openalex",
+            ),
+        )
+        serialized = dump_jsonable(result)
+        return _encode_next_bulk_cursor(
+            serialized,
+            name,
+            context_hash=ctx_hash,
+            provider="openalex",
+        )
+
+    if name == "get_author_info_openalex":
+        validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
+        args_dict = validated_payload.model_dump(by_alias=False)
+        return await openalex_client.get_author_info(author_id=args_dict["author_id"])
+
+    if name == "get_author_papers_openalex":
+        validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
+        args_dict = validated_payload.model_dump(by_alias=False)
+        ctx_hash = compute_context_hash(name, args_dict)
+        result = await openalex_client.get_author_papers(
+            author_id=args_dict["author_id"],
+            limit=args_dict.get("limit", 100),
+            cursor=_cursor_to_bulk_token(
+                args_dict.get("cursor"),
+                tool=name,
+                context_hash=ctx_hash,
+                expected_provider="openalex",
+            ),
+            year=args_dict.get("year"),
+        )
+        serialized = dump_jsonable(result)
+        return _encode_next_bulk_cursor(
+            serialized,
+            name,
+            context_hash=ctx_hash,
+            provider="openalex",
+        )
 
     try:
         method_name, build_args = NON_SEARCH_TOOL_HANDLERS[name]

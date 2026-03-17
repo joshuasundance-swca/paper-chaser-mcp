@@ -54,6 +54,23 @@ TOOL_DESCRIPTIONS = {
         "the same normalized response shape as search_papers, but does not fall "
         "back to other providers. Supported inputs are query, limit, and year."
     ),
+    "search_papers_openalex": (
+        "Search papers using OpenAlex only. Returns a single explicit OpenAlex "
+        "page with the same normalized top-level response shape as search_papers, "
+        "but does not fall back to other providers. Supported inputs are query, "
+        "limit, and year. OpenAlex does not expose a Semantic Scholar-style "
+        "best-match endpoint here; use get_paper_details_openalex for DOI or "
+        "OpenAlex ID lookup and search_papers_openalex_bulk for cursor-paginated "
+        "OpenAlex traversal."
+    ),
+    "search_papers_openalex_bulk": (
+        "Paginated OpenAlex paper search for explicit OpenAlex retrieval flows. "
+        "Uses OpenAlex cursor pagination, returns up to 200 papers per call, and "
+        "treats pagination.nextCursor as an opaque server-issued token. Supported "
+        "inputs are query, limit, year, and cursor. Use this when you explicitly "
+        "want OpenAlex-native paging rather than Semantic Scholar bulk search. "
+        f"{OPAQUE_CURSOR_CONTRACT}"
+    ),
     "search_papers_bulk": (
         "Primary exhaustive retrieval tool for serious research, datasets, or "
         "multi-page collection. Paginated bulk paper search (Semantic Scholar) "
@@ -88,6 +105,11 @@ TOOL_DESCRIPTIONS = {
         "Known-item lookup when you already have an identifier. Get paper "
         "details from a DOI, ArXiv ID, Semantic Scholar ID, or URL."
     ),
+    "get_paper_details_openalex": (
+        "Known-item lookup using OpenAlex semantics. Get one OpenAlex work by "
+        "OpenAlex W-id, OpenAlex work URL, or DOI. This path reconstructs a "
+        "plaintext abstract from OpenAlex's abstract_inverted_index when possible."
+    ),
     "get_paper_citations": (
         "Citation chasing outward: get papers that cite this paper (cited by). "
         "Prefer paper.recommendedExpansionId from brokered search results. If "
@@ -106,6 +128,19 @@ TOOL_DESCRIPTIONS = {
         "Pass cursor=pagination.nextCursor to continue; hasMore signals more pages. "
         f"{OPAQUE_CURSOR_CONTRACT}"
     ),
+    "get_paper_citations_openalex": (
+        "OpenAlex cited-by expansion. Uses the work's cited_by_api_url under the "
+        "hood and keeps OpenAlex cursor pagination opaque and server-issued. Pass "
+        "an OpenAlex W-id, OpenAlex work URL, or DOI as paper_id. "
+        f"{OPAQUE_CURSOR_CONTRACT}"
+    ),
+    "get_paper_references_openalex": (
+        "OpenAlex backward-reference expansion. Hydrates referenced_works in "
+        "batched OpenAlex ID lookups instead of one request per reference, then "
+        "returns an opaque server-issued cursor for the next slice. Pass an "
+        "OpenAlex W-id, OpenAlex work URL, or DOI as paper_id. "
+        f"{OPAQUE_CURSOR_CONTRACT}"
+    ),
     "get_paper_authors": (
         "Get authors of a paper so you can pivot from a paper into an author or "
         "collaboration workflow. Prefer paper.recommendedExpansionId from "
@@ -121,6 +156,10 @@ TOOL_DESCRIPTIONS = {
         "or get_paper_authors. author_id must be a Semantic Scholar authorId from "
         "those tools."
     ),
+    "get_author_info_openalex": (
+        "Get one OpenAlex author profile by OpenAlex A-id or OpenAlex author URL "
+        "for an explicit OpenAlex author workflow."
+    ),
     "get_author_papers": (
         "Author-centric workflow step: get papers by an author, including recent "
         "or filtered work. author_id must be a Semantic Scholar authorId from "
@@ -135,6 +174,20 @@ TOOL_DESCRIPTIONS = {
         "Semantic Scholar. For common names, add affiliation, coauthor, venue, or "
         "topic clues, then confirm identity with get_author_info/get_author_papers. "
         "Pass cursor=pagination.nextCursor to continue; hasMore signals more pages. "
+        f"{OPAQUE_CURSOR_CONTRACT}"
+    ),
+    "search_authors_openalex": (
+        "Search OpenAlex authors by name for an explicit OpenAlex author workflow. "
+        "This is the first step before get_author_info_openalex or "
+        "get_author_papers_openalex; for common names, confirm the right person "
+        "with affiliation or profile metadata before expanding papers. "
+        f"{OPAQUE_CURSOR_CONTRACT}"
+    ),
+    "get_author_papers_openalex": (
+        "Get papers for one OpenAlex author by OpenAlex A-id or author URL, with "
+        "optional year filtering and OpenAlex cursor pagination. This keeps the "
+        "guide's two-step OpenAlex author flow explicit: search_authors_openalex "
+        "or get_author_info_openalex first, then expand with this tool. "
         f"{OPAQUE_CURSOR_CONTRACT}"
     ),
     "batch_get_authors": "Get details for multiple authors at once (up to 1,000).",
