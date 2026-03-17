@@ -372,8 +372,12 @@ What this workflow does:
 - Exercises the primary golden paths instead of every tool: quick discovery,
   known-item lookup, bulk pagination, citation chasing, author pivot, and
   optional SerpApi citation export.
+- Supports manual `workflow_dispatch` inputs so maintainers can run a default
+  `smoke` pass, a broader `comprehensive` UX review, or a `feature_probe` with
+  an optional focus prompt for a new feature or suspected rough edge.
 - Produces a high-level smoke test that catches agent-facing workflow regressions
-  that unit tests can miss.
+  that unit tests can miss and can turn concrete findings into one actionable
+  GitHub issue for follow-on coding-agent work.
 
 How it runs in GitHub:
 
@@ -382,7 +386,9 @@ How it runs in GitHub:
   which is the Actions workflow file GitHub actually runs.
 - Once both files are committed to the default branch and the required secrets
   are configured, GitHub can run the workflow on its schedule or when manually
-  triggered with `workflow_dispatch` from the Actions tab.
+  triggered with `workflow_dispatch` from the Actions tab. Manual dispatches can
+  select `smoke`, `comprehensive`, or `feature_probe` mode and optionally pass a
+  free-form focus prompt.
 
 Required secrets for this workflow:
 
@@ -400,7 +406,10 @@ How to update and use it:
    lock file.
 4. Commit both the `.md` source and `.lock.yml` output together.
 5. Push the branch, then run `Test Scholar Search MCP` from the GitHub Actions
-   UI or wait for the scheduled run on the default branch.
+   UI or wait for the scheduled run on the default branch. For on-demand UX
+   reviews, use `workflow_dispatch` inputs to choose the run mode and provide an
+   optional focus prompt such as a new feature, a provider-specific flow, or a
+   confusing agent interaction to probe.
 
 The normal `Validate` workflow now also recompiles `test-scholar-search.md` on
 CI and fails if `.github/workflows/test-scholar-search.lock.yml` is stale, so

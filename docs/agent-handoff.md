@@ -41,6 +41,10 @@ This document is the current working handoff for the fork. It is intended to giv
 - That workflow now targets the primary golden paths explicitly: quick
   discovery, known-item lookup, pagination, citation chasing, author pivot,
   and optional SerpApi citation export when credentials are available.
+- The workflow now also accepts manual `workflow_dispatch` inputs for `smoke`,
+  `comprehensive`, and `feature_probe` runs, plus an optional focus prompt so
+  maintainers can direct UX review loops and turn the findings into actionable
+  issues for GitHub Copilot coding agents.
 - The GitHub Agentic Workflow MCP config for `scholar-search` must stay
   containerized. Current `gh-aw` MCP Gateway releases reject legacy stdio
   `command`/`args` server definitions and require `container`-based config.
@@ -146,6 +150,9 @@ gh aw compile test-scholar-search --dir .github/workflows
   high-level MCP smoke testing, covering quick discovery, known-item lookup,
   pagination, provider spot checks, author pivot, optional citation export,
   and no-result behavior.
+- Manual workflow_dispatch runs can now switch between smoke, comprehensive,
+  and feature-probe modes, with an optional focus prompt to steer deeper UX
+  probes toward a specific feature or rough edge.
 - The latest pass adds explicit OpenAlex tools instead of brokering OpenAlex
   through `search_papers`, because the OpenAlex guide's citation, author, and
   cursor semantics differ enough from Semantic Scholar to warrant a separate
@@ -240,7 +247,10 @@ gh aw compile test-scholar-search --dir .github/workflows
 7. Consider whether OpenAlex institution/source pivots should become first-class
    tools now that the base OpenAlex author/citation surface exists.
 8. Expand the agentic workflow once stable secrets are available for deeper provider-specific assertions, for example optional SerpApi or OpenAlex coverage.
-9. Add live or recorded UX probes for brokered SerpApi identifier portability if
+9. Revisit whether the new manual mode/focus inputs are enough, or whether the
+   repo should eventually split the agentic workflow into multiple checked-in
+   workflows once specialized UX probes become frequent.
+10. Add live or recorded UX probes for brokered SerpApi identifier portability if
     that path becomes a frequent source of citation-expansion missteps.
 
 ## Ready Handoff Prompt

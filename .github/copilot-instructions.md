@@ -44,6 +44,9 @@ Before changing code, read these files in order:
     `AGENT_WORKFLOW_GUIDE`, `plan_scholar_search`)
   - `docs/golden-paths.md`
   - `docs/agent-handoff.md`
+- Keep the checked-in agentic workflow guidance aligned too when the
+  `workflow_dispatch` review modes (`smoke`, `comprehensive`, `feature_probe`)
+  or focus-prompt contract changes.
 - Record meaningful follow-up work in `docs/agent-handoff.md` or
   `docs/golden-paths.md` so future agents inherit context instead of
   rediscovering it.

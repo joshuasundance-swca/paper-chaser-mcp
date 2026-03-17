@@ -41,19 +41,32 @@ def test_agentic_workflow_source_and_lockfile_are_checked_in() -> None:
         "search_papers_semantic_scholar",
         "search_papers_serpapi",
         "search_papers_arxiv",
+        "search_papers_openalex",
+        "search_papers_openalex_bulk",
         "search_papers_match",
         "get_paper_details",
+        "get_paper_details_openalex",
         "get_paper_citations",
         "get_paper_references",
+        "get_paper_citations_openalex",
+        "get_paper_references_openalex",
+        "get_paper_authors",
         "search_authors",
         "get_author_info",
         "get_author_papers",
+        "search_authors_openalex",
+        "get_author_info_openalex",
+        "get_author_papers_openalex",
         "get_paper_citation_formats",
+        "search_snippets",
     }
 
     assert "mcp-servers:" in workflow_source_content
     assert "scholar-search:" in workflow_source_content
     assert "primary Scholar Search MCP golden paths" in workflow_source_content
+    assert "workflow_dispatch:" in workflow_source_content
+    assert "feature_probe" in workflow_source_content
+    assert "focus_prompt:" in workflow_source_content
     assert (
         'search_papers(query="graph neural networks", limit=5)'
         in workflow_source_content
@@ -62,9 +75,17 @@ def test_agentic_workflow_source_and_lockfile_are_checked_in() -> None:
     assert "search_papers_match" in workflow_source_content
     assert "search_authors(query=\"Yoshua Bengio\", limit=3)" in workflow_source_content
     assert (
+        'search_papers_openalex(query="transformer architecture", limit=3)'
+        in workflow_source_content
+    )
+    assert 'search_snippets(query="attention is all you need", limit=3)' in (
+        workflow_source_content
+    )
+    assert (
         "search_papers_serpapi(query=\"Attention Is All You Need\", limit=3)"
         in workflow_source_content
-        )
+    )
+    assert "code and/or documentation" in workflow_source_content
     assert "create at most one GitHub" in workflow_source_content
     assert allowed_tools == expected_allowed_tools
     assert allowed_tools <= set(TOOL_INPUT_MODELS)
@@ -96,16 +117,20 @@ def test_agentic_workflow_documentation_stays_in_sync() -> None:
     assert ".github/workflows/test-scholar-search.md" in readme
     assert ".github/workflows/test-scholar-search.lock.yml" in readme
     assert compile_command in readme
+    assert "feature_probe" in readme
 
     assert ".github/workflows/test-scholar-search.md" in handoff
     assert ".github/workflows/test-scholar-search.lock.yml" in handoff
     assert compile_command in handoff
+    assert "feature_probe" in handoff
     assert "workflow_dispatch" in readme
     assert "The workflow is \"deployed\" when GitHub" in readme
     assert "pull requests cannot silently drift out of sync" in readme
 
     assert ".github/workflows/test-scholar-search.md" in golden_paths
+    assert "feature_probe" in golden_paths
     assert compile_command in instructions
+    assert "feature_probe" in instructions
     assert "Install gh-aw" in validate_workflow
     assert "GH_TOKEN: ${{ github.token }}" in validate_workflow
     assert compile_command in validate_workflow

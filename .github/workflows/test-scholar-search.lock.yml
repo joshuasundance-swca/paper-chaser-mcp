@@ -23,10 +23,12 @@
 #
 # Exercise the primary Scholar Search MCP golden paths with an agent so the
 # repo gets a scheduled, high-level regression check of discovery,
-# pagination, author pivot, and optional citation-export workflows.
+# pagination, author pivot, and optional citation-export workflows. Manual
+# runs can switch between smoke, comprehensive, and feature-probe UX review
+# modes with an optional focus prompt.
 # Requires a repository or organization secret named COPILOT_GITHUB_TOKEN.
 #
-# gh-aw-metadata: {"schema_version":"v2","frontmatter_hash":"a79929ea8b14c64274df9f7bf21280d1aec22a80b271f29899c87d9dbbd2d14c","compiler_version":"v0.59.0","strict":true}
+# gh-aw-metadata: {"schema_version":"v2","frontmatter_hash":"de768fc911fc5bc444ad1199c50a5cf7356ccc0a2cac234d0da6c0eb194493b9","compiler_version":"v0.59.0","strict":true}
 
 name: "Test Scholar Search MCP"
 "on":
@@ -34,6 +36,19 @@ name: "Test Scholar Search MCP"
   - cron: "29 23 * * 0"
     # Friendly format: weekly on sunday (scattered)
   workflow_dispatch:
+    inputs:
+      focus_prompt:
+        description: Optional feature, workflow, or UX hypothesis to probe.
+        required: false
+        type: string
+      mode:
+        default: smoke
+        description: Choose the UX review depth for this run.
+        options:
+        - smoke
+        - comprehensive
+        - feature_probe
+        type: choice
 
 permissions: {}
 
@@ -117,6 +132,8 @@ jobs:
           GH_AW_GITHUB_REPOSITORY: ${{ github.repository }}
           GH_AW_GITHUB_RUN_ID: ${{ github.run_id }}
           GH_AW_GITHUB_WORKSPACE: ${{ github.workspace }}
+          GH_AW_INPUTS_FOCUS_PROMPT: ${{ inputs.focus_prompt }}
+          GH_AW_INPUTS_MODE: ${{ inputs.mode }}
         run: |
           bash /opt/gh-aw/actions/create_prompt_first.sh
           {
@@ -171,6 +188,8 @@ jobs:
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
           GH_AW_PROMPT: /tmp/gh-aw/aw-prompts/prompt.txt
+          GH_AW_INPUTS_FOCUS_PROMPT: ${{ inputs.focus_prompt }}
+          GH_AW_INPUTS_MODE: ${{ inputs.mode }}
         with:
           script: |
             const { setupGlobals } = require('/opt/gh-aw/actions/setup_globals.cjs');
@@ -189,6 +208,8 @@ jobs:
           GH_AW_GITHUB_REPOSITORY: ${{ github.repository }}
           GH_AW_GITHUB_RUN_ID: ${{ github.run_id }}
           GH_AW_GITHUB_WORKSPACE: ${{ github.workspace }}
+          GH_AW_INPUTS_FOCUS_PROMPT: ${{ inputs.focus_prompt }}
+          GH_AW_INPUTS_MODE: ${{ inputs.mode }}
         with:
           script: |
             const { setupGlobals } = require('/opt/gh-aw/actions/setup_globals.cjs');
@@ -207,7 +228,9 @@ jobs:
                 GH_AW_GITHUB_EVENT_PULL_REQUEST_NUMBER: process.env.GH_AW_GITHUB_EVENT_PULL_REQUEST_NUMBER,
                 GH_AW_GITHUB_REPOSITORY: process.env.GH_AW_GITHUB_REPOSITORY,
                 GH_AW_GITHUB_RUN_ID: process.env.GH_AW_GITHUB_RUN_ID,
-                GH_AW_GITHUB_WORKSPACE: process.env.GH_AW_GITHUB_WORKSPACE
+                GH_AW_GITHUB_WORKSPACE: process.env.GH_AW_GITHUB_WORKSPACE,
+                GH_AW_INPUTS_FOCUS_PROMPT: process.env.GH_AW_INPUTS_FOCUS_PROMPT,
+                GH_AW_INPUTS_MODE: process.env.GH_AW_INPUTS_MODE
               }
             });
       - name: Validate prompt placeholders
@@ -665,14 +688,24 @@ jobs:
                   "search_papers_semantic_scholar",
                   "search_papers_serpapi",
                   "search_papers_arxiv",
+                  "search_papers_openalex",
+                  "search_papers_openalex_bulk",
                   "search_papers_match",
                   "get_paper_details",
+                  "get_paper_details_openalex",
                   "get_paper_citations",
                   "get_paper_references",
+                  "get_paper_citations_openalex",
+                  "get_paper_references_openalex",
+                  "get_paper_authors",
                   "search_authors",
                   "get_author_info",
                   "get_author_papers",
-                  "get_paper_citation_formats"
+                  "search_authors_openalex",
+                  "get_author_info_openalex",
+                  "get_author_papers_openalex",
+                  "get_paper_citation_formats",
+                  "search_snippets"
                 ],
                 "env": {
                   "CORE_API_KEY": "\${CORE_API_KEY}",
@@ -900,7 +933,7 @@ jobs:
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
           WORKFLOW_NAME: "Test Scholar Search MCP"
-          WORKFLOW_DESCRIPTION: "Exercise the primary Scholar Search MCP golden paths with an agent so the\nrepo gets a scheduled, high-level regression check of discovery,\npagination, author pivot, and optional citation-export workflows.\nRequires a repository or organization secret named COPILOT_GITHUB_TOKEN."
+          WORKFLOW_DESCRIPTION: "Exercise the primary Scholar Search MCP golden paths with an agent so the\nrepo gets a scheduled, high-level regression check of discovery,\npagination, author pivot, and optional citation-export workflows. Manual\nruns can switch between smoke, comprehensive, and feature-probe UX review\nmodes with an optional focus prompt.\nRequires a repository or organization secret named COPILOT_GITHUB_TOKEN."
           HAS_PATCH: ${{ steps.collect_output.outputs.has_patch }}
         with:
           script: |
