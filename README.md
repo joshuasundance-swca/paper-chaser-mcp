@@ -367,11 +367,16 @@ gh aw compile test-scholar-search --dir .github/workflows
 
 What this workflow does:
 
-- Runs GitHub Copilot as the workflow engine against the local `scholar-search`
-  MCP server inside GitHub Actions.
+- Runs the agent against the local `scholar-search` MCP server inside GitHub
+  Actions. Set the `GH_AW_MODEL_AGENT_COPILOT` Actions variable to `gpt-5.4`
+  (or another model) to control which model is used.
 - Exercises the primary golden paths instead of every tool: quick discovery,
   known-item lookup, bulk pagination, citation chasing, author pivot, and
   optional SerpApi citation export.
+- **Evaluates agent UX quality** in every step: intuitiveness, unnecessary
+  round trips, missing features, confusing field contracts, and dead-end
+  responses. Produces a structured "UX friction summary" before creating any
+  issue.
 - Supports manual `workflow_dispatch` inputs so maintainers can run a default
   `smoke` pass, a broader `comprehensive` UX review, or a `feature_probe` with
   an optional focus prompt for a new feature or suspected rough edge.
@@ -385,16 +390,21 @@ How it runs in GitHub:
 - `gh aw compile ...` generates `.github/workflows/test-scholar-search.lock.yml`,
   which is the Actions workflow file GitHub actually runs.
 - Once both files are committed to the default branch and the required secrets
-  are configured, GitHub can run the workflow on its schedule or when manually
-  triggered with `workflow_dispatch` from the Actions tab. Manual dispatches can
-  select `smoke`, `comprehensive`, or `feature_probe` mode and optionally pass a
-  free-form focus prompt.
+  are configured, GitHub runs the workflow on `push` to `main` or when
+  manually triggered with `workflow_dispatch` from the Actions tab. Concurrent
+  runs on `main` are cancelled so rapid merges don't queue up redundant
+  verification runs.
+- Manual dispatches can select `smoke`, `comprehensive`, or `feature_probe`
+  mode and optionally pass a free-form focus prompt.
 
-Required secrets for this workflow:
+Required secrets and variables for this workflow:
 
 - `COPILOT_GITHUB_TOKEN` is required. The GitHub Copilot CLI engine fails in
   the activation job before the repo checkout or MCP startup steps if this
   secret is not present.
+- `GH_AW_MODEL_AGENT_COPILOT` (Actions variable, optional): controls the
+  agent model. Set to `gpt-5.4` to use GPT-5.4. If unset, the engine uses
+  its default model.
 - `CORE_API_KEY` is optional.
 - `SEMANTIC_SCHOLAR_API_KEY` is optional.
 
@@ -406,10 +416,17 @@ How to update and use it:
    lock file.
 4. Commit both the `.md` source and `.lock.yml` output together.
 5. Push the branch, then run `Test Scholar Search MCP` from the GitHub Actions
-   UI or wait for the scheduled run on the default branch. For on-demand UX
-   reviews, use `workflow_dispatch` inputs to choose the run mode and provide an
-   optional focus prompt such as a new feature, a provider-specific flow, or a
-   confusing agent interaction to probe.
+   UI or wait for a `push`-triggered run on the default branch. For on-demand
+   UX reviews, use `workflow_dispatch` inputs to choose the run mode and
+   provide an optional focus prompt such as a new feature, a provider-specific
+   flow, or a confusing agent interaction to probe.
+
+The repository also includes `.github/workflows/agentic-assign.yml`, a
+lightweight workflow that triggers on `issues: types: [opened, reopened,
+labeled]` and automatically assigns GitHub Copilot to any issue labeled both
+`agentic` and `needs-copilot`, unless the issue also carries `needs-human`,
+`blocked`, or `no-agent`. This keeps verification, issue creation, and agent
+assignment as separate phases to avoid event storms.
 
 The normal `Validate` workflow now also recompiles `test-scholar-search.md` on
 CI and fails if `.github/workflows/test-scholar-search.lock.yml` is stale, so
