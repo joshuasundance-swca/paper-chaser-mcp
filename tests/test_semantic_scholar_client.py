@@ -166,7 +166,8 @@ async def test_search_papers_bulk_truncates_provider_oversized_batch(
     ]
     assert result["pagination"]["hasMore"] is True
     assert result["pagination"]["nextCursor"] == "tok-next"
-    assert result["token"] == "tok-next"
+    # The raw provider token must NOT be exposed in the public response.
+    assert "token" not in result
     # All returned papers must have expansion ID portability fields populated.
     for paper in result["data"]:
         assert paper["recommendedExpansionId"] == paper["paperId"]
@@ -526,7 +527,22 @@ async def test_search_papers_match_falls_back_to_fuzzy_search_on_404(
         pass
 
     requests: list[tuple[str, str]] = []
+    # The primary /paper/search/match endpoint is tried for each candidate query
+    # produced by _title_lookup_queries: original, punctuation-normalised, and
+    # lowercase.  All three return 404 here so the fuzzy-search fallback runs.
     responses = [
+        httpx.Response(
+            status_code=404,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
+            ),
+        ),
+        httpx.Response(
+            status_code=404,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
+            ),
+        ),
         httpx.Response(
             status_code=404,
             request=httpx.Request(
@@ -586,7 +602,9 @@ async def test_search_papers_match_falls_back_to_fuzzy_search_on_404(
     assert result["matchFound"] is True
     assert result["matchStrategy"] == "fuzzy_search"
     assert requests[0][0].endswith("/paper/search/match")
-    assert requests[1][0].endswith("/paper/search")
+    assert requests[1][0].endswith("/paper/search/match")
+    assert requests[2][0].endswith("/paper/search/match")
+    assert requests[3][0].endswith("/paper/search")
 
 
 @pytest.mark.asyncio
@@ -596,7 +614,22 @@ async def test_search_papers_match_returns_structured_no_match_payload_after_fal
     async def fake_sleep(_: float) -> None:
         pass
 
+    # Three /paper/search/match attempts (original, punct-normalised, lowercase)
+    # all return 404; then the fuzzy-search fallback tries each of the three
+    # candidate queries via /paper/search with no usable title match.
     responses = [
+        httpx.Response(
+            status_code=404,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
+            ),
+        ),
+        httpx.Response(
+            status_code=404,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
+            ),
+        ),
         httpx.Response(
             status_code=404,
             request=httpx.Request(
@@ -609,6 +642,13 @@ async def test_search_papers_match_returns_structured_no_match_payload_after_fal
                 "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
             ),
             json={"total": 1, "offset": 0, "data": [{"title": "Unrelated result"}]},
+        ),
+        httpx.Response(
+            status_code=200,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
+            ),
+            json={"total": 0, "offset": 0, "data": []},
         ),
         httpx.Response(
             status_code=200,
@@ -649,6 +689,7 @@ async def test_search_papers_match_returns_structured_no_match_payload_after_fal
     assert result["normalizedQueriesTried"] == [
         "ezMCDA: An Interactive Dashboard",
         "ezMCDA An Interactive Dashboard",
+        "ezmcda: an interactive dashboard",
     ]
 
 
@@ -709,6 +750,10 @@ async def test_search_papers_match_200_null_paper_triggers_fallback(
     async def fake_sleep(_: float) -> None:
         pass
 
+    # "Attention Is All You Need" has no punctuation to strip, so _title_lookup_queries
+    # produces two unique candidates: the original and its lowercase form.  The first
+    # primary attempt returns a null-paperId 200; the second (lowercase) gets a 404;
+    # then the fuzzy-search fallback finds the paper.
     responses = [
         httpx.Response(
             status_code=200,
@@ -716,6 +761,12 @@ async def test_search_papers_match_200_null_paper_triggers_fallback(
                 "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
             ),
             json={"paperId": None, "title": None, "data": []},
+        ),
+        httpx.Response(
+            status_code=404,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
+            ),
         ),
         httpx.Response(
             status_code=200,
@@ -774,7 +825,16 @@ async def test_search_papers_match_fallback_finds_famous_paper_by_exact_title(
     async def fake_sleep(_: float) -> None:
         pass
 
+    # _title_lookup_queries produces two unique candidates for this query:
+    # the original and its lowercase form.  Both primary attempts return 404 so
+    # the fuzzy-search fallback fires and finds the paper in the search results.
     responses = [
+        httpx.Response(
+            status_code=404,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
+            ),
+        ),
         httpx.Response(
             status_code=404,
             request=httpx.Request(
@@ -832,7 +892,107 @@ async def test_search_papers_match_fallback_finds_famous_paper_by_exact_title(
     assert result["title"] == "Attention is All you Need"
 
 
-def test_search_papers_match_no_match_message_mentions_get_paper_details() -> None:
+@pytest.mark.asyncio
+async def test_search_papers_match_title_case_variant_succeeds_via_lowercase_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: 'Attention Is All You Need' (title case) must resolve to the
+    same paper as 'Attention is All you Need' even when the Semantic Scholar
+    /paper/search/match endpoint is case-sensitive.
+
+    The fix: search_papers_match now iterates over _title_lookup_queries
+    (original → punctuation-normalised → lowercase) on the primary endpoint so
+    a simple capitalization difference does not produce a false no-match.
+    """
+
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    captured_queries: list[tuple[str, str]] = []
+
+    # The primary endpoint returns 404 for the original title-case query but
+    # succeeds for the lowercase variant, reflecting the real Semantic Scholar
+    # API sensitivity observed during smoke testing.
+    responses = [
+        httpx.Response(
+            status_code=404,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
+            ),
+        ),
+        httpx.Response(
+            status_code=200,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
+            ),
+            json={
+                "paperId": "204e3073870fae3d05bcbc2f6a8e263d9b72e776",
+                "title": "Attention Is All You Need",
+            },
+        ),
+    ]
+
+    class SequencedAsyncClient:
+        def __init__(self, queued_responses: list[httpx.Response]) -> None:
+            self._responses = queued_responses
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def request(self, *, url: str, params, **kwargs):
+            captured_queries.append((url, params["query"]))
+            return self._responses.pop(0)
+
+    monkeypatch.setattr(
+        server.httpx,
+        "AsyncClient",
+        lambda timeout: SequencedAsyncClient(responses),
+    )
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    sc = server.SemanticScholarClient()
+    result = await sc.search_papers_match("Attention Is All You Need")
+
+    assert result["matchFound"] is True
+    assert result["matchStrategy"] == "exact_title"
+    assert result["paperId"] == "204e3073870fae3d05bcbc2f6a8e263d9b72e776"
+    # The normalizedQuery field must be set because the successful query differed
+    # from the original input.
+    assert result.get("normalizedQuery") == "attention is all you need"
+    # The first attempt used the original title-case query; the second used
+    # the lowercase variant produced by _title_lookup_queries.
+    assert captured_queries[0][0].endswith("/paper/search/match")
+    assert captured_queries[0][1] == "Attention Is All You Need"
+    assert captured_queries[1][0].endswith("/paper/search/match")
+    assert captured_queries[1][1] == "attention is all you need"
+
+
+def test_title_lookup_queries_includes_lowercase_variant() -> None:
+    """_title_lookup_queries must emit a lowercase variant so that both the
+    primary endpoint retry loop and the fuzzy-search fallback can handle
+    API endpoints that are sensitive to title capitalisation."""
+    client = server.SemanticScholarClient()
+
+    # Plain title with no punctuation: original + lowercase (2 unique values)
+    queries = client._title_lookup_queries("Attention Is All You Need")
+    assert queries == [
+        "Attention Is All You Need",
+        "attention is all you need",
+    ]
+
+    # Title with punctuation: original + punct-normalised + lowercase (3 unique)
+    queries = client._title_lookup_queries("ezMCDA: An Interactive Dashboard")
+    assert queries == [
+        "ezMCDA: An Interactive Dashboard",
+        "ezMCDA An Interactive Dashboard",
+        "ezmcda: an interactive dashboard",
+    ]
+
+
+
     """The no-match message must suggest get_paper_details as a recovery path.
 
     This is a regression guard for the smoke-run finding that the no-match

@@ -275,7 +275,11 @@ class SemanticScholarClient:
     @classmethod
     def _title_lookup_queries(cls, query: str) -> list[str]:
         queries: list[str] = []
-        for candidate in (query.strip(), cls._normalize_title_lookup_query(query)):
+        for candidate in (
+            query.strip(),
+            cls._normalize_title_lookup_query(query),
+            query.strip().lower(),
+        ):
             if candidate and candidate not in queries:
                 queries.append(candidate)
         return queries
@@ -469,29 +473,38 @@ class SemanticScholarClient:
         Adds ``matchFound`` and ``matchStrategy`` fields to the response so
         agents can distinguish a confirmed match from the structured no-match
         payload returned by the fallback path.
+
+        Tries each capitalization variant produced by ``_title_lookup_queries``
+        (original, punctuation-normalized, lowercase) against the primary
+        ``/paper/search/match`` endpoint so that common title-case differences
+        do not cause spurious no-match results.
         """
-        params: dict[str, Any] = {
-            "query": query,
-            "fields": ",".join(fields or DEFAULT_PAPER_FIELDS),
-        }
-        try:
-            response = await self._request("GET", "paper/search/match", params=params)
-        except httpx.HTTPStatusError as exc:
-            status_code = self._status_code_from_error(exc)
-            if status_code in {400, 404}:
-                return await self._search_papers_match_fallback(query, fields=fields)
-            raise
-        paper = self._normalize_match_response(response)
-        if paper.paper_id is None:
-            # Primary endpoint returned a 200 but no usable paper (e.g. empty
-            # data array or a response with all-null identifier fields).  Fall
-            # back to the fuzzy-search path so agents always receive either a
-            # confirmed match or a structured no-match with recovery hints.
-            return await self._search_papers_match_fallback(query, fields=fields)
-        result = dump_jsonable(paper)
-        result["matchFound"] = True
-        result["matchStrategy"] = "exact_title"
-        return result
+        fields_str = ",".join(fields or DEFAULT_PAPER_FIELDS)
+        candidate_queries = self._title_lookup_queries(query)
+        for candidate_query in candidate_queries:
+            params: dict[str, Any] = {
+                "query": candidate_query,
+                "fields": fields_str,
+            }
+            try:
+                response = await self._request(
+                    "GET", "paper/search/match", params=params
+                )
+            except httpx.HTTPStatusError as exc:
+                status_code = self._status_code_from_error(exc)
+                if status_code in {400, 404}:
+                    continue
+                raise
+            paper = self._normalize_match_response(response)
+            if paper.paper_id is None:
+                continue
+            result = dump_jsonable(paper)
+            result["matchFound"] = True
+            result["matchStrategy"] = "exact_title"
+            if candidate_query != query:
+                result["normalizedQuery"] = candidate_query
+            return result
+        return await self._search_papers_match_fallback(query, fields=fields)
 
     async def paper_autocomplete(self, query: str) -> dict[str, Any]:
         """Query completion for paper titles (``/paper/autocomplete``).
