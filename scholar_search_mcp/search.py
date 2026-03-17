@@ -64,7 +64,6 @@ _RELEVANCE_STOPWORDS: frozenset[str] = frozenset(
         "methods",
         "models",
         "neural",
-        "nonsense",
         "novel",
         "number",
         "obtain",

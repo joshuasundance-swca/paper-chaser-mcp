@@ -787,10 +787,13 @@ async def test_broker_metadata_result_quality_low_relevance_for_nonsense_query(
     assert broker_meta["providerUsed"] == "semantic_scholar"
     assert broker_meta["resultQuality"] == "low_relevance"
     assert broker_meta["bulkSearchIsProviderPivot"] is False
-    # The hint must clearly warn that results are weak and not to trust them.
+    # The hint must clearly warn that results are weak and not to trust them,
+    # and must offer actionable remediation guidance.
     hint = broker_meta["nextStepHint"]
     assert "low_relevance" in hint
     assert "weak" in hint.lower() or "irrelevant" in hint.lower()
+    # Verify actionable guidance: agent must be told to rephrase or change provider.
+    assert "rephrase" in hint.lower() or "provider" in hint.lower()
 
 
 @pytest.mark.asyncio
