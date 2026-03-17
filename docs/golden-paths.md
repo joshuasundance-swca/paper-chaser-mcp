@@ -164,6 +164,12 @@ search_authors(query="Yoshua Bengio", limit=5)
 
 - **Quote or snippet validation**: use `search_snippets` only when title or
   keyword search is weak.
+- **Agent UX feedback loop**: the checked-in agentic workflow at
+  `.github/workflows/test-scholar-search.md` now supports `smoke`,
+  `comprehensive`, and `feature_probe` review modes. Start with the smoke
+  baseline, then add deeper OpenAlex/snippet/paper-to-author probes or a
+  feature-specific focus prompt when you need broader UX feedback that can turn
+  into code or documentation work.
 - **Explicit OpenAlex workflows**: use `search_papers_openalex` for one
   OpenAlex page, `search_papers_openalex_bulk` for OpenAlex cursor traversal,
   `get_paper_details_openalex` for OpenAlex W-id/DOI lookup, and the OpenAlex
@@ -243,3 +249,6 @@ as part of the intended agent contract.
 - Consider per-request or per-session provider preferences for budget-aware use.
 - Decide whether retry-recovered provider behavior should remain internal or be
   surfaced to agents as part of the broker story.
+- Consider whether the agentic workflow should eventually split into multiple
+  checked-in workflows once the new manual mode/focus inputs settle and more
+  specialized UX probes become routine.

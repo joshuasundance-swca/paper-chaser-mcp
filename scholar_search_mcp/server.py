@@ -73,6 +73,10 @@ Semantic Scholar-style retrieval; from CORE, arXiv, or SerpApi results it is a
 Semantic Scholar pivot rather than another page from the same provider.
 For small targeted pages, prefer search_papers or search_papers_semantic_scholar;
 Semantic Scholar's bulk endpoint may ignore small limits internally.
+For agentic UX review loops, run a small smoke baseline first, then widen into
+OpenAlex, snippet recovery, paper-to-author pivots, or a feature-specific probe
+only when the workflow goal calls for broader coverage. Capture any defects as
+reproduction-ready issues that can guide code changes and documentation updates.
 
 Pagination rule: treat pagination.nextCursor as opaque — pass it back exactly as
 returned, do not derive, edit, or fabricate it, and do not reuse it across a
@@ -152,6 +156,18 @@ call. Use `search_papers_core`, `search_papers_semantic_scholar`,
 
 For every paginated tool: treat `pagination.nextCursor` as opaque, pass it back
 exactly as returned, and do not derive, edit, fabricate, or cross-reuse it.
+
+## Agentic UX review loop
+
+- Start with a smoke baseline across discovery, known-item lookup, pagination,
+  and author workflows so regressions in the core paths stay visible.
+- If the task is a broader UX review, add deeper probes such as
+  `get_paper_references`, `get_paper_authors`, `search_snippets`, or the
+  explicit `*_openalex` tools.
+- If the task is a feature-specific probe, keep the baseline short and spend the
+  remaining effort on the supplied feature or UX hypothesis.
+- When you find a concrete defect, capture the exact tool calls, expected vs
+  actual behavior, and whether the likely fix belongs in code, docs, or both.
 """.strip()
 
 __all__ = [
@@ -366,10 +382,35 @@ def agent_workflows() -> str:
 def plan_scholar_search(
     topic: str,
     goal: str = "find relevant papers, follow citations, and summarize next steps",
+    mode: Literal["smoke", "comprehensive", "feature_probe"] = "smoke",
+    focus_prompt: str | None = None,
 ) -> str:
     """Create a reusable research workflow prompt for clients."""
+    mode_guidance = {
+        "smoke": (
+            "Run a smoke-style review that stays focused on the primary golden "
+            "paths: quick discovery, known-item lookup, pagination, author pivot, "
+            "and optional citation export."
+        ),
+        "comprehensive": (
+            "Run a comprehensive UX review: cover the smoke baseline first, then "
+            "add deeper probes for references, paper-to-author pivots, snippet "
+            "recovery, and explicit OpenAlex workflows."
+        ),
+        "feature_probe": (
+            "Run a feature-probe review: keep a short smoke baseline, then spend "
+            "most of the effort on the requested feature or UX hypothesis and the "
+            "tool paths that exercise it."
+        ),
+    }
+    focus_text = (
+        f" Focus prompt: {focus_prompt}."
+        if focus_prompt
+        else " No extra focus prompt was supplied."
+    )
     return (
         f"You are planning a scholar-search workflow about '{topic}'. Goal: {goal}. "
+        f"Mode: {mode}. {mode_guidance[mode]}{focus_text} "
         "Start with search_papers for quick literature discovery, then read "
         "brokerMetadata.nextStepHint to decide whether to broaden, narrow, paginate, "
         "pivot providers, or pivot into authors. "
@@ -407,6 +448,10 @@ def plan_scholar_search(
         "tools only when source choice matters. Remember that search_papers_core, "
         "search_papers_serpapi, and search_papers_arxiv only support query, limit, "
         "and year, while search_papers_semantic_scholar supports the wider filter set. "
+        "If you uncover a defect or confusing UX, summarize the exact tool calls, "
+        "expected vs actual behavior, and whether the best follow-up is a code "
+        "change, a documentation update, or both so the result can turn into an "
+        "actionable issue for a GitHub Copilot coding agent. "
         "Treat pagination.nextCursor as opaque: reuse it exactly as returned, do "
         "not edit or fabricate it, and keep it scoped to the tool/query flow that "
         "produced it."

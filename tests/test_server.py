@@ -178,6 +178,14 @@ async def test_fastmcp_resource_and_prompt_support_agent_onboarding() -> None:
             "plan_scholar_search",
             {"topic": "transformers"},
         )
+        feature_plan = await client.get_prompt(
+            "plan_scholar_search",
+            {
+                "topic": "transformers",
+                "mode": "feature_probe",
+                "focus_prompt": "Probe the OpenAlex author workflow UX",
+            },
+        )
 
     assert any(
         str(resource.uri) == "guide://scholar-search/agent-workflows"
@@ -203,6 +211,12 @@ async def test_fastmcp_resource_and_prompt_support_agent_onboarding() -> None:
     assert "empty degraded response rather than a raw 4xx/5xx" in (
         plan.messages[0].content.text
     )
+    assert "Mode: feature_probe." in feature_plan.messages[0].content.text
+    assert "short smoke baseline" in feature_plan.messages[0].content.text
+    assert "Probe the OpenAlex author workflow UX" in (
+        feature_plan.messages[0].content.text
+    )
+    assert "GitHub Copilot coding agent" in feature_plan.messages[0].content.text
 
 
 def test_tool_descriptions_include_workflow_guidance() -> None:
@@ -281,6 +295,8 @@ def test_server_instructions_surface_continuation_and_schema_cues() -> None:
     assert "outside the indexed paper surface" in instructions
     assert "affiliation, coauthor, venue, or topic clues" in instructions
     assert "*_openalex tools" in instructions
+    assert "agentic UX review loops" in instructions
+    assert "reproduction-ready issues" in instructions
 
 
 @pytest.mark.asyncio
@@ -300,6 +316,8 @@ async def test_agent_workflow_resource_mentions_pivots_and_provider_contracts() 
     assert "Common-name author disambiguation" in guide_text
     assert "Outside-paper outputs" in guide_text
     assert "OpenAlex-specific workflows" in guide_text
+    assert "Agentic UX review loop" in guide_text
+    assert "feature-specific probe" in guide_text
 
 
 @pytest.mark.asyncio
@@ -324,3 +342,5 @@ async def test_plan_prompt_mentions_continuation_vs_pivot_and_schema_limits() ->
     assert "prefer search_papers or search_papers_semantic_scholar" in prompt_text
     assert "outside the indexed paper surface" in prompt_text
     assert "affiliation, coauthor, venue, or topic clues" in prompt_text
+    assert "Mode: smoke." in prompt_text
+    assert "GitHub Copilot coding agent" in prompt_text
