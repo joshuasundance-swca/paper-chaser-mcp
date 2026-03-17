@@ -166,7 +166,8 @@ async def test_search_papers_bulk_truncates_provider_oversized_batch(
     ]
     assert result["pagination"]["hasMore"] is True
     assert result["pagination"]["nextCursor"] == "tok-next"
-    assert result["token"] == "tok-next"
+    # The raw provider token must NOT be exposed in the public response.
+    assert "token" not in result
     # All returned papers must have expansion ID portability fields populated.
     for paper in result["data"]:
         assert paper["recommendedExpansionId"] == paper["paperId"]

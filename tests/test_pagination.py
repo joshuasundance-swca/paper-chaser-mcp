@@ -50,6 +50,13 @@ async def test_search_papers_bulk_returns_structured_next_cursor(
     assert decoded.token == "tok-next"
     assert decoded.context_hash is not None
 
+    # The raw provider token must NOT appear in the public response; only
+    # pagination.nextCursor is the intended continuation handle.
+    assert "token" not in payload, (
+        "Raw provider token must be excluded from the public bulk response. "
+        "Use pagination.nextCursor as the single continuation handle."
+    )
+
 
 def test_tool_descriptions_document_cursor_pagination_uniformly() -> None:
     """All paginated tool descriptions must explain the cursor / pagination pattern."""
