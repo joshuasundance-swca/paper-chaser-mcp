@@ -16,6 +16,8 @@ import json
 from dataclasses import dataclass
 
 CURSOR_VERSION = 1
+# Default provider used by the existing Semantic Scholar cursor helpers. OpenAlex
+# callers override the encoded/expected provider explicitly at the dispatch layer.
 PROVIDER = "semantic_scholar"
 SUPPORTED_VERSIONS: frozenset[int] = frozenset({CURSOR_VERSION})
 
@@ -25,6 +27,7 @@ OFFSET_TOOLS: frozenset[str] = frozenset(
         "get_paper_citations",
         "get_paper_references",
         "get_paper_authors",
+        "get_paper_references_openalex",
         "get_author_papers",
         "search_authors",
     }
@@ -35,11 +38,16 @@ OFFSET_TOOLS: frozenset[str] = frozenset(
 # because they do not change which underlying dataset is being paged through.
 STREAM_CONTEXT_KEYS: dict[str, tuple[str, ...]] = {
     "search_papers_bulk": ("query",),
+    "search_papers_openalex_bulk": ("query", "year"),
     "get_paper_citations": ("paper_id",),
+    "get_paper_citations_openalex": ("paper_id",),
     "get_paper_references": ("paper_id",),
+    "get_paper_references_openalex": ("paper_id",),
     "get_paper_authors": ("paper_id",),
     "get_author_papers": ("author_id", "publication_date_or_year"),
+    "get_author_papers_openalex": ("author_id", "year"),
     "search_authors": ("query",),
+    "search_authors_openalex": ("query",),
 }
 
 
@@ -220,6 +228,7 @@ def cursor_from_offset(
     tool: str,
     offset: int,
     context_hash: str | None = None,
+    provider: str = PROVIDER,
 ) -> str:
     """Build a structured cursor encoding *offset* for *tool*.
 
@@ -242,7 +251,7 @@ def cursor_from_offset(
     """
     payload: dict = {
         "tool": tool,
-        "provider": PROVIDER,
+        "provider": provider,
         "offset": offset,
         "version": CURSOR_VERSION,
     }
@@ -255,11 +264,12 @@ def cursor_from_token(
     tool: str,
     token: str,
     context_hash: str | None = None,
+    provider: str = PROVIDER,
 ) -> str:
     """Build a structured cursor encoding a provider token for *tool*."""
     payload: dict = {
         "tool": tool,
-        "provider": PROVIDER,
+        "provider": provider,
         "token": token,
         "version": CURSOR_VERSION,
     }

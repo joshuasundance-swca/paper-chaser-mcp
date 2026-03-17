@@ -238,6 +238,17 @@ def test_tool_descriptions_include_workflow_guidance() -> None:
     assert "fields, year, venue, publicationDateOrYear" in TOOL_DESCRIPTIONS[
         "search_papers_semantic_scholar"
     ]
+    assert "OpenAlex only" in TOOL_DESCRIPTIONS["search_papers_openalex"]
+    assert "OpenAlex cursor pagination" in TOOL_DESCRIPTIONS[
+        "search_papers_openalex_bulk"
+    ]
+    assert "abstract_inverted_index" in TOOL_DESCRIPTIONS["get_paper_details_openalex"]
+    assert "cited_by_api_url" in TOOL_DESCRIPTIONS["get_paper_citations_openalex"]
+    assert "batched OpenAlex ID lookups" in TOOL_DESCRIPTIONS[
+        "get_paper_references_openalex"
+    ]
+    assert "OpenAlex author profile" in TOOL_DESCRIPTIONS["get_author_info_openalex"]
+    assert "search_authors_openalex" in TOOL_DESCRIPTIONS["get_author_papers_openalex"]
 
 
 def test_github_copilot_instructions_align_with_repo_workflow_docs() -> None:
@@ -253,6 +264,7 @@ def test_github_copilot_instructions_align_with_repo_workflow_docs() -> None:
     assert "search_papers_bulk` for exhaustive or paginated retrieval" in instructions
     assert "not a generic" in instructions
     assert "provider-specific tool contracts honest" in instructions
+    assert "OpenAlex" in instructions
     assert "python -m pytest" in instructions
     assert "python -m ruff check ." in instructions
 
@@ -268,6 +280,7 @@ def test_server_instructions_surface_continuation_and_schema_cues() -> None:
     assert "paper.expansionIdStatus is not_portable" in instructions
     assert "outside the indexed paper surface" in instructions
     assert "affiliation, coauthor, venue, or topic clues" in instructions
+    assert "*_openalex tools" in instructions
 
 
 @pytest.mark.asyncio
@@ -286,6 +299,7 @@ async def test_agent_workflow_resource_mentions_pivots_and_provider_contracts() 
     assert "paper.expansionIdStatus" in guide_text
     assert "Common-name author disambiguation" in guide_text
     assert "Outside-paper outputs" in guide_text
+    assert "OpenAlex-specific workflows" in guide_text
 
 
 @pytest.mark.asyncio

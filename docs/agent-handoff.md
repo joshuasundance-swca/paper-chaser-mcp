@@ -14,6 +14,9 @@ This document is the current working handoff for the fork. It is intended to giv
 - `scholar_search_mcp/server.py` is now a compatibility facade over smaller modules.
 - Agent-facing workflow guidance now prioritizes quick discovery, exhaustive retrieval,
   citation chasing, known-item lookup, and author pivots.
+- OpenAlex now has an explicit provider-specific MCP surface for OpenAlex-native
+  search, cursor pagination, DOI/OpenAlex-ID lookup, citation/reference
+  traversal, and author pivots without changing the default broker path.
 - `docs/golden-paths.md` records the primary personas, golden paths, concrete example
   flows, and success signals for future agent work.
 - `.github/copilot-instructions.md` now gives GitHub-native guidance for Copilot
@@ -51,7 +54,7 @@ This document is the current working handoff for the fork. It is intended to giv
 - `scholar_search_mcp/tools.py` defines MCP tool schemas.
 - `scholar_search_mcp/runtime.py` owns stdio startup.
 - `scholar_search_mcp/settings.py` contains environment parsing helpers.
-- `scholar_search_mcp/clients/` contains provider clients for CORE, Semantic Scholar, and arXiv.
+- `scholar_search_mcp/clients/` contains provider clients for CORE, Semantic Scholar, OpenAlex, and arXiv.
 - `scholar_search_mcp/models/common.py` contains shared Pydantic models including `Paper` (with `scholarResultId`).
 - `scholar_search_mcp/parsing.py`, `scholar_search_mcp/constants.py`, and `scholar_search_mcp/transport.py` hold shared helper code and compatibility imports.
 
@@ -143,6 +146,10 @@ gh aw compile test-scholar-search --dir .github/workflows
   high-level MCP smoke testing, covering quick discovery, known-item lookup,
   pagination, provider spot checks, author pivot, optional citation export,
   and no-result behavior.
+- The latest pass adds explicit OpenAlex tools instead of brokering OpenAlex
+  through `search_papers`, because the OpenAlex guide's citation, author, and
+  cursor semantics differ enough from Semantic Scholar to warrant a separate
+  provider-specific surface.
 - The agentic workflow now runs `scholar-search` through a `python:3.12`
   container mounted to `${GITHUB_WORKSPACE}` so the generated MCP Gateway
   config matches the current schema.
@@ -218,6 +225,9 @@ gh aw compile test-scholar-search --dir .github/workflows
 - `pyproject.toml` is the single source of truth for Python dependencies; no parallel runtime dependency file should be reintroduced casually.
 - Dependency version ranges remain intentionally loose.
 - `search.py::_metadata()` now carries product-level UX weight because agents use `nextStepHint` as operational guidance rather than decorative metadata.
+- `clients/openalex/client.py` now carries OpenAlex-specific normalization logic,
+  especially DOI/OpenAlex-ID parsing, abstract reconstruction, and batched
+  `referenced_works` hydration.
 
 ## Suggested Next Steps
 
@@ -227,9 +237,11 @@ gh aw compile test-scholar-search --dir .github/workflows
 4. Consider moving from per-request `httpx.AsyncClient` creation to shared clients if connection reuse becomes important.
 5. Decide whether the compatibility facade in `scholar_search_mcp/server.py` should remain broad or be narrowed with an explicit supported surface.
 6. Revisit `.github/copilot-instructions.md` and `docs/golden-paths.md` whenever future agent-facing search behavior materially changes.
-7. Expand the agentic workflow once stable secrets are available for deeper provider-specific assertions, for example optional SerpApi coverage.
-8. Add live or recorded UX probes for brokered SerpApi identifier portability if
-   that path becomes a frequent source of citation-expansion missteps.
+7. Consider whether OpenAlex institution/source pivots should become first-class
+   tools now that the base OpenAlex author/citation surface exists.
+8. Expand the agentic workflow once stable secrets are available for deeper provider-specific assertions, for example optional SerpApi or OpenAlex coverage.
+9. Add live or recorded UX probes for brokered SerpApi identifier portability if
+    that path becomes a frequent source of citation-expansion missteps.
 
 ## Ready Handoff Prompt
 

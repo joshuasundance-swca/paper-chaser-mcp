@@ -66,9 +66,12 @@ class AppSettings(BaseModel):
 
     semantic_scholar_api_key: str | None = None
     core_api_key: str | None = None
+    openalex_api_key: str | None = None
+    openalex_mailto: str | None = None
     serpapi_api_key: str | None = None
     enable_core: bool = True
     enable_semantic_scholar: bool = True
+    enable_openalex: bool = True
     enable_arxiv: bool = True
     enable_serpapi: bool = False
     provider_order: tuple[SearchProvider, ...] = DEFAULT_SEARCH_PROVIDER_ORDER
@@ -83,11 +86,18 @@ class AppSettings(BaseModel):
         return cls(
             semantic_scholar_api_key=env.get("SEMANTIC_SCHOLAR_API_KEY"),
             core_api_key=env.get("CORE_API_KEY"),
+            openalex_api_key=env.get("OPENALEX_API_KEY"),
+            openalex_mailto=env.get("OPENALEX_MAILTO"),
             serpapi_api_key=env.get("SERPAPI_API_KEY"),
             enable_core=_parse_env_bool(env, "SCHOLAR_SEARCH_ENABLE_CORE", True),
             enable_semantic_scholar=_parse_env_bool(
                 env,
                 "SCHOLAR_SEARCH_ENABLE_SEMANTIC_SCHOLAR",
+                True,
+            ),
+            enable_openalex=_parse_env_bool(
+                env,
+                "SCHOLAR_SEARCH_ENABLE_OPENALEX",
                 True,
             ),
             enable_arxiv=_parse_env_bool(env, "SCHOLAR_SEARCH_ENABLE_ARXIV", True),
