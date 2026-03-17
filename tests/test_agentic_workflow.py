@@ -157,6 +157,6 @@ def test_agentic_assign_workflow_catches_workflow_created_issues() -> None:
     assert 'workflows: ["Test Scholar Search MCP"]' in assign_workflow
     assert "github.event_name == 'workflow_run'" in assign_workflow
     assert "github.rest.issues.listForRepo" in assign_workflow
-    assert "labels: requiredLabels.join(',')" in assign_workflow
+    assert "labels: Array.from(requiredLabels).join(',')" in assign_workflow
     assert "state: 'open'" in assign_workflow
     assert "assignees: ['Copilot']" in assign_workflow
