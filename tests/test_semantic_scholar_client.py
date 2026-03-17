@@ -834,3 +834,136 @@ async def test_search_snippets_degrades_provider_400_to_empty_payload(
     assert result["degraded"] is True
     assert result["providerStatusCode"] == 400
     assert "search_papers_match/search_papers" in result["message"]
+
+
+# ---------------------------------------------------------------------------
+# _normalize_paper_id
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_paper_id_arxiv_mixed_case() -> None:
+    """arXiv: prefix in mixed case should be normalized to ARXIV:."""
+    sc = server.SemanticScholarClient()
+    assert sc._normalize_paper_id("arXiv:1706.03762") == "ARXIV:1706.03762"
+    assert sc._normalize_paper_id("arxiv:1706.03762") == "ARXIV:1706.03762"
+    assert sc._normalize_paper_id("ARXIV:1706.03762") == "ARXIV:1706.03762"
+
+
+def test_normalize_paper_id_bare_new_style_arxiv() -> None:
+    """A bare new-style arXiv ID (YYMM.NNNNN) should get the ARXIV: prefix."""
+    sc = server.SemanticScholarClient()
+    assert sc._normalize_paper_id("1706.03762") == "ARXIV:1706.03762"
+    assert sc._normalize_paper_id("1706.03762v1") == "ARXIV:1706.03762v1"
+    assert sc._normalize_paper_id("2301.00001") == "ARXIV:2301.00001"
+
+
+def test_normalize_paper_id_bare_old_style_arxiv() -> None:
+    """A bare old-style arXiv ID (category/NNNNNNN) should get ARXIV: prefix."""
+    sc = server.SemanticScholarClient()
+    assert sc._normalize_paper_id("hep-ph/9705253") == "ARXIV:hep-ph/9705253"
+    assert sc._normalize_paper_id("cs/0301023v2") == "ARXIV:cs/0301023v2"
+
+
+def test_normalize_paper_id_arxiv_url() -> None:
+    """arxiv.org abs and pdf URLs should be normalized to ARXIV:<id>."""
+    sc = server.SemanticScholarClient()
+    assert (
+        sc._normalize_paper_id("https://arxiv.org/abs/1706.03762")
+        == "ARXIV:1706.03762"
+    )
+    assert (
+        sc._normalize_paper_id("https://arxiv.org/pdf/1706.03762")
+        == "ARXIV:1706.03762"
+    )
+
+
+def test_normalize_paper_id_passthrough() -> None:
+    """Non-arXiv identifiers must pass through unchanged."""
+    sc = server.SemanticScholarClient()
+    # Raw Semantic Scholar paperId hash
+    assert (
+        sc._normalize_paper_id("649def34f8be52c8b66281af98ae884c09aef38b")
+        == "649def34f8be52c8b66281af98ae884c09aef38b"
+    )
+    # DOI prefix already in correct form
+    assert (
+        sc._normalize_paper_id("DOI:10.48550/arXiv.1706.03762")
+        == "DOI:10.48550/arXiv.1706.03762"
+    )
+    # CorpusId
+    assert sc._normalize_paper_id("CorpusId:215416146") == "CorpusId:215416146"
+
+
+# ---------------------------------------------------------------------------
+# get_paper_details error handling
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_paper_details_surfaces_actionable_404_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 404 from get_paper_details should surface a ValueError with the
+    portability hint so agents know to try recommendedExpansionId."""
+
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    request = httpx.Request(
+        "GET", "https://api.semanticscholar.org/graph/v1/paper/ARXIV:1706.03762"
+    )
+    response = httpx.Response(status_code=404, request=request)
+
+    class MissingPaperClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def request(self, **kwargs):
+            return response
+
+    monkeypatch.setattr(
+        server.httpx, "AsyncClient", lambda timeout: MissingPaperClient()
+    )
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    sc = server.SemanticScholarClient()
+    with pytest.raises(ValueError, match="recommendedExpansionId"):
+        await sc.get_paper_details("arXiv:1706.03762")
+
+
+@pytest.mark.asyncio
+async def test_get_paper_details_surfaces_actionable_400_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 400 from get_paper_details should surface a ValueError with the
+    portability hint so agents know the identifier format is invalid."""
+
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    request = httpx.Request(
+        "GET", "https://api.semanticscholar.org/graph/v1/paper/bad-id"
+    )
+    response = httpx.Response(status_code=400, request=request)
+
+    class RejectingPaperClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def request(self, **kwargs):
+            return response
+
+    monkeypatch.setattr(
+        server.httpx, "AsyncClient", lambda timeout: RejectingPaperClient()
+    )
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    sc = server.SemanticScholarClient()
+    with pytest.raises(ValueError, match="get_paper_details"):
+        await sc.get_paper_details("bad-id")

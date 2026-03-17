@@ -44,6 +44,17 @@ _TITLE_MATCH_SIMILARITY_THRESHOLD = 0.92
 # Fallback only needs a small relevance-ranked window because we re-score titles
 # locally and want to keep degraded exact-match recovery cheap.
 _TITLE_MATCH_FALLBACK_LIMIT = 10
+# Regex for a bare arXiv ID (new format YYMM.NNNNN or YYMM.NNNN, optional vN,
+# or old category/NNNNNNN format) without any prefix.
+_BARE_ARXIV_ID_PATTERN = re.compile(
+    r"^(?:\d{4}\.\d{4,5}(?:v\d+)?|[a-z][\w.-]+/\d{7}(?:v\d+)?)$",
+    re.IGNORECASE,
+)
+# arxiv.org URL patterns: https://arxiv.org/abs/NNNNN or https://arxiv.org/pdf/NNNNN
+_ARXIV_URL_PATTERN = re.compile(
+    r"https?://(?:www\.)?arxiv\.org/(?:abs|pdf)/([^\s/?#]+)",
+    re.IGNORECASE,
+)
 
 
 class SemanticScholarClient:
@@ -186,6 +197,36 @@ class SemanticScholarClient:
         normalized = _AUTHOR_QUERY_INITIAL_PERIOD_PATTERN.sub("", normalized)
         normalized = _AUTHOR_QUERY_WHITESPACE_PATTERN.sub(" ", normalized).strip()
         return normalized or query.strip()
+
+    @staticmethod
+    def _normalize_paper_id(paper_id: str) -> str:
+        """Normalize a paper identifier to a form accepted by Semantic Scholar.
+
+        Semantic Scholar's ``/paper/{id}`` endpoint requires specific prefixes
+        (``ARXIV:``, ``DOI:``, ``URL:``, etc.) in uppercase.  This helper
+        normalizes the most common variants so callers can pass natural-language
+        identifiers such as ``arXiv:1706.03762``, ``1706.03762``, or an
+        ``arxiv.org`` URL and still reach the correct paper.
+
+        Normalization rules (applied in order):
+        1. ``arXiv:<id>`` / ``arxiv:<id>`` → ``ARXIV:<id>``
+        2. Bare arXiv IDs (new-style ``YYMM.NNNNN`` or old-style
+           ``category/NNNNNNN``) → ``ARXIV:<id>``
+        3. ``https://arxiv.org/abs/<id>`` (or ``/pdf/``) → ``ARXIV:<id>``
+        4. Everything else is returned unchanged.
+        """
+        stripped = paper_id.strip()
+        # 1. Normalize case of arXiv: prefix
+        if re.match(r"^arxiv:", stripped, re.IGNORECASE):
+            return "ARXIV:" + stripped[len("arxiv:"):]
+        # 2. Bare arXiv ID (no prefix)
+        if _BARE_ARXIV_ID_PATTERN.match(stripped):
+            return "ARXIV:" + stripped
+        # 3. arxiv.org URL → ARXIV:<id>
+        url_match = _ARXIV_URL_PATTERN.match(stripped)
+        if url_match:
+            return "ARXIV:" + url_match.group(1)
+        return stripped
 
     @staticmethod
     def _paper_id_portability_hint() -> str:
@@ -454,8 +495,38 @@ class SemanticScholarClient:
         fields: Optional[list[str]] = None,
     ) -> dict[str, Any]:
         """Get paper details (``/paper/{paper_id}``)."""
+        normalized_id = self._normalize_paper_id(paper_id)
         params = {"fields": ",".join(fields or DEFAULT_PAPER_FIELDS)}
-        response = await self._request("GET", f"paper/{paper_id}", params=params)
+        try:
+            response = await self._request(
+                "GET", f"paper/{normalized_id}", params=params
+            )
+        except httpx.HTTPStatusError as exc:
+            status_code = self._status_code_from_error(exc)
+            if status_code == 404:
+                raise ValueError(
+                    f"Semantic Scholar could not find paper {paper_id!r}"
+                    + (
+                        f" (normalized to {normalized_id!r})"
+                        if normalized_id != paper_id
+                        else ""
+                    )
+                    + ". "
+                    + self._paper_id_portability_hint()
+                ) from exc
+            if status_code == 400:
+                raise ValueError(
+                    f"Semantic Scholar rejected paper identifier {paper_id!r}"
+                    + (
+                        f" (normalized to {normalized_id!r})"
+                        if normalized_id != paper_id
+                        else ""
+                    )
+                    + " for get_paper_details. Use a Semantic Scholar-compatible "
+                    "paper identifier. "
+                    + self._paper_id_portability_hint()
+                ) from exc
+            raise
         return dump_jsonable(Paper.model_validate(response))
 
     async def get_paper_citations(
