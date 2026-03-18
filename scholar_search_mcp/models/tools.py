@@ -413,11 +413,14 @@ class AuthorPapersArgs(AuthorInfoArgs):
         default=None,
         alias="publicationDateOrYear",
         description=(
-            "Date or date-range filter. Supported formats: '2022' (single year), "
-            "'2022-05-15' (specific date), '2022:' or '2022-' (from year onward, "
-            "open-ended right), ':2023' (up to year), '2020:2023' (closed range). "
-            "Trailing-dash open-ended form (e.g. '2022-') is automatically "
-            "normalized to the colon form ('2022:') before the API call."
+            "Date or date-range filter. Accepted formats: '2019' (year), "
+            "'2019-03-05' (date), '2022:' (from 2022 onwards), "
+            "':2021' (up to 2021), '2020:2023' (range), "
+            "'2020-06-01:2023-12-31' (date range). "
+            "Note: use a trailing colon for open-ended ranges ('2022:'), "
+            "not a trailing hyphen. A trailing hyphen (e.g. '2022-' or "
+            "'2022-03-05-') is automatically normalized to the correct "
+            "colon form ('2022:' or '2022-03-05:')."
         ),
     )
 

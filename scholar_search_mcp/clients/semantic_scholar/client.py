@@ -674,25 +674,6 @@ class SemanticScholarClient:
             raise
         return dump_jsonable(AuthorProfile.model_validate(response))
 
-    @staticmethod
-    def _normalize_author_papers_date(value: str) -> str:
-        """Normalize open-ended date-range filter for the author papers endpoint.
-
-        The author papers endpoint requires a colon as the range separator for
-        open-ended ranges (e.g. ``"2022:"``).  Agents and golden-path docs
-        historically used a trailing dash (e.g. ``"2022-"``) which the endpoint
-        rejects with a 400.  This method converts the trailing-dash form to the
-        colon form so documented examples work transparently.
-
-        Affected patterns (trailing ``-`` after a date prefix):
-        - ``"2022-"``       → ``"2022:"``
-        - ``"2022-05-"``    → ``"2022-05:"``
-        - ``"2022-05-15-"`` → ``"2022-05-15:"``
-        """
-        if re.match(r"^\d{4}(?:-\d{2}(?:-\d{2})?)?-$", value):
-            return value[:-1] + ":"
-        return value
-
     async def get_author_papers(
         self,
         author_id: str,
@@ -709,9 +690,17 @@ class SemanticScholarClient:
         if offset is not None:
             params["offset"] = offset
         if publication_date_or_year:
-            params["publicationDateOrYear"] = self._normalize_author_papers_date(
-                publication_date_or_year
+            # publicationDateOrYear uses ':' as the range separator (e.g. "2022:"),
+            # not '-' which is the year-parameter style (e.g. "2022-").
+            # Normalize a single trailing '-' to ':' so the common shorthand
+            # "2022-" or "2022-03-05-" works the same as the API-native
+            # "2022:" or "2022-03-05:".
+            normalized_date = (
+                publication_date_or_year[:-1] + ":"
+                if publication_date_or_year.endswith("-")
+                else publication_date_or_year
             )
+            params["publicationDateOrYear"] = normalized_date
         try:
             response = await self._request(
                 "GET",
@@ -722,17 +711,17 @@ class SemanticScholarClient:
             status_code = self._status_code_from_error(exc)
             if status_code == 400:
                 filter_hint = (
-                    f" The publicationDateOrYear filter {publication_date_or_year!r}"
-                    " may be malformed; use formats like '2022', '2022:', or"
-                    " '2020:2023'."
+                    f" Check that publicationDateOrYear={publication_date_or_year!r} "
+                    "uses a valid format (e.g. '2022', '2022:', '2022-03-05:', "
+                    "'2020-01-01:2023-12-31'). Open-ended ranges require a trailing "
+                    "colon ('2022:'), not a trailing hyphen."
                     if publication_date_or_year
-                    else ""
+                    else " Use a Semantic Scholar authorId returned by "
+                    "search_authors or get_paper_authors."
                 )
                 raise ValueError(
                     f"Semantic Scholar rejected get_author_papers for author "
-                    f"{author_id!r}.{filter_hint} Also verify the author_id is a "
-                    "Semantic Scholar authorId returned by search_authors or "
-                    "get_paper_authors."
+                    f"{author_id!r}.{filter_hint}"
                 ) from exc
             if status_code == 404:
                 raise ValueError(

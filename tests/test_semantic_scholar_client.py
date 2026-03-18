@@ -456,6 +456,195 @@ async def test_get_author_papers_response_includes_pagination(
 
 
 @pytest.mark.asyncio
+async def test_get_author_papers_normalizes_trailing_hyphen_in_date_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """get_author_papers must normalize 'YYYY-' to 'YYYY:' before calling the API.
+
+    Regression test for the broken golden path that advertised
+    publicationDateOrYear="2022-" (year-parameter style with a trailing hyphen)
+    when the correct open-ended format for publicationDateOrYear is "2022:"
+    (colon separator).  The client should silently normalize the trailing hyphen
+    so that agents using the documented form do not receive a misleading 400.
+    """
+
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    captured_params: list[dict] = []
+
+    class CapturingAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def request(self, **kwargs):
+            captured_params.append(kwargs.get("params", {}))
+            return DummyResponse(
+                status_code=200,
+                payload={
+                    "offset": 0,
+                    "data": [{"paperId": "paper-x", "title": "Recent work"}],
+                },
+            )
+
+    monkeypatch.setattr(
+        server.httpx, "AsyncClient", lambda timeout: CapturingAsyncClient()
+    )
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    sc = server.SemanticScholarClient()
+    result = await sc.get_author_papers(
+        "1751762", limit=5, publication_date_or_year="2022-"
+    )
+
+    # The request should have succeeded and returned paper data.
+    assert result["data"][0]["paperId"] == "paper-x"
+    # The trailing hyphen must have been rewritten to a colon before the call.
+    assert captured_params[0]["publicationDateOrYear"] == "2022:"
+
+
+@pytest.mark.asyncio
+async def test_get_author_papers_normalizes_multiple_trailing_hyphen_formats(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """get_author_papers normalizes trailing hyphens across all date prefix lengths.
+
+    Covers year-only, year+month, year+month+day forms plus verifies that
+    already-valid colon forms, closed ranges, and bare years pass through
+    unchanged.
+    """
+
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    captured_params: list[dict] = []
+
+    class CapturingAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def request(self, **kwargs):
+            captured_params.append(dict(kwargs.get("params", {})))
+            return DummyResponse(
+                status_code=200,
+                payload={
+                    "offset": 0,
+                    "data": [{"paperId": "paper-1", "title": "Some paper"}],
+                },
+            )
+
+    monkeypatch.setattr(
+        server.httpx, "AsyncClient", lambda timeout: CapturingAsyncClient()
+    )
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    sc = server.SemanticScholarClient()
+
+    # "2022-" (year + trailing hyphen) must become "2022:"
+    await sc.get_author_papers("author-xyz", publication_date_or_year="2022-")
+    assert captured_params[-1]["publicationDateOrYear"] == "2022:"
+
+    # "2022-05-" (year+month + trailing hyphen) must become "2022-05:"
+    await sc.get_author_papers("author-xyz", publication_date_or_year="2022-05-")
+    assert captured_params[-1]["publicationDateOrYear"] == "2022-05:"
+
+    # Already-valid colon form must pass through unchanged
+    await sc.get_author_papers("author-xyz", publication_date_or_year="2022:")
+    assert captured_params[-1]["publicationDateOrYear"] == "2022:"
+
+    # Closed range must pass through unchanged
+    await sc.get_author_papers("author-xyz", publication_date_or_year="2020:2023")
+    assert captured_params[-1]["publicationDateOrYear"] == "2020:2023"
+
+    # Bare year must pass through unchanged
+    await sc.get_author_papers("author-xyz", publication_date_or_year="2022")
+    assert captured_params[-1]["publicationDateOrYear"] == "2022"
+
+
+@pytest.mark.asyncio
+async def test_get_author_papers_400_with_date_filter_mentions_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 400 on get_author_papers with publicationDateOrYear set should blame
+    the filter, not the author ID, so agents are not sent on a dead-end
+    "check your authorId" path when the ID is actually valid.
+    """
+
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    request = httpx.Request(
+        "GET",
+        "https://api.semanticscholar.org/graph/v1/author/1751762/papers",
+    )
+    bad_response = httpx.Response(status_code=400, request=request)
+
+    class RejectingFilterClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def request(self, **kwargs):
+            return bad_response
+
+    monkeypatch.setattr(
+        server.httpx, "AsyncClient", lambda timeout: RejectingFilterClient()
+    )
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    sc = server.SemanticScholarClient()
+    with pytest.raises(ValueError, match="publicationDateOrYear"):
+        await sc.get_author_papers(
+            "1751762", limit=5, publication_date_or_year="bad-filter-value"
+        )
+
+
+@pytest.mark.asyncio
+async def test_get_author_papers_400_without_date_filter_mentions_author_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 400 on get_author_papers without a date filter should still tell the
+    agent to verify the authorId, since that is the most likely cause.
+    """
+
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    request = httpx.Request(
+        "GET",
+        "https://api.semanticscholar.org/graph/v1/author/bad-id/papers",
+    )
+    bad_response = httpx.Response(status_code=400, request=request)
+
+    class RejectingAuthorClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def request(self, **kwargs):
+            return bad_response
+
+    monkeypatch.setattr(
+        server.httpx, "AsyncClient", lambda timeout: RejectingAuthorClient()
+    )
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    sc = server.SemanticScholarClient()
+    with pytest.raises(ValueError, match="search_authors or get_paper_authors"):
+        await sc.get_author_papers("bad-id", limit=5)
+
+
+@pytest.mark.asyncio
 async def test_search_papers_response_includes_next(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1322,108 +1511,3 @@ async def test_get_paper_details_surfaces_actionable_400_error(
     sc = server.SemanticScholarClient()
     with pytest.raises(ValueError, match="get_paper_details"):
         await sc.get_paper_details("bad-id")
-
-
-@pytest.mark.asyncio
-async def test_get_author_papers_normalizes_trailing_dash_to_colon(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """get_author_papers must normalize trailing-dash open-ended date filters.
-
-    Golden-path docs use ``publicationDateOrYear="2022-"`` to mean "from 2022
-    onward", but the Semantic Scholar author papers endpoint only accepts the
-    colon form (``"2022:"``).  The client must silently convert the trailing-dash
-    form so the documented workflow succeeds without requiring agents to know
-    about this endpoint-specific limitation.
-    """
-
-    async def fake_sleep(_: float) -> None:
-        pass
-
-    captured_params: list[dict] = []
-
-    class CapturingAsyncClient:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_):
-            pass
-
-        async def request(self, **kwargs):
-            captured_params.append(dict(kwargs.get("params", {})))
-            return DummyResponse(
-                status_code=200,
-                payload={
-                    "offset": 0,
-                    "next": None,
-                    "data": [{"paperId": "paper-1", "title": "Some paper"}],
-                },
-            )
-
-    monkeypatch.setattr(
-        server.httpx, "AsyncClient", lambda timeout: CapturingAsyncClient()
-    )
-    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
-
-    sc = server.SemanticScholarClient()
-
-    # "2022-" (trailing dash) must be sent as "2022:" (colon form)
-    await sc.get_author_papers("author-xyz", publication_date_or_year="2022-")
-    assert captured_params[-1]["publicationDateOrYear"] == "2022:"
-
-    # "2022-05-" must become "2022-05:"
-    await sc.get_author_papers("author-xyz", publication_date_or_year="2022-05-")
-    assert captured_params[-1]["publicationDateOrYear"] == "2022-05:"
-
-    # Already-valid colon form must pass through unchanged
-    await sc.get_author_papers("author-xyz", publication_date_or_year="2022:")
-    assert captured_params[-1]["publicationDateOrYear"] == "2022:"
-
-    # Closed range must pass through unchanged
-    await sc.get_author_papers("author-xyz", publication_date_or_year="2020:2023")
-    assert captured_params[-1]["publicationDateOrYear"] == "2020:2023"
-
-    # Bare year must pass through unchanged
-    await sc.get_author_papers("author-xyz", publication_date_or_year="2022")
-    assert captured_params[-1]["publicationDateOrYear"] == "2022"
-
-
-@pytest.mark.asyncio
-async def test_get_author_papers_400_with_filter_surfaces_filter_hint(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A 400 when a date filter is supplied must mention the filter, not just the ID.
-
-    Before this fix the error message only advised agents to re-check the
-    author_id, which was misleading when the filter format was the real problem.
-    """
-
-    async def fake_sleep(_: float) -> None:
-        pass
-
-    request = httpx.Request(
-        "GET",
-        "https://api.semanticscholar.org/graph/v1/author/1751762/papers",
-    )
-    response = httpx.Response(status_code=400, request=request)
-
-    class RejectingAsyncClient:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_):
-            pass
-
-        async def request(self, **kwargs):
-            return response
-
-    monkeypatch.setattr(
-        server.httpx, "AsyncClient", lambda timeout: RejectingAsyncClient()
-    )
-    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
-
-    sc = server.SemanticScholarClient()
-    with pytest.raises(ValueError, match="publicationDateOrYear"):
-        await sc.get_author_papers(
-            "1751762", publication_date_or_year="bad-filter-value"
-        )

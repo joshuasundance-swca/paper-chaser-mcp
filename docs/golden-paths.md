@@ -153,7 +153,7 @@ search_papers_match(query="Attention Is All You Need")
 ```
 search_authors(query="Yoshua Bengio", limit=5)
 → get_author_info(author_id=top_match.authorId)
-→ get_author_papers(author_id=top_match.authorId, publicationDateOrYear="2022-", limit=50)
+→ get_author_papers(author_id=top_match.authorId, publicationDateOrYear="2022:", limit=50)
 ```
 
 **Success signals**
@@ -271,17 +271,17 @@ as part of the intended agent contract.
 - `resultQuality="strong"` still means Semantic Scholar's semantic ranking was
   used and all inspected distinctive tokens appear in at least one result.
 
-### 8. `get_author_papers` open-ended date filter now works as documented
+### 8. `get_author_papers` open-ended `publicationDateOrYear` filter normalized
 
-- The Semantic Scholar author papers endpoint only accepts a colon as the
-  range separator for open-ended filters (e.g. `"2022:"`), but the golden-path
-  example used a trailing dash (`"2022-"`).
-- `get_author_papers` now silently normalizes the trailing-dash form to the
-  colon form before calling the API, so `publicationDateOrYear="2022-"` and
-  `publicationDateOrYear="2022:"` are both valid and produce the same result.
-- When a 400 is returned despite normalization, the error message now explicitly
-  identifies the `publicationDateOrYear` filter as the likely cause instead of
-  only pointing agents back to the author ID.
+- The `publicationDateOrYear` parameter for `get_author_papers` uses `:` as the
+  range separator, not `-` (which is the `year` parameter style).
+- The documented open-ended form `"2022-"` is now automatically normalized to the
+  correct API form `"2022:"` by the client, so both forms work.
+- The 400 error message now points agents at the filter rather than the author ID
+  when `publicationDateOrYear` is set, eliminating the dead-end "Use a Semantic
+  Scholar authorId" message when the ID is actually valid.
+- The golden path example and tool description have been updated to use the
+  canonical colon form (`"2022:"`).
 
 ## Future Work
 
