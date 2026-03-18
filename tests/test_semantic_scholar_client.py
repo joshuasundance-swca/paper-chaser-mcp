@@ -1392,6 +1392,7 @@ async def test_search_papers_match_fallback_citation_ranked_bulk_last_resort(
     class SequencedAsyncClient:
         def __init__(self, queued_responses: list[httpx.Response]) -> None:
             self._responses = queued_responses
+            self.called_urls: list[str] = []
 
         async def __aenter__(self):
             return self
@@ -1400,14 +1401,16 @@ async def test_search_papers_match_fallback_citation_ranked_bulk_last_resort(
             pass
 
         async def request(self, *, url: str, params, **kwargs):
+            self.called_urls.append(url)
             if "bulk" in url:
                 captured_bulk_params.append(dict(params))
             return self._responses.pop(0)
 
+    sequenced_client = SequencedAsyncClient(responses)
     monkeypatch.setattr(
         server.httpx,
         "AsyncClient",
-        lambda timeout: SequencedAsyncClient(responses),
+        lambda timeout: sequenced_client,
     )
     monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
 
@@ -1421,6 +1424,13 @@ async def test_search_papers_match_fallback_citation_ranked_bulk_last_resort(
     # Verify the bulk request used citation-count sorting
     assert captured_bulk_params, "Expected at least one bulk search call"
     assert captured_bulk_params[0].get("sort") == "citationCount:desc"
+    # All queued responses were consumed in the expected order:
+    # 2 match, 4 search (all 400), 1 bulk
+    assert not responses, "Not all queued responses were consumed"
+    called_suffixes = [u.split("/graph/v1/")[-1] for u in sequenced_client.called_urls]
+    assert called_suffixes[:2] == ["paper/search/match", "paper/search/match"]
+    assert all(s == "paper/search" for s in called_suffixes[2:6])
+    assert called_suffixes[6] == "paper/search/bulk"
 
 
 @pytest.mark.asyncio
