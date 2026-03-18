@@ -36,6 +36,57 @@ def test_author_field_models_reject_unsupported_fields() -> None:
         AuthorSearchArgs(query="Ryan L. Perroy", fields=["name", "aliases"])
 
 
+def test_author_papers_args_accepts_paper_fields() -> None:
+    """AuthorPapersArgs must accept paper fields, not author-profile fields."""
+    from scholar_search_mcp.models.tools import AuthorPapersArgs
+
+    # Paper fields must be accepted without error
+    args = AuthorPapersArgs(
+        author_id="1751762",
+        fields=["paperId", "title", "year", "authors"],
+    )
+    assert args.fields == ["paperId", "title", "year", "authors"]
+
+    # All default paper fields must be accepted
+    args_full = AuthorPapersArgs(
+        author_id="1751762",
+        fields=["paperId", "title", "abstract", "year", "authors", "citationCount",
+                "referenceCount", "influentialCitationCount", "venue",
+                "publicationTypes", "publicationDate", "url"],
+    )
+    assert args_full.fields is not None
+    assert "title" in args_full.fields
+
+
+def test_author_papers_args_rejects_author_profile_fields() -> None:
+    """AuthorPapersArgs must reject author-profile fields with a clear error."""
+    from pydantic import ValidationError
+
+    from scholar_search_mcp.models.tools import AuthorPapersArgs
+
+    with pytest.raises(ValidationError, match="Unsupported paper fields"):
+        AuthorPapersArgs(
+            author_id="1751762",
+            fields=["paperId", "title", "year", "authors", "hIndex"],
+        )
+
+    with pytest.raises(
+        ValidationError, match="Supported values: paperId, title"
+    ):
+        AuthorPapersArgs(
+            author_id="1751762",
+            fields=["affiliations"],
+        )
+
+
+def test_author_papers_args_fields_none_by_default() -> None:
+    """AuthorPapersArgs.fields must default to None (use server defaults)."""
+    from scholar_search_mcp.models.tools import AuthorPapersArgs
+
+    args = AuthorPapersArgs(author_id="1751762")
+    assert args.fields is None
+
+
 def test_snippet_result_model_preserves_nested_snippet() -> None:
     """SnippetResult must keep the snippet sub-object, not hoist text to the top."""
     from scholar_search_mcp.models import SnippetResult

@@ -42,3 +42,23 @@ DEFAULT_AUTHOR_FIELDS = [
 ]
 
 SUPPORTED_AUTHOR_FIELDS = tuple(DEFAULT_AUTHOR_FIELDS)
+
+SUPPORTED_PAPER_FIELDS = (
+    "paperId",
+    "title",
+    "abstract",
+    "year",
+    "authors",
+    "citationCount",
+    "referenceCount",
+    "influentialCitationCount",
+    "venue",
+    "publicationTypes",
+    "publicationDate",
+    "url",
+    "externalIds",
+    "fieldsOfStudy",
+    "s2FieldsOfStudy",
+    "isOpenAccess",
+    "openAccessPdf",
+)

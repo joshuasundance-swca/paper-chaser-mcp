@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from ..constants import SUPPORTED_AUTHOR_FIELDS
+from ..constants import SUPPORTED_AUTHOR_FIELDS, SUPPORTED_PAPER_FIELDS
 
 
 class ToolArgsModel(BaseModel):
@@ -21,8 +21,12 @@ OPAQUE_CURSOR_FIELD_DESCRIPTION = (
 )
 
 SUPPORTED_AUTHOR_FIELDS_TEXT = ", ".join(SUPPORTED_AUTHOR_FIELDS)
+SUPPORTED_PAPER_FIELDS_TEXT = ", ".join(SUPPORTED_PAPER_FIELDS)
 AUTHOR_FIELDS_DESCRIPTION = (
     "Fields to return. Supported values: " + SUPPORTED_AUTHOR_FIELDS_TEXT
+)
+PAPER_FIELDS_DESCRIPTION = (
+    "Paper fields to return. Supported values: " + SUPPORTED_PAPER_FIELDS_TEXT
 )
 AUTHOR_ID_DESCRIPTION = (
     "Semantic Scholar author ID from search_authors or get_paper_authors"
@@ -64,6 +68,21 @@ def _validate_author_fields(fields: list[str] | None) -> list[str] | None:
             + ", ".join(unsupported)
             + ". Supported values: "
             + SUPPORTED_AUTHOR_FIELDS_TEXT
+            + "."
+        )
+    return fields
+
+
+def _validate_paper_fields(fields: list[str] | None) -> list[str] | None:
+    if fields is None:
+        return None
+    unsupported = [field for field in fields if field not in SUPPORTED_PAPER_FIELDS]
+    if unsupported:
+        raise ValueError(
+            "Unsupported paper fields: "
+            + ", ".join(unsupported)
+            + ". Supported values: "
+            + SUPPORTED_PAPER_FIELDS_TEXT
             + "."
         )
     return fields
@@ -401,6 +420,10 @@ class AuthorInfoArgs(ToolArgsModel):
 
 
 class AuthorPapersArgs(AuthorInfoArgs):
+    fields: list[str] | None = Field(
+        default=None,
+        description=PAPER_FIELDS_DESCRIPTION,
+    )
     limit: int = Field(
         default=100,
         description="Max results (default 100, max 1000)",
@@ -428,6 +451,11 @@ class AuthorPapersArgs(AuthorInfoArgs):
     @classmethod
     def clamp_limit(cls, value: int | None) -> int:
         return _clamp_limit(value, 100, 1000)
+
+    @field_validator("fields")
+    @classmethod
+    def validate_fields(cls, value: list[str] | None) -> list[str] | None:
+        return _validate_paper_fields(value)
 
 
 class OpenAlexAuthorInfoArgs(ToolArgsModel):
