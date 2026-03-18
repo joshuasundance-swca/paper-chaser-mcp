@@ -826,8 +826,8 @@ async def test_search_papers_match_returns_structured_no_match_payload_after_fal
 
     # Four /paper/search/match attempts (original, punct-normalised, lowercase,
     # lowercase-punct-normalised) all return 404; then the fuzzy-search fallback
-    # tries each of the four candidate queries via /paper/search with no usable
-    # title match.
+    # tries each of the four candidate queries via /paper/search (unquoted) then
+    # each again in quoted-phrase form, none with a usable title match.
     responses = [
         httpx.Response(
             status_code=404,
@@ -853,12 +853,42 @@ async def test_search_papers_match_returns_structured_no_match_payload_after_fal
                 "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
             ),
         ),
+        # Unquoted fallback searches (4 variants) — no match
         httpx.Response(
             status_code=200,
             request=httpx.Request(
                 "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
             ),
             json={"total": 1, "offset": 0, "data": [{"title": "Unrelated result"}]},
+        ),
+        httpx.Response(
+            status_code=200,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
+            ),
+            json={"total": 0, "offset": 0, "data": []},
+        ),
+        httpx.Response(
+            status_code=200,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
+            ),
+            json={"total": 0, "offset": 0, "data": []},
+        ),
+        httpx.Response(
+            status_code=200,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
+            ),
+            json={"total": 0, "offset": 0, "data": []},
+        ),
+        # Quoted-phrase fallback searches (4 variants) — still no match
+        httpx.Response(
+            status_code=200,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
+            ),
+            json={"total": 0, "offset": 0, "data": []},
         ),
         httpx.Response(
             status_code=200,
@@ -910,11 +940,17 @@ async def test_search_papers_match_returns_structured_no_match_payload_after_fal
     assert result["matchFound"] is False
     assert result["matchStrategy"] == "none"
     assert "outside the indexed paper surface" in result["message"]
+    # normalizedQueriesTried now includes all 8 queries tried:
+    # 4 unquoted variants + 4 quoted-phrase variants.
     assert result["normalizedQueriesTried"] == [
         "ezMCDA: An Interactive Dashboard",
         "ezMCDA An Interactive Dashboard",
         "ezmcda: an interactive dashboard",
         "ezmcda an interactive dashboard",
+        '"ezMCDA: An Interactive Dashboard"',
+        '"ezMCDA An Interactive Dashboard"',
+        '"ezmcda: an interactive dashboard"',
+        '"ezmcda an interactive dashboard"',
     ]
 
 
@@ -1115,6 +1151,145 @@ async def test_search_papers_match_fallback_finds_famous_paper_by_exact_title(
     assert result["matchStrategy"] == "fuzzy_search"
     assert result["paperId"] == "204e3073870fae3d05bcbc2f6a8e263d9b72e776"
     assert result["title"] == "Attention is All you Need"
+
+
+@pytest.mark.asyncio
+async def test_search_papers_match_fallback_uses_quoted_phrase_when_unquoted_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Quoted-phrase fallback must find the paper when unquoted keyword search
+    returns no relevant candidates.
+
+    Semantic Scholar's /paper/search endpoint treats unquoted words as separate
+    keywords so a query like 'Attention Is All You Need' may rank generic
+    attention-mechanism papers above the Vaswani et al. paper.  Wrapping the
+    query in double quotes enables exact phrase matching and should surface the
+    specific paper even when unquoted variants fail.
+
+    Scenario:
+      - Both primary /paper/search/match attempts return 404.
+        ('Attention Is All You Need' has no punctuation so _title_lookup_queries
+        produces exactly two unique variants: the original and its lowercase form.)
+      - Unquoted search_papers for both title variants return no relevant
+        candidates (_pick_title_match_candidate returns None).
+      - Quoted search '"Attention Is All You Need"' returns the canonical paper.
+    """
+
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    captured_queries: list[str] = []
+
+    # Sequence:
+    #   [0] primary match 404 for "Attention Is All You Need"
+    #   [1] primary match 404 for "attention is all you need"
+    #   [2] unquoted search "Attention Is All You Need" → irrelevant results
+    #   [3] unquoted search "attention is all you need" → irrelevant results
+    #   [4] quoted search '"Attention Is All You Need"' → correct paper
+    responses = [
+        httpx.Response(
+            status_code=404,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
+            ),
+        ),
+        httpx.Response(
+            status_code=404,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
+            ),
+        ),
+        # Unquoted search — returns attention papers but not the specific one
+        httpx.Response(
+            status_code=200,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
+            ),
+            json={
+                "total": 3,
+                "offset": 0,
+                "data": [
+                    {"paperId": "other-1", "title": "Attention Mechanisms in NLP"},
+                    {"paperId": "other-2", "title": "Self-Attention Networks"},
+                    {"paperId": "other-3", "title": "Multi-Head Attention"},
+                ],
+            },
+        ),
+        # Lowercase unquoted search — still no match
+        httpx.Response(
+            status_code=200,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
+            ),
+            json={
+                "total": 3,
+                "offset": 0,
+                "data": [
+                    {"paperId": "other-1", "title": "Attention Mechanisms in NLP"},
+                    {"paperId": "other-2", "title": "Self-Attention Networks"},
+                ],
+            },
+        ),
+        # Quoted phrase search — returns the canonical paper
+        httpx.Response(
+            status_code=200,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
+            ),
+            json={
+                "total": 1,
+                "offset": 0,
+                "data": [
+                    {
+                        "paperId": "204e3073870fae3d05bcbc2f6a8e263d9b72e776",
+                        "title": "Attention is All you Need",
+                    }
+                ],
+            },
+        ),
+    ]
+
+    class SequencedAsyncClient:
+        def __init__(self, queued_responses: list[httpx.Response]) -> None:
+            self._responses = queued_responses
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def request(self, *, url: str, params, **kwargs):
+            captured_queries.append(params.get("query", ""))
+            return self._responses.pop(0)
+
+    monkeypatch.setattr(
+        server.httpx,
+        "AsyncClient",
+        lambda timeout: SequencedAsyncClient(responses),
+    )
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    sc = server.SemanticScholarClient()
+    result = await sc.search_papers_match("Attention Is All You Need")
+
+    assert result["matchFound"] is True
+    assert result["matchStrategy"] == "fuzzy_search"
+    assert result["paperId"] == "204e3073870fae3d05bcbc2f6a8e263d9b72e776"
+    assert result["title"] == "Attention is All you Need"
+    # The normalizedQuery must reflect the quoted phrase that was actually used.
+    assert result.get("normalizedQuery") == '"Attention Is All You Need"'
+    # Verify the quoted query was tried after the two unquoted search attempts.
+    search_queries = [q for q in captured_queries if q]
+    # First two are primary match attempts: original title-case + lowercase.
+    # (No punctuation in this title so only 2 unique variants are produced.)
+    assert search_queries[0] == "Attention Is All You Need"
+    assert search_queries[1] == "attention is all you need"
+    # Next two are unquoted search fallback attempts (same two variants)
+    assert search_queries[2] == "Attention Is All You Need"
+    assert search_queries[3] == "attention is all you need"
+    # Fifth is the quoted phrase fallback
+    assert search_queries[4] == '"Attention Is All You Need"'
 
 
 @pytest.mark.asyncio
