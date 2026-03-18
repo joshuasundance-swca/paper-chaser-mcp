@@ -366,6 +366,36 @@ class SemanticScholarClient:
                 payload["normalizedQuery"] = candidate_query
             return payload
 
+        # Final fallback: citation-sorted bulk search.  Relevance-ranked search
+        # may bury a very famous paper behind topic papers with higher textual
+        # overlap (e.g. "Attention Is All You Need" drowned by attention surveys).
+        # Sorting by citation count descending ensures canonical, highly-cited
+        # papers appear at the top regardless of relevance ranking.  This is a
+        # deliberate last resort — it only runs after every other strategy has
+        # failed, so the extra API call is acceptable.
+        for candidate_query in candidate_queries:
+            try:
+                bulk_response = await self.search_papers_bulk(
+                    candidate_query,
+                    fields=fields,
+                    sort="citationCount:desc",
+                    limit=_TITLE_MATCH_FALLBACK_LIMIT,
+                )
+            except httpx.HTTPStatusError:
+                continue
+            matched = self._pick_title_match_candidate(
+                query,
+                bulk_response.get("data", []),
+            )
+            if matched is None:
+                continue
+            payload = dump_jsonable(Paper.model_validate(matched))
+            payload["matchFound"] = True
+            payload["matchStrategy"] = "citation_ranked"
+            if candidate_query != query.strip():
+                payload["normalizedQuery"] = candidate_query
+            return payload
+
         return {
             "paperId": None,
             "title": None,
