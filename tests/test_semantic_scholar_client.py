@@ -241,6 +241,80 @@ async def test_search_papers_bulk_enriches_expansion_id_fields(
 
 
 @pytest.mark.asyncio
+async def test_search_papers_bulk_400_with_custom_fields_retries_with_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When search_papers_bulk gets a 400 with a custom fields list, it must
+    retry with DEFAULT_PAPER_FIELDS and add a fieldsDropped flag to the result.
+
+    The Semantic Scholar /paper/search/bulk endpoint supports fewer fields than
+    /paper/search, so agents that pass unsupported fields (e.g. 'tldr',
+    'embedding') should still get results rather than an unhandled 400 error.
+    """
+
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    captured_params: list[dict] = []
+    responses = [
+        # First attempt (with custom fields) returns 400.
+        httpx.Response(
+            status_code=400,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/bulk"
+            ),
+        ),
+        # Retry (with default fields) succeeds.
+        httpx.Response(
+            status_code=200,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/bulk"
+            ),
+            json={
+                "total": 1,
+                "data": [{"paperId": "bulk-fallback", "title": "Fallback Paper"}],
+            },
+        ),
+    ]
+
+    class CapturingAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def request(self, *, params, **kwargs):
+            captured_params.append(dict(params))
+            return responses.pop(0)
+
+    monkeypatch.setattr(
+        server.httpx,
+        "AsyncClient",
+        lambda timeout: CapturingAsyncClient(),
+    )
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    sc = server.SemanticScholarClient()
+    result = await sc.search_papers_bulk(
+        "attention mechanism", fields=["paperId", "title", "tldr"]
+    )
+
+    # The result must contain the fallback paper, not raise.
+    assert len(result["data"]) == 1
+    assert result["data"][0]["paperId"] == "bulk-fallback"
+    # The degradation flags must be set.
+    assert result["fieldsDropped"] is True
+    assert "default field set" in result["message"]
+    # First attempt used the custom fields; retry used DEFAULT_PAPER_FIELDS.
+    from scholar_search_mcp.constants import DEFAULT_PAPER_FIELDS
+
+    assert captured_params[0]["fields"] == "paperId,title,tldr"
+    assert captured_params[1]["fields"] == ",".join(DEFAULT_PAPER_FIELDS)
+
+
+
+@pytest.mark.asyncio
 async def test_semantic_scholar_request_retries_with_pacing_on_429(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
