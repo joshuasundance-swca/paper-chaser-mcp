@@ -164,6 +164,8 @@ TOOL_DESCRIPTIONS = {
         "Author-centric workflow step: get papers by an author, including recent "
         "or filtered work. author_id must be a Semantic Scholar authorId from "
         "search_authors or get_paper_authors. "
+        "The optional fields parameter selects paper fields (e.g. title, year, "
+        "authors, citationCount); omit to get the default paper field set. "
         "Pass cursor=pagination.nextCursor to continue; hasMore signals more pages. "
         f"{OPAQUE_CURSOR_CONTRACT}"
     ),

@@ -283,6 +283,20 @@ as part of the intended agent contract.
 - The golden path example and tool description have been updated to use the
   canonical colon form (`"2022:"`).
 
+### 9. `get_author_papers` `fields` accepts paper fields, not author fields
+
+- `get_author_papers` returns paper records, so its `fields` parameter accepts
+  paper field names such as `title`, `year`, `authors`, `citationCount`, `abstract`,
+  `url`, `publicationDate`, etc.
+- Passing author-profile fields (e.g. `hIndex`, `affiliations`) to
+  `get_author_papers` raises a validation error pointing at the supported paper
+  fields.
+- Omitting `fields` returns the default paper field set.
+- The validated paper fields are: `paperId`, `title`, `abstract`, `year`,
+  `authors`, `citationCount`, `referenceCount`, `influentialCitationCount`,
+  `venue`, `publicationTypes`, `publicationDate`, `url`, `externalIds`,
+  `fieldsOfStudy`, `s2FieldsOfStudy`, `isOpenAccess`, `openAccessPdf`.
+
 ## Future Work
 
 - Consider per-request or per-session provider preferences for budget-aware use.
