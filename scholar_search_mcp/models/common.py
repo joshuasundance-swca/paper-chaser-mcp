@@ -104,6 +104,16 @@ class BrokerMetadata(BaseModel):
     Possible values are ``"core"``, ``"semantic_scholar"``, ``"arxiv"``, or
     ``"none"`` when no provider returned results.
 
+    ``result_status`` gives a first-class signal about the outcome of the search:
+    - ``"returned_results"``: at least one provider returned results.
+    - ``"no_results"``: all attempted providers returned empty result sets (genuine
+      no-results for this query).
+    - ``"provider_failed"``: every active provider encountered an upstream error;
+      no results were returned.  This is distinct from ``"no_results"`` — it
+      indicates a transient provider outage rather than a query with no matches.
+      Inspect ``attemptedProviders`` for error details and retry later or pivot to
+      a different tool.
+
     ``continuation_supported`` is always ``False`` for ``search_papers``; for
     paginated retrieval use ``search_papers_bulk`` or other provider-specific
     tools.
@@ -130,6 +140,17 @@ class BrokerMetadata(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
     mode: str = Field(default="brokered_single_page", serialization_alias="mode")
+    result_status: Literal["returned_results", "no_results", "provider_failed"] = Field(
+        default="no_results",
+        serialization_alias="resultStatus",
+        description=(
+            "First-class outcome signal. 'returned_results' means at least one "
+            "provider returned data. 'no_results' means all providers returned empty "
+            "result sets (genuine empty query). 'provider_failed' means every active "
+            "provider raised an upstream error — treat this as a transient outage, "
+            "not an empty query; retry later or pivot to search_papers."
+        ),
+    )
     provider_used: str = Field(serialization_alias="providerUsed")
     continuation_supported: bool = Field(
         default=False,

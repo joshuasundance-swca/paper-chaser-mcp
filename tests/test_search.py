@@ -266,10 +266,147 @@ async def test_provider_specific_search_tool_does_not_fallback(
 
     assert payload["total"] == 0
     assert payload["brokerMetadata"]["providerUsed"] == "none"
+    assert payload["brokerMetadata"]["resultStatus"] == "no_results"
     assert payload["brokerMetadata"]["attemptedProviders"] == [
         {"provider": "core", "status": "returned_no_results", "reason": None}
     ]
     assert semantic_client.called is False
+
+
+@pytest.mark.asyncio
+async def test_provider_specific_search_tool_upstream_5xx_is_provider_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: upstream 5xx on a provider-specific tool must surface as
+    resultStatus='provider_failed', not look like a true no-results response.
+
+    When search_papers_core's only provider (CORE) raises an upstream error,
+    the response must:
+    - set brokerMetadata.resultStatus to 'provider_failed'
+    - provide a nextStepHint that describes the failure and suggests retrying
+      or switching tools, rather than rephrasing the query
+    - not call any other provider (no fallback)
+    """
+
+    class FailingCoreClient:
+        async def search(self, **kwargs) -> dict:
+            raise RuntimeError("500 Internal Server Error")
+
+    class SemanticClient:
+        def __init__(self) -> None:
+            self.called = False
+
+        async def search_papers(self, **kwargs) -> dict:
+            self.called = True
+            return {"total": 1, "offset": 0, "data": [{"paperId": "s2-1"}]}
+
+    semantic_client = SemanticClient()
+    monkeypatch.setattr(server, "enable_core", True)
+    monkeypatch.setattr(server, "enable_semantic_scholar", True)
+    monkeypatch.setattr(server, "core_client", FailingCoreClient())
+    monkeypatch.setattr(server, "client", semantic_client)
+
+    payload = _payload(
+        await server.call_tool(
+            "search_papers_core", {"query": "transformer architecture"}
+        )
+    )
+
+    # Top-level data must be empty — no results were returned.
+    assert payload["total"] == 0
+    assert payload["data"] == []
+
+    meta = payload["brokerMetadata"]
+    # providerUsed should still be "none" since no provider returned results.
+    assert meta["providerUsed"] == "none"
+
+    # resultStatus must be 'provider_failed', NOT 'no_results', so agents can
+    # distinguish a transient outage from a genuinely empty query.
+    assert meta["resultStatus"] == "provider_failed", (
+        "Expected 'provider_failed' when the sole provider raises an upstream error, "
+        f"got {meta['resultStatus']!r}"
+    )
+
+    # The failed attempt must be recorded.
+    assert meta["attemptedProviders"][0]["provider"] == "core"
+    assert meta["attemptedProviders"][0]["status"] == "failed"
+    assert "500 Internal Server Error" in meta["attemptedProviders"][0]["reason"]
+
+    # The nextStepHint must describe the failure, not suggest query rephrasing.
+    hint = meta["nextStepHint"]
+    assert "resultStatus='provider_failed'" in hint, (
+        "nextStepHint should reference resultStatus='provider_failed' explicitly"
+    )
+    assert "CORE" in hint, "nextStepHint should name the failing provider"
+    # Must NOT give the misleading "broaden the query" guidance for a failure.
+    assert "broaden" not in hint.lower(), (
+        "nextStepHint must not suggest broadening the query for a provider failure"
+    )
+
+    # No fallback to Semantic Scholar should have occurred.
+    assert semantic_client.called is False
+
+
+@pytest.mark.asyncio
+async def test_all_providers_fail_gives_provider_failed_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When multiple providers all fail, resultStatus must be 'provider_failed'."""
+
+    class FailingCoreClient:
+        async def search(self, **kwargs) -> dict:
+            raise RuntimeError("CORE 503")
+
+    class FailingSemanticClient:
+        async def search_papers(self, **kwargs) -> dict:
+            raise RuntimeError("S2 500")
+
+    monkeypatch.setattr(server, "enable_core", True)
+    monkeypatch.setattr(server, "enable_semantic_scholar", True)
+    monkeypatch.setattr(server, "enable_arxiv", False)
+    monkeypatch.setattr(server, "core_client", FailingCoreClient())
+    monkeypatch.setattr(server, "client", FailingSemanticClient())
+
+    payload = _payload(
+        await server.call_tool("search_papers", {"query": "neural nets"})
+    )
+
+    meta = payload["brokerMetadata"]
+    assert meta["resultStatus"] == "provider_failed"
+    # Hint must mention plural providers and not suggest query broadening.
+    hint = meta["nextStepHint"]
+    assert "resultStatus='provider_failed'" in hint
+    assert "broaden" not in hint.lower()
+
+
+@pytest.mark.asyncio
+async def test_mixed_failure_and_no_results_gives_no_results_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When some providers fail but another returns an empty result set,
+    resultStatus must be 'no_results' (not 'provider_failed'), because the
+    empty result set is a valid query response."""
+
+    class FailingCoreClient:
+        async def search(self, **kwargs) -> dict:
+            raise RuntimeError("CORE 503")
+
+    class EmptySemanticClient:
+        async def search_papers(self, **kwargs) -> dict:
+            return {"total": 0, "offset": 0, "data": []}
+
+    monkeypatch.setattr(server, "enable_core", True)
+    monkeypatch.setattr(server, "enable_semantic_scholar", True)
+    monkeypatch.setattr(server, "enable_arxiv", False)
+    monkeypatch.setattr(server, "core_client", FailingCoreClient())
+    monkeypatch.setattr(server, "client", EmptySemanticClient())
+
+    payload = _payload(
+        await server.call_tool("search_papers", {"query": "neural nets"})
+    )
+
+    meta = payload["brokerMetadata"]
+    assert meta["resultStatus"] == "no_results"
 
 
 @pytest.mark.asyncio

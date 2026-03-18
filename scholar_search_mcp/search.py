@@ -187,6 +187,27 @@ def _result_quality(
     return "unknown"
 
 
+def _compute_result_status(
+    provider_used: str,
+    attempts: list[BrokerAttempt],
+) -> Literal["returned_results", "no_results", "provider_failed"]:
+    """Determine the top-level outcome of a search broker run.
+
+    - ``"returned_results"``: at least one provider returned data.
+    - ``"provider_failed"``: every active (non-skipped) attempt failed with an
+      upstream error and no provider returned even an empty result set.  This
+      signals a transient outage rather than a genuinely empty query.
+    - ``"no_results"``: all providers responded but none returned results (true
+      empty result set for this query).
+    """
+    if provider_used != "none":
+        return "returned_results"
+    active_attempts = [a for a in attempts if a.status != "skipped"]
+    if active_attempts and all(a.status == "failed" for a in active_attempts):
+        return "provider_failed"
+    return "no_results"
+
+
 def _metadata(
     *,
     provider_used: str,
@@ -203,6 +224,11 @@ def _metadata(
     result quality is downgraded from ``"strong"`` to ``"low_relevance"`` and
     the ``nextStepHint`` includes an explicit warning so agents do not treat
     the results as a healthy discovery set.
+
+    When ``provider_used`` is ``"none"`` and every active provider raised an
+    upstream error, ``resultStatus`` is set to ``"provider_failed"`` and the
+    ``nextStepHint`` explicitly describes the failure so agents do not confuse
+    a transient outage with a genuinely empty query.
     """
     routing_steered = preferred_provider is not None or provider_order is not None
     provider_labels = {
@@ -274,6 +300,8 @@ def _metadata(
     else:
         quality_guidance = ""
 
+    result_status = _compute_result_status(provider_used, attempts)
+
     if provider_used == "serpapi_google_scholar":
         next_step_hint = (
             "Results are from SerpApi Google Scholar. Papers that include "
@@ -286,10 +314,36 @@ def _metadata(
             "To expand from a paper use get_paper_citations or get_paper_references."
         )
     elif provider_used == "none":
-        next_step_hint = (
-            "No provider returned results. Try broadening the query, changing "
-            "providerOrder, or using search_papers_bulk with a different query."
-        )
+        if result_status == "provider_failed":
+            failed_labels = [
+                provider_labels.get(a.provider, a.provider)
+                for a in attempts
+                if a.status == "failed"
+            ]
+            if len(failed_labels) == 1:
+                next_step_hint = (
+                    f"{failed_labels[0]} returned an upstream error "
+                    f"(brokerMetadata.resultStatus='provider_failed'). "
+                    "This is likely a transient outage, not an empty result set. "
+                    "Retry the call later, or use search_papers to try other "
+                    "providers. "
+                    "Error details are in brokerMetadata.attemptedProviders."
+                )
+            else:
+                failed_str = ", ".join(failed_labels)
+                next_step_hint = (
+                    f"All attempted providers ({failed_str}) returned upstream "
+                    f"errors (brokerMetadata.resultStatus='provider_failed'). "
+                    "This is likely a transient outage, not an empty result set. "
+                    "Retry the call later, or use search_papers with a different "
+                    "providerOrder. "
+                    "Error details are in brokerMetadata.attemptedProviders."
+                )
+        else:
+            next_step_hint = (
+                "No provider returned results. Try broadening the query, changing "
+                "providerOrder, or using search_papers_bulk with a different query."
+            )
     else:
         next_step_hint = (
             "Inspect the results. "
@@ -305,6 +359,7 @@ def _metadata(
         )
     return BrokerMetadata(
         provider_used=provider_used,
+        result_status=result_status,
         attempted_providers=attempts,
         semantic_scholar_only_filters=ss_only_filters,
         result_quality=quality,
