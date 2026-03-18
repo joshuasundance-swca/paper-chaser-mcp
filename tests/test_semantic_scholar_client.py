@@ -911,6 +911,35 @@ async def test_search_papers_match_returns_structured_no_match_payload_after_fal
             ),
             json={"total": 0, "offset": 0, "data": []},
         ),
+        # Citation-ranked bulk fallback (4 variants) — no title match either
+        httpx.Response(
+            status_code=200,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/bulk"
+            ),
+            json={"total": 0, "data": []},
+        ),
+        httpx.Response(
+            status_code=200,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/bulk"
+            ),
+            json={"total": 0, "data": []},
+        ),
+        httpx.Response(
+            status_code=200,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/bulk"
+            ),
+            json={"total": 0, "data": []},
+        ),
+        httpx.Response(
+            status_code=200,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/bulk"
+            ),
+            json={"total": 0, "data": []},
+        ),
     ]
 
     class SequencedAsyncClient:
@@ -1290,6 +1319,118 @@ async def test_search_papers_match_fallback_uses_quoted_phrase_when_unquoted_fai
     assert search_queries[3] == "attention is all you need"
     # Fifth is the quoted phrase fallback
     assert search_queries[4] == '"Attention Is All You Need"'
+
+
+@pytest.mark.asyncio
+async def test_search_papers_match_fallback_citation_ranked_bulk_last_resort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Citation-sorted bulk search must find the paper when all other fallbacks fail.
+
+    This is the sentinel regression test for 'Attention Is All You Need'.  In
+    production the Semantic Scholar /paper/search endpoint sometimes buries this
+    paper behind topic-specific attention papers even with a quoted phrase, and
+    the /paper/search/match endpoint returns 404.  The fix adds a final fallback
+    that issues a /paper/search/bulk request sorted by citationCount:desc; the
+    canonical Vaswani et al. transformer paper has 100,000+ citations and will
+    always appear at the top of citation-sorted results.
+
+    Scenario:
+      - Both primary /paper/search/match attempts return 404.
+      - All four /paper/search attempts (2 unquoted + 2 quoted) return 400
+        (simulating the Semantic Scholar API rejecting quoted phrase syntax),
+        so the fuzzy_search strategy cannot find the paper.
+      - The /paper/search/bulk call (citation-sorted) returns the canonical paper.
+    """
+
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    captured_bulk_params: list[dict] = []
+
+    # Sequence:
+    #   [0]  primary match 404 for "Attention Is All You Need"
+    #   [1]  primary match 404 for "attention is all you need"
+    #   [2]  search_papers unquoted "Attention Is All You Need" → 400
+    #   [3]  search_papers unquoted "attention is all you need" → 400
+    #   [4]  search_papers quoted '"Attention Is All You Need"' → 400
+    #   [5]  search_papers quoted '"attention is all you need"' → 400
+    #   [6]  search_papers_bulk "Attention Is All You Need" citationCount:desc → hit
+    match_404 = httpx.Response(
+        status_code=404,
+        request=httpx.Request(
+            "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
+        ),
+    )
+    search_400 = httpx.Response(
+        status_code=400,
+        request=httpx.Request(
+            "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
+        ),
+    )
+    bulk_hit = httpx.Response(
+        status_code=200,
+        request=httpx.Request(
+            "GET", "https://api.semanticscholar.org/graph/v1/paper/search/bulk"
+        ),
+        json={
+            "total": 1,
+            "data": [
+                {
+                    "paperId": "204e3073870fae3d05bcbc2f6a8e263d9b72e776",
+                    "title": "Attention is All you Need",
+                }
+            ],
+        },
+    )
+    responses = [
+        match_404, match_404,
+        search_400, search_400, search_400, search_400,
+        bulk_hit,
+    ]
+
+    class SequencedAsyncClient:
+        def __init__(self, queued_responses: list[httpx.Response]) -> None:
+            self._responses = queued_responses
+            self.called_urls: list[str] = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def request(self, *, url: str, params, **kwargs):
+            self.called_urls.append(url)
+            if "bulk" in url:
+                captured_bulk_params.append(dict(params))
+            return self._responses.pop(0)
+
+    sequenced_client = SequencedAsyncClient(responses)
+    monkeypatch.setattr(
+        server.httpx,
+        "AsyncClient",
+        lambda timeout: sequenced_client,
+    )
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    sc = server.SemanticScholarClient()
+    result = await sc.search_papers_match("Attention Is All You Need")
+
+    assert result["matchFound"] is True
+    assert result["matchStrategy"] == "citation_ranked"
+    assert result["paperId"] == "204e3073870fae3d05bcbc2f6a8e263d9b72e776"
+    assert result["title"] == "Attention is All you Need"
+    # Verify the bulk request used citation-count sorting
+    assert captured_bulk_params, "Expected at least one bulk search call"
+    assert captured_bulk_params[0].get("sort") == "citationCount:desc"
+    # All queued responses were consumed in the expected order:
+    # 2 match, 4 search (all 400), 1 bulk
+    assert not responses, "Not all queued responses were consumed"
+    called_suffixes = [u.split("/graph/v1/")[-1] for u in sequenced_client.called_urls]
+    assert called_suffixes[:2] == ["paper/search/match", "paper/search/match"]
+    assert all(s == "paper/search" for s in called_suffixes[2:6])
+    assert called_suffixes[6] == "paper/search/bulk"
 
 
 @pytest.mark.asyncio
