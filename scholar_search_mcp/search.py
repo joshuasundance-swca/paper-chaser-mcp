@@ -258,13 +258,21 @@ def _metadata(
         elif routing_steered:
             bulk_guidance = (
                 "If you need many more Semantic Scholar results for the same topic, "
-                "switch to search_papers_bulk. That is the closest continuation path, "
-                "but it leaves the brokered routing preferences behind. "
+                "use search_papers_bulk — but note it uses exhaustive corpus traversal "
+                "with an internal ordering that is NOT relevance-ranked, and it "
+                "leaves the brokered routing preferences behind. "
+                "It is not 'page 2' of these results; "
+                "expect different result ordering. "
+                "For citation-ranked bulk retrieval, pass sort='citationCount:desc'. "
             )
         else:
             bulk_guidance = (
                 "If you need many more Semantic Scholar results for the same topic, "
-                "switch to search_papers_bulk. That is the closest continuation path. "
+                "use search_papers_bulk — but note it uses exhaustive corpus traversal "
+                "with an internal ordering that is NOT relevance-ranked. "
+                "It is not 'page 2' of these results; "
+                "expect different result ordering. "
+                "For citation-ranked bulk retrieval, pass sort='citationCount:desc'. "
             )
     elif provider_used in provider_labels:
         bulk_guidance = (

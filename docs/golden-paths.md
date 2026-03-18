@@ -35,7 +35,10 @@ exercised by the agentic smoke test in `.github/workflows/test-scholar-search.md
 ```
 search_papers(query="large language model alignment", limit=10)
 → read brokerMetadata.nextStepHint
-→ if more needed: search_papers_bulk(query="...", limit=100)
+→ if exhaustive collection needed: search_papers_bulk(query="...", limit=100)
+  NOTE: search_papers_bulk uses exhaustive corpus traversal (NOT relevance-ranked).
+  It is not 'page 2' of search_papers — results may appear in a different order.
+  For citation-ranked bulk retrieval pass sort='citationCount:desc'.
 → for interesting paper X: get_paper_citations(paper_id=X.paperId)
 ```
 
@@ -53,10 +56,14 @@ search_papers(query="large language model alignment", limit=10)
 
 1. Start with `search_papers_bulk` when the request asks for all results, the
    first N results across pages, or a dataset-like collection.
-2. Treat `pagination.nextCursor` as opaque and pass it back as `cursor`
+2. Note that the **default ordering is NOT relevance-ranked** — it is exhaustive
+   corpus traversal with an internal ordering. Read `retrievalNote` in the
+   response for the active ordering contract. For citation-ranked traversal pass
+   `sort='citationCount:desc'`.
+3. Treat `pagination.nextCursor` as opaque and pass it back as `cursor`
    unchanged.
-3. Continue until `pagination.hasMore` is false.
-4. For small targeted pages, prefer `search_papers` or
+4. Continue until `pagination.hasMore` is false.
+5. For small targeted pages, prefer `search_papers` or
    `search_papers_semantic_scholar`; the upstream bulk endpoint may ignore small
    `limit` values internally, and this server only truncates the returned data.
 
@@ -296,6 +303,23 @@ as part of the intended agent contract.
   `authors`, `citationCount`, `referenceCount`, `influentialCitationCount`,
   `venue`, `publicationTypes`, `publicationDate`, `url`, `externalIds`,
   `fieldsOfStudy`, `s2FieldsOfStudy`, `isOpenAccess`, `openAccessPdf`.
+
+### 10. `search_papers_bulk` default ordering is now explicitly disclosed
+
+- `search_papers_bulk` uses exhaustive corpus traversal with an internal
+  ordering that is **not relevance-ranked** — it is a semantic pivot from
+  `search_papers`, not "page 2".
+- Every `search_papers_bulk` response now includes a `retrievalNote` field
+  that describes the active ordering contract so agents don't need extra round
+  trips to infer it.
+- `brokerMetadata.nextStepHint` from `search_papers` (Semantic Scholar path)
+  now explicitly says the bulk ordering is NOT relevance-ranked and suggests
+  `sort='citationCount:desc'` as an alternative.
+- The `search_papers_bulk` tool description also calls out this ordering
+  difference prominently.
+- Agents should read `retrievalNote` before deciding whether bulk retrieval
+  serves their intent; for relevance-ranked small pages, stick with
+  `search_papers` or `search_papers_semantic_scholar`.
 
 ## Future Work
 

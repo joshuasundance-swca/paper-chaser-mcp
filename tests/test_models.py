@@ -315,7 +315,8 @@ def test_broker_metadata_next_step_hint_is_provider_specific() -> None:
     )
     assert "search_papers_bulk" in ss_meta.next_step_hint
     assert "get_paper_citations" in ss_meta.next_step_hint
-    assert "closest continuation path" in ss_meta.next_step_hint
+    assert "NOT relevance-ranked" in ss_meta.next_step_hint
+    assert "not 'page 2'" in ss_meta.next_step_hint.lower()
 
     venue_meta = _metadata(
         provider_used="semantic_scholar",
