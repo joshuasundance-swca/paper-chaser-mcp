@@ -275,10 +275,12 @@ class SemanticScholarClient:
     @classmethod
     def _title_lookup_queries(cls, query: str) -> list[str]:
         queries: list[str] = []
+        normalized = cls._normalize_title_lookup_query(query)
         for candidate in (
             query.strip(),
-            cls._normalize_title_lookup_query(query),
+            normalized,
             query.strip().lower(),
+            normalized.lower(),
         ):
             if candidate and candidate not in queries:
                 queries.append(candidate)
@@ -474,10 +476,11 @@ class SemanticScholarClient:
         agents can distinguish a confirmed match from the structured no-match
         payload returned by the fallback path.
 
-        Tries each capitalization variant produced by ``_title_lookup_queries``
-        (original, punctuation-normalized, lowercase) against the primary
-        ``/paper/search/match`` endpoint so that common title-case differences
-        do not cause spurious no-match results.
+        Tries each variant produced by ``_title_lookup_queries``
+        (original, punctuation-normalized, lowercase, lowercase-punct-normalized)
+        against the primary ``/paper/search/match`` endpoint so that common
+        title-case and punctuation differences do not cause spurious no-match
+        results.
         """
         fields_str = ",".join(fields or DEFAULT_PAPER_FIELDS)
         candidate_queries = self._title_lookup_queries(query)

@@ -656,9 +656,16 @@ async def test_search_papers_match_falls_back_to_fuzzy_search_on_404(
 
     requests: list[tuple[str, str]] = []
     # The primary /paper/search/match endpoint is tried for each candidate query
-    # produced by _title_lookup_queries: original, punctuation-normalised, and
-    # lowercase.  All three return 404 here so the fuzzy-search fallback runs.
+    # produced by _title_lookup_queries: original, punctuation-normalised,
+    # lowercase, and lowercase-punct-normalised.  All four return 404 here so
+    # the fuzzy-search fallback runs.
     responses = [
+        httpx.Response(
+            status_code=404,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
+            ),
+        ),
         httpx.Response(
             status_code=404,
             request=httpx.Request(
@@ -732,7 +739,8 @@ async def test_search_papers_match_falls_back_to_fuzzy_search_on_404(
     assert requests[0][0].endswith("/paper/search/match")
     assert requests[1][0].endswith("/paper/search/match")
     assert requests[2][0].endswith("/paper/search/match")
-    assert requests[3][0].endswith("/paper/search")
+    assert requests[3][0].endswith("/paper/search/match")
+    assert requests[4][0].endswith("/paper/search")
 
 
 @pytest.mark.asyncio
@@ -742,10 +750,17 @@ async def test_search_papers_match_returns_structured_no_match_payload_after_fal
     async def fake_sleep(_: float) -> None:
         pass
 
-    # Three /paper/search/match attempts (original, punct-normalised, lowercase)
-    # all return 404; then the fuzzy-search fallback tries each of the three
-    # candidate queries via /paper/search with no usable title match.
+    # Four /paper/search/match attempts (original, punct-normalised, lowercase,
+    # lowercase-punct-normalised) all return 404; then the fuzzy-search fallback
+    # tries each of the four candidate queries via /paper/search with no usable
+    # title match.
     responses = [
+        httpx.Response(
+            status_code=404,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
+            ),
+        ),
         httpx.Response(
             status_code=404,
             request=httpx.Request(
@@ -770,6 +785,13 @@ async def test_search_papers_match_returns_structured_no_match_payload_after_fal
                 "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
             ),
             json={"total": 1, "offset": 0, "data": [{"title": "Unrelated result"}]},
+        ),
+        httpx.Response(
+            status_code=200,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
+            ),
+            json={"total": 0, "offset": 0, "data": []},
         ),
         httpx.Response(
             status_code=200,
@@ -818,6 +840,7 @@ async def test_search_papers_match_returns_structured_no_match_payload_after_fal
         "ezMCDA: An Interactive Dashboard",
         "ezMCDA An Interactive Dashboard",
         "ezmcda: an interactive dashboard",
+        "ezmcda an interactive dashboard",
     ]
 
 
@@ -1111,16 +1134,20 @@ def test_title_lookup_queries_includes_lowercase_variant() -> None:
         "attention is all you need",
     ]
 
-    # Title with punctuation: original + punct-normalised + lowercase (3 unique)
+    # Title with punctuation: original + punct-normalised + lowercase +
+    # lowercase-punct-normalised (up to 4 unique values).  The
+    # lowercase-punct-normalised variant is important when the API rejects
+    # colons or other punctuation in lowercase queries.
     queries = client._title_lookup_queries("ezMCDA: An Interactive Dashboard")
     assert queries == [
         "ezMCDA: An Interactive Dashboard",
         "ezMCDA An Interactive Dashboard",
         "ezmcda: an interactive dashboard",
+        "ezmcda an interactive dashboard",
     ]
 
 
-
+def test_no_match_message_suggests_get_paper_details() -> None:
     """The no-match message must suggest get_paper_details as a recovery path.
 
     This is a regression guard for the smoke-run finding that the no-match
