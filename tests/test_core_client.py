@@ -62,6 +62,20 @@ def test_core_result_to_paper_prefers_doi_url_and_normalizes_metadata() -> None:
     }
 
 
+def test_core_result_to_paper_wraps_scalar_document_type_in_list() -> None:
+    paper = server.CoreApiClient()._result_to_paper(
+        {
+            "id": 99,
+            "title": "Scalar type test",
+            "downloadUrl": "https://example.com/paper.pdf",
+            "documentType": "research",
+        }
+    )
+
+    assert paper is not None
+    assert paper["publicationTypes"] == ["research"]
+
+
 def test_core_result_to_paper_uses_nested_download_url_variants() -> None:
     paper = server.CoreApiClient()._result_to_paper(
         {
