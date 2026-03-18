@@ -309,8 +309,8 @@ async def test_search_papers_bulk_400_with_custom_fields_retries_with_defaults(
     # First attempt used the custom fields; retry used DEFAULT_PAPER_FIELDS.
     from scholar_search_mcp.constants import DEFAULT_PAPER_FIELDS
 
-    assert captured_params[0]["fields"] == "paperId,title,tldr"
-    assert captured_params[1]["fields"] == ",".join(DEFAULT_PAPER_FIELDS)
+    assert set(captured_params[0]["fields"].split(",")) == {"paperId", "title", "tldr"}
+    assert set(captured_params[1]["fields"].split(",")) == set(DEFAULT_PAPER_FIELDS)
 
 
 
