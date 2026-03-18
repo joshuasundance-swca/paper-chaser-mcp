@@ -31,8 +31,9 @@ This document is the current working handoff for the fork. It is intended to giv
   `recommendedExpansionId` and `expansionIdStatus` so CORE-native fallback IDs
   are not mistaken for Semantic Scholar-compatible expansion inputs.
 - Exact-title lookup now degrades more cleanly: punctuation-heavy 400/404 misses
-  on `search_papers_match` fall back to fuzzy title search and then to a
-  structured no-match payload.
+  on `search_papers_match` fall back to fuzzy title search (unquoted, then
+  quoted-phrase variants) and then to a structured no-match payload.  The
+  fallback search window was increased to 100 results (the API maximum).
 - `search_snippets` now degrades provider 4xx/5xx failures to an empty payload
   with retry guidance instead of surfacing the raw provider error.
 - `.github/workflows/test-scholar-search.md` now defines a GitHub Agentic
@@ -254,6 +255,17 @@ gh aw compile test-scholar-search --dir .github/workflows
    DOI or Semantic Scholar lookup first. This is especially important for
    CORE results whose `canonicalId` may still fall back to a raw CORE id when
    no DOI is present.
+
+10. `search_papers_match` fallback now uses quoted-phrase search as a final
+    recovery layer before returning a structured no-match payload.
+    Semantic Scholar's `/paper/search` endpoint treats unquoted title words as
+    separate keywords, so common-word titles like "Attention Is All You Need"
+    can rank below 100 generic attention-mechanism papers.  The fallback now
+    appends quoted variants (e.g. `'"Attention Is All You Need"'`) after the
+    plain keyword searches so the exact phrase gets a second chance via
+    Semantic Scholar's phrase-match semantics.  The fallback limit was also
+    increased from 30 to 100 (the API maximum) to widen the candidate window
+    for relevance-ranked results.
 
 ## Known Hotspots
 

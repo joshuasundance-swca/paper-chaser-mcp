@@ -43,8 +43,10 @@ _TITLE_LOOKUP_KEY_PATTERN = re.compile(r"[^0-9a-z]+")
 _TITLE_MATCH_SIMILARITY_THRESHOLD = 0.92
 # Fallback search window: use a larger window so that famous papers (e.g.
 # "Attention Is All You Need") are more likely to appear in the candidate list
-# even when relevance ranking places them below position 10.
-_TITLE_MATCH_FALLBACK_LIMIT = 30
+# even when relevance ranking places them below position 10.  100 is the
+# maximum the /paper/search endpoint accepts; prefer accuracy over speed in
+# this rare fallback path.
+_TITLE_MATCH_FALLBACK_LIMIT = 100
 # Regex for a bare arXiv ID (new format YYMM.NNNNN or YYMM.NNNN, optional vN,
 # or old category/NNNNNNN format) without any prefix.
 _BARE_ARXIV_ID_PATTERN = re.compile(
@@ -333,7 +335,16 @@ class SemanticScholarClient:
         fields: Optional[list[str]] = None,
     ) -> dict[str, Any]:
         candidate_queries = self._title_lookup_queries(query)
-        for candidate_query in candidate_queries:
+        # Also try quoted-phrase variants so that Semantic Scholar treats the
+        # title as an exact phrase rather than separate keywords.  Unquoted
+        # keyword search can rank generic topic papers above the specific paper
+        # the agent wants when the title contains common words (e.g. "Attention
+        # Is All You Need" competes with hundreds of papers about attention
+        # mechanisms).  Quoted variants are appended after the plain variants so
+        # the cheap unquoted paths are tried first.
+        quoted_candidates = [f'"{q}"' for q in candidate_queries]
+        all_search_queries = candidate_queries + quoted_candidates
+        for candidate_query in all_search_queries:
             try:
                 fallback_response = await self.search_papers(
                     candidate_query,
@@ -361,7 +372,7 @@ class SemanticScholarClient:
             "query": query,
             "matchFound": False,
             "matchStrategy": "none",
-            "normalizedQueriesTried": candidate_queries,
+            "normalizedQueriesTried": all_search_queries,
             "message": (
                 "No Semantic Scholar title match was found. If you have a DOI, "
                 "arXiv ID, or URL for this item, use get_paper_details instead "
