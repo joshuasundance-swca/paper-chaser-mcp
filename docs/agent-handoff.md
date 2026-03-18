@@ -266,6 +266,33 @@ gh aw compile test-scholar-search --dir .github/workflows
   especially DOI/OpenAlex-ID parsing, abstract reconstruction, and batched
   `referenced_works` hydration.
 
+## Transient Workflow Failure Investigation (2026-03-18)
+
+Run [23227785857](https://github.com/joshuasundance-swca/scholar-search-mcp/actions/runs/23227785857)
+failed at the "Install GitHub Copilot CLI" step in the `agent` job:
+
+```
+curl: (22) The requested URL returned error: 502
+```
+
+The binary download from `https://github.com/github/copilot-cli/releases/latest/download/copilot-linux-x64.tar.gz`
+returned HTTP 502 after four retries. This is a transient GitHub infrastructure issue unrelated to any code
+change. The immediately preceding activation job passed (COPILOT_GITHUB_TOKEN validated), and the failure
+occurred before the agent or the MCP server had a chance to run.
+
+**Resolution**: No code change required.
+- All 237 unit tests pass (`python -m pytest`).
+- `python -m mypy --config-file pyproject.toml` — no issues.
+- `python -m ruff check .` — no issues.
+- `python -m bandit -c pyproject.toml -r scholar_search_mcp` — no issues.
+- PR #65 (normalize CORE `publicationTypes` from scalar string to list) is correctly
+  implemented and covered by the test suite.
+
+The verifier workflow will run again on the next push to `master` and is expected to
+succeed when the GitHub infrastructure is stable. If the 502 error recurs on a subsequent
+push, check [GitHub Status](https://www.githubstatus.com/) before treating it as a code
+regression.
+
 ## Suggested Next Steps
 
 1. Consider whether budget-aware provider preferences should become a more explicit first-class planning concept in the docs and prompt surfaces.
