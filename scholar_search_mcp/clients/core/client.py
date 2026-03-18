@@ -207,6 +207,9 @@ class CoreApiClient:
             "portable" if recommended_expansion_id else "not_portable"
         )
 
+        doc_type = result.get("documentType")
+        publication_types = [doc_type] if isinstance(doc_type, str) else doc_type
+
         return dump_jsonable(
             Paper(
                 paperId=str(result.get("id", result.get("doi", ""))),
@@ -219,7 +222,7 @@ class CoreApiClient:
                 referenceCount=None,
                 influentialCitationCount=None,
                 venue=venue or None,
-                publicationTypes=result.get("documentType"),
+                publicationTypes=publication_types,
                 publicationDate=date_str,
                 url=url,
                 pdfUrl=pdf_url,
