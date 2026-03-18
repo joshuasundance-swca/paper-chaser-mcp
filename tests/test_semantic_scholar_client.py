@@ -241,6 +241,80 @@ async def test_search_papers_bulk_enriches_expansion_id_fields(
 
 
 @pytest.mark.asyncio
+async def test_search_papers_bulk_400_with_custom_fields_retries_with_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When search_papers_bulk gets a 400 with a custom fields list, it must
+    retry with DEFAULT_PAPER_FIELDS and add a fieldsDropped flag to the result.
+
+    The Semantic Scholar /paper/search/bulk endpoint supports fewer fields than
+    /paper/search, so agents that pass unsupported fields (e.g. 'tldr',
+    'embedding') should still get results rather than an unhandled 400 error.
+    """
+
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    captured_params: list[dict] = []
+    responses = [
+        # First attempt (with custom fields) returns 400.
+        httpx.Response(
+            status_code=400,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/bulk"
+            ),
+        ),
+        # Retry (with default fields) succeeds.
+        httpx.Response(
+            status_code=200,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/bulk"
+            ),
+            json={
+                "total": 1,
+                "data": [{"paperId": "bulk-fallback", "title": "Fallback Paper"}],
+            },
+        ),
+    ]
+
+    class CapturingAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def request(self, *, params, **kwargs):
+            captured_params.append(dict(params))
+            return responses.pop(0)
+
+    monkeypatch.setattr(
+        server.httpx,
+        "AsyncClient",
+        lambda timeout: CapturingAsyncClient(),
+    )
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    sc = server.SemanticScholarClient()
+    result = await sc.search_papers_bulk(
+        "attention mechanism", fields=["paperId", "title", "tldr"]
+    )
+
+    # The result must contain the fallback paper, not raise.
+    assert len(result["data"]) == 1
+    assert result["data"][0]["paperId"] == "bulk-fallback"
+    # The degradation flags must be set.
+    assert result["fieldsDropped"] is True
+    assert "default field set" in result["message"]
+    # First attempt used the custom fields; retry used DEFAULT_PAPER_FIELDS.
+    from scholar_search_mcp.constants import DEFAULT_PAPER_FIELDS
+
+    assert set(captured_params[0]["fields"].split(",")) == {"paperId", "title", "tldr"}
+    assert set(captured_params[1]["fields"].split(",")) == set(DEFAULT_PAPER_FIELDS)
+
+
+
+@pytest.mark.asyncio
 async def test_semantic_scholar_request_retries_with_pacing_on_429(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -656,9 +730,16 @@ async def test_search_papers_match_falls_back_to_fuzzy_search_on_404(
 
     requests: list[tuple[str, str]] = []
     # The primary /paper/search/match endpoint is tried for each candidate query
-    # produced by _title_lookup_queries: original, punctuation-normalised, and
-    # lowercase.  All three return 404 here so the fuzzy-search fallback runs.
+    # produced by _title_lookup_queries: original, punctuation-normalised,
+    # lowercase, and lowercase-punct-normalised.  All four return 404 here so
+    # the fuzzy-search fallback runs.
     responses = [
+        httpx.Response(
+            status_code=404,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
+            ),
+        ),
         httpx.Response(
             status_code=404,
             request=httpx.Request(
@@ -732,7 +813,8 @@ async def test_search_papers_match_falls_back_to_fuzzy_search_on_404(
     assert requests[0][0].endswith("/paper/search/match")
     assert requests[1][0].endswith("/paper/search/match")
     assert requests[2][0].endswith("/paper/search/match")
-    assert requests[3][0].endswith("/paper/search")
+    assert requests[3][0].endswith("/paper/search/match")
+    assert requests[4][0].endswith("/paper/search")
 
 
 @pytest.mark.asyncio
@@ -742,10 +824,17 @@ async def test_search_papers_match_returns_structured_no_match_payload_after_fal
     async def fake_sleep(_: float) -> None:
         pass
 
-    # Three /paper/search/match attempts (original, punct-normalised, lowercase)
-    # all return 404; then the fuzzy-search fallback tries each of the three
-    # candidate queries via /paper/search with no usable title match.
+    # Four /paper/search/match attempts (original, punct-normalised, lowercase,
+    # lowercase-punct-normalised) all return 404; then the fuzzy-search fallback
+    # tries each of the four candidate queries via /paper/search with no usable
+    # title match.
     responses = [
+        httpx.Response(
+            status_code=404,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
+            ),
+        ),
         httpx.Response(
             status_code=404,
             request=httpx.Request(
@@ -770,6 +859,13 @@ async def test_search_papers_match_returns_structured_no_match_payload_after_fal
                 "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
             ),
             json={"total": 1, "offset": 0, "data": [{"title": "Unrelated result"}]},
+        ),
+        httpx.Response(
+            status_code=200,
+            request=httpx.Request(
+                "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
+            ),
+            json={"total": 0, "offset": 0, "data": []},
         ),
         httpx.Response(
             status_code=200,
@@ -818,6 +914,7 @@ async def test_search_papers_match_returns_structured_no_match_payload_after_fal
         "ezMCDA: An Interactive Dashboard",
         "ezMCDA An Interactive Dashboard",
         "ezmcda: an interactive dashboard",
+        "ezmcda an interactive dashboard",
     ]
 
 
@@ -1111,16 +1208,20 @@ def test_title_lookup_queries_includes_lowercase_variant() -> None:
         "attention is all you need",
     ]
 
-    # Title with punctuation: original + punct-normalised + lowercase (3 unique)
+    # Title with punctuation: original + punct-normalised + lowercase +
+    # lowercase-punct-normalised (up to 4 unique values).  The
+    # lowercase-punct-normalised variant is important when the API rejects
+    # colons or other punctuation in lowercase queries.
     queries = client._title_lookup_queries("ezMCDA: An Interactive Dashboard")
     assert queries == [
         "ezMCDA: An Interactive Dashboard",
         "ezMCDA An Interactive Dashboard",
         "ezmcda: an interactive dashboard",
+        "ezmcda an interactive dashboard",
     ]
 
 
-
+def test_no_match_message_suggests_get_paper_details() -> None:
     """The no-match message must suggest get_paper_details as a recovery path.
 
     This is a regression guard for the smoke-run finding that the no-match

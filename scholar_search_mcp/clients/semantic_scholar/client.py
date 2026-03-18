@@ -275,10 +275,12 @@ class SemanticScholarClient:
     @classmethod
     def _title_lookup_queries(cls, query: str) -> list[str]:
         queries: list[str] = []
+        normalized = cls._normalize_title_lookup_query(query)
         for candidate in (
             query.strip(),
-            cls._normalize_title_lookup_query(query),
+            normalized,
             query.strip().lower(),
+            normalized.lower(),
         ):
             if candidate and candidate not in queries:
                 queries.append(candidate)
@@ -433,6 +435,12 @@ class SemanticScholarClient:
         ``token`` for continuation. Repeat the call with the returned ``token``
         until the response contains no token to paginate through up to
         10,000,000 results.
+
+        When custom *fields* are supplied and the upstream endpoint responds with
+        400 (e.g. because the bulk endpoint does not support every field that
+        ``/paper/search`` accepts), the request is automatically retried with the
+        default field set so agents always receive results. A ``fieldsDropped``
+        flag and explanatory message are added to the response in that case.
         """
         params: dict[str, Any] = {
             "query": query,
@@ -455,12 +463,38 @@ class SemanticScholarClient:
             params["openAccessPdf"] = ""
         if min_citation_count is not None:
             params["minCitationCount"] = min_citation_count
-        response = await self._request("GET", "paper/search/bulk", params=params)
+
+        fields_dropped: bool = False
+        try:
+            response = await self._request("GET", "paper/search/bulk", params=params)
+        except httpx.HTTPStatusError as exc:
+            status_code = self._status_code_from_error(exc)
+            if status_code == 400 and fields:
+                # The bulk endpoint supports fewer fields than /paper/search.
+                # Retry with default fields so agents always get results.
+                params["fields"] = ",".join(DEFAULT_PAPER_FIELDS)
+                response = await self._request(
+                    "GET", "paper/search/bulk", params=params
+                )
+                fields_dropped = True
+            else:
+                raise
+
         parsed = BulkSearchResponse.model_validate(response)
         if len(parsed.data) > limit:
             parsed.data = parsed.data[:limit]
         parsed.data = [self._enrich_bulk_paper(paper) for paper in parsed.data]
-        return dump_jsonable(parsed)
+        result = dump_jsonable(parsed)
+        if fields_dropped:
+            result["fieldsDropped"] = True
+            result["message"] = (
+                "One or more requested fields are not supported by the "
+                "Semantic Scholar bulk search endpoint and were dropped. "
+                "Results use the default field set. "
+                "To retrieve specific fields, use search_papers or "
+                "search_papers_semantic_scholar instead."
+            )
+        return result
 
     async def search_papers_match(
         self,
@@ -474,10 +508,11 @@ class SemanticScholarClient:
         agents can distinguish a confirmed match from the structured no-match
         payload returned by the fallback path.
 
-        Tries each capitalization variant produced by ``_title_lookup_queries``
-        (original, punctuation-normalized, lowercase) against the primary
-        ``/paper/search/match`` endpoint so that common title-case differences
-        do not cause spurious no-match results.
+        Tries each variant produced by ``_title_lookup_queries``
+        (original, punctuation-normalized, lowercase, lowercase-punct-normalized)
+        against the primary ``/paper/search/match`` endpoint so that common
+        title-case and punctuation differences do not cause spurious no-match
+        results.
         """
         fields_str = ",".join(fields or DEFAULT_PAPER_FIELDS)
         candidate_queries = self._title_lookup_queries(query)
