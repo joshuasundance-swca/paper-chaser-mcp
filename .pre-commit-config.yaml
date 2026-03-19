@@ -1,28 +1,67 @@
+default_install_hook_types: [pre-commit, pre-push]
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
+      - id: check-case-conflict
       - id: check-added-large-files
         args: [--maxkb=1000]
-      - id: check-ast
-      - id: check-json
       - id: check-merge-conflict
-      - id: check-toml
-      - id: check-yaml
-      - id: debug-statements
       - id: detect-private-key
-      - id: end-of-file-fixer
       - id: fix-byte-order-marker
       - id: mixed-line-ending
         args: [--fix=lf]
+      - id: end-of-file-fixer
       - id: trailing-whitespace
         args: [--markdown-linebreak-ext=md]
+      - id: check-json
+      - id: check-toml
+      - id: check-yaml
+      - id: check-ast
+      - id: debug-statements
+
+  - repo: https://github.com/abravalheri/validate-pyproject
+    rev: v0.25
+    hooks:
+      - id: validate-pyproject
+        additional_dependencies:
+          - validate-pyproject-schema-store[all]
+
+  - repo: https://github.com/python-jsonschema/check-jsonschema
+    rev: 0.37.0
+    hooks:
+      - id: check-github-workflows
+      - id: check-dependabot
+
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.11
+    hooks:
+      - id: actionlint
+        exclude: ^\.github/workflows/.*\.lock\.yml$
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.24.2
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.44.0
+    hooks:
+      - id: typos
+        exclude: ^(\.github/workflows/test-scholar-search\.lock\.yml|infra/.*\.json)$
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
+    hooks:
+      - id: shellcheck
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.12.9
     hooks:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
 
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.17.1
@@ -45,3 +84,104 @@ repos:
       - id: bandit
         args: [-c, pyproject.toml]
         additional_dependencies: [".[toml]"]
+
+  - repo: https://github.com/bridgecrewio/checkov
+    rev: 3.2.508
+    hooks:
+      - id: checkov
+        name: checkov (bicep)
+        args:
+          - --file
+          - infra/main.bicep
+          - --framework
+          - bicep
+          - --skip-path
+          - infra/modules/roleAssignments.bicep
+          - --skip-check
+          # Azure image quarantine is still intentionally handled outside
+          # infrastructure because the registry policy alone is not a complete
+          # promotion workflow.
+          - CKV_AZURE_166
+        pass_filenames: false
+        files: ^infra/.*\.(bicep|bicepparam)$
+
+  - repo: local
+    hooks:
+      # The stock hadolint docker_image hook can wedge under Docker Desktop on
+      # Windows. Use a pinned image plus an explicit timeout/cleanup wrapper so
+      # the hook stays enforced without hanging the whole pre-commit run.
+      - id: hadolint-docker
+        name: hadolint (docker, pinned)
+        entry: python scripts/run_hadolint.py
+        language: system
+        files: ^Dockerfile$
+
+      - id: pip-check
+        name: pip check
+        entry: python -m pip check
+        language: python
+        additional_dependencies:
+          - anyio>=4.0.0
+          - defusedxml>=0.7.1
+          - fastmcp>=3.1.0
+          - httpx>=0.25.0
+          - mcp>=1.24.0
+          - pydantic>=2.11.0
+          - pytest>=8.3.0
+          - pytest-asyncio>=0.24.0
+          - pytest-cov>=7.0.0
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push, manual]
+
+      - id: pytest-coverage
+        name: pytest coverage
+        entry: python -m pytest --cov=scholar_search_mcp --cov-report=term-missing --cov-fail-under=85
+        language: python
+        additional_dependencies:
+          - anyio>=4.0.0
+          - defusedxml>=0.7.1
+          - fastmcp>=3.1.0
+          - httpx>=0.25.0
+          - mcp>=1.24.0
+          - pydantic>=2.11.0
+          - pytest>=8.3.0
+          - pytest-asyncio>=0.24.0
+          - pytest-cov>=7.0.0
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push, manual]
+
+      - id: build-package
+        name: build package
+        entry: python -m build
+        language: python
+        additional_dependencies:
+          - build>=1.4.0
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push, manual]
+
+      - id: pip-audit
+        name: pip audit
+        entry: python -m pip_audit . --progress-spinner off
+        language: python
+        additional_dependencies:
+          - pip-audit>=2.10.0
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push, manual]
+
+      - id: validate-azure-security-baseline
+        name: validate azure security baseline
+        entry: python scripts/validate_psrule_azure.py
+        language: system
+        pass_filenames: false
+        files: ^(infra/.*\.(bicep|bicepparam)|ps-rule\.yaml|scripts/validate_psrule_azure\.py)$
+
+      - id: validate-azure-deployment-assets
+        name: validate azure deployment assets
+        entry: python scripts/validate_deployment.py --skip-docker
+        language: system
+        pass_filenames: false
+        files: ^(infra/.*\.(bicep|bicepparam)|infra/policies/.*\.xml|\.github/workflows/deploy-azure\.yml|Dockerfile|scholar_search_mcp/deployment\.py|docs/azure-(architecture|deployment|security-model)\.md)$

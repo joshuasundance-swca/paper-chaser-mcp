@@ -30,6 +30,18 @@ The package now uses FastMCP for tool/resource/prompt registration, Pydantic for
 pip install scholar-search-mcp
 ```
 
+### Local Quick Start
+
+The Azure deployment scaffold is optional. Local `python -m scholar_search_mcp`
+still defaults to `stdio` transport and does not require any Azure deployment
+variables.
+
+If you want a local env template for shell runs or Docker, copy
+`.env.example` to `.env`, fill in only the providers you use, and keep the
+resulting file uncommitted. The repo ignores `.env`, `.env.local`, other
+`.env.*` variants except `.env.example`, and `.local-*` planning/artifact
+files. Docker now keeps those local-only files out of the image build context.
+
 ## Configuration
 
 ### Claude Desktop
@@ -255,6 +267,9 @@ The server defaults to local **stdio** transport, which is the recommended mode 
 | `SCHOLAR_SEARCH_HTTP_HOST` | `127.0.0.1` | Host to bind when using an HTTP transport |
 | `SCHOLAR_SEARCH_HTTP_PORT` | `8000` | Port to bind when using an HTTP transport |
 | `SCHOLAR_SEARCH_HTTP_PATH` | `/mcp` | MCP endpoint path when using an HTTP transport |
+| `SCHOLAR_SEARCH_HTTP_AUTH_TOKEN` | unset | Optional shared token required by the deployment wrapper for requests to the MCP endpoint |
+| `SCHOLAR_SEARCH_HTTP_AUTH_HEADER` | `authorization` | Header name checked by the deployment wrapper; `authorization` expects `Bearer <token>` |
+| `SCHOLAR_SEARCH_ALLOWED_ORIGINS` | unset | Optional comma-separated Origin allowlist enforced by the deployment wrapper |
 
 > [!IMPORTANT]
 > HTTP transport compatibility is available, but this repository does **not**
@@ -267,6 +282,15 @@ The server defaults to local **stdio** transport, which is the recommended mode 
 Use `scholar_search_mcp.server.build_http_app(...)` if you need to inject
 deployment-specific Starlette middleware around the FastMCP ASGI app.
 
+For private Azure hosting, this repository also ships
+`scholar_search_mcp.deployment:app`, an ASGI wrapper that adds `/healthz`,
+optional shared-token authentication, and optional Origin allowlisting in front
+of the MCP app. The Azure deployment scaffold in [docs/azure-deployment.md](docs/azure-deployment.md)
+uses that wrapper behind private Azure API Management and private endpoints so
+trusted clients never see the backend token or upstream provider API keys.
+The tracked Azure workflow is manual-only and supports a `bootstrap` mode for
+first-time environment bring-up before the `full` private-runner deployment.
+
 Example local/integration HTTP run:
 
 ```bash
@@ -275,6 +299,73 @@ SCHOLAR_SEARCH_HTTP_HOST=0.0.0.0 \
 SCHOLAR_SEARCH_HTTP_PORT=8000 \
 python -m scholar_search_mcp
 ```
+
+That path serves the FastMCP app directly over streamable HTTP at
+`http://127.0.0.1:8000/mcp` by default. It is the simplest local option when
+you want HTTP transport without the deployment wrapper.
+
+If you want local parity with the container and Azure deployment wrapper
+instead, run the same entrypoint the image uses:
+
+```bash
+PORT=8000 SCHOLAR_SEARCH_HTTP_HOST=127.0.0.1 python -m scholar_search_mcp.deployment_runner
+```
+
+`deployment_runner` launches Uvicorn around
+`scholar_search_mcp.deployment:app`, prefers `PORT` when it is set, and
+otherwise falls back to `SCHOLAR_SEARCH_HTTP_PORT` (default `8080` for the
+container image). That wrapper keeps the same streamable HTTP MCP transport,
+adds `/healthz`, and optionally enforces `SCHOLAR_SEARCH_HTTP_AUTH_TOKEN` and
+`SCHOLAR_SEARCH_ALLOWED_ORIGINS` for `/mcp`.
+
+In all of these local HTTP modes, clients talk only to your local MCP endpoint.
+They do **not** need upstream provider API keys. Those keys, when present, stay
+server-side and only let your local server use higher provider limits or
+optional paid providers such as SerpApi.
+
+### Docker Compose
+
+For local HTTP testing, MCP Inspector, or bridge-style integrations, this repo
+now ships `docker-compose.yaml` with localhost-only defaults. The compose service runs
+the same deployment wrapper used by the Docker image, with streamable HTTP on
+`/mcp`.
+
+Compose intentionally keeps the container bind host and internal port fixed at
+`0.0.0.0:8080`, because those are container-runtime details rather than
+consumer-facing behavior. The compose file still lets downstream users override
+the user-facing knobs that matter locally: transport, MCP path, provider keys,
+provider toggles, auth, and the published host port mapping.
+
+As a rule of thumb for this repo: make behavior configurable, keep secrets out
+of git, and avoid exposing infrastructure internals as knobs unless a
+downstream consumer actually benefits from changing them.
+
+1. Copy `.env.example` to `.env`.
+2. Fill in any optional provider keys you want to use.
+3. Start the service:
+
+```bash
+docker compose -f docker-compose.yaml up --build
+```
+
+The service listens on `http://127.0.0.1:8000` by default, serves
+`/healthz` for probes, and exposes MCP over `http://127.0.0.1:8000/mcp`.
+
+```bash
+curl http://127.0.0.1:8000/healthz
+```
+
+If you set `SCHOLAR_SEARCH_HTTP_AUTH_TOKEN` and leave
+`SCHOLAR_SEARCH_HTTP_AUTH_HEADER=authorization`, the deployment wrapper expects
+`Authorization: Bearer <token>` on `/mcp`. The checked-in Azure scaffold
+overrides the header name to `x-backend-auth` and has API Management inject
+that header for backend-only traffic. The published host defaults to
+`127.0.0.1`; only change `SCHOLAR_SEARCH_PUBLISHED_HOST` when you intentionally
+want the container reachable beyond the local machine.
+
+If you leave the provider key fields blank, local clients still work. The
+server falls back to the free/default provider paths where supported, and
+SerpApi stays disabled by default.
 
 ## Tools
 
@@ -353,6 +444,42 @@ Run the local test suite:
 pytest
 ```
 
+### Full local validation
+
+The repo's CI-equivalent local gate is broader than `pytest` alone. For a
+thorough local pass, run:
+
+```bash
+python -m pip check
+pre-commit run --all-files
+python -m pytest --cov=scholar_search_mcp --cov-report=term-missing --cov-fail-under=85
+python -m mypy --config-file pyproject.toml
+python -m ruff check .
+python -m bandit -c pyproject.toml -r scholar_search_mcp
+python -m build
+python -m pip_audit . --progress-spinner off
+```
+
+If you prefer to invoke the heavier hook-managed checks through pre-commit,
+`pre-commit run --hook-stage manual --all-files` runs the manual-stage
+`pip check`, coverage, build, and `pip-audit` hooks defined in
+`.pre-commit-config.yaml`.
+
+When you touch Azure IaC, deployment docs, the Dockerfile, the APIM policy, or
+the Azure deployment workflow, also run:
+
+```bash
+python scripts/validate_psrule_azure.py
+python scripts/validate_deployment.py --skip-docker
+```
+
+For parity with the `Deploy Azure` workflow's full deployment validation path,
+run:
+
+```bash
+python scripts/validate_deployment.py --require-az --require-docker --image-tag scholar-search-mcp:ci-validate
+```
+
 ### GitHub Agentic Workflow smoke test
 
 The repository now includes an agentic regression workflow source at
@@ -383,6 +510,8 @@ What this workflow does:
 - Produces a high-level smoke test that catches agent-facing workflow regressions
   that unit tests can miss and can turn concrete findings into one actionable
   GitHub issue for follow-on coding-agent work.
+- Runs manually only. This is intentional because the workflow can consume
+  repository secrets in a public repo.
 
 How it runs in GitHub:
 
@@ -390,10 +519,8 @@ How it runs in GitHub:
 - `gh aw compile ...` generates `.github/workflows/test-scholar-search.lock.yml`,
   which is the Actions workflow file GitHub actually runs.
 - Once both files are committed to the default branch and the required secrets
-  are configured, GitHub runs the workflow on `push` to `master` or when
-  manually triggered with `workflow_dispatch` from the Actions tab. Concurrent
-  runs on `master` are cancelled so rapid merges don't queue up redundant
-  verification runs.
+  are configured, maintainers run the workflow manually with
+  `workflow_dispatch` from the Actions tab.
 - Manual dispatches can select `smoke`, `comprehensive`, or `feature_probe`
   mode and optionally pass a free-form focus prompt.
 
@@ -416,10 +543,9 @@ How to update and use it:
    lock file.
 4. Commit both the `.md` source and `.lock.yml` output together.
 5. Push the branch, then run `Test Scholar Search MCP` from the GitHub Actions
-   UI or wait for a `push`-triggered run on the default branch. For on-demand
-   UX reviews, use `workflow_dispatch` inputs to choose the run mode and
-   provide an optional focus prompt such as a new feature, a provider-specific
-   flow, or a confusing agent interaction to probe.
+   UI. For on-demand UX reviews, use `workflow_dispatch` inputs to choose the
+   run mode and provide an optional focus prompt such as a new feature, a
+   provider-specific flow, or a confusing agent interaction to probe.
 
 The repository also includes `.github/workflows/agentic-assign.yml`, a
 lightweight workflow that automatically assigns GitHub Copilot to any issue
@@ -437,6 +563,9 @@ The normal `Validate` workflow now also recompiles `test-scholar-search.md` on
 CI and fails if `.github/workflows/test-scholar-search.lock.yml` is stale, so
 pull requests cannot silently drift out of sync.
 
+See [SECURITY.md](SECURITY.md) for the public-repo security posture and the
+recommended private reporting path for vulnerabilities.
+
 For this repo, there is no separate deployment step beyond checking in the
 workflow source and compiled lock file. The workflow is "deployed" when GitHub
 Actions sees the committed `.lock.yml` on the branch where it should run.
@@ -448,8 +577,14 @@ pre-commit install
 pre-commit run --all-files
 ```
 
-The development extras now include `pytest`, `pytest-asyncio`, `ruff`, `mypy`,
-`bandit`, `types-defusedxml`, and `pre-commit`.
+`pre-commit install` now installs both the fast `pre-commit` hooks and the
+heavier `pre-push` gates configured in `.pre-commit-config.yaml`. Manual-stage
+hooks are not invoked automatically; run `pre-commit run --hook-stage manual
+--all-files` (or the direct commands above) when you want the full local gate.
+
+The development extras now include `pytest`, `pytest-asyncio`, `pytest-cov`,
+`ruff`, `mypy`, `bandit`, `build`, `pip-audit`, `types-defusedxml`, and
+`pre-commit`.
 
 GitHub dependency automation is configured for both Python packages and GitHub Actions via Dependabot, with pull requests checked by the dependency review workflow.
 
@@ -460,8 +595,13 @@ For maintainer orientation after the module split, start with `docs/agent-handof
 - [GitHub Copilot Instructions](.github/copilot-instructions.md) - repo-specific guidance for GitHub Copilot and the GitHub cloud coding agent, including workflow defaults and durable planning expectations.
 - [Agent Handoff](docs/agent-handoff.md) - current repo status, validation commands, and next recommended work for follow-on agents.
 - [Scholar Search Golden Paths](docs/golden-paths.md) - primary personas, workflow defaults, success signals, and future workflow-oriented follow-up work.
+- [Azure Deployment](docs/azure-deployment.md) - deployment modes, required secrets and variables, and validation paths for the private Azure rollout.
+- [Azure Architecture](docs/azure-architecture.md) - trust boundaries, runtime topology, and credential separation for the Azure scaffold.
+- [Azure Security Model](docs/azure-security-model.md) - credential classes, Key Vault usage, and backend-auth separation in the Azure rollout.
 - [OpenAlex API Guide](docs/openalex-api-guide.md) - implementation-focused guidance for the repo's explicit OpenAlex MCP surface, including authentication, credit-based limits, paging, `/works` semantics, and normalization caveats.
 - [Semantic Scholar API Guide](docs/semantic-scholar-api-guide.md) - practical guidance for respectful and effective Semantic Scholar API usage with async rate limiting, retries, and `.env`-based local development.
+- [SerpApi Google Scholar Guide](docs/serpapi-google-scholar-api-guide.md) - deep research notes on SerpApi capabilities, tradeoffs, and cost/compliance considerations; only part of that surface is currently shipped here.
+- [FastMCP Migration Plan](docs/fastmcp-migration-plan.md) - historical architecture rationale for the FastMCP migration and compatibility surface.
 
 ## License
 

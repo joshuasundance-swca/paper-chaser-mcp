@@ -26,9 +26,7 @@ def _extract_allowed_tools(workflow_source_content: str) -> list[str]:
 def test_agentic_workflow_source_and_lockfile_are_checked_in() -> None:
     repo_root = Path(__file__).resolve().parent.parent
     workflow_md = repo_root / ".github" / "workflows" / "test-scholar-search.md"
-    workflow_lock = (
-        repo_root / ".github" / "workflows" / "test-scholar-search.lock.yml"
-    )
+    workflow_lock = repo_root / ".github" / "workflows" / "test-scholar-search.lock.yml"
 
     workflow_source_content = workflow_md.read_text()
     workflow_lock_content = workflow_lock.read_text()
@@ -73,7 +71,7 @@ def test_agentic_workflow_source_and_lockfile_are_checked_in() -> None:
     )
     assert "search_papers_bulk" in workflow_source_content
     assert "search_papers_match" in workflow_source_content
-    assert "search_authors(query=\"Yoshua Bengio\", limit=3)" in workflow_source_content
+    assert 'search_authors(query="Yoshua Bengio", limit=3)' in workflow_source_content
     assert (
         'search_papers_openalex(query="transformer architecture", limit=3)'
         in workflow_source_content
@@ -82,7 +80,7 @@ def test_agentic_workflow_source_and_lockfile_are_checked_in() -> None:
         workflow_source_content
     )
     assert (
-        "search_papers_serpapi(query=\"Attention Is All You Need\", limit=3)"
+        'search_papers_serpapi(query="Attention Is All You Need", limit=3)'
         in workflow_source_content
     )
     assert "code and/or documentation" in workflow_source_content
@@ -124,7 +122,7 @@ def test_agentic_workflow_documentation_stays_in_sync() -> None:
     assert compile_command in handoff
     assert "feature_probe" in handoff
     assert "workflow_dispatch" in readme
-    assert "The workflow is \"deployed\" when GitHub" in readme
+    assert 'The workflow is "deployed" when GitHub' in readme
     assert "pull requests cannot silently drift out of sync" in readme
 
     assert ".github/workflows/test-scholar-search.md" in golden_paths
@@ -163,8 +161,7 @@ def test_agentic_assign_workflow_catches_workflow_created_issues() -> None:
     assert "agent_assignment:" in assign_workflow
     assert "github-token:" in assign_workflow
     expected_token_fallback = (
-        "secrets.GH_AW_GITHUB_TOKEN || "
-        "secrets.COPILOT_GITHUB_TOKEN || github.token"
+        "secrets.GH_AW_GITHUB_TOKEN || secrets.COPILOT_GITHUB_TOKEN || github.token"
     )
     assert expected_token_fallback in assign_workflow
     assert "target_repo: targetRepo" in assign_workflow
@@ -172,19 +169,16 @@ def test_agentic_assign_workflow_catches_workflow_created_issues() -> None:
     assert "assignees: [copilotAssignee]" in assign_workflow
 
 
-def test_verifier_workflow_triggers_on_default_branch() -> None:
-    """Regression: push trigger must match the repo default branch (master).
-
-    If the trigger branch is wrong, merging a Copilot fix PR never re-runs
-    the verifier, which breaks the agentic feedback loop.
-    """
+def test_verifier_workflow_is_manual_only_for_public_repo_safety() -> None:
+    """Regression: secret-bearing verifier must stay manual-only."""
     repo_root = Path(__file__).resolve().parent.parent
     workflow_md = (
         repo_root / ".github" / "workflows" / "test-scholar-search.md"
     ).read_text()
 
-    assert "branches: [master]" in workflow_md, (
-        "test-scholar-search.md must trigger on push to 'master' (the repo default "
-        "branch). If this is 'main', merged Copilot fix PRs will not re-run the "
-        "verifier and the agentic feedback loop will be silently broken."
+    assert "workflow_dispatch:" in workflow_md
+    assert "\n  push:\n" not in workflow_md
+    assert "manual-only by design" in workflow_md, (
+        "test-scholar-search.md should keep the secret-bearing verifier "
+        "manual-only in this public repository."
     )

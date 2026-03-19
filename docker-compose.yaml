@@ -1,0 +1,39 @@
+services:
+  scholar-search-mcp:
+    build:
+      context: .
+    image: scholar-search-mcp:local
+    ports:
+      - "${SCHOLAR_SEARCH_PUBLISHED_HOST:-127.0.0.1}:${SCHOLAR_SEARCH_PUBLISHED_PORT:-8000}:8080"
+    environment:
+      # Optional local overrides. User-facing transport and path stay
+      # configurable here; the image keeps the container bind host and internal
+      # port fixed at 0.0.0.0:8080.
+      CORE_API_KEY: ${CORE_API_KEY:-}
+      SEMANTIC_SCHOLAR_API_KEY: ${SEMANTIC_SCHOLAR_API_KEY:-}
+      OPENALEX_API_KEY: ${OPENALEX_API_KEY:-}
+      OPENALEX_MAILTO: ${OPENALEX_MAILTO:-}
+      SERPAPI_API_KEY: ${SERPAPI_API_KEY:-}
+      SCHOLAR_SEARCH_ENABLE_CORE: ${SCHOLAR_SEARCH_ENABLE_CORE:-true}
+      SCHOLAR_SEARCH_ENABLE_SEMANTIC_SCHOLAR: ${SCHOLAR_SEARCH_ENABLE_SEMANTIC_SCHOLAR:-true}
+      SCHOLAR_SEARCH_ENABLE_OPENALEX: ${SCHOLAR_SEARCH_ENABLE_OPENALEX:-true}
+      SCHOLAR_SEARCH_ENABLE_ARXIV: ${SCHOLAR_SEARCH_ENABLE_ARXIV:-true}
+      SCHOLAR_SEARCH_ENABLE_SERPAPI: ${SCHOLAR_SEARCH_ENABLE_SERPAPI:-false}
+      SCHOLAR_SEARCH_PROVIDER_ORDER: ${SCHOLAR_SEARCH_PROVIDER_ORDER:-}
+      SCHOLAR_SEARCH_TRANSPORT: ${SCHOLAR_SEARCH_TRANSPORT:-streamable-http}
+      SCHOLAR_SEARCH_HTTP_PATH: ${SCHOLAR_SEARCH_HTTP_PATH:-/mcp}
+      SCHOLAR_SEARCH_HTTP_AUTH_TOKEN: ${SCHOLAR_SEARCH_HTTP_AUTH_TOKEN:-}
+      SCHOLAR_SEARCH_HTTP_AUTH_HEADER: ${SCHOLAR_SEARCH_HTTP_AUTH_HEADER:-authorization}
+      SCHOLAR_SEARCH_ALLOWED_ORIGINS: ${SCHOLAR_SEARCH_ALLOWED_ORIGINS:-}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz').read()",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

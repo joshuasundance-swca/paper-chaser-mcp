@@ -199,6 +199,7 @@ class SearchPapersBaseArgs(BasicSearchPapersArgs):
         description="Minimum citation count filter",
     )
 
+
 class SearchPapersArgs(SearchPapersBaseArgs):
     preferred_provider: SearchProvider | None = Field(
         default=None,
@@ -280,9 +281,7 @@ class BulkSearchPapersArgs(ToolArgsModel):
     )
     sort: str | None = Field(
         default=None,
-        description=(
-            "Sort order, e.g. 'paperId', 'citationCount', 'publicationDate'"
-        ),
+        description=("Sort order, e.g. 'paperId', 'citationCount', 'publicationDate'"),
     )
     year: str | None = Field(
         default=None,

@@ -129,8 +129,7 @@ async def test_search_papers_bulk_truncates_provider_oversized_batch(
         pass
 
     oversized_batch = [
-        {"paperId": f"bulk-{index}", "title": f"Paper {index}"}
-        for index in range(10)
+        {"paperId": f"bulk-{index}", "title": f"Paper {index}"} for index in range(10)
     ]
 
     class BulkAsyncClient:
@@ -311,7 +310,6 @@ async def test_search_papers_bulk_400_with_custom_fields_retries_with_defaults(
 
     assert set(captured_params[0]["fields"].split(",")) == {"paperId", "title", "tldr"}
     assert set(captured_params[1]["fields"].split(",")) == set(DEFAULT_PAPER_FIELDS)
-
 
 
 @pytest.mark.asyncio
@@ -1384,8 +1382,12 @@ async def test_search_papers_match_fallback_citation_ranked_bulk_last_resort(
         },
     )
     responses = [
-        match_404, match_404,
-        search_400, search_400, search_400, search_400,
+        match_404,
+        match_404,
+        search_400,
+        search_400,
+        search_400,
+        search_400,
         bulk_hit,
     ]
 
@@ -1768,12 +1770,10 @@ def test_normalize_paper_id_arxiv_url() -> None:
     """arxiv.org abs and pdf URLs should be normalized to ARXIV:<id>."""
     sc = server.SemanticScholarClient()
     assert (
-        sc._normalize_paper_id("https://arxiv.org/abs/1706.03762")
-        == "ARXIV:1706.03762"
+        sc._normalize_paper_id("https://arxiv.org/abs/1706.03762") == "ARXIV:1706.03762"
     )
     assert (
-        sc._normalize_paper_id("https://arxiv.org/pdf/1706.03762")
-        == "ARXIV:1706.03762"
+        sc._normalize_paper_id("https://arxiv.org/pdf/1706.03762") == "ARXIV:1706.03762"
     )
 
 

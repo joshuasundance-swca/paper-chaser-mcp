@@ -67,6 +67,16 @@ def run_server(*, app: Any, logger: Any, settings: AppSettings) -> None:
         settings.http_port,
         settings.http_path,
     )
+    if settings.http_auth_token:
+        logger.info(
+            "HTTP auth token configured for deployment wrapper using header %s",
+            settings.http_auth_header,
+        )
+    if settings.allowed_origins:
+        logger.info(
+            "HTTP Origin allowlist configured for %s entries",
+            len(settings.allowed_origins),
+        )
     app.run(
         transport=settings.transport,
         host=settings.http_host,

@@ -84,6 +84,26 @@ def test_app_settings_openalex_enabled_with_optional_mailto_and_key() -> None:
     assert settings.openalex_mailto == "team@example.com"
 
 
+def test_app_settings_normalizes_blank_optional_values_to_none() -> None:
+    settings = AppSettings.from_env(
+        {
+            "CORE_API_KEY": "   ",
+            "SEMANTIC_SCHOLAR_API_KEY": "",
+            "OPENALEX_API_KEY": "   ",
+            "OPENALEX_MAILTO": "",
+            "SERPAPI_API_KEY": "   ",
+            "SCHOLAR_SEARCH_HTTP_AUTH_TOKEN": "",
+        }
+    )
+
+    assert settings.core_api_key is None
+    assert settings.semantic_scholar_api_key is None
+    assert settings.openalex_api_key is None
+    assert settings.openalex_mailto is None
+    assert settings.serpapi_api_key is None
+    assert settings.http_auth_token is None
+
+
 def test_app_settings_transport_defaults_to_stdio() -> None:
     settings = AppSettings.from_env({})
 
@@ -107,6 +127,26 @@ def test_app_settings_parses_http_transport_configuration() -> None:
     assert settings.http_host == "0.0.0.0"
     assert settings.http_port == 9000
     assert settings.http_path == "/api/mcp"
+
+
+def test_app_settings_ignores_unrelated_azure_workflow_metadata() -> None:
+    settings = AppSettings.from_env(
+        {
+            "AZURE_CLIENT_ID": "client-id",
+            "AZURE_TENANT_ID": "tenant-id",
+            "AZURE_SUBSCRIPTION_ID": "subscription-id",
+            "AZURE_RESOURCE_GROUP": "rg-scholar-search-dev-01",
+            "ACR_NAME": "acrscholarsearchdev",
+            "IMAGE_REPOSITORY": "scholar-search-mcp",
+            "AZURE_PRIVATE_RUNNER_LABELS_JSON": '["self-hosted","linux"]',
+        }
+    )
+
+    assert settings.transport == "stdio"
+    assert settings.enable_core is True
+    assert settings.enable_semantic_scholar is True
+    assert settings.enable_serpapi is False
+    assert settings.http_auth_token is None
 
 
 @pytest.mark.parametrize("value", ["false", "0", "no", "off"])

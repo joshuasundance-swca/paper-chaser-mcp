@@ -1006,7 +1006,6 @@ async def test_broker_metadata_result_quality_low_relevance_uses_abstract_text(
     assert broker_meta["resultQuality"] == "strong"
 
 
-
 @pytest.mark.asyncio
 async def test_broker_metadata_result_quality_lexical_for_core(
     monkeypatch: pytest.MonkeyPatch,

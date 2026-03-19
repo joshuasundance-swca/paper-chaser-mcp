@@ -39,6 +39,13 @@ Current implementation notes:
 - the client uses conservative built-in pacing/retry defaults
   (`min_interval=0.05s`, `max_retries=2`) rather than separate env vars
 
+Current repo boundaries to keep in mind:
+
+- OpenAlex remains outside the default `search_papers` broker and the default
+  provider-order configuration
+- the shipped OpenAlex MCP surface does not yet expose institution/source pivot
+  tools or OpenAlex autocomplete
+
 Primary references:
 
 - Overview: https://developers.openalex.org/
@@ -83,7 +90,7 @@ https://api.openalex.org/works?filter=doi:https://doi.org/10.48550/arXiv.1706.03
 
 The current official docs describe the polite pool mainly as a response-time
 and reliability improvement, not as a separate excuse to ignore the published
-rate limits. A future client for this repo should still enforce its own pacing.
+rate limits. The client in this repo still enforces its own pacing.
 
 ## Rate Limits and Credit Costs
 
@@ -108,7 +115,7 @@ expensive compared with singleton lookups. A provider implementation should:
 - avoid doing broad list queries inside tight retry loops
 - reuse results instead of immediately refetching adjacent pages
 - prefer singleton follow-ups only for items the user actually needs expanded
-- expose limits clearly in any future provider-specific tool descriptions
+- expose limits clearly in provider-specific tool descriptions
 
 Every response also includes rate-limit headers such as
 `X-RateLimit-Remaining`, and the `/rate-limit` endpoint can be queried when an
@@ -116,8 +123,8 @@ API key is available.
 
 ## Base Surface Most Relevant to This Repo
 
-OpenAlex is much broader than this server needs, but a future provider
-integration would mostly care about the following:
+OpenAlex is much broader than this server needs, but the explicit provider
+integration in this repo mostly cares about the following:
 
 | MCP capability | Best OpenAlex surface | Notes |
 | --- | --- | --- |
@@ -130,7 +137,7 @@ integration would mostly care about the following:
 | author pivot | `authorships.author.id`, `/authors`, `/works?filter=authorships.author.id:...` | typically a two-step flow |
 | venue/source pivot | `primary_location.source.id` | source IDs are more reliable than searching by venue name |
 
-In this repo specifically, OpenAlex would fit best as a metadata-rich search and
+In this repo specifically, OpenAlex fits best as a metadata-rich search and
 lookup provider. It is less of a drop-in replacement for the current Semantic
 Scholar expansion flow because several semantics are different:
 
@@ -160,7 +167,7 @@ Important response-shape details for normalization:
   `https://openalex.org/W2741809807`
 - DOI values are URI-formatted as well, e.g. `https://doi.org/...`
 
-That means a future client for this repo should normalize IDs deliberately
+That means the client in this repo should normalize IDs deliberately
 instead of assuming short provider-native strings like the current Semantic
 Scholar or CORE flows.
 
@@ -195,8 +202,9 @@ For this MCP server, that means OpenAlex search would sit somewhere between:
 - a fielded lookup provider for titles, sources, institutions, and topics
 
 But it would not map perfectly onto the current Semantic Scholar-only filters.
-Any future `search_papers_openalex` tool should advertise only the parameters
-that OpenAlex actually honors.
+The existing `search_papers_openalex` tool already advertises only the
+parameters OpenAlex actually honors, and future OpenAlex tool additions should
+keep that discipline.
 
 ## Filter Semantics That Matter for MCP Integration
 
@@ -205,7 +213,7 @@ providers in this repo.
 
 ### AND, OR, NOT
 
-- filters are ANDed by default:
+- filters are combined with logical AND by default:
   `filter=publication_year:2024,is_oa:true`
 - OR within a single filter uses `|`
 - negation uses `!`
@@ -234,7 +242,7 @@ useful for DOI or ID batch lookup:
 /works?filter=doi:https://doi.org/10.1/abc|https://doi.org/10.2/def&per-page=100
 ```
 
-For a future MCP provider, this is likely the right building block for:
+For this MCP provider, this is the right building block for:
 
 - batched known-item DOI resolution
 - hydrating `referenced_works` after reading a single work
@@ -270,10 +278,9 @@ Provider-specific nuance:
 - the response metadata field is spelled `per_page`
 - `next_cursor` is provider-issued and should be treated as opaque
 
-If OpenAlex is ever wired into this MCP server, we should keep the server-side
-cursor contract opaque just as we do today for Semantic Scholar-backed
-pagination rather than leaking raw provider pagination assumptions into the MCP
-surface.
+In this repo, the server-side OpenAlex cursor contract stays opaque just as it
+does for Semantic Scholar-backed pagination rather than leaking raw provider
+pagination assumptions into the MCP surface.
 
 Also note the OpenAlex docs explicitly discourage using cursor pagination to
 download the full dataset; for corpus-scale ingestion, the snapshot is the
@@ -308,10 +315,10 @@ different from the existing Semantic Scholar citation/reference endpoints.
 
 ### 3. Authorship payloads are capped
 
-`authorships` are limited to the first 100 authors. A future normalization layer
+`authorships` are limited to the first 100 authors. The normalization layer
 should not silently imply that the author list is always exhaustive; if a work
-reaches that cap, treat the author list as potentially partial in downstream MCP
-responses and documentation.
+reaches that cap, treat the author list as potentially partial in downstream
+MCP responses and documentation.
 
 ### 4. Venue/location fields have migrated
 
@@ -323,9 +330,9 @@ So any new provider code should avoid building on deprecated venue fields.
 ### 5. Source aggregation affects deduplication
 
 OpenAlex aggregates records from multiple upstream sources, including Crossref,
-PubMed, repositories, and arXiv. In this repo that matters because a future
-brokered path would overlap heavily with existing CORE, arXiv, and Semantic
-Scholar coverage.
+PubMed, repositories, and arXiv. In this repo that matters because OpenAlex
+overlaps heavily with existing CORE, arXiv, and Semantic Scholar coverage even
+though it is intentionally kept outside the default broker.
 
 Practical implication: dedupe on stable identifiers like DOI and carefully
 normalized titles, not just provider-native IDs.
@@ -350,8 +357,9 @@ Examples:
 
 This is a good fit for explicit multi-step MCP workflows, but a poor fit for a
 single over-broad search tool that pretends free-text related-entity search is
-precise. If this repo ever adds OpenAlex provider-specific tools, author,
-institution, and source pivots should stay honest about that two-step pattern.
+precise. Because this repo already has OpenAlex provider-specific tools,
+future author, institution, and source pivots should stay honest about that
+two-step pattern.
 
 ## `select` for Smaller Payloads
 
@@ -365,13 +373,13 @@ Example:
 ```
 
 This is useful for fast list views and broker-style search results. However, it
-cannot select nested fields such as `open_access.is_oa`. A future provider
-client should therefore maintain a few known-good field sets rather than trying
-to build arbitrarily deep response masks.
+cannot select nested fields such as `open_access.is_oa`. The provider client
+should therefore maintain a few known-good field sets rather than trying to
+build arbitrarily deep response masks.
 
 ## Where OpenAlex Would Likely Fit in This MCP Server
 
-If the repo adds OpenAlex later, the cleanest positioning would likely be:
+Given the current repo surface, OpenAlex's cleanest positioning is:
 
 - **search/discovery**: a free, broad metadata provider with rich filters
 - **known-item DOI/title recovery**: especially useful when users have DOI,
@@ -388,8 +396,7 @@ Less likely clean fits:
 
 ## Recommended Integration Defaults
 
-If implementing a future OpenAlex client in this repo, start with these
-defaults:
+When extending the OpenAlex client in this repo, start with these defaults:
 
 1. Always send a configured contact email when available.
 2. Keep a shared limiter even though OpenAlex's published ceiling is much higher
@@ -403,7 +410,7 @@ defaults:
 6. Prefer batched OR filters for DOI or reference hydration instead of loops of
    singleton requests.
 7. Avoid exposing deprecated venue fields or unsupported cross-field boolean
-   semantics in any future tool schema.
+   semantics in future tool additions.
 
 ## Bottom Line
 

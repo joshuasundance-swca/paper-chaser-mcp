@@ -73,11 +73,31 @@ pip install -e .[dev]
 Then run:
 
 ```bash
-python -m pytest
+python -m pip check
+pre-commit run --all-files
+python -m pytest --cov=scholar_search_mcp --cov-report=term-missing --cov-fail-under=85
 python -m mypy --config-file pyproject.toml
 python -m ruff check .
 python -m bandit -c pyproject.toml -r scholar_search_mcp
+python -m build
+python -m pip_audit . --progress-spinner off
 ```
+
+If you prefer the hook entrypoint for the heavier checks, run
+`pre-commit run --hook-stage manual --all-files` to execute the manual-stage
+`pip check`, coverage, build, and audit hooks.
+
+If you touch Azure IaC, deployment docs, the Dockerfile, the APIM policy, or
+`.github/workflows/deploy-azure.yml`, also run:
+
+```bash
+python scripts/validate_psrule_azure.py
+python scripts/validate_deployment.py --skip-docker
+```
+
+Use
+`python scripts/validate_deployment.py --require-az --require-docker --image-tag scholar-search-mcp:ci-validate`
+when you need parity with the full `Deploy Azure` workflow.
 
 If you edit `.github/workflows/test-scholar-search.md`, also rerun
 `gh aw compile test-scholar-search --dir .github/workflows` so the checked-in
