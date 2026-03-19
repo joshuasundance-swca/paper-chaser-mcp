@@ -12,6 +12,14 @@ From a compliance and risk standpoint, Google’s current Terms prohibit **using
 
 The remainder of this report inventories the engines/parameters/schemas and then translates those behaviors into concrete design patterns for a high-quality, production MCP (metadata collection/proxy) server: strict request normalization, caching and in-flight de-duplication, adaptive throttling using Account API metrics, resilient retry/backoff for SerpApi `5xx`, support for two-phase citation expansion flows, and strong security boundaries around upstream API keys. citeturn13view0turn12view0turn26view0turn25view0
 
+## Repo note
+
+The shipped MCP surface in this repository currently uses only the
+SerpApi-backed `search_papers_serpapi` search path and
+`get_paper_citation_formats`. Author-profile flows, Search Archive polling, the
+Account API, and broader Google Scholar engine coverage are documented here as
+design research rather than as committed MCP tools.
+
 ## Google Scholar engines and API inventory
 
 ### Overview of relevant SerpApi endpoints

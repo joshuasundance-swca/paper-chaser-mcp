@@ -10,6 +10,15 @@ It assumes:
 - client-side pacing that stays below the published limit
 - API keys loaded from environment variables, with a `.env` file during local development
 
+Repo note:
+
+- `scholar-search-mcp` currently exposes `SEMANTIC_SCHOLAR_API_KEY` as the
+  public Semantic Scholar configuration knob
+- shared pacing, retries, and client construction are handled in code rather
+  than through extra public env vars
+- the broader `.env` examples later in this guide are reference patterns, not
+  the committed repo contract
+
 ## Operating Principles
 
 If you remember only a few things, make them these:

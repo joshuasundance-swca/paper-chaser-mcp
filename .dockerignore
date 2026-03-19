@@ -1,0 +1,16 @@
+.git
+.github
+.mypy_cache
+.pytest_cache
+.ruff_cache
+__pycache__
+.env
+.env.local
+.env.*
+!.env.example
+.local-*
+build
+dist
+scholar_search_mcp.egg-info
+tests
+docs

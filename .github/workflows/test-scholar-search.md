@@ -5,8 +5,10 @@ description: |
   pivot, and optional citation-export workflows. Evaluates agent UX quality:
   intuitiveness, unnecessary round trips, missing features, and friction
   points that make common workflows harder than they should be.
-  Manual runs can switch between smoke, comprehensive, and feature-probe UX
-  review modes with an optional focus prompt.
+  This workflow is manual-only by design because it can consume repository
+  secrets in a public repo. Manual runs can switch between smoke,
+  comprehensive, and feature-probe UX review modes with an optional focus
+  prompt.
   Requires a repository or organization secret named COPILOT_GITHUB_TOKEN.
 
 on:
@@ -21,8 +23,6 @@ on:
         description: Optional feature, workflow, or UX hypothesis to probe.
         type: string
         required: false
-  push:
-    branches: [master]
 
 permissions: read-all
 
@@ -117,8 +117,8 @@ as functional pass/fail results.
 
 - Requested mode: `${{ inputs.mode }}`
 - Requested focus prompt: `${{ inputs.focus_prompt }}`
-- Push-triggered runs do not supply manual inputs; when the mode is blank, treat this
-  run as `smoke`.
+- This workflow should be dispatched manually from the Actions tab so operators
+  can choose the review depth intentionally.
 - When a focus prompt is present, restate it in your notes and use it to choose
   the deeper probes after the baseline checks.
 
@@ -157,8 +157,8 @@ as functional pass/fail results.
 ## Test protocol
 
 1. **Choose the review plan**
-   - Determine the effective mode from the run context above. If no manual mode
-     is present, use `smoke`.
+   - Determine the effective mode from the run context above. If the mode is
+     blank for any reason, use `smoke`.
    - If a focus prompt is present, note which tools or paths it most likely
      exercises before you start the deeper probes.
    - Always run at least a lightweight baseline so regressions in the core

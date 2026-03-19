@@ -509,9 +509,7 @@ class OpenAlexClient:
         if not isinstance(cited_by_api_url, str) or not cited_by_api_url.strip():
             work_id = self._extract_openalex_id(work.get("id"), "W")
             if work_id:
-                cited_by_api_url = (
-                    f"{OPENALEX_API_BASE}/works?filter=cites:{work_id}"
-                )
+                cited_by_api_url = f"{OPENALEX_API_BASE}/works?filter=cites:{work_id}"
         # Guard: construction may also fail if the work has no resolvable ID.
         if not isinstance(cited_by_api_url, str) or not cited_by_api_url.strip():
             return {

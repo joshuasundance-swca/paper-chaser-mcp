@@ -1,3 +1,4 @@
+import importlib
 from typing import Any
 
 import pytest
@@ -228,9 +229,10 @@ def test_tool_descriptions_include_workflow_guidance() -> None:
         TOOL_DESCRIPTIONS["search_papers_bulk"].lower()
     )
     assert "Known-item lookup" in TOOL_DESCRIPTIONS["search_papers_match"]
-    assert "fuzzy Semantic Scholar title search" in TOOL_DESCRIPTIONS[
-        "search_papers_match"
-    ]
+    assert (
+        "fuzzy Semantic Scholar title search"
+        in TOOL_DESCRIPTIONS["search_papers_match"]
+    )
     assert "Known-item lookup" in TOOL_DESCRIPTIONS["get_paper_details"]
     assert "cite this paper (cited by)" in TOOL_DESCRIPTIONS["get_paper_citations"]
     assert "references this paper cites" in TOOL_DESCRIPTIONS["get_paper_references"]
@@ -239,30 +241,137 @@ def test_tool_descriptions_include_workflow_guidance() -> None:
     assert "expansionIdStatus is not_portable" in TOOL_DESCRIPTIONS["get_paper_authors"]
     assert "Semantic Scholar authorId" in TOOL_DESCRIPTIONS["get_author_info"]
     assert "affiliation, coauthor, venue, or" in TOOL_DESCRIPTIONS["search_authors"]
-    assert "special-purpose recovery tool" in TOOL_DESCRIPTIONS[
-        "search_snippets"
-    ].lower()
+    assert (
+        "special-purpose recovery tool" in TOOL_DESCRIPTIONS["search_snippets"].lower()
+    )
     assert "empty result with retry guidance" in TOOL_DESCRIPTIONS["search_snippets"]
-    assert "Supported inputs are query, limit, and year" in TOOL_DESCRIPTIONS[
-        "search_papers_core"
-    ]
-    assert "Supported inputs are query, limit, and year" in TOOL_DESCRIPTIONS[
-        "search_papers_arxiv"
-    ]
-    assert "fields, year, venue, publicationDateOrYear" in TOOL_DESCRIPTIONS[
-        "search_papers_semantic_scholar"
-    ]
+    assert (
+        "Supported inputs are query, limit, and year"
+        in TOOL_DESCRIPTIONS["search_papers_core"]
+    )
+    assert (
+        "Supported inputs are query, limit, and year"
+        in TOOL_DESCRIPTIONS["search_papers_arxiv"]
+    )
+    assert (
+        "fields, year, venue, publicationDateOrYear"
+        in TOOL_DESCRIPTIONS["search_papers_semantic_scholar"]
+    )
     assert "OpenAlex only" in TOOL_DESCRIPTIONS["search_papers_openalex"]
-    assert "OpenAlex cursor pagination" in TOOL_DESCRIPTIONS[
-        "search_papers_openalex_bulk"
-    ]
+    assert (
+        "OpenAlex cursor pagination" in TOOL_DESCRIPTIONS["search_papers_openalex_bulk"]
+    )
     assert "abstract_inverted_index" in TOOL_DESCRIPTIONS["get_paper_details_openalex"]
     assert "cited_by_api_url" in TOOL_DESCRIPTIONS["get_paper_citations_openalex"]
-    assert "batched OpenAlex ID lookups" in TOOL_DESCRIPTIONS[
-        "get_paper_references_openalex"
-    ]
+    assert (
+        "batched OpenAlex ID lookups"
+        in TOOL_DESCRIPTIONS["get_paper_references_openalex"]
+    )
     assert "OpenAlex author profile" in TOOL_DESCRIPTIONS["get_author_info_openalex"]
     assert "search_authors_openalex" in TOOL_DESCRIPTIONS["get_author_papers_openalex"]
+
+
+def test_deployment_app_exposes_health_endpoint() -> None:
+    from starlette.testclient import TestClient
+
+    from scholar_search_mcp.deployment import create_deployment_app
+
+    with TestClient(create_deployment_app()) as client:
+        response = client.get("/healthz")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+def test_deployment_app_rejects_missing_auth_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from starlette.testclient import TestClient
+
+    monkeypatch.setenv("SCHOLAR_SEARCH_HTTP_AUTH_TOKEN", "super-secret")
+    monkeypatch.setenv("SCHOLAR_SEARCH_HTTP_PATH", "/mcp")
+
+    import scholar_search_mcp.deployment as deployment
+
+    importlib.reload(deployment)
+
+    with TestClient(deployment.create_deployment_app()) as client:
+        response = client.post("/mcp", json={})
+
+    assert response.status_code == 401
+
+
+def test_deployment_app_allows_expected_bearer_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from starlette.testclient import TestClient
+
+    monkeypatch.setenv("SCHOLAR_SEARCH_HTTP_AUTH_TOKEN", "super-secret")
+    monkeypatch.setenv("SCHOLAR_SEARCH_HTTP_PATH", "/mcp")
+
+    import scholar_search_mcp.deployment as deployment
+
+    importlib.reload(deployment)
+
+    with TestClient(deployment.create_deployment_app()) as client:
+        response = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+            headers={
+                "Authorization": "Bearer super-secret",
+                "Accept": "application/json, text/event-stream",
+            },
+        )
+
+    assert response.status_code != 401
+
+
+def test_deployment_app_rejects_unlisted_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from starlette.testclient import TestClient
+
+    monkeypatch.setenv("SCHOLAR_SEARCH_ALLOWED_ORIGINS", "https://allowed.example")
+
+    import scholar_search_mcp.deployment as deployment
+
+    importlib.reload(deployment)
+
+    with TestClient(deployment.create_deployment_app()) as client:
+        response = client.post(
+            "/mcp",
+            json={},
+            headers={"Origin": "https://blocked.example"},
+        )
+
+    assert response.status_code == 403
+
+
+def test_deployment_app_allows_expected_backend_header_and_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from starlette.testclient import TestClient
+
+    monkeypatch.setenv("SCHOLAR_SEARCH_HTTP_AUTH_TOKEN", "super-secret")
+    monkeypatch.setenv("SCHOLAR_SEARCH_HTTP_AUTH_HEADER", "x-backend-auth")
+    monkeypatch.setenv("SCHOLAR_SEARCH_ALLOWED_ORIGINS", "https://allowed.example")
+
+    import scholar_search_mcp.deployment as deployment
+
+    importlib.reload(deployment)
+
+    with TestClient(deployment.create_deployment_app()) as client:
+        response = client.post(
+            "/mcp/",
+            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+            headers={
+                "Accept": "application/json, text/event-stream",
+                "Origin": "https://allowed.example",
+                "X-Backend-Auth": "super-secret",
+            },
+        )
+
+    assert response.status_code not in {401, 403}
 
 
 def test_github_copilot_instructions_align_with_repo_workflow_docs() -> None:

@@ -54,7 +54,7 @@ def _cursor_to_offset(
     explicitly.  Passing ``tool=None`` skips cross-tool validation; this is
     intentional only for the ``cursor=None`` early-return path.
 
-    Raises ``ValueError`` for stale, mis-typed, corrupted, cross-tool, or
+    Raises ``ValueError`` for stale, mistyped, corrupted, cross-tool, or
     cross-query cursors, unsupported versions, unknown providers, and negative
     integer offsets.
     """
@@ -471,9 +471,7 @@ async def dispatch_tool(
             fields_of_study=getattr(provider_arguments, "fields_of_study", None),
             publication_types=getattr(provider_arguments, "publication_types", None),
             open_access_pdf=getattr(provider_arguments, "open_access_pdf", None),
-            min_citation_count=getattr(
-                provider_arguments, "min_citation_count", None
-            ),
+            min_citation_count=getattr(provider_arguments, "min_citation_count", None),
             enable_core=enable_core,
             enable_semantic_scholar=enable_semantic_scholar,
             enable_arxiv=enable_arxiv,
