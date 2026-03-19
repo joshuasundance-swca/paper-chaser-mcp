@@ -1,0 +1,23 @@
+requires:
+  PSRule.Rules.Azure: ">=1.29.0"
+
+include:
+  module:
+    - PSRule.Rules.Azure
+
+configuration:
+  AZURE_BICEP_FILE_EXPANSION: true
+  AZURE_BICEP_CHECK_TOOL: true
+  AZURE_BICEP_FILE_EXPANSION_TIMEOUT: 30
+  AZURE_BICEP_MINIMUM_VERSION: "0.33.93"
+  AZURE_PARAMETER_FILE_EXPANSION: true
+
+input:
+  pathIgnore:
+    - ".github/**"
+    - "docs/**"
+    - "infra/*.json"
+    - "tests/**"
+
+execution:
+  unprocessedObject: Ignore

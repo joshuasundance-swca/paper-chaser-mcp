@@ -14,8 +14,7 @@ def test_openalex_work_to_paper_reconstructs_abstract_and_marks_truncation() -> 
         "publication_year": 2024,
         "publication_date": "2024-01-02",
         "authorships": [
-            {"author": {"display_name": f"Author {index}"}}
-            for index in range(1, 101)
+            {"author": {"display_name": f"Author {index}"}} for index in range(1, 101)
         ],
         "cited_by_count": 42,
         "referenced_works_count": 8,
@@ -269,8 +268,7 @@ async def test_openalex_get_paper_citations_falls_back_when_cited_by_api_url_abs
     assert result["total"] == 462
     assert result["data"][0]["paperId"] == "W99"
     assert (
-        captured[1]["url"]
-        == "https://api.openalex.org/works?filter=cites:W3139434170"
+        captured[1]["url"] == "https://api.openalex.org/works?filter=cites:W3139434170"
     )
 
 

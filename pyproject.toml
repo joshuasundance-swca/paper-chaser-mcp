@@ -8,12 +8,11 @@ version = "0.1.2"
 description = "Model Context Protocol server for Semantic Scholar, CORE, and arXiv paper search"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = "MIT"
 keywords = ["mcp", "semantic-scholar", "core", "arxiv", "academic", "papers", "research"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -32,10 +31,13 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "bandit>=1.8.0",
+    "build>=1.4.0",
     "mypy>=1.17.0",
+    "pip-audit>=2.10.0",
     "pre-commit>=4.2.0",
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
+    "pytest-cov>=7.0.0",
     "ruff>=0.12.0",
     "types-defusedxml>=0.7.0",
 ]
@@ -52,6 +54,9 @@ include = ["scholar_search_mcp*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-ra --strict-config --strict-markers"
+xfail_strict = true
 
 [tool.ruff]
 line-length = 88
@@ -76,3 +81,11 @@ ignore_missing_imports = true
 [tool.bandit]
 exclude_dirs = ["tests"]
 skips = ["B101"]
+
+[tool.coverage.run]
+source = ["scholar_search_mcp"]
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+skip_covered = true

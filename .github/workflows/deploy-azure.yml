@@ -1,0 +1,344 @@
+name: Deploy Azure
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment to deploy.
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      deploy_mode:
+        description: Safe rollout mode. Use bootstrap for first-time environment bring-up.
+        required: true
+        default: bootstrap
+        type: choice
+        options:
+          - bootstrap
+          - full
+      image_tag:
+        description: Optional image tag override. Defaults to the current commit SHA.
+        required: false
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: deploy-azure-${{ github.event.inputs.environment || 'manual' }}
+  cancel-in-progress: false
+
+env:
+  COVERAGE_FAIL_UNDER: '85'
+  PYTHON_VERSION: '3.12'
+  TRIVY_VERSION: 'v0.68.0'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+      - name: Verify installed dependencies
+        run: python -m pip check
+
+      - name: Run validation stack
+        run: |
+          pre-commit run --all-files
+          python -m pytest \
+            --cov=scholar_search_mcp \
+            --cov-report=term-missing \
+            --cov-fail-under=${{ env.COVERAGE_FAIL_UNDER }}
+          python -m mypy --config-file pyproject.toml
+          python -m ruff check .
+          python -m bandit -c pyproject.toml -r scholar_search_mcp
+          python -m build
+          python -m pip_audit . --progress-spinner off
+
+  bootstrap-infra:
+    if: github.event.inputs.deploy_mode == 'bootstrap'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: azure-${{ github.event.inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      DEPLOY_ENV: ${{ github.event.inputs.environment }}
+      DEPLOY_MODE: ${{ github.event.inputs.deploy_mode }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Mask deployment identifiers
+        shell: bash
+        run: |
+          set -euo pipefail
+          values=(
+            "$AZURE_CLIENT_ID"
+            "$AZURE_TENANT_ID"
+            "$AZURE_SUBSCRIPTION_ID"
+            "$AZURE_RESOURCE_GROUP"
+          )
+          for value in "${values[@]}"; do
+            if [ -n "$value" ]; then
+              echo "::add-mask::$value"
+            fi
+          done
+
+      - name: Validate environment configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID AZURE_RESOURCE_GROUP; do
+            if [ -z "${!name}" ]; then
+              echo "Missing required environment variable: $name"
+              exit 1
+            fi
+          done
+
+      - name: Azure login with OIDC
+        uses: azure/login@eec3c95657c1536435858eda1f3ff5437fee8474 # v2.3.0
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve deployment variables
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "PARAM_FILE=infra/main.${DEPLOY_ENV}.bicepparam"
+            echo "DEPLOYMENT_NAME=github-${DEPLOY_ENV}-${DEPLOY_MODE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          } >> "$GITHUB_ENV"
+
+      - name: Validate deployment assets locally
+        run: python scripts/validate_deployment.py --require-az --skip-docker
+
+      - name: Preview bootstrap deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          az deployment group what-if \
+            --name "$DEPLOYMENT_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --template-file infra/main.bicep \
+            --parameters "${PARAM_FILE}" \
+            deployMode="${DEPLOY_MODE}" \
+            --only-show-errors \
+            --output none
+
+      - name: Deploy bootstrap infrastructure
+        shell: bash
+        run: |
+          set -euo pipefail
+          az deployment group create \
+            --name "$DEPLOYMENT_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --template-file infra/main.bicep \
+            --parameters "${PARAM_FILE}" \
+            deployMode="${DEPLOY_MODE}" \
+            --only-show-errors \
+            --output none
+
+  build-and-deploy:
+    if: github.event.inputs.deploy_mode == 'full'
+    needs: validate
+    runs-on: ${{ fromJSON(vars.AZURE_PRIVATE_RUNNER_LABELS_JSON || '["self-hosted","linux","azure-private"]') }}
+    timeout-minutes: 45
+    environment: azure-${{ github.event.inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      DEPLOY_ENV: ${{ github.event.inputs.environment }}
+      DEPLOY_MODE: ${{ github.event.inputs.deploy_mode }}
+      IMAGE_TAG: ${{ github.event.inputs.image_tag || github.sha }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
+      ACR_NAME: ${{ secrets.ACR_NAME }}
+      IMAGE_REPOSITORY: ${{ secrets.IMAGE_REPOSITORY || 'scholar-search-mcp' }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.5
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+
+      - name: Mask deployment identifiers
+        shell: bash
+        env:
+          SMOKE_TEST_HEALTH_URL: ${{ secrets.SMOKE_TEST_HEALTH_URL }}
+        run: |
+          set -euo pipefail
+          values=(
+            "$AZURE_CLIENT_ID"
+            "$AZURE_TENANT_ID"
+            "$AZURE_SUBSCRIPTION_ID"
+            "$AZURE_RESOURCE_GROUP"
+            "$ACR_NAME"
+            "${ACR_NAME}.azurecr.io"
+            "$IMAGE_REPOSITORY"
+            "$SMOKE_TEST_HEALTH_URL"
+          )
+          for value in "${values[@]}"; do
+            if [ -n "$value" ]; then
+              echo "::add-mask::$value"
+            fi
+          done
+
+      - name: Validate environment configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID AZURE_RESOURCE_GROUP ACR_NAME IMAGE_REPOSITORY; do
+            if [ -z "${!name}" ]; then
+              echo "Missing required environment variable: $name"
+              exit 1
+            fi
+          done
+
+      - name: Azure login with OIDC
+        uses: azure/login@eec3c95657c1536435858eda1f3ff5437fee8474 # v2.3.0
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify private runner prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker version
+          trivy --version
+
+      - name: Resolve deployment variables
+        shell: bash
+        run: |
+          set -euo pipefail
+          login_server="${ACR_NAME}.azurecr.io"
+          image_ref="${login_server}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+          echo "::add-mask::${login_server}"
+          echo "::add-mask::${image_ref}"
+          {
+            echo "ACR_LOGIN_SERVER=${login_server}"
+            echo "IMAGE_REF=${image_ref}"
+            echo "PARAM_FILE=infra/main.${DEPLOY_ENV}.bicepparam"
+            echo "DEPLOYMENT_NAME=github-${DEPLOY_ENV}-${DEPLOY_MODE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          } >> "$GITHUB_ENV"
+
+      - name: Validate deployment assets locally
+        run: python scripts/validate_deployment.py --require-az --require-docker --image-tag scholar-search-mcp:ci-validate
+
+      - name: Log into Azure Container Registry
+        run: az acr login --name "$ACR_NAME" --only-show-errors
+
+      - name: Build image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --tag "$IMAGE_REF" .
+
+      - name: Scan image for vulnerabilities
+        shell: bash
+        run: |
+          set -euo pipefail
+          trivy image \
+            --exit-code 1 \
+            --ignore-unfixed \
+            --severity HIGH,CRITICAL \
+            "$IMAGE_REF"
+
+      - name: Push image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker push "$IMAGE_REF"
+
+      - name: Preview full deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          az deployment group what-if \
+            --name "$DEPLOYMENT_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --template-file infra/main.bicep \
+            --parameters "${PARAM_FILE}" \
+            deployMode="${DEPLOY_MODE}" \
+            imageTag="${IMAGE_TAG}" \
+            imageRepository="${IMAGE_REPOSITORY}" \
+            --only-show-errors \
+            --output none
+
+      - name: Deploy infrastructure and application
+        shell: bash
+        run: |
+          set -euo pipefail
+          deployment_output="$(mktemp)"
+          az deployment group create \
+            --name "$DEPLOYMENT_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --template-file infra/main.bicep \
+            --parameters "${PARAM_FILE}" \
+            deployMode="${DEPLOY_MODE}" \
+            imageTag="${IMAGE_TAG}" \
+            imageRepository="${IMAGE_REPOSITORY}" \
+            --only-show-errors \
+            --output json > "$deployment_output"
+          echo "AZURE_DEPLOYMENT_OUTPUT=${deployment_output}" >> "$GITHUB_ENV"
+
+      - name: Resolve smoke test health endpoint
+        shell: bash
+        env:
+          SMOKE_TEST_HEALTH_URL: ${{ secrets.SMOKE_TEST_HEALTH_URL }}
+        run: |
+          set -euo pipefail
+          resolved_url="$(
+            python -c "from pathlib import Path; import json, os; from scholar_search_mcp.deployment_utils import resolve_smoke_test_health_url; payload = json.loads(Path(os.environ['AZURE_DEPLOYMENT_OUTPUT']).read_text(encoding='utf-8')); print(resolve_smoke_test_health_url(os.environ.get('SMOKE_TEST_HEALTH_URL'), payload))"
+          )"
+          echo "::add-mask::${resolved_url}"
+          echo "RESOLVED_SMOKE_TEST_HEALTH_URL=${resolved_url}" >> "$GITHUB_ENV"
+
+      - name: Smoke test health endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl \
+            --fail \
+            --location \
+            --output /dev/null \
+            --silent \
+            "$RESOLVED_SMOKE_TEST_HEALTH_URL"

@@ -221,7 +221,7 @@ class SemanticScholarClient:
         stripped = paper_id.strip()
         # 1. Normalize case of arXiv: prefix
         if re.match(r"^arxiv:", stripped, re.IGNORECASE):
-            return "ARXIV:" + stripped[len("arxiv:"):]
+            return "ARXIV:" + stripped[len("arxiv:") :]
         # 2. Bare arXiv ID (no prefix)
         if _BARE_ARXIV_ID_PATTERN.match(stripped):
             return "ARXIV:" + stripped
@@ -249,9 +249,9 @@ class SemanticScholarClient:
         results expose the same ``recommendedExpansionId`` / ``expansionIdStatus``
         signals as brokered ``search_papers_semantic_scholar`` results.
         """
-        external_ids: dict[str, Any] = (
-            (paper.model_extra or {}).get("externalIds") or {}
-        )
+        external_ids: dict[str, Any] = (paper.model_extra or {}).get(
+            "externalIds"
+        ) or {}
         doi: str | None = external_ids.get("DOI") or None
         arxiv_id: str | None = external_ids.get("ArXiv") or None
         paper_id: str | None = paper.paper_id
@@ -643,8 +643,7 @@ class SemanticScholarClient:
                         else ""
                     )
                     + " for get_paper_details. Use a Semantic Scholar-compatible "
-                    "paper identifier. "
-                    + self._paper_id_portability_hint()
+                    "paper identifier. " + self._paper_id_portability_hint()
                 ) from exc
             raise
         return dump_jsonable(Paper.model_validate(response))

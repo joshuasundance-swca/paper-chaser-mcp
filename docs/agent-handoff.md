@@ -11,6 +11,22 @@ This document is the current working handoff for the fork. It is intended to giv
 - XML parsing uses `defusedxml`.
 - README configuration examples are valid JSON.
 - GitHub Actions now validates pushes and pull requests.
+- The repo now includes a private-network Azure deployment scaffold: Docker
+  packaging, a deployment wrapper ASGI app, Bicep infrastructure under
+  `infra/`, a manual OIDC deployment workflow with `bootstrap` and `full`
+  modes, and operator-facing Azure docs.
+- Deployment asset validation is now a first-class workflow: pre-commit and the
+  main CI workflow run `scripts/validate_deployment.py`, and the validator can
+  lint/build the Bicep, validate the APIM policy XML, build the Docker image,
+  and smoke-test the secured `/healthz` and `/mcp/` paths locally, including
+  the APIM-style Origin allowlist and the Azure-scaffold
+  `SCHOLAR_SEARCH_HTTP_AUTH_HEADER=x-backend-auth` contract.
+- `scholar_search_mcp/deployment_runner.py` is now the container and Azure
+  image entrypoint. It wraps `scholar_search_mcp.deployment:app` with Uvicorn
+  and prefers `PORT` over `SCHOLAR_SEARCH_HTTP_PORT`.
+- `scholar_search_mcp/deployment_utils.py` resolves the post-deploy `/healthz`
+  smoke-test target from `SMOKE_TEST_HEALTH_URL`, `containerAppHealthUrl`, or
+  `containerAppFqdn`.
 - `scholar_search_mcp/server.py` is now a compatibility facade over smaller modules.
 - Agent-facing workflow guidance now prioritizes quick discovery, exhaustive retrieval,
   citation chasing, known-item lookup, and author pivots.
@@ -22,6 +38,15 @@ This document is the current working handoff for the fork. It is intended to giv
 - `.github/copilot-instructions.md` now gives GitHub-native guidance for Copilot
   and the GitHub cloud coding agent so repo planning expectations are durable
   outside the runtime MCP surface.
+- `tests/test_local_config_contract.py` and
+  `tests/test_repo_security_hygiene.py` now protect the public/local config
+  split: `.env.example`, `docker-compose.yaml`, `.gitignore`,
+  `.dockerignore`, and the Azure workflow's secret-vs-variable boundary are
+  contract-tested.
+- Durable docs now distinguish the wrapper's generic
+  `authorization`-header default from the Azure scaffold's
+  `x-backend-auth` override, and the published validation commands now match
+  the repo's real pre-commit/CI/deployment gate layout.
 - The highest-priority workflow-level rough edges from the last agent UX review
   have now been fixed in code, tests, and durable docs.
 - Author lookup and author-pivot guidance now call out Semantic Scholar field
@@ -49,10 +74,9 @@ This document is the current working handoff for the fork. It is intended to giv
 - The GitHub Agentic Workflow MCP config for `scholar-search` must stay
   containerized. Current `gh-aw` MCP Gateway releases reject legacy stdio
   `command`/`args` server definitions and require `container`-based config.
-- The verifier workflow now runs on `push` to `master` plus `workflow_dispatch`.
-  Concurrency is set to cancel in-progress runs so rapid merges do not queue
-  up redundant verifications. The old `pull_request.closed` trigger and the
-  6-hourly schedule are not used.
+- The verifier workflow is now manual-only on purpose because it can consume
+  repository secrets in a public repo. Maintainers should trigger it from the
+  Actions tab when they want a UX regression pass.
 - The verifier creates issues with `agentic` and `needs-copilot` labels in
   addition to `automation` and `testing`, so the auto-assignment workflow can
   pick them up. Issues include a stable `<!-- agent-loop-key: ... -->` body
@@ -89,9 +113,19 @@ This document is the current working handoff for the fork. It is intended to giv
 - `scholar_search_mcp/tools.py` defines MCP tool schemas.
 - `scholar_search_mcp/runtime.py` owns stdio startup.
 - `scholar_search_mcp/settings.py` contains environment parsing helpers.
+- `scholar_search_mcp/deployment.py` wraps the HTTP app with `/healthz`,
+  optional backend-token auth, and optional Origin allowlisting for hosted
+  deployments.
+- `scholar_search_mcp/deployment_runner.py` is the runtime image entrypoint for
+  Docker, Compose, and Azure-hosted deployments.
+- `scholar_search_mcp/deployment_utils.py` resolves smoke-test endpoints from
+  Azure deployment outputs or an explicit environment override.
 - `scholar_search_mcp/clients/` contains provider clients for CORE, Semantic Scholar, OpenAlex, and arXiv.
 - `scholar_search_mcp/models/common.py` contains shared Pydantic models including `Paper` (with `scholarResultId`).
 - `scholar_search_mcp/parsing.py`, `scholar_search_mcp/constants.py`, and `scholar_search_mcp/transport.py` hold shared helper code and compatibility imports.
+- `scripts/validate_deployment.py` validates the Azure/Docker deployment path.
+- `infra/` contains the Azure Container Apps + API Management Bicep scaffold
+  and parameter files for `dev`, `staging`, and `prod`.
 
 ## Validation Commands
 
@@ -104,10 +138,32 @@ pip install -e .[dev]
 Then run:
 
 ```bash
+python -m pip check
 pre-commit run --all-files
-python -m pytest
+python -m pytest --cov=scholar_search_mcp --cov-report=term-missing --cov-fail-under=85
 python -m mypy --config-file pyproject.toml
+python -m ruff check .
 python -m bandit -c pyproject.toml -r scholar_search_mcp
+python -m build
+python -m pip_audit . --progress-spinner off
+```
+
+If you prefer to trigger the heavy hook-managed checks through pre-commit,
+`pre-commit run --hook-stage manual --all-files` runs the manual-stage
+`pip check`, coverage, build, and `pip-audit` hooks.
+
+If you touch the Azure deployment wrapper, Dockerfile, Bicep, APIM policy,
+deployment docs, or deployment workflow, also run:
+
+```bash
+python scripts/validate_psrule_azure.py
+python scripts/validate_deployment.py --skip-docker
+```
+
+For full parity with the `Deploy Azure` workflow's full-deployment path, run:
+
+```bash
+python scripts/validate_deployment.py --require-az --require-docker --image-tag scholar-search-mcp:ci-validate
 ```
 
 If you edit `.github/workflows/test-scholar-search.md`, recompile it before
@@ -149,6 +205,15 @@ gh aw compile test-scholar-search --dir .github/workflows
 - CORE search now retries short-lived 5xx responses, which was required after
   live broker smoke testing exposed transient backend shard failures on the
   first hop.
+- A hosted deployment path now exists for Azure: `scholar_search_mcp.deployment`
+  adds `/healthz`, optional backend-token auth, and optional Origin allowlists
+  in front of the FastMCP HTTP app.
+- The repo now ships a Dockerfile, Bicep infrastructure scaffold, APIM policy
+  template, and `.github/workflows/deploy-azure.yml` for private-network Azure
+  deployment without committing live secrets.
+- Deployment validation is now codified in `scripts/validate_deployment.py` and
+  wired into pre-commit and CI so Bicep, Docker, APIM policy XML, and the
+  secured HTTP wrapper are exercised before release work ships.
 
 ## Progress Snapshot
 
@@ -195,6 +260,15 @@ gh aw compile test-scholar-search --dir .github/workflows
   because the upstream Semantic Scholar bulk endpoint can ignore small limits;
   agents should still prefer `search_papers` or
   `search_papers_semantic_scholar` for small targeted pages.
+- The Azure deployment scaffold has a full local validation path:
+  `python scripts/validate_deployment.py --require-az --require-docker`
+  exercises Bicep lint/build, Docker build, blocked-origin `403`, missing
+  backend-header `401`, and allowed-origin `X-Backend-Auth` smoke checks for
+  `/mcp/`. The lighter routine path remains
+  `python scripts/validate_deployment.py --skip-docker`.
+- Targeted pre-commit checks over changed deployment files should include
+  `actionlint`, `gitleaks`, `ruff`, `mypy`, `bandit`, and the local deployment
+  validator hook.
 
 ## Follow-up Completed
 
@@ -300,15 +374,21 @@ gh aw compile test-scholar-search --dir .github/workflows
 7. Consider whether OpenAlex institution/source pivots should become first-class
    tools now that the base OpenAlex author/citation surface exists.
 8. Expand the agentic workflow once stable secrets are available for deeper provider-specific assertions, for example optional SerpApi or OpenAlex coverage.
-9. Act on the first UX friction report produced by the GPT-5.4 verifier. Focus
-   on the highest-impact item from the structured "UX friction summary": likely
-   a round-trip reduction or a clearly missing feature rather than cosmetic work.
+9. Act on the first UX friction report produced by the
+   `GH_AW_MODEL_AGENT_COPILOT`-configured verifier. Focus on the
+   highest-impact item from the structured "UX friction summary": likely a
+   round-trip reduction or a clearly missing feature rather than cosmetic work.
 10. Review labels in the repository (`agentic`, `needs-copilot`, `needs-human`,
     `blocked`, `no-agent`, `automation`, `testing`) to ensure they exist before
     the first verifier run creates an issue. Missing labels cause issue creation
     to fail silently on the label assignment step.
 11. Set the `GH_AW_MODEL_AGENT_COPILOT` Actions variable to `gpt-5.4` in the
     repository settings if you want to override the compiled default at runtime.
+12. Run the `Deploy Azure` workflow against `dev` in `bootstrap` mode first,
+    then seed Key Vault and run it again in `full` mode once GitHub
+    environment secrets, the optional runner-label variable, and the federated
+    credential are in place. Capture any environment-specific fixes back into
+    the docs.
 
 ## Ready Handoff Prompt
 
@@ -330,10 +410,14 @@ Your task:
 - Add or update targeted tests and durable docs if the agent-facing behavior changes again.
 
 Validation target:
-- python -m pytest
+- python -m pip check
+- pre-commit run --all-files
+- python -m pytest --cov=scholar_search_mcp --cov-report=term-missing --cov-fail-under=85
 - python -m mypy --config-file pyproject.toml
 - python -m ruff check .
 - python -m bandit -c pyproject.toml -r scholar_search_mcp
+- python -m build
+- python -m pip_audit . --progress-spinner off
 
 Do not broaden scope unless a blocking dependency makes it necessary.
 ```

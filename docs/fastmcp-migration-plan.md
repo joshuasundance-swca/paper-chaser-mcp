@@ -2,6 +2,11 @@
 
 This document ties the recommended FastMCP design directly to the current repository implementation. It is intended to help maintainers understand what was preserved, what was redesigned, and what should come next.
 
+> [!NOTE]
+> This is historical design context. Most of the migration described here has
+> already landed. Use `README.md`, `docs/agent-handoff.md`, and
+> `scholar_search_mcp/server.py` for the current runtime contract.
+
 ## Context7-backed decisions used here
 
 - **FastMCP server framework**: Context7-confirmed FastMCP patterns support `FastMCP(...)`, `@mcp.tool`, `@mcp.resource`, `@mcp.prompt`, `mcp.run(...)`, `mcp.http_app(...)`, in-memory client testing with `Client(server)`, and middleware such as `TimingMiddleware`.

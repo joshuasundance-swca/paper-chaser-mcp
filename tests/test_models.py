@@ -50,9 +50,20 @@ def test_author_papers_args_accepts_paper_fields() -> None:
     # All default paper fields must be accepted
     args_full = AuthorPapersArgs(
         author_id="1751762",
-        fields=["paperId", "title", "abstract", "year", "authors", "citationCount",
-                "referenceCount", "influentialCitationCount", "venue",
-                "publicationTypes", "publicationDate", "url"],
+        fields=[
+            "paperId",
+            "title",
+            "abstract",
+            "year",
+            "authors",
+            "citationCount",
+            "referenceCount",
+            "influentialCitationCount",
+            "venue",
+            "publicationTypes",
+            "publicationDate",
+            "url",
+        ],
     )
     assert args_full.fields is not None
     assert "title" in args_full.fields
@@ -70,9 +81,7 @@ def test_author_papers_args_rejects_author_profile_fields() -> None:
             fields=["paperId", "title", "year", "authors", "hIndex"],
         )
 
-    with pytest.raises(
-        ValidationError, match="Supported values: paperId, title"
-    ):
+    with pytest.raises(ValidationError, match="Supported values: paperId, title"):
         AuthorPapersArgs(
             author_id="1751762",
             fields=["affiliations"],

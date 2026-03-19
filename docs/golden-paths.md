@@ -177,16 +177,18 @@ search_authors(query="Yoshua Bengio", limit=5)
   keyword search is weak.
 - **Agent UX feedback loop**: the checked-in agentic workflow at
   `.github/workflows/test-scholar-search.md` now supports `smoke`,
-  `comprehensive`, and `feature_probe` review modes. The workflow runs GPT-5.4
-  and explicitly evaluates agent UX in every step: intuitiveness, unnecessary
-  round trips, missing features, confusing contracts, and dead-end responses.
-  Each run produces a structured UX friction summary before filing any issue.
-  Start with the smoke baseline, then add deeper probes or a feature-specific
-  focus prompt when you need broader UX feedback. Issues created by the
-  verifier carry `agentic` and `needs-copilot` labels with stable body markers.
-  The auto-assignment workflow listens to both issue events and completed
-  verifier runs so workflow-created issues still get assigned to GitHub Copilot
-  without duplicates.
+  `comprehensive`, and `feature_probe` review modes. The workflow uses the
+  GitHub Copilot CLI engine and can be pointed at GPT-5.4 or another model via
+  `GH_AW_MODEL_AGENT_COPILOT`. It explicitly evaluates agent UX in every step:
+  intuitiveness, unnecessary round trips, missing features, confusing
+  contracts, and dead-end responses. Each run produces a structured UX friction
+  summary before filing any issue. Start with the smoke baseline, then add
+  deeper probes or a feature-specific focus prompt when you need broader UX
+  feedback. Issues created by the verifier carry `agentic` and
+  `needs-copilot` labels with stable body markers. The auto-assignment
+  workflow listens to both issue events and completed verifier runs so
+  workflow-created issues still get assigned to GitHub Copilot without
+  duplicates.
   After 3 failed fix attempts the issue escalates to `needs-human`.
 - **Explicit OpenAlex workflows**: use `search_papers_openalex` for one
   OpenAlex page, `search_papers_openalex_bulk` for OpenAlex cursor traversal,

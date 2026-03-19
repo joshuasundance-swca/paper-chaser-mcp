@@ -318,8 +318,7 @@ def _metadata(
             + portability_guidance
             + quality_guidance
             + bulk_guidance
-            +
-            "To expand from a paper use get_paper_citations or get_paper_references."
+            + "To expand from a paper use get_paper_citations or get_paper_references."
         )
     elif provider_used == "none":
         if result_status == "provider_failed":
@@ -355,15 +354,10 @@ def _metadata(
     else:
         next_step_hint = (
             "Inspect the results. "
-            + (
-                portability_guidance
-                if provider_used in {"core", "arxiv"}
-                else ""
-            )
+            + (portability_guidance if provider_used in {"core", "arxiv"} else "")
             + quality_guidance
             + bulk_guidance
-            +
-            "To expand from a paper use get_paper_citations or get_paper_references."
+            + "To expand from a paper use get_paper_citations or get_paper_references."
         )
     return BrokerMetadata(
         provider_used=provider_used,
