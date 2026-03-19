@@ -134,8 +134,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "PARAM_FILE=infra/main.${DEPLOY_ENV}.bicepparam" >> "$GITHUB_ENV"
-          echo "DEPLOYMENT_NAME=github-${DEPLOY_ENV}-${DEPLOY_MODE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
+          {
+            echo "PARAM_FILE=infra/main.${DEPLOY_ENV}.bicepparam"
+            echo "DEPLOYMENT_NAME=github-${DEPLOY_ENV}-${DEPLOY_MODE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          } >> "$GITHUB_ENV"
 
       - name: Validate deployment assets locally
         run: python scripts/validate_deployment.py --require-az --skip-docker
@@ -251,10 +253,12 @@ jobs:
           image_ref="${login_server}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
           echo "::add-mask::${login_server}"
           echo "::add-mask::${image_ref}"
-          echo "ACR_LOGIN_SERVER=${login_server}" >> "$GITHUB_ENV"
-          echo "IMAGE_REF=${image_ref}" >> "$GITHUB_ENV"
-          echo "PARAM_FILE=infra/main.${DEPLOY_ENV}.bicepparam" >> "$GITHUB_ENV"
-          echo "DEPLOYMENT_NAME=github-${DEPLOY_ENV}-${DEPLOY_MODE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
+          {
+            echo "ACR_LOGIN_SERVER=${login_server}"
+            echo "IMAGE_REF=${image_ref}"
+            echo "PARAM_FILE=infra/main.${DEPLOY_ENV}.bicepparam"
+            echo "DEPLOYMENT_NAME=github-${DEPLOY_ENV}-${DEPLOY_MODE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          } >> "$GITHUB_ENV"
 
       - name: Validate deployment assets locally
         run: python scripts/validate_deployment.py --require-az --require-docker --image-tag scholar-search-mcp:ci-validate
@@ -323,25 +327,7 @@ jobs:
         run: |
           set -euo pipefail
           resolved_url="$(
-            python - <<'PY'
-            from __future__ import annotations
-
-            import json
-            import os
-            from pathlib import Path
-
-            from scholar_search_mcp.deployment_utils import resolve_smoke_test_health_url
-
-            payload = json.loads(
-                Path(os.environ["AZURE_DEPLOYMENT_OUTPUT"]).read_text(encoding="utf-8")
-            )
-            print(
-                resolve_smoke_test_health_url(
-                    os.environ.get("SMOKE_TEST_HEALTH_URL"),
-                    payload,
-                )
-            )
-            PY
+            python -c "from pathlib import Path; import json, os; from scholar_search_mcp.deployment_utils import resolve_smoke_test_health_url; payload = json.loads(Path(os.environ['AZURE_DEPLOYMENT_OUTPUT']).read_text(encoding='utf-8')); print(resolve_smoke_test_health_url(os.environ.get('SMOKE_TEST_HEALTH_URL'), payload))"
           )"
           echo "::add-mask::${resolved_url}"
           echo "RESOLVED_SMOKE_TEST_HEALTH_URL=${resolved_url}" >> "$GITHUB_ENV"

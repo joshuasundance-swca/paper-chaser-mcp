@@ -38,6 +38,7 @@ repos:
     rev: v1.7.11
     hooks:
       - id: actionlint
+        exclude: ^\.github/workflows/.*\.lock\.yml$
 
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.24.2

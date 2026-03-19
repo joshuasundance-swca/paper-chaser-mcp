@@ -213,7 +213,7 @@ providers in this repo.
 
 ### AND, OR, NOT
 
-- filters are ANDed by default:
+- filters are combined with logical AND by default:
   `filter=publication_year:2024,is_oa:true`
 - OR within a single filter uses `|`
 - negation uses `!`

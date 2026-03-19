@@ -30,7 +30,7 @@ jobs:
         if: matrix.python-version == '3.12'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh extension install github/gh-aw --pin $GH_AW_VERSION
+        run: gh extension install github/gh-aw --pin "$GH_AW_VERSION"
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
