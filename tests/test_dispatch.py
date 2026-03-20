@@ -352,7 +352,8 @@ async def test_openalex_detail_and_author_tools_route_to_openalex_client(
     )
 
 
-def test_package_entrypoints_stay_aligned() -> None:
+def test_package_import_and_module_entrypoints_keep_expected_targets() -> None:
+    """Package import exposes server.main while python -m routes through cli.main."""
     assert scholar_search_mcp.main is server.main
     assert server_main.main is cli.main
 

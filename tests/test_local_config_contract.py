@@ -63,6 +63,35 @@ def _parse_compose_substitution_keys(path: Path) -> set[str]:
     return set(re.findall(r"\$\{([A-Z0-9_]+)(?::-[^}]*)?\}", text))
 
 
+def _iter_compose_short_syntax_port_mappings(text: str) -> list[str]:
+    mappings: list[str] = []
+    in_ports_block = False
+    ports_indent = 0
+
+    for raw_line in text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+
+        indent = len(raw_line) - len(raw_line.lstrip())
+        if in_ports_block and indent <= ports_indent and not stripped.startswith("-"):
+            in_ports_block = False
+
+        if in_ports_block:
+            if not stripped.startswith("-"):
+                continue
+            mapping = stripped[1:].split("#", 1)[0].strip().strip("\"'")
+            if mapping:
+                mappings.append(mapping)
+            continue
+
+        if stripped == "ports:":
+            in_ports_block = True
+            ports_indent = indent
+
+    return mappings
+
+
 def test_env_example_lists_supported_public_local_config_keys() -> None:
     keys = _parse_env_keys(ENV_EXAMPLE)
 
@@ -98,5 +127,5 @@ def test_inspector_compose_keeps_ports_localhost_bound_when_present() -> None:
         pytest.skip("compose.inspector.yaml is not part of this checkout.")
 
     text = INSPECTOR_COMPOSE.read_text(encoding="utf-8")
-    for mapping in re.findall(r'"([^"]+:\d+:\d+)"', text):
+    for mapping in _iter_compose_short_syntax_port_mappings(text):
         assert mapping.startswith("127.0.0.1:")

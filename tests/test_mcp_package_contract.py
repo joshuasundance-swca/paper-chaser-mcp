@@ -10,7 +10,9 @@ DOCKERFILE = REPO_ROOT / "Dockerfile"
 SERVER_JSON = REPO_ROOT / "server.json"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 
-SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z][0-9A-Za-z.-]*)?$")
+SEMVER_PATTERN = re.compile(
+    r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?(?:\+[0-9A-Za-z][0-9A-Za-z.-]*)?$"
+)
 
 
 def _read_server_json() -> dict[str, Any]:
