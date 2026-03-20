@@ -253,7 +253,9 @@ def _metadata(
             bulk_guidance = (
                 "search_papers_bulk can broaden this into a larger Semantic Scholar "
                 "retrieval flow, but that is a semantic pivot because bulk search "
-                "does not preserve venue filtering. "
+                "does not preserve venue filtering. Its default ordering is also "
+                "NOT relevance-ranked, so it is not 'page 2' of these results. "
+                "For citation-ranked bulk retrieval, pass sort='citationCount:desc'. "
             )
         elif routing_steered:
             bulk_guidance = (

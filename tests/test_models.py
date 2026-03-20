@@ -335,6 +335,9 @@ def test_broker_metadata_next_step_hint_is_provider_specific() -> None:
     )
     assert "semantic pivot" in venue_meta.next_step_hint
     assert "does not preserve venue filtering" in venue_meta.next_step_hint
+    assert "NOT relevance-ranked" in venue_meta.next_step_hint
+    assert "not 'page 2'" in venue_meta.next_step_hint.lower()
+    assert "citationCount:desc" in venue_meta.next_step_hint
 
     core_meta = _metadata(
         provider_used="core",

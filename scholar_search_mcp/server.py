@@ -43,7 +43,8 @@ Decision tree for tool selection:
 
 1. QUICK DISCOVERY → search_papers (brokered, single page, returns brokerMetadata)
 2. EXHAUSTIVE / MULTI-PAGE → search_papers_bulk
-   (cursor-paginated, up to 1 000 returned/call)
+   (cursor-paginated, up to 1 000 returned/call; read retrievalNote because
+   default bulk ordering is not relevance-ranked)
 3. KNOWN ITEM (messy title) → search_papers_match
 4. KNOWN ITEM (DOI / arXiv / URL) → get_paper_details
 5. CITATION EXPANSION → get_paper_citations (cited-by) or get_paper_references (refs)
@@ -71,6 +72,9 @@ and pagination semantics differ from Semantic Scholar.
 Continuation rule: search_papers_bulk is the closest continuation path only for
 Semantic Scholar-style retrieval; from CORE, arXiv, or SerpApi results it is a
 Semantic Scholar pivot rather than another page from the same provider.
+Even on Semantic Scholar paths, default bulk ordering is NOT relevance-ranked;
+it is not 'page 2' of search_papers. Read retrievalNote in each bulk response,
+or pass sort='citationCount:desc' for citation-ranked bulk traversal.
 For small targeted pages, prefer search_papers or search_papers_semantic_scholar;
 Semantic Scholar's bulk endpoint may ignore small limits internally.
 For agentic UX review loops, run a small smoke baseline first, then widen into
@@ -92,7 +96,8 @@ AGENT_WORKFLOW_GUIDE = """
   `brokerMetadata.nextStepHint` to decide whether to broaden, narrow,
   paginate, or pivot.
 - **Exhaustive / multi-page retrieval**: `search_papers_bulk` with cursor loop until
-  `pagination.hasMore` is false.
+  `pagination.hasMore` is false; read `retrievalNote` because default bulk
+  ordering is not relevance-ranked.
 - **Small targeted Semantic Scholar page**: `search_papers_semantic_scholar` (or
   `search_papers` if brokered discovery is fine) instead of bulk retrieval.
 - **Known-item lookup (messy title)**: `search_papers_match`
@@ -144,6 +149,9 @@ call. Use `search_papers_core`, `search_papers_semantic_scholar`,
 
 - `search_papers_bulk` is the closest continuation path when the task is already
     aligned with Semantic Scholar retrieval semantics.
+- Even on Semantic Scholar paths, default bulk ordering is NOT relevance-ranked;
+    it is not "page 2" of `search_papers`. Read `retrievalNote` and use
+    `sort='citationCount:desc'` for citation-ranked bulk traversal.
 - If `search_papers` returned CORE, arXiv, or SerpApi results, `search_papers_bulk`
     is a Semantic Scholar pivot, not another page from the same provider.
 - Venue-filtered Semantic Scholar searches can also broaden when moved to bulk
@@ -415,7 +423,10 @@ def plan_scholar_search(
         "brokerMetadata.nextStepHint to decide whether to broaden, narrow, paginate, "
         "pivot providers, or pivot into authors. "
         "Treat search_papers_bulk as the closest continuation path only when the "
-        "workflow is already aligned with Semantic Scholar retrieval semantics; if "
+        "workflow is already aligned with Semantic Scholar retrieval semantics. "
+        "Even then, default bulk ordering is NOT relevance-ranked, so it is not "
+        "'page 2' of search_papers; read retrievalNote in each bulk response, or "
+        "pass sort='citationCount:desc' for citation-ranked bulk traversal. If "
         "results came from CORE, arXiv, or SerpApi, bulk retrieval is a Semantic "
         "Scholar pivot rather than another page from the same provider. "
         "If the task is exhaustive retrieval, first N results, or multi-page "
