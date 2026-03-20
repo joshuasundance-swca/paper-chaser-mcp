@@ -85,8 +85,7 @@ def test_public_mcp_publish_workflow_pins_docker_actions_to_commit_shas() -> Non
         assert action in text
 
 
-def test_public_mcp_publish_workflow_pins_mcp_publisher_release_and_verifies_checksum(
-) -> None:
+def test_public_mcp_publish_workflow_pins_mcp_publisher_install() -> None:
     text = PUBLIC_MCP_PUBLISH_WORKFLOW.read_text(encoding="utf-8")
 
     assert "releases/latest/download" not in text
