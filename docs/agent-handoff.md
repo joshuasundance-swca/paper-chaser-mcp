@@ -18,8 +18,9 @@ This document is the current working handoff for the fork. It is intended to giv
 - The Docker image is now a reusable public MCP package surface as well: the
   default image contract is stdio-first with a stable `scholar-search-mcp`
   entrypoint, `server.json` tracks the public MCP/OCI metadata, and
-  `.github/workflows/publish-public-mcp-package.yml` handles GHCR publishing
-  with semver checks plus SBOM/provenance output.
+  `.github/workflows/publish-public-mcp-package.yml` handles tag-driven GHCR
+  publishing plus MCP Registry publication, with semver checks, OIDC auth, and
+  SBOM/provenance output.
 - Deployment asset validation is now a first-class workflow: pre-commit and the
   main CI workflow run `scripts/validate_deployment.py`, and the validator can
   lint/build the Bicep, validate the APIM policy XML, build the Docker image,

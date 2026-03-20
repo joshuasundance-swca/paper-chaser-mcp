@@ -357,7 +357,10 @@ This mode is ideal for local desktop MCP usage because the host launches and
 owns the server process lifecycle.
 
 The repo also ships `server.json` so the public OCI image and MCP package
-metadata stay aligned for registry/discovery tooling.
+metadata stay aligned for registry/discovery tooling. The public-package
+workflow is tag-driven: a `v*` tag publishes the GHCR image first, then
+publishes the same committed `server.json` metadata to the MCP Registry via
+GitHub OIDC.
 
 ### Docker Compose (HTTP wrapper mode)
 
