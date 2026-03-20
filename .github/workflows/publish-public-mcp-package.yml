@@ -10,6 +10,7 @@ on:
       - .github/workflows/publish-public-mcp-package.yml
   push:
     branches:
+      - master
       - main
     tags:
       - v*
@@ -53,8 +54,10 @@ jobs:
         run: |
           set -euo pipefail
           repo_lc="$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
-          echo "name=ghcr.io/${repo_lc}" >> "$GITHUB_OUTPUT"
-          echo "ci_ref=ghcr.io/${repo_lc}:ci-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          {
+            echo "name=ghcr.io/${repo_lc}"
+            echo "ci_ref=ghcr.io/${repo_lc}:ci-${GITHUB_SHA}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Read MCP server metadata
         id: server
@@ -87,8 +90,10 @@ jobs:
             exit 1
           fi
 
-          echo "name=${server_name}" >> "$GITHUB_OUTPUT"
-          echo "version=${server_version}" >> "$GITHUB_OUTPUT"
+          {
+            echo "name=${server_name}"
+            echo "version=${server_version}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Capture build metadata
         id: buildinfo
@@ -136,16 +141,17 @@ jobs:
             exit 1
           fi
 
-      - name: Install Trivy
-        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.5
-        with:
-          version: v0.68.0
-
       - name: Scan container image
         shell: bash
         run: |
           set -euo pipefail
-          trivy image \
+          mkdir -p "${RUNNER_TEMP}/trivy-cache"
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "${RUNNER_TEMP}/trivy-cache:/root/.cache/" \
+            "aquasec/trivy:0.69.3" \
+            image \
+            --scanners vuln \
             --exit-code 1 \
             --ignore-unfixed \
             --severity HIGH,CRITICAL \
@@ -201,8 +207,10 @@ jobs:
             echo "Public OCI MCP package transport must be stdio."
             exit 1
           fi
-          echo "name=${server_name}" >> "$GITHUB_OUTPUT"
-          echo "version=${server_version}" >> "$GITHUB_OUTPUT"
+          {
+            echo "name=${server_name}"
+            echo "version=${server_version}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Resolve publish tag
         id: publish_tag
@@ -235,9 +243,11 @@ jobs:
             prerelease=true
           fi
 
-          echo "raw=${raw_tag}" >> "$GITHUB_OUTPUT"
-          echo "normalized=${normalized}" >> "$GITHUB_OUTPUT"
-          echo "is_prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+          {
+            echo "raw=${raw_tag}"
+            echo "normalized=${normalized}"
+            echo "is_prerelease=${prerelease}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Capture build metadata
         id: buildinfo
@@ -261,6 +271,23 @@ jobs:
             echo "io.modelcontextprotocol.server.name does not match server.json name."
             exit 1
           fi
+
+      - name: Scan publish candidate image
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/trivy-cache"
+          image_ref="${{ steps.image.outputs.name }}:verify-${GITHUB_SHA}"
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "${RUNNER_TEMP}/trivy-cache:/root/.cache/" \
+            "aquasec/trivy:0.69.3" \
+            image \
+            --scanners vuln \
+            --exit-code 1 \
+            --ignore-unfixed \
+            --severity HIGH,CRITICAL \
+            "${image_ref}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
