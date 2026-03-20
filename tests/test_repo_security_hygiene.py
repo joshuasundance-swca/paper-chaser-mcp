@@ -6,6 +6,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 GITIGNORE = REPO_ROOT / ".gitignore"
 DOCKERIGNORE = REPO_ROOT / ".dockerignore"
 DEPLOY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy-azure.yml"
+PUBLIC_MCP_PUBLISH_WORKFLOW = (
+    REPO_ROOT / ".github" / "workflows" / "publish-public-mcp-package.yml"
+)
 
 REQUIRED_GITIGNORE_PATTERNS = {
     ".env",
@@ -66,3 +69,25 @@ def test_deploy_workflow_keeps_only_runner_labels_as_variable_override() -> None
     text = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
 
     assert "vars.AZURE_PRIVATE_RUNNER_LABELS_JSON" in text
+
+
+def test_public_mcp_publish_workflow_pins_docker_actions_to_commit_shas() -> None:
+    text = PUBLIC_MCP_PUBLISH_WORKFLOW.read_text(encoding="utf-8")
+
+    for action in (
+        "docker/setup-buildx-action",
+        "docker/setup-qemu-action",
+        "docker/build-push-action",
+        "docker/login-action",
+        "docker/metadata-action",
+    ):
+        assert f"{action}@v" not in text
+        assert action in text
+
+
+def test_public_mcp_publish_workflow_pins_mcp_publisher_install() -> None:
+    text = PUBLIC_MCP_PUBLISH_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "releases/latest/download" not in text
+    assert "MCP_PUBLISHER_VERSION:" in text
+    assert "sha256sum -c -" in text

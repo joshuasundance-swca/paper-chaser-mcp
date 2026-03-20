@@ -2,6 +2,7 @@ import pytest
 
 import scholar_search_mcp
 import scholar_search_mcp.__main__ as server_main
+import scholar_search_mcp.cli as cli
 from scholar_search_mcp import server
 from scholar_search_mcp.utils.cursor import decode_bulk_cursor, decode_cursor
 from tests.helpers import RecordingOpenAlexClient, RecordingSemanticClient, _payload
@@ -351,9 +352,36 @@ async def test_openalex_detail_and_author_tools_route_to_openalex_client(
     )
 
 
-def test_package_entrypoints_stay_aligned() -> None:
+def test_package_import_and_module_entrypoints_keep_expected_targets() -> None:
+    """Package import exposes server.main while python -m routes through cli.main."""
     assert scholar_search_mcp.main is server.main
-    assert server_main.main is server.main
+    assert server_main.main is cli.main
+
+
+def test_cli_default_entrypoint_runs_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(cli, "_run_server", lambda: calls.append("server"))
+
+    cli.main([])
+
+    assert calls == ["server"]
+
+
+def test_cli_deployment_http_subcommand_runs_wrapper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_run_deployment_http",
+        lambda: calls.append("deployment-http"),
+    )
+
+    cli.main(["deployment-http"])
+
+    assert calls == ["deployment-http"]
 
 
 @pytest.mark.asyncio

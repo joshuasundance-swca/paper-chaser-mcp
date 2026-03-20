@@ -2,14 +2,9 @@ services:
   scholar-search-mcp:
     build:
       context: .
-    image: scholar-search-mcp:local
+    image: ${IMAGE:-scholar-search-mcp:local}
     command: ["deployment-http"]
-    ports:
-      - "${SCHOLAR_SEARCH_PUBLISHED_HOST:-127.0.0.1}:${SCHOLAR_SEARCH_PUBLISHED_PORT:-8000}:8080"
     environment:
-      # Optional local overrides. User-facing transport and path stay
-      # configurable here; the image keeps the container bind host and internal
-      # port fixed at 0.0.0.0:8080.
       CORE_API_KEY: ${CORE_API_KEY:-}
       SEMANTIC_SCHOLAR_API_KEY: ${SEMANTIC_SCHOLAR_API_KEY:-}
       OPENALEX_API_KEY: ${OPENALEX_API_KEY:-}
@@ -38,3 +33,22 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    networks:
+      - mcp
+
+  mcp-inspector:
+    image: ghcr.io/modelcontextprotocol/inspector:latest
+    depends_on:
+      scholar-search-mcp:
+        condition: service_healthy
+    environment:
+      HOST: 0.0.0.0
+      MCP_AUTO_OPEN_ENABLED: "false"
+    ports:
+      - "127.0.0.1:6274:6274"
+      - "127.0.0.1:6277:6277"
+    networks:
+      - mcp
+
+networks:
+  mcp:

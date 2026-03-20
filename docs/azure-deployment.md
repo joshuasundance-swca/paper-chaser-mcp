@@ -22,20 +22,24 @@ build/push, workload rollout, and smoke testing.
 
 ## Runtime entrypoint
 
-The Docker image and Azure Container App use:
+The Azure Container App should explicitly run:
 
 ```text
-python -m scholar_search_mcp.deployment_runner
+scholar-search-mcp deployment-http
 ```
 
-`scholar_search_mcp.deployment_runner` launches Uvicorn around
-`scholar_search_mcp.deployment:app`, binds to `PORT` when the platform provides
-it, and otherwise falls back to `SCHOLAR_SEARCH_HTTP_PORT` (default `8080` in
-the image). The deployment wrapper adds:
+`scholar-search-mcp deployment-http` launches the
+`scholar_search_mcp.deployment:app` wrapper, binds to `PORT` when the platform
+provides it, and otherwise falls back to `SCHOLAR_SEARCH_HTTP_PORT` (default
+`8080` in the deployment path). The deployment wrapper adds:
 
 - `/healthz`
 - optional shared-token enforcement for `/mcp`
 - optional Origin allowlisting for `/mcp`
+
+This explicit subcommand keeps the hosted HTTP wrapper contract stable even if
+the public OCI package defaults to stdio transport for local MCP subprocess
+usage.
 
 ## Required Azure setup
 
@@ -216,11 +220,16 @@ python scripts/validate_deployment.py --require-az --require-docker --image-tag 
 
 `scripts/validate_deployment.py` currently validates:
 
+- `server.json` public MCP metadata exists, uses the GitHub namespace form,
+  declares a stdio OCI package, and keeps the GHCR identifier aligned with the
+  repo URL and version
 - APIM policy XML is well-formed
 - `az bicep lint` on `infra/main.bicep`
 - `az bicep build` on `infra/main.bicep`
 - `az bicep build-params` for each committed `.bicepparam`
 - `docker build` of the runtime image
+- Docker OCI labels stay aligned with `server.json` for server name, version,
+  and source URL
 - container smoke test for `/healthz`
 - blocked-origin `/mcp/` request returns `403`
 - missing configured backend auth header on `/mcp/` returns `401`

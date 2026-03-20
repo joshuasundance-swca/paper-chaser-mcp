@@ -1,4 +1,8 @@
-FROM python:3.12-slim AS builder
+# syntax=docker/dockerfile:1.7
+
+ARG PYTHON_VERSION=3.12
+
+FROM python:${PYTHON_VERSION}-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -10,13 +14,20 @@ WORKDIR /build
 
 RUN python -m venv /opt/venv
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md LICENSE ./
 COPY scholar_search_mcp ./scholar_search_mcp
 
-RUN pip install --upgrade pip \
-    && pip install . "uvicorn>=0.35.0"
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip \
+    && pip install .
 
-FROM python:3.12-slim AS runtime
+FROM python:${PYTHON_VERSION}-slim AS runtime
+
+ARG UID=10001
+ARG GID=10001
+ARG VERSION=dev
+ARG VCS_REF=unknown
+ARG BUILD_DATE=unknown
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -24,15 +35,26 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PATH="/opt/venv/bin:$PATH" \
     PORT=8080 \
-    SCHOLAR_SEARCH_TRANSPORT=streamable-http \
     SCHOLAR_SEARCH_HTTP_HOST=0.0.0.0 \
     SCHOLAR_SEARCH_HTTP_PORT=8080 \
     SCHOLAR_SEARCH_HTTP_PATH=/mcp
 
-RUN groupadd --system app \
-    && useradd --system --gid app --uid 10001 --create-home --home-dir /home/app app
+LABEL org.opencontainers.image.title="Scholar Search MCP" \
+      org.opencontainers.image.description="Academic paper discovery MCP server with stdio-first local packaging and optional HTTP deployment wrapper." \
+      org.opencontainers.image.documentation="https://github.com/joshuasundance-swca/scholar-search-mcp#readme" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.source="https://github.com/joshuasundance-swca/scholar-search-mcp" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.version="${VERSION}" \
+      io.modelcontextprotocol.server.name="io.github.joshuasundance-swca/scholar-search-mcp"
 
-WORKDIR /app
+RUN groupadd --gid "${GID}" app \
+    && useradd --uid "${UID}" --gid app --create-home --home-dir /home/app --shell /usr/sbin/nologin app \
+    && mkdir -p /workspace \
+    && chown -R app:app /workspace /home/app
+
+WORKDIR /workspace
 
 COPY --from=builder /opt/venv /opt/venv
 
@@ -40,7 +62,6 @@ USER app
 
 EXPOSE 8080
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz').read()"]
+ENTRYPOINT ["scholar-search-mcp"]
 
-CMD ["python", "-m", "scholar_search_mcp.deployment_runner"]
+CMD []

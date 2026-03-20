@@ -22,6 +22,7 @@ PARAM_FILES = [
     REPO_ROOT / "infra" / "main.prod.bicepparam",
 ]
 APIM_POLICY = REPO_ROOT / "infra" / "policies" / "scholar-search-policy.xml"
+SERVER_METADATA = REPO_ROOT / "server.json"
 
 
 def parse_args() -> argparse.Namespace:
@@ -98,6 +99,119 @@ def validate_xml_policy() -> None:
     DefusedET.parse(APIM_POLICY)
 
 
+def _read_server_metadata() -> dict:
+    if not SERVER_METADATA.exists():
+        raise SystemExit(
+            "Missing server.json. Public MCP packaging requires registry metadata."
+        )
+    try:
+        payload = json.loads(SERVER_METADATA.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"Invalid server.json JSON: {error}") from error
+
+    if not isinstance(payload, dict):
+        raise SystemExit("server.json must contain a top-level JSON object.")
+    return payload
+
+
+def _extract_oci_packages(payload: dict) -> list[dict]:
+    packages = payload.get("packages")
+    if not isinstance(packages, list):
+        return []
+    oci_packages: list[dict] = []
+    for candidate in packages:
+        if not isinstance(candidate, dict):
+            continue
+        package_type = (
+            candidate.get("registryType")
+            or candidate.get("registry_type")
+            or candidate.get("type")
+        )
+        if isinstance(package_type, str) and package_type.lower() == "oci":
+            oci_packages.append(candidate)
+    return oci_packages
+
+
+def _expected_ghcr_identifier(repository_url: str, version: str) -> str:
+    parsed = urllib.parse.urlparse(repository_url)
+    path_parts = [part for part in parsed.path.split("/") if part]
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != "github.com"
+        or len(path_parts) != 2
+    ):
+        raise SystemExit(
+            "server.json repository.url must point to an "
+            "https://github.com/<owner>/<repo> path for public OCI packaging."
+        )
+    owner = path_parts[0].lower()
+    repo = path_parts[1].lower()
+    return f"ghcr.io/{owner}/{repo}:{version}"
+
+
+def validate_server_metadata() -> dict[str, str]:
+    payload = _read_server_metadata()
+
+    name = payload.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise SystemExit("server.json must define a non-empty string 'name'.")
+    if not name.startswith("io.github."):
+        raise SystemExit(
+            "server.json name must use the public GitHub namespace form "
+            "(io.github.username/* or io.github.orgname/*)."
+        )
+    if "/" not in name:
+        raise SystemExit("server.json name must include a server identifier path.")
+
+    version = payload.get("version")
+    if not isinstance(version, str) or not version.strip():
+        raise SystemExit("server.json must define a non-empty string 'version'.")
+
+    repository = payload.get("repository")
+    repository_url = repository.get("url") if isinstance(repository, dict) else None
+    if not isinstance(repository_url, str) or not repository_url.strip():
+        raise SystemExit(
+            "server.json repository.url must be a non-empty GitHub repository URL."
+        )
+
+    oci_packages = _extract_oci_packages(payload)
+    if not oci_packages:
+        raise SystemExit(
+            "server.json must include at least one OCI package entry "
+            "(registryType/registry_type/type == 'oci')."
+        )
+
+    primary_package = oci_packages[0]
+    package_identifier = primary_package.get("identifier")
+    if not isinstance(package_identifier, str) or not package_identifier.strip():
+        raise SystemExit(
+            "server.json OCI packages must define a non-empty string 'identifier'."
+        )
+
+    expected_identifier = _expected_ghcr_identifier(repository_url, version)
+    if package_identifier != expected_identifier:
+        raise SystemExit(
+            "server.json OCI package identifier must match the repository-backed "
+            f"GHCR package path. Expected {expected_identifier!r}, got "
+            f"{package_identifier!r}."
+        )
+
+    transport = primary_package.get("transport")
+    transport_type = transport.get("type") if isinstance(transport, dict) else None
+    if transport_type != "stdio":
+        raise SystemExit(
+            "Public OCI MCP packages must declare transport.type='stdio' in "
+            "server.json."
+        )
+
+    return {
+        "name": name,
+        "version": version,
+        "source_url": repository_url,
+        "package_identifier": package_identifier,
+    }
+
+
 def validate_bicep(az_command: str) -> None:
     run(
         [az_command, "bicep", "lint", "--file", str(MAIN_BICEP)],
@@ -172,7 +286,28 @@ def wait_for_health(url: str) -> None:
     raise SystemExit(f"Timed out waiting for container health at {url}")
 
 
-def validate_image_config(docker_command: str, image_tag: str) -> None:
+def _parse_image_env(config: dict) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    raw_env = config.get("Env")
+    if not isinstance(raw_env, list):
+        return parsed
+    for entry in raw_env:
+        if not isinstance(entry, str):
+            continue
+        key, sep, value = entry.partition("=")
+        if sep:
+            parsed[key] = value
+    return parsed
+
+
+def validate_image_config(
+    docker_command: str,
+    image_tag: str,
+    *,
+    expected_server_name: str,
+    expected_server_version: str,
+    expected_source_url: str,
+) -> None:
     inspect = run(
         [docker_command, "image", "inspect", image_tag],
         description=f"Inspect Docker image {image_tag}",
@@ -182,6 +317,46 @@ def validate_image_config(docker_command: str, image_tag: str) -> None:
         raise SystemExit(f"Docker inspect returned no data for image {image_tag}.")
 
     config = payload[0].get("Config", {})
+    labels = config.get("Labels") or {}
+    if not isinstance(labels, dict):
+        raise SystemExit("Docker image labels payload must be an object.")
+
+    declared_server_name = labels.get("io.modelcontextprotocol.server.name")
+    if declared_server_name != expected_server_name:
+        raise SystemExit(
+            "Docker image label io.modelcontextprotocol.server.name must match "
+            f"server.json name. Expected {expected_server_name!r}, got "
+            f"{declared_server_name!r}."
+        )
+
+    image_version = labels.get("org.opencontainers.image.version")
+    if image_version != expected_server_version:
+        raise SystemExit(
+            "Docker image label org.opencontainers.image.version must match "
+            f"server.json version. Expected {expected_server_version!r}, got "
+            f"{image_version!r}."
+        )
+
+    image_source = labels.get("org.opencontainers.image.source")
+    if image_source != expected_source_url:
+        raise SystemExit(
+            "Docker image label org.opencontainers.image.source must match "
+            f"server.json repository.url. Expected {expected_source_url!r}, got "
+            f"{image_source!r}."
+        )
+
+    entrypoint = config.get("Entrypoint")
+    if not isinstance(entrypoint, list) or not entrypoint:
+        raise SystemExit("Docker image must define a non-empty ENTRYPOINT.")
+
+    env = _parse_image_env(config)
+    configured_transport = env.get("SCHOLAR_SEARCH_TRANSPORT")
+    if configured_transport and configured_transport.lower() != "stdio":
+        raise SystemExit(
+            "Docker image default transport must be stdio when "
+            "SCHOLAR_SEARCH_TRANSPORT is set."
+        )
+
     user = str(config.get("User") or "").strip().lower()
     if user in {"", "0", "root"}:
         raise SystemExit(
@@ -189,21 +364,44 @@ def validate_image_config(docker_command: str, image_tag: str) -> None:
             f"Current image user is {config.get('User')!r}."
         )
 
-    healthcheck = config.get("Healthcheck")
-    if not healthcheck or not healthcheck.get("Test"):
-        raise SystemExit("Docker image must define a HEALTHCHECK.")
 
-
-def validate_docker(docker_command: str, image_tag: str) -> None:
+def validate_docker(
+    docker_command: str,
+    image_tag: str,
+    *,
+    expected_server_name: str,
+    expected_server_version: str,
+    expected_source_url: str,
+) -> None:
+    build_date = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     run(
-        [docker_command, "build", "-t", image_tag, "."],
+        [
+            docker_command,
+            "build",
+            "-t",
+            image_tag,
+            "--build-arg",
+            f"VERSION={expected_server_version}",
+            "--build-arg",
+            "VCS_REF=local-validate",
+            "--build-arg",
+            f"BUILD_DATE={build_date}",
+            ".",
+        ],
         description=f"Build Docker image {image_tag}",
     )
-    validate_image_config(docker_command, image_tag)
+    validate_image_config(
+        docker_command,
+        image_tag,
+        expected_server_name=expected_server_name,
+        expected_server_version=expected_server_version,
+        expected_source_url=expected_source_url,
+    )
 
     port = free_port()
     container_name = f"scholar-search-validation-{port}"
     allowed_origin = "https://apim.validation.local"
+    # Keep HTTP smoke tests explicit so the image can remain stdio-first by default.
     run(
         [
             docker_command,
@@ -221,6 +419,7 @@ def validate_docker(docker_command: str, image_tag: str) -> None:
             "-e",
             "SCHOLAR_SEARCH_HTTP_AUTH_TOKEN=local-test-token",
             image_tag,
+            "deployment-http",
         ],
         description=f"Start validation container {container_name}",
     )
@@ -277,6 +476,7 @@ def main() -> None:
     args = parse_args()
 
     validate_xml_policy()
+    server_metadata = validate_server_metadata()
 
     az_command = None
     if not args.skip_az:
@@ -296,7 +496,13 @@ def main() -> None:
             label="Docker validation",
         )
     if docker_command:
-        validate_docker(docker_command, args.image_tag)
+        validate_docker(
+            docker_command,
+            args.image_tag,
+            expected_server_name=server_metadata["name"],
+            expected_server_version=server_metadata["version"],
+            expected_source_url=server_metadata["source_url"],
+        )
 
     print("[validate-deployment] Deployment asset validation completed successfully")
 

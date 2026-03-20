@@ -15,14 +15,21 @@ This document is the current working handoff for the fork. It is intended to giv
   packaging, a deployment wrapper ASGI app, Bicep infrastructure under
   `infra/`, a manual OIDC deployment workflow with `bootstrap` and `full`
   modes, and operator-facing Azure docs.
+- The Docker image is now a reusable public MCP package surface as well: the
+  default image contract is stdio-first with a stable `scholar-search-mcp`
+  entrypoint, `server.json` tracks the public MCP/OCI metadata, and
+  `.github/workflows/publish-public-mcp-package.yml` handles tag-driven GHCR
+  publishing plus MCP Registry publication, with semver checks, OIDC auth, and
+  SBOM/provenance output.
 - Deployment asset validation is now a first-class workflow: pre-commit and the
   main CI workflow run `scripts/validate_deployment.py`, and the validator can
   lint/build the Bicep, validate the APIM policy XML, build the Docker image,
   and smoke-test the secured `/healthz` and `/mcp/` paths locally, including
   the APIM-style Origin allowlist and the Azure-scaffold
   `SCHOLAR_SEARCH_HTTP_AUTH_HEADER=x-backend-auth` contract.
-- `scholar_search_mcp/deployment_runner.py` is now the container and Azure
-  image entrypoint. It wraps `scholar_search_mcp.deployment:app` with Uvicorn
+- `scholar_search_mcp/deployment_runner.py` powers the explicit
+  `scholar-search-mcp deployment-http` command used by Compose and the Azure
+  deployment path. It wraps `scholar_search_mcp.deployment:app` with Uvicorn
   and prefers `PORT` over `SCHOLAR_SEARCH_HTTP_PORT`.
 - `scholar_search_mcp/deployment_utils.py` resolves the post-deploy `/healthz`
   smoke-test target from `SMOKE_TEST_HEALTH_URL`, `containerAppHealthUrl`, or
@@ -116,8 +123,9 @@ This document is the current working handoff for the fork. It is intended to giv
 - `scholar_search_mcp/deployment.py` wraps the HTTP app with `/healthz`,
   optional backend-token auth, and optional Origin allowlisting for hosted
   deployments.
-- `scholar_search_mcp/deployment_runner.py` is the runtime image entrypoint for
-  Docker, Compose, and Azure-hosted deployments.
+- `scholar_search_mcp/deployment_runner.py` powers the explicit
+  `scholar-search-mcp deployment-http` runtime used for HTTP-wrapper hosting in
+  Compose and Azure-hosted deployments.
 - `scholar_search_mcp/deployment_utils.py` resolves smoke-test endpoints from
   Azure deployment outputs or an explicit environment override.
 - `scholar_search_mcp/clients/` contains provider clients for CORE, Semantic Scholar, OpenAlex, and arXiv.
