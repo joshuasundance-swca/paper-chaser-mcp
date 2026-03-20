@@ -398,6 +398,9 @@ def test_server_instructions_surface_continuation_and_schema_cues() -> None:
     assert "search_papers_core, search_papers_serpapi, and" in instructions
     assert "only accept query/limit/year" in instructions
     assert "Semantic Scholar pivot rather than another page" in instructions
+    assert "NOT relevance-ranked" in instructions
+    assert "retrievalNote" in instructions
+    assert "citationCount:desc" in instructions
     assert "prefer search_papers or search_papers_semantic_scholar" in instructions
     assert "paper.recommendedExpansionId" in instructions
     assert "paper.expansionIdStatus is not_portable" in instructions
@@ -419,6 +422,9 @@ async def test_agent_workflow_resource_mentions_pivots_and_provider_contracts() 
     assert "Provider-specific tool contracts" in guide_text
     assert "expose only `query`, `limit`, and `year`" in guide_text
     assert "Semantic Scholar pivot, not another page" in guide_text
+    assert "NOT relevance-ranked" in guide_text
+    assert "retrievalNote" in guide_text
+    assert "citationCount:desc" in guide_text
     assert "For small targeted pages" in guide_text
     assert "paper.recommendedExpansionId" in guide_text
     assert "paper.expansionIdStatus" in guide_text
@@ -443,6 +449,9 @@ async def test_plan_prompt_mentions_continuation_vs_pivot_and_schema_limits() ->
     assert "closest continuation path only when the workflow is already aligned" in (
         prompt_text
     )
+    assert "NOT relevance-ranked" in prompt_text
+    assert "retrievalNote" in prompt_text
+    assert "citationCount:desc" in prompt_text
     assert "paper.expansionIdStatus is not_portable" in prompt_text
     assert "Semantic Scholar pivot rather than another page from the same provider" in (
         prompt_text

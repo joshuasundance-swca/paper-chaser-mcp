@@ -253,18 +253,28 @@ def _metadata(
             bulk_guidance = (
                 "search_papers_bulk can broaden this into a larger Semantic Scholar "
                 "retrieval flow, but that is a semantic pivot because bulk search "
-                "does not preserve venue filtering. "
+                "does not preserve venue filtering. Its default ordering is also "
+                "NOT relevance-ranked, so it is not 'page 2' of these results. "
+                "For citation-ranked bulk retrieval, pass sort='citationCount:desc'. "
             )
         elif routing_steered:
             bulk_guidance = (
                 "If you need many more Semantic Scholar results for the same topic, "
-                "switch to search_papers_bulk. That is the closest continuation path, "
-                "but it leaves the brokered routing preferences behind. "
+                "use search_papers_bulk — but note it uses exhaustive corpus traversal "
+                "with an internal ordering that is NOT relevance-ranked, and it "
+                "leaves the brokered routing preferences behind. "
+                "It is not 'page 2' of these results; "
+                "expect different result ordering. "
+                "For citation-ranked bulk retrieval, pass sort='citationCount:desc'. "
             )
         else:
             bulk_guidance = (
                 "If you need many more Semantic Scholar results for the same topic, "
-                "switch to search_papers_bulk. That is the closest continuation path. "
+                "use search_papers_bulk — but note it uses exhaustive corpus traversal "
+                "with an internal ordering that is NOT relevance-ranked. "
+                "It is not 'page 2' of these results; "
+                "expect different result ordering. "
+                "For citation-ranked bulk retrieval, pass sort='citationCount:desc'. "
             )
     elif provider_used in provider_labels:
         bulk_guidance = (

@@ -56,6 +56,56 @@ async def test_search_papers_bulk_returns_structured_next_cursor(
         "Raw provider token must be excluded from the public bulk response. "
         "Use pagination.nextCursor as the single continuation handle."
     )
+    # retrievalNote must be present and describe the ordering contract
+    assert "retrievalNote" in payload, (
+        "search_papers_bulk must include a retrievalNote field so agents "
+        "understand the ordering contract without extra round trips."
+    )
+    note = payload["retrievalNote"]
+    assert note, "retrievalNote must be non-empty"
+    # sort was specified (citationCount), so note should mention it
+    assert "citationCount" in note, (
+        "retrievalNote should mention the active sort parameter when one was given"
+    )
+
+
+@pytest.mark.asyncio
+async def test_search_papers_bulk_retrieval_note_default_ordering(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """search_papers_bulk must include a retrievalNote when no sort is supplied."""
+    import json
+
+    class SimpleBulkClient(RecordingSemanticClient):
+        async def search_papers_bulk(self, **kwargs) -> dict:
+            self.calls.append(("search_papers_bulk", kwargs))
+            return dump_jsonable(
+                BulkSearchResponse.model_validate(
+                    {"total": 1, "token": None, "data": [{"paperId": "bulk-1"}]}
+                )
+            )
+
+    fake_client = SimpleBulkClient()
+    monkeypatch.setattr(server, "client", fake_client)
+
+    result = await server.call_tool(
+        "search_papers_bulk",
+        {"query": "graph neural networks"},
+    )
+    payload = json.loads(result[0].text)
+
+    assert "retrievalNote" in payload, (
+        "search_papers_bulk must include a retrievalNote field in every response."
+    )
+    note = payload["retrievalNote"]
+    assert note, "retrievalNote must be non-empty"
+    assert "NOT relevance-ranked" in note or "not relevance-ranked" in note.lower(), (
+        "retrievalNote must state that default bulk ordering is not relevance-ranked."
+    )
+    # The note should guide agents toward relevance-ranked alternatives
+    assert "search_papers" in note, (
+        "retrievalNote should mention search_papers as a relevance-ranked alternative."
+    )
 
 
 def test_tool_descriptions_document_cursor_pagination_uniformly() -> None:

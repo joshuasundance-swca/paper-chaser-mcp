@@ -341,6 +341,17 @@ gh aw compile test-scholar-search --dir .github/workflows
     increased from 30 to 100 (the API maximum) to widen the candidate window
     for relevance-ranked results.
 
+11. `search_papers_bulk` default ordering is now explicitly disclosed.
+    The bulk endpoint uses exhaustive corpus traversal with an internal ordering
+    that is NOT relevance-ranked.  This is a semantic pivot from `search_papers`
+    results, not "page 2". Every `search_papers_bulk` response now includes a
+    `retrievalNote` field describing the active ordering contract.
+    `brokerMetadata.nextStepHint` from `search_papers` (Semantic Scholar path)
+    also explicitly warns about the ordering change and suggests
+    `sort='citationCount:desc'` as a citation-ranked alternative.
+    The `search_papers_bulk` tool description also calls out this ordering
+    difference prominently so agents don't need extra round trips to infer it.
+
 ## Known Hotspots
 
 - `CoreApiClient._result_to_paper()` remains the densest parsing logic and should keep getting defensive tests before behavior changes.

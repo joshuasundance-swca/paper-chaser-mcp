@@ -552,7 +552,29 @@ async def dispatch_tool(
             min_citation_count=args_dict.get("min_citation_count"),
         )
         serialized = dump_jsonable(result)
-        return _encode_next_bulk_cursor(serialized, name, context_hash=ctx_hash)
+        serialized = _encode_next_bulk_cursor(serialized, name, context_hash=ctx_hash)
+        sort_param = args_dict.get("sort")
+        if sort_param:
+            retrieval_note = (
+                f"Results are sorted by '{sort_param}' (Semantic Scholar "
+                "/paper/search/bulk). Bulk retrieval is exhaustive corpus "
+                "collection — results are ordered by the specified sort, not "
+                "by relevance to the query. This is a different contract from "
+                "search_papers. Use pagination.nextCursor to continue."
+            )
+        else:
+            retrieval_note = (
+                "ORDERING: search_papers_bulk uses exhaustive corpus traversal "
+                "with an internal ordering that is NOT relevance-ranked. This is "
+                "NOT 'page 2' of search_papers — the ranking semantics differ and "
+                "results may appear unrelated to the discovery page. For "
+                "relevance-ranked results use search_papers or "
+                "search_papers_semantic_scholar. For citation-ranked bulk "
+                "retrieval pass sort='citationCount:desc'. Use "
+                "pagination.nextCursor to continue this bulk stream."
+            )
+        serialized.setdefault("retrievalNote", retrieval_note)
+        return serialized
 
     if not enable_openalex and name.endswith("_openalex"):
         raise ValueError(

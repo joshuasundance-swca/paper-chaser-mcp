@@ -281,7 +281,10 @@ class BulkSearchPapersArgs(ToolArgsModel):
     )
     sort: str | None = Field(
         default=None,
-        description=("Sort order, e.g. 'paperId', 'citationCount', 'publicationDate'"),
+        description=(
+            "Sort order, e.g. 'paperId:asc', 'citationCount:desc', "
+            "'publicationDate:desc'"
+        ),
     )
     year: str | None = Field(
         default=None,
