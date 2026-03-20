@@ -304,31 +304,67 @@ That path serves the FastMCP app directly over streamable HTTP at
 `http://127.0.0.1:8000/mcp` by default. It is the simplest local option when
 you want HTTP transport without the deployment wrapper.
 
-If you want local parity with the container and Azure deployment wrapper
-instead, run the same entrypoint the image uses:
+If you want local parity with the HTTP wrapper used by Compose and Azure,
+run:
 
 ```bash
-PORT=8000 SCHOLAR_SEARCH_HTTP_HOST=127.0.0.1 python -m scholar_search_mcp.deployment_runner
+PORT=8000 SCHOLAR_SEARCH_HTTP_HOST=127.0.0.1 scholar-search-mcp deployment-http
 ```
 
-`deployment_runner` launches Uvicorn around
-`scholar_search_mcp.deployment:app`, prefers `PORT` when it is set, and
-otherwise falls back to `SCHOLAR_SEARCH_HTTP_PORT` (default `8080` for the
-container image). That wrapper keeps the same streamable HTTP MCP transport,
-adds `/healthz`, and optionally enforces `SCHOLAR_SEARCH_HTTP_AUTH_TOKEN` and
-`SCHOLAR_SEARCH_ALLOWED_ORIGINS` for `/mcp`.
+`scholar-search-mcp deployment-http` launches the same
+`scholar_search_mcp.deployment:app` wrapper used by hosted HTTP deployments.
+It prefers `PORT` when it is set, and otherwise falls back to
+`SCHOLAR_SEARCH_HTTP_PORT`. That wrapper keeps the same streamable HTTP MCP
+transport, adds `/healthz`, and optionally enforces
+`SCHOLAR_SEARCH_HTTP_AUTH_TOKEN` and `SCHOLAR_SEARCH_ALLOWED_ORIGINS` for
+`/mcp`.
 
 In all of these local HTTP modes, clients talk only to your local MCP endpoint.
 They do **not** need upstream provider API keys. Those keys, when present, stay
 server-side and only let your local server use higher provider limits or
 optional paid providers such as SerpApi.
 
-### Docker Compose
+### Docker MCP package (stdio)
+
+For local MCP clients that launch servers as subprocesses, use the image in
+stdio mode. For unpublished local iteration, build and run `scholar-search-mcp:local`.
+For the reusable public package, use the published GHCR tag:
+
+```bash
+docker run --rm -i ghcr.io/joshuasundance-swca/scholar-search-mcp:latest
+```
+
+For a locally built image:
+
+```bash
+docker run --rm -i scholar-search-mcp:local
+```
+
+A Docker-backed MCP client entry typically looks like:
+
+```json
+{
+  "mcpServers": {
+    "scholar-search": {
+      "command": "docker",
+      "args": ["run", "--rm", "-i", "ghcr.io/joshuasundance-swca/scholar-search-mcp:latest"]
+    }
+  }
+}
+```
+
+This mode is ideal for local desktop MCP usage because the host launches and
+owns the server process lifecycle.
+
+The repo also ships `server.json` so the public OCI image and MCP package
+metadata stay aligned for registry/discovery tooling.
+
+### Docker Compose (HTTP wrapper mode)
 
 For local HTTP testing, MCP Inspector, or bridge-style integrations, this repo
-now ships `docker-compose.yaml` with localhost-only defaults. The compose service runs
-the same deployment wrapper used by the Docker image, with streamable HTTP on
-`/mcp`.
+ships `docker-compose.yaml` with localhost-only defaults. Compose now
+explicitly starts the `deployment-http` subcommand, so HTTP wrapper behavior
+does not depend on the image's default transport.
 
 Compose intentionally keeps the container bind host and internal port fixed at
 `0.0.0.0:8080`, because those are container-runtime details rather than
@@ -366,6 +402,37 @@ want the container reachable beyond the local machine.
 If you leave the provider key fields blank, local clients still work. The
 server falls back to the free/default provider paths where supported, and
 SerpApi stays disabled by default.
+
+### Docker Compose Inspector sidecar
+
+For browser-based debugging without installing Node locally, use the dedicated
+Inspector stack:
+
+```bash
+docker compose -f compose.inspector.yaml up --build
+```
+
+This stack keeps Inspector separate from the MCP server image and binds the UI
+and proxy to localhost only:
+
+- Inspector UI: `http://127.0.0.1:6274`
+- Inspector proxy: `http://127.0.0.1:6277`
+
+Inspector proxy authentication remains enabled by default. Use
+`docker compose -f compose.inspector.yaml logs mcp-inspector` to read the
+session token that Inspector prints on startup.
+
+Inside Inspector, connect using Streamable HTTP and set:
+
+- URL: `http://scholar-search-mcp:8080/mcp`
+- Transport: `streamable-http`
+
+`compose.inspector.yaml` accepts `IMAGE` overrides, so you can test a specific
+tag without editing files:
+
+```bash
+IMAGE=ghcr.io/joshuasundance-swca/scholar-search-mcp:latest docker compose -f compose.inspector.yaml up
+```
 
 ## Tools
 
@@ -422,6 +489,17 @@ Primary defaults for agents:
 
 
 ## Testing with MCP Inspector
+
+The recommended local path is the Docker sidecar workflow:
+
+```bash
+docker compose -f compose.inspector.yaml up --build
+```
+
+This keeps Inspector out of the production MCP image and binds Inspector ports
+to localhost only.
+
+If you prefer a host-installed Inspector, you can still run:
 
 ```bash
 npm install -g @modelcontextprotocol/inspector

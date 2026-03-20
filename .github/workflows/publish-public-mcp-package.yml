@@ -1,0 +1,302 @@
+name: Publish Public MCP Package
+
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - pyproject.toml
+      - server.json
+      - scholar_search_mcp/**
+      - .github/workflows/publish-public-mcp-package.yml
+  push:
+    branches:
+      - main
+    tags:
+      - v*
+    paths:
+      - Dockerfile
+      - pyproject.toml
+      - server.json
+      - scholar_search_mcp/**
+      - .github/workflows/publish-public-mcp-package.yml
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Optional semver tag to publish (for example v0.2.0).
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-mcp-package-${{ github.event.release.tag_name || github.ref_name || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  package-check:
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Resolve image reference
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo_lc="$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          echo "name=ghcr.io/${repo_lc}" >> "$GITHUB_OUTPUT"
+          echo "ci_ref=ghcr.io/${repo_lc}:ci-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Read MCP server metadata
+        id: server
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f server.json ]; then
+            echo "server.json is required for public MCP package publishing."
+            exit 1
+          fi
+
+          server_name="$(jq -re '.name' server.json)"
+          server_version="$(jq -re '.version' server.json)"
+          package_identifier="$(jq -re '.packages[0].identifier' server.json)"
+          transport_type="$(jq -re '.packages[0].transport.type' server.json)"
+          if [ -z "$server_name" ] || [ -z "$server_version" ]; then
+            echo "server.json must define non-empty name and version."
+            exit 1
+          fi
+          if [[ ! "$server_name" =~ ^io\.github\.[^/]+/.+ ]]; then
+            echo "MCP server name must follow io.github.<owner>/<server> for registry publication."
+            exit 1
+          fi
+          if [ "$package_identifier" != "${{ steps.image.outputs.name }}:${server_version}" ]; then
+            echo "server.json OCI package identifier must match ghcr.io/<owner>/<repo>:<version>."
+            exit 1
+          fi
+          if [ "$transport_type" != "stdio" ]; then
+            echo "Public OCI MCP package transport must be stdio."
+            exit 1
+          fi
+
+          echo "name=${server_name}" >> "$GITHUB_OUTPUT"
+          echo "version=${server_version}" >> "$GITHUB_OUTPUT"
+
+      - name: Capture build metadata
+        id: buildinfo
+        shell: bash
+        run: echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Build image for CI verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build \
+            --tag "${{ steps.image.outputs.ci_ref }}" \
+            --build-arg "VERSION=${{ steps.server.outputs.version }}" \
+            --build-arg "VCS_REF=${GITHUB_SHA}" \
+            --build-arg "BUILD_DATE=${{ steps.buildinfo.outputs.date }}" \
+            .
+
+      - name: Verify OCI and MCP image metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_ref="${{ steps.image.outputs.ci_ref }}"
+
+          mcp_name="$(docker image inspect "${image_ref}" --format '{{ index .Config.Labels "io.modelcontextprotocol.server.name" }}')"
+          if [ "$mcp_name" != "${{ steps.server.outputs.name }}" ]; then
+            echo "io.modelcontextprotocol.server.name does not match server.json name."
+            exit 1
+          fi
+
+          image_version="$(docker image inspect "${image_ref}" --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')"
+          if [ "$image_version" != "${{ steps.server.outputs.version }}" ]; then
+            echo "org.opencontainers.image.version does not match server.json version."
+            exit 1
+          fi
+
+          image_user="$(docker image inspect "${image_ref}" --format '{{ .Config.User }}')"
+          if [ -z "$image_user" ] || [ "$image_user" = "root" ] || [ "$image_user" = "0" ]; then
+            echo "Container image must run as a non-root user."
+            exit 1
+          fi
+
+          entrypoint="$(docker image inspect "${image_ref}" --format '{{ json .Config.Entrypoint }}')"
+          if [ "$entrypoint" = "null" ]; then
+            echo "Container image should define a stable ENTRYPOINT for MCP hosts."
+            exit 1
+          fi
+
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.5
+        with:
+          version: v0.68.0
+
+      - name: Scan container image
+        shell: bash
+        run: |
+          set -euo pipefail
+          trivy image \
+            --exit-code 1 \
+            --ignore-unfixed \
+            --severity HIGH,CRITICAL \
+            "${{ steps.image.outputs.ci_ref }}"
+
+  publish:
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Resolve image name
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo_lc="$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          echo "name=ghcr.io/${repo_lc}" >> "$GITHUB_OUTPUT"
+
+      - name: Read MCP server metadata
+        id: server
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f server.json ]; then
+            echo "server.json is required for public MCP package publishing."
+            exit 1
+          fi
+          server_name="$(jq -re '.name' server.json)"
+          server_version="$(jq -re '.version' server.json)"
+          package_identifier="$(jq -re '.packages[0].identifier' server.json)"
+          transport_type="$(jq -re '.packages[0].transport.type' server.json)"
+          if [ -z "$server_name" ] || [ -z "$server_version" ]; then
+            echo "server.json must define non-empty name and version."
+            exit 1
+          fi
+          repo_lc="$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          expected_identifier="ghcr.io/${repo_lc}:${server_version}"
+          if [ "$package_identifier" != "$expected_identifier" ]; then
+            echo "server.json OCI package identifier must match ${expected_identifier}."
+            exit 1
+          fi
+          if [ "$transport_type" != "stdio" ]; then
+            echo "Public OCI MCP package transport must be stdio."
+            exit 1
+          fi
+          echo "name=${server_name}" >> "$GITHUB_OUTPUT"
+          echo "version=${server_version}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve publish tag
+        id: publish_tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "release" ]; then
+            raw_tag="${{ github.event.release.tag_name }}"
+          elif [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            raw_tag="${GITHUB_REF_NAME}"
+          elif [ -n "${{ inputs.image_tag }}" ]; then
+            raw_tag="${{ inputs.image_tag }}"
+          else
+            raw_tag="v${{ steps.server.outputs.version }}"
+          fi
+
+          if [[ ! "$raw_tag" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Publish tag must be semver-compatible (for example v1.2.3 or v1.2.3-rc.1)."
+            exit 1
+          fi
+
+          normalized="${raw_tag#v}"
+          if [ "$normalized" != "${{ steps.server.outputs.version }}" ]; then
+            echo "server.json version (${{ steps.server.outputs.version }}) must match publish tag ($normalized)."
+            exit 1
+          fi
+
+          prerelease=false
+          if [[ "$normalized" == *-* ]]; then
+            prerelease=true
+          fi
+
+          echo "raw=${raw_tag}" >> "$GITHUB_OUTPUT"
+          echo "normalized=${normalized}" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+
+      - name: Capture build metadata
+        id: buildinfo
+        shell: bash
+        run: echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Build image for metadata verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_ref="${{ steps.image.outputs.name }}:verify-${GITHUB_SHA}"
+          docker build \
+            --tag "${image_ref}" \
+            --build-arg "VERSION=${{ steps.server.outputs.version }}" \
+            --build-arg "VCS_REF=${GITHUB_SHA}" \
+            --build-arg "BUILD_DATE=${{ steps.buildinfo.outputs.date }}" \
+            .
+
+          mcp_name="$(docker image inspect "${image_ref}" --format '{{ index .Config.Labels "io.modelcontextprotocol.server.name" }}')"
+          if [ "$mcp_name" != "${{ steps.server.outputs.name }}" ]; then
+            echo "io.modelcontextprotocol.server.name does not match server.json name."
+            exit 1
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log into GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate Docker tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ steps.publish_tag.outputs.raw }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.publish_tag.outputs.raw }}
+            type=semver,pattern={{major}},value=${{ steps.publish_tag.outputs.raw }}
+            type=raw,value=latest,enable=${{ steps.publish_tag.outputs.is_prerelease == 'false' }}
+            type=sha,format=short,prefix=sha-
+
+      - name: Build and push public image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: |
+            ${{ steps.meta.outputs.labels }}
+            io.modelcontextprotocol.server.name=${{ steps.server.outputs.name }}
+          build-args: |
+            VERSION=${{ steps.server.outputs.version }}
+            VCS_REF=${{ github.sha }}
+            BUILD_DATE=${{ steps.buildinfo.outputs.date }}
+          provenance: mode=max
+          sbom: true

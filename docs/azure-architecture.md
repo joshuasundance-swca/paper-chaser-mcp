@@ -18,7 +18,7 @@ Azure API Management
    |
    v
 Azure Container Apps
-  - scholar_search_mcp.deployment_runner -> scholar_search_mcp.deployment:app
+  - scholar-search-mcp deployment-http -> scholar_search_mcp.deployment:app
   - /healthz for probes
   - /mcp for streamable HTTP MCP traffic
   - managed environment public network disabled; private endpoint on the environment

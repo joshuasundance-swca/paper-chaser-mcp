@@ -165,6 +165,9 @@ resource app 'Microsoft.App/containerApps@2025-07-01' = {
     template: {
       containers: [
         {
+          args: [
+            'deployment-http'
+          ]
           env: containerEnv
           image: image
           name: 'scholar-search'

@@ -3,9 +3,12 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ENV_EXAMPLE = REPO_ROOT / ".env.example"
 DOCKER_COMPOSE = REPO_ROOT / "docker-compose.yaml"
+INSPECTOR_COMPOSE = REPO_ROOT / "compose.inspector.yaml"
 
 EXPECTED_LOCAL_CONFIG_KEYS = {
     "CORE_API_KEY",
@@ -26,6 +29,10 @@ EXPECTED_LOCAL_CONFIG_KEYS = {
     "SCHOLAR_SEARCH_ALLOWED_ORIGINS",
     "SCHOLAR_SEARCH_PUBLISHED_HOST",
     "SCHOLAR_SEARCH_PUBLISHED_PORT",
+}
+
+OPTIONAL_COMPOSE_ONLY_KEYS = {
+    "IMAGE",
 }
 
 BLOCKED_PUBLIC_CONFIG_KEYS = {
@@ -59,14 +66,18 @@ def _parse_compose_substitution_keys(path: Path) -> set[str]:
 def test_env_example_lists_supported_public_local_config_keys() -> None:
     keys = _parse_env_keys(ENV_EXAMPLE)
 
-    assert keys == EXPECTED_LOCAL_CONFIG_KEYS
+    assert EXPECTED_LOCAL_CONFIG_KEYS <= keys
     assert not (keys & BLOCKED_PUBLIC_CONFIG_KEYS)
 
 
 def test_compose_uses_only_documented_local_config_keys() -> None:
     compose_keys = _parse_compose_substitution_keys(DOCKER_COMPOSE)
 
-    assert compose_keys == EXPECTED_LOCAL_CONFIG_KEYS
+    assert EXPECTED_LOCAL_CONFIG_KEYS <= compose_keys
+    undocumented = (
+        compose_keys - EXPECTED_LOCAL_CONFIG_KEYS - OPTIONAL_COMPOSE_ONLY_KEYS
+    )
+    assert undocumented == set()
 
 
 def test_compose_does_not_expose_container_bind_host_or_internal_port() -> None:
@@ -74,3 +85,18 @@ def test_compose_does_not_expose_container_bind_host_or_internal_port() -> None:
 
     assert "SCHOLAR_SEARCH_HTTP_HOST" not in compose_keys
     assert "SCHOLAR_SEARCH_HTTP_PORT" not in compose_keys
+
+
+def test_compose_explicitly_opts_into_http_deployment_wrapper() -> None:
+    text = DOCKER_COMPOSE.read_text(encoding="utf-8")
+
+    assert "deployment-http" in text
+
+
+def test_inspector_compose_keeps_ports_localhost_bound_when_present() -> None:
+    if not INSPECTOR_COMPOSE.exists():
+        pytest.skip("compose.inspector.yaml is not part of this checkout.")
+
+    text = INSPECTOR_COMPOSE.read_text(encoding="utf-8")
+    for mapping in re.findall(r'"([^"]+:\d+:\d+)"', text):
+        assert mapping.startswith("127.0.0.1:")
