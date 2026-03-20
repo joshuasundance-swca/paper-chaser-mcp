@@ -135,10 +135,14 @@ def _extract_oci_packages(payload: dict) -> list[dict]:
 def _expected_ghcr_identifier(repository_url: str, version: str) -> str:
     parsed = urllib.parse.urlparse(repository_url)
     path_parts = [part for part in parsed.path.split("/") if part]
-    if parsed.netloc not in {"github.com", "www.github.com"} or len(path_parts) < 2:
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != "github.com"
+        or len(path_parts) != 2
+    ):
         raise SystemExit(
-            "server.json repository.url must point to a GitHub owner/repo path "
-            "for public OCI packaging."
+            "server.json repository.url must point to an "
+            "https://github.com/<owner>/<repo> path for public OCI packaging."
         )
     owner = path_parts[0].lower()
     repo = path_parts[1].lower()
