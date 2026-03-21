@@ -36,6 +36,7 @@ from .constants import (
 from .dispatch import dispatch_tool
 from .models import TOOL_INPUT_MODELS, dump_jsonable
 from .parsing import _arxiv_id_from_url, _text
+from .provider_runtime import ProviderDiagnosticsRegistry
 from .runtime import run_server
 from .search import _core_response_to_merged, _merge_search_results
 from .settings import AppSettings, _env_bool
@@ -49,7 +50,9 @@ SERVER_INSTRUCTIONS = """
 Decision tree for tool selection:
 
 1. CONCEPT-LEVEL DISCOVERY / REVIEW → search_papers_smart
-   (returns searchSessionId, strategyMetadata, resourceUris, and agentHints)
+   (returns searchSessionId, strategyMetadata, resourceUris, and agentHints;
+   use latencyProfile=fast for smoke tests, balanced for default work, and deep
+   for controlled multi-provider expansion)
 2. QUICK RAW DISCOVERY → search_papers
    (brokered, single page, returns brokerMetadata plus agentHints/resourceUris)
 3. EXHAUSTIVE / MULTI-PAGE → search_papers_bulk
@@ -63,12 +66,20 @@ Decision tree for tool selection:
 9. AUTHOR PIVOT → search_authors → get_author_info → get_author_papers
 10. PHRASE / QUOTE RECOVERY → search_snippets (last resort)
 11. OPENALEX-SPECIFIC PATHS → use the *_openalex tools when you explicitly need
-   OpenAlex-native DOI/ID lookup, OpenAlex cursor paging, or OpenAlex author pivots
+   OpenAlex-native DOI/ID lookup, OpenAlex cursor paging, author pivots, or
+   source/institution/topic pivots via search_entities_openalex and
+   search_papers_openalex_by_entity
+12. SERPAPI RECOVERY PATHS → use search_papers_serpapi_cited_by,
+   search_papers_serpapi_versions, get_author_profile_serpapi,
+   get_author_articles_serpapi, or get_serpapi_account_status only when
+   SCHOLAR_SEARCH_ENABLE_SERPAPI=true and the workflow justifies paid recall recovery
+13. PROVIDER HEALTH / DEBUGGING → get_provider_diagnostics
 
 After search_papers: read brokerMetadata.nextStepHint for the recommended next move.
 After search_papers_smart: reuse searchSessionId for ask_result_set,
 map_research_landscape, or expand_research_graph, and inspect acceptedExpansions,
-rejectedExpansions, speculativeExpansions, providersUsed, and driftWarnings.
+rejectedExpansions, speculativeExpansions, providersUsed, driftWarnings,
+latencyProfile, providerBudgetApplied, and providerOutcomes.
 Primary read tools now also return agentHints, clarification, resourceUris, and,
 when they produce reusable result sets, searchSessionId.
 For Semantic Scholar expansion tools, prefer paper.recommendedExpansionId when
@@ -83,7 +94,7 @@ paper surface.
 For common-name author lookup, add affiliation, coauthor, venue, or topic clues
 before expanding into get_author_info/get_author_papers.
 To steer the broker: use preferredProvider (try-first) or providerOrder (full override).
-Provider names: core, semantic_scholar, arxiv, serpapi / serpapi_google_scholar.
+Provider names: semantic_scholar, arxiv, core, serpapi / serpapi_google_scholar.
 Provider-specific search inputs: search_papers_core, search_papers_serpapi, and
 search_papers_arxiv only accept query/limit/year; search_papers_semantic_scholar
 supports the wider Semantic Scholar filter set. OpenAlex is available through
@@ -114,7 +125,9 @@ AGENT_WORKFLOW_GUIDE = """
 
 - **Concept-level discovery or literature review**: `search_papers_smart` →
   reuse `searchSessionId` with `ask_result_set`, `map_research_landscape`,
-  or `expand_research_graph`.
+  or `expand_research_graph`. Use `latencyProfile=fast` for smoke baselines,
+  `balanced` for the default path, and `deep` when controlled multi-provider
+  expansion is worth the extra latency.
 - **Quick literature discovery**: `search_papers` → inspect
   `brokerMetadata.nextStepHint`, `agentHints`, and `resourceUris` to decide
   whether to broaden, narrow, paginate, or pivot.
@@ -155,7 +168,16 @@ AGENT_WORKFLOW_GUIDE = """
 - **OpenAlex-specific workflows**: use `search_papers_openalex` for one explicit
   OpenAlex page, `search_papers_openalex_bulk` for cursor-paginated OpenAlex
   traversal, `get_paper_details_openalex` for OpenAlex ID/DOI lookup, and the
-  OpenAlex citation/author tools when you want OpenAlex-native semantics.
+  OpenAlex citation/author tools when you want OpenAlex-native semantics. Use
+  `paper_autocomplete_openalex`, `search_entities_openalex`, and
+  `search_papers_openalex_by_entity` for title hints plus venue, affiliation,
+  or topic pivots.
+- **SerpApi recovery workflows**: keep SerpApi off the default broad path and use
+  `search_papers_serpapi_cited_by`, `search_papers_serpapi_versions`,
+  `get_author_profile_serpapi`, `get_author_articles_serpapi`, and
+  `get_serpapi_account_status` only when Google Scholar recall recovery or quota
+  inspection is explicitly needed.
+- **Provider/runtime debugging**: `get_provider_diagnostics`
 - **Grounded follow-up over a saved result set**: `ask_result_set` for QA,
   claim checks, or comparisons; `map_research_landscape` for themes, gaps, and
   disagreements; `expand_research_graph` for a compact citation or author graph.
@@ -264,6 +286,7 @@ __all__ = [
     "openalex_client",
     "arxiv_client",
     "serpapi_client",
+    "provider_registry",
     "workspace_registry",
     "provider_bundle",
     "agentic_runtime",
@@ -299,11 +322,51 @@ def _tool_tags(name: str) -> set[str]:
             "provider-specific",
             "provider:openalex",
         },
+        "paper_autocomplete_openalex": {
+            "search",
+            "provider-specific",
+            "provider:openalex",
+        },
         "search_papers_openalex_bulk": {
             "search",
             "provider-specific",
             "provider:openalex",
         },
+        "search_entities_openalex": {
+            "search",
+            "provider-specific",
+            "provider:openalex",
+        },
+        "search_papers_openalex_by_entity": {
+            "search",
+            "provider-specific",
+            "provider:openalex",
+        },
+        "search_papers_serpapi_cited_by": {
+            "search",
+            "provider-specific",
+            "provider:serpapi_google_scholar",
+        },
+        "search_papers_serpapi_versions": {
+            "search",
+            "provider-specific",
+            "provider:serpapi_google_scholar",
+        },
+        "get_author_profile_serpapi": {
+            "author",
+            "provider-specific",
+            "provider:serpapi_google_scholar",
+        },
+        "get_author_articles_serpapi": {
+            "author",
+            "provider-specific",
+            "provider:serpapi_google_scholar",
+        },
+        "get_serpapi_account_status": {
+            "provider-specific",
+            "provider:serpapi_google_scholar",
+        },
+        "get_provider_diagnostics": {"diagnostics", "provider-health"},
         "ask_result_set": {"smart", "grounded-answer"},
         "map_research_landscape": {"smart", "landscape"},
         "expand_research_graph": {"smart", "graph"},
@@ -412,6 +475,7 @@ async def _execute_tool(
         serpapi_client=serpapi_client,
         enable_serpapi=enable_serpapi,
         provider_order=provider_order,
+        provider_registry=provider_registry,
         workspace_registry=workspace_registry,
         agentic_runtime=agentic_runtime,
         ctx=ctx,
@@ -437,9 +501,11 @@ core_client = CoreApiClient(api_key=core_api_key)
 openalex_client = OpenAlexClient(api_key=openalex_api_key, mailto=openalex_mailto)
 arxiv_client = ArxivClient()
 serpapi_client = SerpApiScholarClient(api_key=serpapi_api_key)
+provider_registry = ProviderDiagnosticsRegistry()
 provider_bundle = resolve_provider_bundle(
     agentic_config,
     openai_api_key=openai_api_key,
+    provider_registry=provider_registry,
 )
 workspace_registry = WorkspaceRegistry(
     ttl_seconds=settings.session_ttl_seconds,
@@ -463,6 +529,7 @@ agentic_runtime = AgenticRuntime(
     enable_openalex=enable_openalex,
     enable_arxiv=enable_arxiv,
     enable_serpapi=enable_serpapi,
+    provider_registry=provider_registry,
 )
 
 app = FastMCP(

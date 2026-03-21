@@ -3,7 +3,13 @@ import json
 import pytest
 
 from scholar_search_mcp import server
+from scholar_search_mcp.provider_runtime import ProviderDiagnosticsRegistry
 from tests.helpers import DummyResponse, DummySerpApiAsyncClient
+
+
+@pytest.fixture(autouse=True)
+def _reset_provider_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(server, "provider_registry", ProviderDiagnosticsRegistry())
 
 
 def test_serpapi_normalize_organic_result_minimal() -> None:
@@ -336,7 +342,7 @@ async def test_serpapi_client_get_citation_formats_rejects_empty_result_id() -> 
 async def test_search_papers_uses_serpapi_when_enabled_and_others_fail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """SerpApi must be tried between Semantic Scholar and arXiv in the chain."""
+    """SerpApi should be reachable when the caller explicitly steers to it."""
 
     class FailingCoreClient:
         async def search(self, **kwargs) -> dict:
@@ -366,7 +372,14 @@ async def test_search_papers_uses_serpapi_when_enabled_and_others_fail(
     monkeypatch.setattr(server, "client", FailingSemanticClient())
     monkeypatch.setattr(server, "serpapi_client", FakeSerpApiClient())
 
-    response = await server.call_tool("search_papers", {"query": "neural nets"})
+    response = await server.call_tool(
+        "search_papers",
+        {
+            "query": "neural nets",
+            "preferredProvider": "serpapi",
+            "providerOrder": ["serpapi", "arxiv", "core", "semantic_scholar"],
+        },
+    )
     payload = json.loads(response[0].text)
 
     assert payload["total"] == 1
@@ -679,7 +692,14 @@ async def test_search_papers_raises_when_serpapi_enabled_without_key(
     monkeypatch.setattr(server, "arxiv_client", ArxivFallback())
 
     with pytest.raises(SerpApiKeyMissingError, match="SERPAPI_API_KEY"):
-        await server.call_tool("search_papers", {"query": "test"})
+        await server.call_tool(
+            "search_papers",
+            {
+                "query": "test",
+                "preferredProvider": "serpapi",
+                "providerOrder": ["serpapi", "arxiv", "core", "semantic_scholar"],
+            },
+        )
 
 
 @pytest.mark.asyncio
@@ -859,7 +879,14 @@ async def test_search_papers_serpapi_all_provenance_fields_in_response(
     monkeypatch.setattr(server, "enable_arxiv", False)
     monkeypatch.setattr(server, "serpapi_client", FakeSerpApiClient())
 
-    response = await server.call_tool("search_papers", {"query": "e2e provenance"})
+    response = await server.call_tool(
+        "search_papers",
+        {
+            "query": "e2e provenance",
+            "preferredProvider": "serpapi",
+            "providerOrder": ["serpapi", "arxiv", "core", "semantic_scholar"],
+        },
+    )
     payload = json.loads(response[0].text)
 
     assert len(payload["data"]) == 1

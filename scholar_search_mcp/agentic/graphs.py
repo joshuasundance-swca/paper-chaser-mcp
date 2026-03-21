@@ -5,13 +5,20 @@ from __future__ import annotations
 import asyncio
 import statistics
 from typing import Any
+from uuid import uuid4
 
 from fastmcp import Context
 
 from ..citation_repair import resolve_citation
 from ..compat import build_agent_hints, build_resource_uris
 from ..models import Paper, dump_jsonable
-from .config import AgenticConfig
+from ..provider_runtime import (
+    ProviderBudgetState,
+    ProviderDiagnosticsRegistry,
+    execute_provider_call,
+)
+from ..search import _enrich_ss_paper
+from .config import AgenticConfig, LatencyProfile
 from .models import (
     AgentHints,
     AskResultSetResponse,
@@ -33,9 +40,9 @@ from .planner import (
     grounded_expansion_candidates,
     speculative_expansion_candidates,
 )
-from .providers import ModelProviderBundle
+from .providers import DeterministicProviderBundle, ModelProviderBundle
 from .ranking import evaluate_speculative_variants, merge_candidates, rerank_candidates
-from .retrieval import retrieve_variant
+from .retrieval import SMART_RETRIEVAL_FIELDS, RetrievedCandidate, retrieve_variant
 from .workspace import (
     ExpiredSearchSessionError,
     SearchSessionNotFoundError,
@@ -80,9 +87,11 @@ class AgenticRuntime:
         enable_openalex: bool,
         enable_arxiv: bool,
         enable_serpapi: bool,
+        provider_registry: ProviderDiagnosticsRegistry | None = None,
     ) -> None:
         self._config = config
         self._provider_bundle = provider_bundle
+        self._deterministic_bundle = DeterministicProviderBundle(config)
         self._workspace_registry = workspace_registry
         self._client = client
         self._core_client = core_client
@@ -94,7 +103,17 @@ class AgenticRuntime:
         self._enable_openalex = enable_openalex
         self._enable_arxiv = enable_arxiv
         self._enable_serpapi = enable_serpapi
+        self._provider_registry = provider_registry
         self._compiled_graphs = self._maybe_compile_graphs()
+
+    def _provider_bundle_for_profile(
+        self,
+        latency_profile: LatencyProfile,
+    ) -> ModelProviderBundle:
+        settings = self._config.latency_profile_settings(latency_profile)
+        if settings.use_deterministic_bundle:
+            return self._deterministic_bundle
+        return self._provider_bundle
 
     async def search_papers_smart(
         self,
@@ -106,6 +125,8 @@ class AgenticRuntime:
         year: str | None = None,
         venue: str | None = None,
         focus: str | None = None,
+        latency_profile: LatencyProfile = "balanced",
+        provider_budget: dict[str, Any] | None = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         """Smart concept-level discovery with grounded expansion and fusion."""
@@ -121,13 +142,19 @@ class AgenticRuntime:
                 ],
             )
 
+        profile_settings = self._config.latency_profile_settings(latency_profile)
+        provider_bundle = self._provider_bundle_for_profile(latency_profile)
+        budget_state = ProviderBudgetState.from_mapping(provider_budget)
+        request_id = f"smart-{uuid4().hex[:10]}"
+        provider_outcomes: list[dict[str, Any]] = []
+
         normalized_query, planner = classify_query(
             query=query,
             mode=mode,
             year=year,
             venue=venue,
             focus=focus,
-            provider_bundle=self._provider_bundle,
+            provider_bundle=provider_bundle,
         )
         if ctx is not None:
             await ctx.report_progress(
@@ -142,6 +169,7 @@ class AgenticRuntime:
                 limit=limit,
                 planner_intent=planner.intent,
                 search_session_id=search_session_id,
+                latency_profile=latency_profile,
                 ctx=ctx,
             )
 
@@ -162,7 +190,14 @@ class AgenticRuntime:
             arxiv_client=self._arxiv_client,
             serpapi_client=self._serpapi_client,
             widened=planner.intent == "review",
-            allow_serpapi=self._enable_serpapi,
+            allow_serpapi=(
+                self._enable_serpapi and profile_settings.allow_serpapi_on_input
+            ),
+            latency_profile=latency_profile,
+            provider_registry=self._provider_registry,
+            provider_budget=budget_state,
+            request_outcomes=provider_outcomes,
+            request_id=request_id,
         )
         first_pass_papers = [candidate.paper for candidate in first_batch.candidates]
         if search_session_id:
@@ -175,22 +210,26 @@ class AgenticRuntime:
         grounded = grounded_expansion_candidates(
             original_query=normalized_query,
             papers=first_pass_papers,
-            config=self._config,
+            config=profile_settings.search_config,
             focus=focus,
             venue=venue,
             year=year,
         )
-        speculative = speculative_expansion_candidates(
-            original_query=normalized_query,
-            papers=first_pass_papers,
-            config=self._config,
-            provider_bundle=self._provider_bundle,
+        speculative = (
+            speculative_expansion_candidates(
+                original_query=normalized_query,
+                papers=first_pass_papers,
+                config=profile_settings.search_config,
+                provider_bundle=provider_bundle,
+            )
+            if profile_settings.enable_speculative_expansions
+            else []
         )
         variants = combine_variants(
             original_query=normalized_query,
             grounded=grounded,
             speculative=speculative,
-            config=self._config,
+            config=profile_settings.search_config,
         )
 
         if ctx is not None:
@@ -200,40 +239,62 @@ class AgenticRuntime:
                 message="Running grounded expansions",
             )
 
-        remaining_batches = await asyncio.gather(
-            *[
-                retrieve_variant(
-                    variant=candidate.variant,
-                    variant_source=candidate.source,
-                    intent=planner.intent,
-                    year=year,
-                    venue=venue,
-                    enable_core=self._enable_core,
-                    enable_semantic_scholar=self._enable_semantic_scholar,
-                    enable_openalex=self._enable_openalex,
-                    enable_arxiv=self._enable_arxiv,
-                    enable_serpapi=self._enable_serpapi,
-                    core_client=self._core_client,
-                    semantic_client=self._client,
-                    openalex_client=self._openalex_client,
-                    arxiv_client=self._arxiv_client,
-                    serpapi_client=self._serpapi_client,
-                    widened=planner.intent == "review",
-                    allow_serpapi=False,
-                )
-                for candidate in variants[1:]
-            ]
+        remaining_batches = (
+            await asyncio.gather(
+                *[
+                    retrieve_variant(
+                        variant=candidate.variant,
+                        variant_source=candidate.source,
+                        intent=planner.intent,
+                        year=year,
+                        venue=venue,
+                        enable_core=self._enable_core,
+                        enable_semantic_scholar=self._enable_semantic_scholar,
+                        enable_openalex=self._enable_openalex,
+                        enable_arxiv=self._enable_arxiv,
+                        enable_serpapi=self._enable_serpapi,
+                        core_client=self._core_client,
+                        semantic_client=self._client,
+                        openalex_client=self._openalex_client,
+                        arxiv_client=self._arxiv_client,
+                        serpapi_client=self._serpapi_client,
+                        widened=planner.intent == "review",
+                        allow_serpapi=(
+                            self._enable_serpapi
+                            and profile_settings.allow_serpapi_on_expansions
+                        ),
+                        latency_profile=latency_profile,
+                        provider_registry=self._provider_registry,
+                        provider_budget=budget_state,
+                        request_outcomes=provider_outcomes,
+                        request_id=request_id,
+                    )
+                    for candidate in variants[1:]
+                ]
+            )
+            if len(variants) > 1
+            else []
+        )
+
+        recommendation_candidates = await self._semantic_recommendation_candidates(
+            seed_candidates=first_batch.candidates,
+            normalized_query=normalized_query,
+            enabled=profile_settings.enable_deep_recommendations,
+            request_id=request_id,
+            provider_outcomes=provider_outcomes,
+            provider_budget=budget_state,
         )
 
         all_candidates = list(first_batch.candidates)
         for batch in remaining_batches:
             all_candidates.extend(batch.candidates)
+        all_candidates.extend(recommendation_candidates)
 
         merged = merge_candidates(all_candidates)
         reranked = rerank_candidates(
             query=normalized_query,
             merged_candidates=merged,
-            provider_bundle=self._provider_bundle,
+            provider_bundle=provider_bundle,
             candidate_concepts=planner.candidate_concepts,
         )
         (
@@ -242,7 +303,7 @@ class AgenticRuntime:
             drift_warnings,
         ) = evaluate_speculative_variants(
             ranked_candidates=reranked,
-            config=self._config,
+            config=profile_settings.search_config,
         )
         filtered_ranked = [
             candidate
@@ -262,6 +323,7 @@ class AgenticRuntime:
 
         strategy_metadata = SearchStrategyMetadata(
             intent=planner.intent,
+            latencyProfile=latency_profile,
             normalizedQuery=normalized_query,
             queryVariantsTried=[candidate.variant for candidate in variants],
             acceptedExpansions=_dedupe_variants(
@@ -288,9 +350,12 @@ class AgenticRuntime:
                     for batch in [first_batch, *remaining_batches]
                     for provider in batch.providers_used
                 }
+                | {candidate.provider for candidate in recommendation_candidates}
             ),
             resultCoverage=_result_coverage_label(filtered_ranked),
             driftWarnings=drift_warnings,
+            providerBudgetApplied=budget_state.to_dict() if budget_state else {},
+            providerOutcomes=provider_outcomes,
         )
 
         top_candidates = filtered_ranked[:limit]
@@ -350,6 +415,10 @@ class AgenticRuntime:
                     "queryVariantsTried": strategy_metadata.query_variants_tried,
                     "acceptedExpansions": strategy_metadata.accepted_expansions,
                     "rejectedExpansions": strategy_metadata.rejected_expansions,
+                    "latencyProfile": latency_profile,
+                    "providerBudgetApplied": (
+                        budget_state.to_dict() if budget_state else {}
+                    ),
                 },
             )
         if ctx is not None:
@@ -367,6 +436,7 @@ class AgenticRuntime:
         question: str,
         top_k: int,
         answer_mode: str,
+        latency_profile: LatencyProfile = "balanced",
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         """Answer grounded follow-up questions against a saved result set."""
@@ -388,6 +458,8 @@ class AgenticRuntime:
         except SearchSessionNotFoundError:
             return self._missing_result_set_error(search_session_id)
 
+        provider_bundle = self._provider_bundle_for_profile(latency_profile)
+
         if ctx is not None:
             await ctx.report_progress(
                 progress=1,
@@ -402,7 +474,7 @@ class AgenticRuntime:
             )
             or record.papers[:top_k]
         )
-        synthesis = self._provider_bundle.answer_question(
+        synthesis = provider_bundle.answer_question(
             question=question,
             evidence_papers=evidence_papers,
             answer_mode=answer_mode,
@@ -417,7 +489,7 @@ class AgenticRuntime:
                     matched_concepts=[],
                 ),
                 relevanceScore=round(
-                    self._provider_bundle.similarity(question, _paper_text(paper)),
+                    provider_bundle.similarity(question, _paper_text(paper)),
                     6,
                 ),
             )
@@ -434,9 +506,7 @@ class AgenticRuntime:
             evidence=evidence,
             unsupportedAsks=list(synthesis.get("unsupportedAsks") or []),
             followUpQuestions=list(synthesis.get("followUpQuestions") or []),
-            confidence=self._provider_bundle.normalize_confidence(
-                synthesis.get("confidence")
-            ),
+            confidence=provider_bundle.normalize_confidence(synthesis.get("confidence")),
             searchSessionId=search_session_id,
             agentHints=build_agent_hints("ask_result_set", {}),
             resourceUris=build_resource_uris(
@@ -473,6 +543,7 @@ class AgenticRuntime:
         *,
         search_session_id: str,
         max_themes: int,
+        latency_profile: LatencyProfile = "balanced",
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         """Cluster a saved result set into themes, gaps, and disagreements."""
@@ -494,6 +565,8 @@ class AgenticRuntime:
         except SearchSessionNotFoundError:
             return self._missing_result_set_error(search_session_id)
 
+        provider_bundle = self._provider_bundle_for_profile(latency_profile)
+
         if ctx is not None:
             await ctx.report_progress(
                 progress=1,
@@ -502,7 +575,7 @@ class AgenticRuntime:
             )
         clusters = _cluster_papers(
             papers=record.papers,
-            provider_bundle=self._provider_bundle,
+            provider_bundle=provider_bundle,
             max_themes=max_themes,
         )
         themes: list[LandscapeTheme] = []
@@ -512,13 +585,13 @@ class AgenticRuntime:
             title = await self._maybe_sample_theme_label(
                 seed_terms=seed_terms,
                 papers=cluster,
-                fallback=self._provider_bundle.label_theme(
+                fallback=provider_bundle.label_theme(
                     seed_terms=seed_terms,
                     papers=cluster,
                 ),
                 ctx=ctx,
             )
-            summary = self._provider_bundle.summarize_theme(
+            summary = provider_bundle.summarize_theme(
                 title=title,
                 papers=cluster,
             )
@@ -586,6 +659,7 @@ class AgenticRuntime:
         direction: str,
         hops: int,
         per_seed_limit: int,
+        latency_profile: LatencyProfile = "balanced",
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         """Expand citation/reference/author relationships into a compact graph."""
@@ -620,6 +694,7 @@ class AgenticRuntime:
                 total=3,
                 message="Expanding research graph",
             )
+        provider_bundle = self._provider_bundle_for_profile(latency_profile)
 
         frontier_papers: list[dict[str, Any]] = []
         nodes: dict[str, GraphNode] = {}
@@ -715,7 +790,7 @@ class AgenticRuntime:
                             score=_graph_frontier_score(
                                 seed=seed,
                                 related=paper,
-                                provider_bundle=self._provider_bundle,
+                                provider_bundle=provider_bundle,
                             ),
                             attributes={
                                 "year": paper.get("year"),
@@ -806,6 +881,74 @@ class AgenticRuntime:
             )
         return dump_jsonable(response)
 
+    async def _semantic_recommendation_candidates(
+        self,
+        *,
+        seed_candidates: list[RetrievedCandidate],
+        normalized_query: str,
+        enabled: bool,
+        request_id: str,
+        provider_outcomes: list[dict[str, Any]],
+        provider_budget: ProviderBudgetState | None,
+    ) -> list[RetrievedCandidate]:
+        if not enabled or not self._enable_semantic_scholar:
+            return []
+        positive_paper_ids: list[str] = []
+        for candidate in seed_candidates:
+            if candidate.provider != "semantic_scholar":
+                continue
+            paper_id = candidate.paper.get("paperId")
+            if not isinstance(paper_id, str) or not paper_id.strip():
+                continue
+            normalized_id = paper_id.strip()
+            if normalized_id in positive_paper_ids:
+                continue
+            positive_paper_ids.append(normalized_id)
+            if len(positive_paper_ids) >= 5:
+                break
+        if not positive_paper_ids:
+            return []
+
+        recommendation_call = await execute_provider_call(
+            provider="semantic_scholar",
+            endpoint="get_recommendations_post",
+            operation=lambda: self._client.get_recommendations_post(
+                positive_paper_ids=positive_paper_ids,
+                limit=8,
+                fields=SMART_RETRIEVAL_FIELDS,
+            ),
+            registry=self._provider_registry,
+            budget=provider_budget,
+            request_outcomes=provider_outcomes,
+            request_id=request_id,
+            is_empty=lambda payload: not (payload or {}).get("recommendedPapers"),
+        )
+        if recommendation_call.payload is None:
+            return []
+
+        candidates: list[RetrievedCandidate] = []
+        for rank, paper in enumerate(
+            recommendation_call.payload.get("recommendedPapers") or [],
+            start=1,
+        ):
+            if not isinstance(paper, dict):
+                continue
+            enriched = _enrich_ss_paper(Paper.model_validate(paper)).model_dump(
+                by_alias=True,
+                exclude_none=True,
+                exclude_defaults=True,
+            )
+            candidates.append(
+                RetrievedCandidate(
+                    paper=enriched,
+                    provider="semantic_scholar",
+                    variant=normalized_query,
+                    variant_source="deep_recommendation",
+                    provider_rank=rank,
+                )
+            )
+        return candidates
+
     async def _search_known_item(
         self,
         *,
@@ -813,6 +956,7 @@ class AgenticRuntime:
         limit: int,
         planner_intent: str,
         search_session_id: str | None,
+        latency_profile: LatencyProfile,
         ctx: Context | None,
     ) -> dict[str, Any]:
         if ctx is not None:
@@ -842,6 +986,7 @@ class AgenticRuntime:
         )
         strategy_metadata = SearchStrategyMetadata(
             intent=planner_intent,
+            latencyProfile=latency_profile,
             normalizedQuery=query,
             queryVariantsTried=[query],
             acceptedExpansions=[],

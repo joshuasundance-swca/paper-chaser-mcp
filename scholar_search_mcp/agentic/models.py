@@ -55,6 +55,10 @@ class SearchStrategyMetadata(ApiModel):
     """Transparent search-planning metadata surfaced to external agents."""
 
     intent: str = "discovery"
+    latency_profile: Literal["fast", "balanced", "deep"] = Field(
+        default="balanced",
+        alias="latencyProfile",
+    )
     normalized_query: str = Field(
         default="",
         alias="normalizedQuery",
@@ -86,6 +90,14 @@ class SearchStrategyMetadata(ApiModel):
     drift_warnings: list[str] = Field(
         default_factory=list,
         alias="driftWarnings",
+    )
+    provider_budget_applied: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="providerBudgetApplied",
+    )
+    provider_outcomes: list[dict[str, Any]] = Field(
+        default_factory=list,
+        alias="providerOutcomes",
     )
 
 

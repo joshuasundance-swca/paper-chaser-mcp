@@ -14,11 +14,27 @@ The remainder of this report inventories the engines/parameters/schemas and then
 
 ## Repo note
 
-The shipped MCP surface in this repository currently uses only the
-SerpApi-backed `search_papers_serpapi` search path and
-`get_paper_citation_formats`. Author-profile flows, Search Archive polling, the
-Account API, and broader Google Scholar engine coverage are documented here as
-design research rather than as committed MCP tools.
+The shipped MCP surface in this repository now exposes these explicit
+SerpApi-backed workflows:
+
+- `search_papers_serpapi`
+- `search_papers_serpapi_cited_by`
+- `search_papers_serpapi_versions`
+- `get_author_profile_serpapi`
+- `get_author_articles_serpapi`
+- `get_paper_citation_formats`
+- `get_serpapi_account_status`
+
+SerpApi still remains guarded operationally:
+
+- it is disabled by default
+- it is not part of silent broad fanout
+- it is intended for explicit recall recovery, citation discovery, author
+  workflows, and quota-aware deep research rather than the default broker path
+
+Search Archive polling and broader async archive orchestration are still best
+treated as advanced or future-facing extensions rather than the default
+interactive flow.
 
 ## Google Scholar engines and API inventory
 

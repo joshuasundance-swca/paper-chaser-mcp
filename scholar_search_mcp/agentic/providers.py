@@ -9,8 +9,12 @@ import re
 from collections import Counter
 from typing import Any, Literal
 
-from pydantic import SecretStr
+from pydantic import BaseModel, SecretStr
 
+from ..provider_runtime import (
+    ProviderDiagnosticsRegistry,
+    execute_provider_call_sync,
+)
 from .config import AgenticConfig
 from .models import ExpansionCandidate, PlannerDecision
 
@@ -392,16 +396,40 @@ class DeterministicProviderBundle(ModelProviderBundle):
 class OpenAIProviderBundle(DeterministicProviderBundle):
     """Best-effort LangChain-backed OpenAI adapter with deterministic fallback."""
 
-    def __init__(self, config: AgenticConfig, api_key: str | None) -> None:
+    def __init__(
+        self,
+        config: AgenticConfig,
+        api_key: str | None,
+        *,
+        provider_registry: ProviderDiagnosticsRegistry | None = None,
+    ) -> None:
         super().__init__(config)
         self.planner_model_name = config.planner_model
         self.synthesis_model_name = config.synthesis_model
         self.embedding_model_name = config.embedding_model
         self._api_key = api_key
+        self._provider_registry = provider_registry
+        self._openai_client: Any | None = None
         self._planner: Any | None = None
         self._synthesizer: Any | None = None
         self._embeddings: Any | None = None
         self._embedding_cache: dict[str, tuple[float, ...]] = {}
+
+    def _load_openai_client(self) -> Any | None:
+        if self._openai_client is not None:
+            return self._openai_client
+        if not self._api_key:
+            return None
+        try:
+            from openai import OpenAI
+        except ImportError:
+            logger.info(
+                "openai is not installed; falling back to LangChain and "
+                "deterministic smart-provider adapters."
+            )
+            return None
+        self._openai_client = OpenAI(api_key=self._api_key)
+        return self._openai_client
 
     def _load_models(self) -> tuple[Any | None, Any | None]:
         if self._planner is not None or self._synthesizer is not None:
@@ -457,6 +485,148 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         self._embedding_cache[normalized] = cached
         return cached
 
+    @staticmethod
+    def _responses_input(
+        system_prompt: str,
+        payload: dict[str, Any],
+    ) -> list[dict[str, str]]:
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(payload)},
+        ]
+
+    @staticmethod
+    def _extract_response_text(response: Any) -> str:
+        output_text = getattr(response, "output_text", None)
+        if isinstance(output_text, str) and output_text.strip():
+            return output_text.strip()
+        for item in getattr(response, "output", None) or []:
+            for content in getattr(item, "content", None) or []:
+                text = getattr(content, "text", None)
+                if isinstance(text, str) and text.strip():
+                    return text.strip()
+        return ""
+
+    @staticmethod
+    def _extract_response_parsed(
+        response: Any,
+        response_model: type[BaseModel],
+    ) -> BaseModel:
+        parsed = getattr(response, "output_parsed", None)
+        if parsed is not None:
+            if isinstance(parsed, response_model):
+                return parsed
+            return response_model.model_validate(parsed)
+        for item in getattr(response, "output", None) or []:
+            for content in getattr(item, "content", None) or []:
+                parsed_content = getattr(content, "parsed", None)
+                if parsed_content is not None:
+                    if isinstance(parsed_content, response_model):
+                        return parsed_content
+                    return response_model.model_validate(parsed_content)
+                text = getattr(content, "text", None)
+                if isinstance(text, str) and text.strip():
+                    return response_model.model_validate_json(text)
+        text = OpenAIProviderBundle._extract_response_text(response)
+        if text:
+            return response_model.model_validate_json(text)
+        raise ValueError("OpenAI Responses payload did not include structured output.")
+
+    def _responses_parse(
+        self,
+        *,
+        endpoint: str,
+        model_name: str,
+        response_model: type[BaseModel],
+        system_prompt: str,
+        payload: dict[str, Any],
+        previous_response_id: str | None = None,
+    ) -> BaseModel | None:
+        client = self._load_openai_client()
+        if client is None or not hasattr(client, "responses"):
+            return None
+        if not hasattr(client.responses, "parse"):
+            return None
+
+        def _call() -> Any:
+            kwargs: dict[str, Any] = {
+                "model": model_name,
+                "input": self._responses_input(system_prompt, payload),
+                "text_format": response_model,
+            }
+            if previous_response_id:
+                kwargs["previous_response_id"] = previous_response_id
+            return client.responses.parse(**kwargs)
+
+        response = execute_provider_call_sync(
+            provider="openai",
+            endpoint=endpoint,
+            operation=_call,
+            registry=self._provider_registry,
+        )
+        if response.payload is None:
+            logger.warning(
+                "OpenAI Responses structured call failed for %s: %s",
+                endpoint,
+                response.outcome.error or response.outcome.fallback_reason,
+            )
+            return None
+        try:
+            return self._extract_response_parsed(response.payload, response_model)
+        except Exception:
+            logger.exception("OpenAI Responses parse failed for %s.", endpoint)
+            return None
+
+    def _responses_text(
+        self,
+        *,
+        endpoint: str,
+        model_name: str,
+        system_prompt: str,
+        payload: dict[str, Any],
+        max_output_tokens: int | None = None,
+        previous_response_id: str | None = None,
+    ) -> str | None:
+        client = self._load_openai_client()
+        if client is None or not hasattr(client, "responses"):
+            return None
+
+        def _call() -> Any:
+            kwargs: dict[str, Any] = {
+                "model": model_name,
+                "input": self._responses_input(system_prompt, payload),
+            }
+            if max_output_tokens is not None:
+                kwargs["max_output_tokens"] = max_output_tokens
+            if previous_response_id:
+                kwargs["previous_response_id"] = previous_response_id
+            return client.responses.create(**kwargs)
+
+        response = execute_provider_call_sync(
+            provider="openai",
+            endpoint=endpoint,
+            operation=_call,
+            registry=self._provider_registry,
+        )
+        if response.payload is None:
+            return None
+        text = self._extract_response_text(response.payload)
+        return text or None
+
+    @staticmethod
+    def _embedding_vectors(payload: Any) -> list[list[float]]:
+        data = getattr(payload, "data", None)
+        if data is None and isinstance(payload, dict):
+            data = payload.get("data")
+        vectors: list[list[float]] = []
+        for item in data or []:
+            embedding = getattr(item, "embedding", None)
+            if embedding is None and isinstance(item, dict):
+                embedding = item.get("embedding")
+            if isinstance(embedding, list):
+                vectors.append([float(value) for value in embedding])
+        return vectors
+
     def embed_query(self, text: str) -> tuple[float, ...] | None:
         normalized = _normalized_embedding_text(text)
         if not normalized:
@@ -464,6 +634,26 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         cached = self._embedding_cache.get(normalized)
         if cached is not None:
             return cached
+        client = self._load_openai_client()
+        if client is not None and hasattr(client, "embeddings"):
+            try:
+                response = execute_provider_call_sync(
+                    provider="openai",
+                    endpoint="embeddings.create",
+                    operation=lambda: client.embeddings.create(
+                        model=self.embedding_model_name,
+                        input=normalized,
+                    ),
+                    registry=self._provider_registry,
+                )
+                vectors = self._embedding_vectors(response.payload)
+                if vectors:
+                    return self._cache_embedding(normalized, vectors[0])
+            except Exception:
+                logger.exception(
+                    "OpenAI embeddings failed; falling back to LangChain "
+                    "or lexical similarity."
+                )
         embeddings = self._load_embeddings()
         if embeddings is None:
             return None
@@ -478,6 +668,31 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
 
     def embed_texts(self, texts: list[str]) -> list[tuple[float, ...] | None]:
         normalized_texts = [_normalized_embedding_text(text) for text in texts]
+        client = self._load_openai_client()
+        pending = [
+            text
+            for text in normalized_texts
+            if text and text not in self._embedding_cache
+        ]
+        if client is not None and hasattr(client, "embeddings") and pending:
+            try:
+                response = execute_provider_call_sync(
+                    provider="openai",
+                    endpoint="embeddings.create",
+                    operation=lambda: client.embeddings.create(
+                        model=self.embedding_model_name,
+                        input=pending,
+                    ),
+                    registry=self._provider_registry,
+                )
+                vectors = self._embedding_vectors(response.payload)
+                for text, vector in zip(pending, vectors):
+                    self._cache_embedding(text, vector)
+            except Exception:
+                logger.exception(
+                    "Batched OpenAI embeddings failed; falling back to "
+                    "LangChain or lexical similarity."
+                )
         embeddings = self._load_embeddings()
         if embeddings is None:
             return [self.embed_query(text) for text in normalized_texts]
@@ -538,14 +753,6 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         focus: str | None = None,
     ) -> PlannerDecision:
         planner, _ = self._load_models()
-        if planner is None:
-            return super().plan_search(
-                query=query,
-                mode=mode,
-                year=year,
-                venue=venue,
-                focus=focus,
-            )
         try:
             from pydantic import BaseModel, Field
 
@@ -556,6 +763,34 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 candidateConcepts: list[str] = Field(default_factory=list)
                 providerPlan: list[str] = Field(default_factory=list)
                 followUpMode: str = Field(default="qa")
+
+            direct = self._responses_parse(
+                endpoint="responses.parse:planner",
+                model_name=self.planner_model_name,
+                response_model=PlannerSchema,
+                system_prompt=(
+                    "Plan a grounded literature-search workflow. Keep providerPlan "
+                    "limited to semantic_scholar, openalex, core, and arxiv. "
+                    "Return compact structured output only."
+                ),
+                payload={
+                    "query": query,
+                    "mode": mode,
+                    "year": year,
+                    "venue": venue,
+                    "focus": focus,
+                },
+            )
+            if direct is not None:
+                return PlannerDecision.model_validate(direct.model_dump())
+            if planner is None:
+                return super().plan_search(
+                    query=query,
+                    mode=mode,
+                    year=year,
+                    venue=venue,
+                    focus=focus,
+                )
 
             structured = planner.with_structured_output(
                 PlannerSchema,
@@ -604,12 +839,6 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         max_variants: int,
     ) -> list[ExpansionCandidate]:
         planner, _ = self._load_models()
-        if planner is None:
-            return super().suggest_speculative_expansions(
-                query=query,
-                evidence_texts=evidence_texts,
-                max_variants=max_variants,
-            )
         try:
             from pydantic import BaseModel, Field
 
@@ -621,32 +850,58 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             class ExpansionListSchema(BaseModel):
                 expansions: list[ExpansionSchema] = Field(default_factory=list)
 
-            structured = planner.with_structured_output(
-                ExpansionListSchema,
-                method="function_calling",
+            direct = self._responses_parse(
+                endpoint="responses.parse:expansions",
+                model_name=self.planner_model_name,
+                response_model=ExpansionListSchema,
+                system_prompt=(
+                    "Suggest at most three short literature-search expansions. "
+                    "Each expansion must preserve the user's research intent, "
+                    "must not add unrelated domains, and must avoid stopwords, "
+                    "generic verbs, or filler terms. Label each expansion as "
+                    "from_input, from_retrieved_evidence, or speculative."
+                ),
+                payload={
+                    "query": query,
+                    "evidence": evidence_texts[:5],
+                    "max_variants": max_variants,
+                },
             )
-            response = structured.invoke(
-                [
-                    (
-                        "system",
-                        "Suggest at most three short literature-search expansions. "
-                        "Each expansion must preserve the user's research intent, "
-                        "must not add unrelated domains, and must avoid stopwords, "
-                        "generic verbs, or filler terms. Label each expansion as "
-                        "from_input, from_retrieved_evidence, or speculative.",
-                    ),
-                    (
-                        "human",
-                        json.dumps(
-                            {
-                                "query": query,
-                                "evidence": evidence_texts[:5],
-                                "max_variants": max_variants,
-                            }
+            if direct is not None:
+                response = direct
+            else:
+                if planner is None:
+                    return super().suggest_speculative_expansions(
+                        query=query,
+                        evidence_texts=evidence_texts,
+                        max_variants=max_variants,
+                    )
+                structured = planner.with_structured_output(
+                    ExpansionListSchema,
+                    method="function_calling",
+                )
+                response = structured.invoke(
+                    [
+                        (
+                            "system",
+                            "Suggest at most three short literature-search expansions. "
+                            "Each expansion must preserve the user's research intent, "
+                            "must not add unrelated domains, and must avoid stopwords, "
+                            "generic verbs, or filler terms. Label each expansion as "
+                            "from_input, from_retrieved_evidence, or speculative.",
                         ),
-                    ),
-                ]
-            )
+                        (
+                            "human",
+                            json.dumps(
+                                {
+                                    "query": query,
+                                    "evidence": evidence_texts[:5],
+                                    "max_variants": max_variants,
+                                }
+                            ),
+                        ),
+                    ]
+                )
             variants: list[ExpansionCandidate] = []
             for item in response.expansions[:max_variants]:
                 variant = item.variant.strip()
@@ -680,6 +935,18 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         seed_terms: list[str],
         papers: list[dict[str, Any]],
     ) -> str:
+        direct = self._responses_text(
+            endpoint="responses.create:label_theme",
+            model_name=self.synthesis_model_name,
+            system_prompt="Write a very short literature theme label.",
+            payload={
+                "seed_terms": seed_terms,
+                "titles": [paper.get("title") for paper in papers[:6]],
+            },
+            max_output_tokens=40,
+        )
+        if direct:
+            return direct.strip().strip('"')
         _, synthesizer = self._load_models()
         if synthesizer is None:
             return super().label_theme(seed_terms=seed_terms, papers=papers)
@@ -709,6 +976,26 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         title: str,
         papers: list[dict[str, Any]],
     ) -> str:
+        direct = self._responses_text(
+            endpoint="responses.create:summarize_theme",
+            model_name=self.synthesis_model_name,
+            system_prompt="Summarize one literature cluster in two sentences.",
+            payload={
+                "title": title,
+                "papers": [
+                    {
+                        "title": paper.get("title"),
+                        "abstract": paper.get("abstract"),
+                        "venue": paper.get("venue"),
+                        "year": paper.get("year"),
+                    }
+                    for paper in papers[:5]
+                ],
+            },
+            max_output_tokens=180,
+        )
+        if direct:
+            return direct
         _, synthesizer = self._load_models()
         if synthesizer is None:
             return super().summarize_theme(title=title, papers=papers)
@@ -748,12 +1035,6 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         answer_mode: str,
     ) -> dict[str, Any]:
         _, synthesizer = self._load_models()
-        if synthesizer is None:
-            return super().answer_question(
-                question=question,
-                evidence_papers=evidence_papers,
-                answer_mode=answer_mode,
-            )
         try:
             from pydantic import BaseModel, Field
 
@@ -763,39 +1044,70 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 followUpQuestions: list[str] = Field(default_factory=list)
                 confidence: Literal["high", "medium", "low"] = "medium"
 
-            structured = synthesizer.with_structured_output(
-                AnswerSchema,
-                method="function_calling",
+            direct = self._responses_parse(
+                endpoint="responses.parse:answer",
+                model_name=self.synthesis_model_name,
+                response_model=AnswerSchema,
+                system_prompt=(
+                    "Answer only from the supplied papers. If evidence is weak, "
+                    "say so. Confidence must be exactly one of: high, medium, low."
+                ),
+                payload={
+                    "question": question,
+                    "answer_mode": answer_mode,
+                    "evidence": [
+                        {
+                            "title": paper.get("title"),
+                            "abstract": paper.get("abstract"),
+                            "venue": paper.get("venue"),
+                            "year": paper.get("year"),
+                        }
+                        for paper in evidence_papers[:6]
+                    ],
+                },
             )
-            response = structured.invoke(
-                [
-                    (
-                        "system",
-                        "Answer only from the supplied papers. If evidence is "
-                        "weak, say so. Confidence must be exactly one of: high, "
-                        "medium, low.",
-                    ),
-                    (
-                        "human",
-                        json.dumps(
-                            {
-                                "question": question,
-                                "answer_mode": answer_mode,
-                                "evidence": [
-                                    {
-                                        "title": paper.get("title"),
-                                        "abstract": paper.get("abstract"),
-                                        "venue": paper.get("venue"),
-                                        "year": paper.get("year"),
-                                    }
-                                    for paper in evidence_papers[:6]
-                                ],
-                            }
+            if direct is not None:
+                parsed = direct.model_dump()
+            else:
+                if synthesizer is None:
+                    return super().answer_question(
+                        question=question,
+                        evidence_papers=evidence_papers,
+                        answer_mode=answer_mode,
+                    )
+                structured = synthesizer.with_structured_output(
+                    AnswerSchema,
+                    method="function_calling",
+                )
+                response = structured.invoke(
+                    [
+                        (
+                            "system",
+                            "Answer only from the supplied papers. If evidence is "
+                            "weak, say so. Confidence must be exactly one of: high, "
+                            "medium, low.",
                         ),
-                    ),
-                ]
-            )
-            parsed = response.model_dump()
+                        (
+                            "human",
+                            json.dumps(
+                                {
+                                    "question": question,
+                                    "answer_mode": answer_mode,
+                                    "evidence": [
+                                        {
+                                            "title": paper.get("title"),
+                                            "abstract": paper.get("abstract"),
+                                            "venue": paper.get("venue"),
+                                            "year": paper.get("year"),
+                                        }
+                                        for paper in evidence_papers[:6]
+                                    ],
+                                }
+                            ),
+                        ),
+                    ]
+                )
+                parsed = response.model_dump()
             parsed["confidence"] = self.normalize_confidence(parsed.get("confidence"))
             if isinstance(parsed, dict):
                 return parsed
@@ -815,11 +1127,16 @@ def resolve_provider_bundle(
     config: AgenticConfig,
     *,
     openai_api_key: str | None,
+    provider_registry: ProviderDiagnosticsRegistry | None = None,
 ) -> ModelProviderBundle:
     """Resolve the configured provider bundle with deterministic fallback."""
     if config.provider == "deterministic":
         return DeterministicProviderBundle(config)
-    return OpenAIProviderBundle(config, openai_api_key)
+    return OpenAIProviderBundle(
+        config,
+        openai_api_key,
+        provider_registry=provider_registry,
+    )
 
 
 def _extract_seed_identifiers(query: str) -> list[str]:

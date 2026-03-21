@@ -16,8 +16,10 @@ TOOL_DESCRIPTIONS = {
     "search_papers": (
         "Primary entry point for quick literature discovery: start here when "
         "quick topic exploration needs one strong first page fast. Best-effort "
-        "paper search tries CORE → Semantic Scholar → "
-        "SerpApi Google Scholar (opt-in, paid) → arXiv in order by default. "
+        "paper search tries Semantic Scholar → arXiv → CORE → "
+        "SerpApi Google Scholar in order by default. CORE is disabled by "
+        "default until its reliability gate is re-earned, and SerpApi stays "
+        "guarded behind explicit enablement because it is paid. "
         "Use preferredProvider to try one provider first, or providerOrder to "
         "override the broker chain for this call when source constraints matter. "
         "Provider names accepted by those arguments are core, semantic_scholar, "
@@ -117,6 +119,11 @@ TOOL_DESCRIPTIONS = {
     "paper_autocomplete": (
         "Return paper title completions for a partial query string."
     ),
+    "paper_autocomplete_openalex": (
+        "Return lightweight OpenAlex work autocomplete matches for a partial "
+        "paper title. This is useful when an agent wants OpenAlex-native title "
+        "hints before pivoting into explicit OpenAlex work lookup or entity flows."
+    ),
     "get_paper_details": (
         "Known-item lookup when you already have an identifier. Get paper "
         "details from a DOI, ArXiv ID, Semantic Scholar ID, or URL."
@@ -201,6 +208,18 @@ TOOL_DESCRIPTIONS = {
         "with affiliation or profile metadata before expanding papers. "
         f"{OPAQUE_CURSOR_CONTRACT}"
     ),
+    "search_entities_openalex": (
+        "Search OpenAlex sources, institutions, or topics explicitly. Use this "
+        "when venue, affiliation, or topic disambiguation matters and you want "
+        "an OpenAlex-native pivot target before expanding to papers. "
+        f"{OPAQUE_CURSOR_CONTRACT}"
+    ),
+    "search_papers_openalex_by_entity": (
+        "Return OpenAlex works filtered by one explicit source, institution, or "
+        "topic entity ID. This is the follow-on tool after search_entities_openalex "
+        "when you want an OpenAlex-native venue, affiliation, or topic pivot. "
+        f"{OPAQUE_CURSOR_CONTRACT}"
+    ),
     "get_author_papers_openalex": (
         "Get papers for one OpenAlex author by OpenAlex A-id or author URL, with "
         "optional year filtering and OpenAlex cursor pagination. This keeps the "
@@ -236,28 +255,70 @@ TOOL_DESCRIPTIONS = {
         "EndNote, RefMan, RefWorks). "
         "Not paginated — single response per paper."
     ),
+    "search_papers_serpapi_cited_by": (
+        "Explicit SerpApi cited-by expansion for one Google Scholar cites_id. "
+        "Use this only when SCHOLAR_SEARCH_ENABLE_SERPAPI=true and the workflow "
+        "really needs Scholar's cited-by surface, recall recovery, or search-within-"
+        "citing-articles behavior. "
+        f"{OPAQUE_CURSOR_CONTRACT}"
+    ),
+    "search_papers_serpapi_versions": (
+        "Explicit SerpApi all-versions expansion for one Google Scholar cluster_id. "
+        "Use this to inspect alternate copies or clustered variants of a result "
+        "without turning SerpApi into the default broad search path. "
+        f"{OPAQUE_CURSOR_CONTRACT}"
+    ),
+    "get_author_profile_serpapi": (
+        "Fetch one Google Scholar author profile through SerpApi, including top-"
+        "level citation summary, interests, and co-authors. This is a paid "
+        "provider-specific workflow and should be used intentionally."
+    ),
+    "get_author_articles_serpapi": (
+        "Return normalized Google Scholar author articles through SerpApi. Use "
+        "this after get_author_profile_serpapi when an explicit Scholar author "
+        "publication list is required. "
+        f"{OPAQUE_CURSOR_CONTRACT}"
+    ),
+    "get_serpapi_account_status": (
+        "Return SerpApi account and quota metadata, including remaining search "
+        "budget and hourly throughput guidance. Use this before expensive or "
+        "deep Scholar recovery workflows."
+    ),
+    "get_provider_diagnostics": (
+        "Return shared provider-health diagnostics for Semantic Scholar, OpenAlex, "
+        "CORE, arXiv, SerpApi, and OpenAI. Includes suppression state, recent "
+        "rate limits and failures, and normalized outcome envelopes so transport "
+        "and provider issues are visible without reading raw logs."
+    ),
     "search_papers_smart": (
         "Agent-oriented concept and literature-review search. Starts from a broad "
         "concept, known item, author clue, or citation seed; runs grounded query "
         "expansion, multi-provider retrieval, deduplication, reranking, and stores "
         "the result set under searchSessionId for follow-up QA, landscape mapping, "
-        "and graph expansion. Returns compact smart hits, strategyMetadata, "
-        "agentHints, resourceUris, and a concrete next-step recommendation."
+        "and graph expansion. Optional latencyProfile supports fast, balanced, and "
+        "deep execution modes, and providerBudget lets advanced clients cap total, "
+        "per-provider, or paid usage for one smart search. Returns compact smart "
+        "hits, strategyMetadata, agentHints, resourceUris, and a concrete next-step "
+        "recommendation."
     ),
     "ask_result_set": (
         "Grounded follow-up over a saved searchSessionId. Answer a question using "
         "only the papers in that result set, returning evidence for every claim. "
-        "answerMode supports qa, claim_check, and comparison."
+        "answerMode supports qa, claim_check, and comparison, and latencyProfile "
+        "lets callers choose faster deterministic synthesis when needed."
     ),
     "map_research_landscape": (
         "Cluster a saved searchSessionId into 3-5 themes, representative papers, "
         "gaps, disagreements, and suggested next searches. Use this when an "
-        "agent needs a literature-review map rather than another flat result page."
+        "agent needs a literature-review map rather than another flat result page. "
+        "latencyProfile controls how much model work is spent on theme labeling."
     ),
     "expand_research_graph": (
         "Expand a saved search session or explicit paper seeds into a compact "
         "citation, reference, or author graph. Returns nodes, edges, a ranked "
-        "frontier, agentHints, and resourceUris for continued exploration."
+        "frontier, agentHints, and resourceUris for continued exploration. "
+        "latencyProfile controls graph scoring cost without changing the explicit "
+        "seed, direction, or hop inputs."
     ),
 }
 

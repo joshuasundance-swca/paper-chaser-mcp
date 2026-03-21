@@ -99,7 +99,7 @@ class AppSettings(BaseModel):
     openalex_api_key: str | None = None
     openalex_mailto: str | None = None
     serpapi_api_key: str | None = None
-    enable_core: bool = True
+    enable_core: bool = False
     enable_semantic_scholar: bool = True
     enable_openalex: bool = True
     enable_arxiv: bool = True
@@ -114,8 +114,8 @@ class AppSettings(BaseModel):
     allowed_origins: tuple[str, ...] = ()
     enable_agentic: bool = False
     agentic_provider: AgenticProvider = "openai"
-    planner_model: str = "gpt-5.4-mini"
-    synthesis_model: str = "gpt-5.4"
+    planner_model: str = "gpt-5.2-mini"
+    synthesis_model: str = "gpt-5.2"
     embedding_model: str = "text-embedding-3-large"
     agentic_index_backend: AgenticIndexBackend = "memory"
     session_ttl_seconds: int = 1800
@@ -134,7 +134,7 @@ class AppSettings(BaseModel):
             openalex_api_key=_parse_optional_string(env, "OPENALEX_API_KEY"),
             openalex_mailto=_parse_optional_string(env, "OPENALEX_MAILTO"),
             serpapi_api_key=_parse_optional_string(env, "SERPAPI_API_KEY"),
-            enable_core=_parse_env_bool(env, "SCHOLAR_SEARCH_ENABLE_CORE", True),
+            enable_core=_parse_env_bool(env, "SCHOLAR_SEARCH_ENABLE_CORE", False),
             enable_semantic_scholar=_parse_env_bool(
                 env,
                 "SCHOLAR_SEARCH_ENABLE_SEMANTIC_SCHOLAR",
@@ -174,8 +174,8 @@ class AppSettings(BaseModel):
             agentic_provider=cast_agentic_provider(
                 env.get("SCHOLAR_SEARCH_AGENTIC_PROVIDER")
             ),
-            planner_model=env.get("SCHOLAR_SEARCH_PLANNER_MODEL", "gpt-5.4-mini"),
-            synthesis_model=env.get("SCHOLAR_SEARCH_SYNTHESIS_MODEL", "gpt-5.4"),
+            planner_model=env.get("SCHOLAR_SEARCH_PLANNER_MODEL", "gpt-5.2-mini"),
+            synthesis_model=env.get("SCHOLAR_SEARCH_SYNTHESIS_MODEL", "gpt-5.2"),
             embedding_model=env.get(
                 "SCHOLAR_SEARCH_EMBEDDING_MODEL",
                 "text-embedding-3-large",

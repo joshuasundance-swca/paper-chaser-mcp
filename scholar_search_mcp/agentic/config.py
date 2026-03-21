@@ -2,9 +2,25 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from typing import Literal
 
 from ..settings import AppSettings
+
+LatencyProfile = Literal["fast", "balanced", "deep"]
+
+
+@dataclass(frozen=True)
+class LatencyProfileSettings:
+    """Derived execution settings for one smart-tool latency profile."""
+
+    name: LatencyProfile
+    search_config: "AgenticConfig"
+    use_deterministic_bundle: bool
+    allow_serpapi_on_input: bool
+    allow_serpapi_on_expansions: bool
+    enable_speculative_expansions: bool
+    enable_deep_recommendations: bool
 
 
 @dataclass(frozen=True)
@@ -28,6 +44,69 @@ class AgenticConfig:
     drift_similarity_threshold: float = 0.16
     landscape_min_themes: int = 3
     landscape_max_themes: int = 5
+
+    def for_latency_profile(self, profile: LatencyProfile) -> "AgenticConfig":
+        """Return a copy tuned for fast, balanced, or deep execution."""
+
+        if profile == "fast":
+            return replace(
+                self,
+                max_grounded_variants=min(self.max_grounded_variants, 1),
+                max_speculative_variants=0,
+                max_total_variants=min(self.max_total_variants, 2),
+                candidate_pool_size=min(self.candidate_pool_size, 40),
+                speculative_top_pool_cutoff=min(self.speculative_top_pool_cutoff, 20),
+            )
+        if profile == "deep":
+            return replace(
+                self,
+                max_grounded_variants=min(self.max_grounded_variants + 1, 4),
+                max_speculative_variants=min(self.max_speculative_variants + 1, 4),
+                max_total_variants=min(self.max_total_variants + 2, 8),
+                candidate_pool_size=min(self.candidate_pool_size + 20, 120),
+                speculative_top_pool_cutoff=min(
+                    self.speculative_top_pool_cutoff + 20,
+                    80,
+                ),
+            )
+        return self
+
+    def latency_profile_settings(
+        self,
+        profile: LatencyProfile,
+    ) -> LatencyProfileSettings:
+        """Return derived toggles for the requested latency profile."""
+
+        tuned = self.for_latency_profile(profile)
+        if profile == "fast":
+            return LatencyProfileSettings(
+                name=profile,
+                search_config=tuned,
+                use_deterministic_bundle=True,
+                allow_serpapi_on_input=False,
+                allow_serpapi_on_expansions=False,
+                enable_speculative_expansions=False,
+                enable_deep_recommendations=False,
+            )
+        if profile == "deep":
+            return LatencyProfileSettings(
+                name=profile,
+                search_config=tuned,
+                use_deterministic_bundle=False,
+                allow_serpapi_on_input=True,
+                allow_serpapi_on_expansions=True,
+                enable_speculative_expansions=True,
+                enable_deep_recommendations=True,
+            )
+        return LatencyProfileSettings(
+            name=profile,
+            search_config=tuned,
+            use_deterministic_bundle=False,
+            allow_serpapi_on_input=True,
+            allow_serpapi_on_expansions=False,
+            enable_speculative_expansions=True,
+            enable_deep_recommendations=False,
+        )
 
     @classmethod
     def from_settings(cls, settings: AppSettings) -> "AgenticConfig":

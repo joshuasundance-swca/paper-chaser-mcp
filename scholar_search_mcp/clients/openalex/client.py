@@ -26,6 +26,13 @@ OPENALEX_AUTHOR_SELECT = (
     "id,display_name,works_count,cited_by_count,summary_stats,"
     "last_known_institutions,orcid,works_api_url"
 )
+OPENALEX_SOURCE_SELECT = "id,display_name,works_count,cited_by_count,type,summary_stats"
+OPENALEX_INSTITUTION_SELECT = (
+    "id,display_name,works_count,cited_by_count,country_code,type,summary_stats"
+)
+OPENALEX_TOPIC_SELECT = (
+    "id,display_name,works_count,cited_by_count,description,subfield,field,domain"
+)
 _MAILTO_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
@@ -246,6 +253,66 @@ class OpenAlexClient:
         return ",".join(values) if values else None
 
     @staticmethod
+    def _entity_metadata(entity_type: str) -> tuple[str, str, str]:
+        metadata = {
+            "source": ("/sources", OPENALEX_SOURCE_SELECT, "S"),
+            "institution": ("/institutions", OPENALEX_INSTITUTION_SELECT, "I"),
+            "topic": ("/topics", OPENALEX_TOPIC_SELECT, "T"),
+        }
+        try:
+            return metadata[entity_type]
+        except KeyError as exc:
+            raise ValueError(
+                "OpenAlex entity_type must be one of: source, institution, topic."
+            ) from exc
+
+    @classmethod
+    def _normalize_entity_id(cls, entity_type: str, value: str) -> str:
+        _, _, prefix = cls._entity_metadata(entity_type)
+        entity_id = cls._extract_openalex_id(value, prefix)
+        if entity_id is None:
+            raise ValueError(
+                f"OpenAlex {entity_type} IDs must be OpenAlex {prefix}-ids or "
+                f"OpenAlex {entity_type} URLs."
+            )
+        return entity_id
+
+    @staticmethod
+    def _normalize_entity_result(
+        entity_type: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        summary_stats = payload.get("summary_stats")
+        summary = summary_stats if isinstance(summary_stats, dict) else {}
+        result = {
+            "entityType": entity_type,
+            "entityId": payload.get("id"),
+            "displayName": payload.get("display_name"),
+            "worksCount": payload.get("works_count"),
+            "citedByCount": payload.get("cited_by_count"),
+            "source": "openalex",
+        }
+        if entity_type == "source":
+            result["type"] = payload.get("type")
+            result["hIndex"] = summary.get("h_index")
+        elif entity_type == "institution":
+            result["type"] = payload.get("type")
+            result["countryCode"] = payload.get("country_code")
+            result["hIndex"] = summary.get("h_index")
+        else:
+            result["description"] = payload.get("description")
+            subfield = payload.get("subfield")
+            field = payload.get("field")
+            domain = payload.get("domain")
+            if isinstance(subfield, dict):
+                result["subfield"] = subfield.get("display_name")
+            if isinstance(field, dict):
+                result["field"] = field.get("display_name")
+            if isinstance(domain, dict):
+                result["domain"] = domain.get("display_name")
+        return dump_jsonable(result)
+
+    @staticmethod
     def _year_filters(year: str | None) -> tuple[str | None, str | None]:
         """Translate supported year syntaxes to OpenAlex date filters.
 
@@ -452,6 +519,34 @@ class OpenAlexClient:
             }
         )
 
+    async def paper_autocomplete(
+        self,
+        query: str,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        """Return lightweight OpenAlex work autocomplete matches."""
+
+        response = await self._request(
+            "/autocomplete/works",
+            params={"q": query.strip()},
+        )
+        raw_results = response.get("results") or []
+        matches: list[dict[str, Any]] = []
+        for item in raw_results[: min(limit, 20)]:
+            if not isinstance(item, dict):
+                continue
+            matches.append(
+                {
+                    "id": item.get("id"),
+                    "displayName": item.get("display_name"),
+                    "hint": item.get("hint"),
+                    "citedByCount": item.get("cited_by_count"),
+                    "worksCount": item.get("works_count"),
+                    "source": "openalex",
+                }
+            )
+        return dump_jsonable({"matches": matches, "provider": "openalex"})
+
     async def search_bulk(
         self,
         query: str,
@@ -482,6 +577,97 @@ class OpenAlexClient:
         return dump_jsonable(
             {
                 "total": meta.get("count", len(data)),
+                "data": data,
+                "pagination": {
+                    "hasMore": next_cursor is not None,
+                    "nextCursor": next_cursor,
+                },
+            }
+        )
+
+    async def search_entities(
+        self,
+        entity_type: str,
+        query: str,
+        limit: int = 10,
+        cursor: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Search OpenAlex sources, institutions, or topics."""
+
+        endpoint, select, _ = self._entity_metadata(entity_type)
+        response = await self._request(
+            endpoint,
+            params={
+                "search": query.strip(),
+                "cursor": cursor or "*",
+                "per-page": min(limit, 200),
+                "select": select,
+            },
+        )
+        meta = response.get("meta") if isinstance(response.get("meta"), dict) else {}
+        next_cursor = meta.get("next_cursor")
+        results = response.get("results") or []
+        data = [
+            self._normalize_entity_result(entity_type, item)
+            for item in results
+            if isinstance(item, dict)
+        ]
+        return dump_jsonable(
+            {
+                "entityType": entity_type,
+                "total": meta.get("count", len(data)),
+                "offset": 0,
+                "data": data,
+                "pagination": {
+                    "hasMore": next_cursor is not None,
+                    "nextCursor": next_cursor,
+                },
+            }
+        )
+
+    async def search_works_by_entity(
+        self,
+        entity_type: str,
+        entity_id: str,
+        limit: int = 100,
+        cursor: Optional[str] = None,
+        year: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Return OpenAlex works filtered by source, institution, or topic."""
+
+        normalized_entity_id = self._normalize_entity_id(entity_type, entity_id)
+        entity_filters = {
+            "source": f"primary_location.source.id:{normalized_entity_id}",
+            "institution": f"authorships.institutions.id:{normalized_entity_id}",
+            "topic": f"topics.id:{normalized_entity_id}",
+        }
+        filters = self._combine_filters(
+            entity_filters[entity_type],
+            *self._year_filters(year),
+        )
+        response = await self._request(
+            "/works",
+            params={
+                "filter": filters,
+                "cursor": cursor or "*",
+                "per-page": min(limit, 200),
+                "select": OPENALEX_LIST_SELECT,
+            },
+        )
+        meta = response.get("meta") if isinstance(response.get("meta"), dict) else {}
+        next_cursor = meta.get("next_cursor")
+        results = response.get("results") or []
+        data = [
+            self._work_to_paper(work, include_abstract=False)
+            for work in results
+            if isinstance(work, dict)
+        ]
+        return dump_jsonable(
+            {
+                "entityType": entity_type,
+                "entityId": normalized_entity_id,
+                "total": meta.get("count", len(data)),
+                "offset": 0,
                 "data": data,
                 "pagination": {
                     "hasMore": next_cursor is not None,

@@ -29,6 +29,9 @@ OFFSET_TOOLS: frozenset[str] = frozenset(
         "get_paper_authors",
         "get_paper_references_openalex",
         "get_author_papers",
+        "search_papers_serpapi_cited_by",
+        "search_papers_serpapi_versions",
+        "get_author_articles_serpapi",
         "search_authors",
     }
 )
@@ -39,6 +42,8 @@ OFFSET_TOOLS: frozenset[str] = frozenset(
 STREAM_CONTEXT_KEYS: dict[str, tuple[str, ...]] = {
     "search_papers_bulk": ("query",),
     "search_papers_openalex_bulk": ("query", "year"),
+    "search_entities_openalex": ("entity_type", "query"),
+    "search_papers_openalex_by_entity": ("entity_type", "entity_id", "year"),
     "get_paper_citations": ("paper_id",),
     "get_paper_citations_openalex": ("paper_id",),
     "get_paper_references": ("paper_id",),
@@ -46,6 +51,9 @@ STREAM_CONTEXT_KEYS: dict[str, tuple[str, ...]] = {
     "get_paper_authors": ("paper_id",),
     "get_author_papers": ("author_id", "publication_date_or_year"),
     "get_author_papers_openalex": ("author_id", "year"),
+    "search_papers_serpapi_cited_by": ("cites_id", "query", "year"),
+    "search_papers_serpapi_versions": ("cluster_id",),
+    "get_author_articles_serpapi": ("author_id", "sort"),
     "search_authors": ("query",),
     "search_authors_openalex": ("query",),
 }

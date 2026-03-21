@@ -23,7 +23,7 @@ def _assert_additive_metadata(
 async def test_list_tools_returns_expected_public_contract() -> None:
     tools = await server.list_tools()
 
-    assert len(tools) == 34
+    assert len(tools) == 43
     tool_map = {tool.name: tool for tool in tools}
     assert set(tool_map) == {
         "search_papers",
@@ -37,6 +37,7 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "search_papers_match",
         "resolve_citation",
         "paper_autocomplete",
+        "paper_autocomplete_openalex",
         "get_paper_details",
         "get_paper_details_openalex",
         "get_paper_citations",
@@ -49,6 +50,8 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "get_author_papers",
         "search_authors",
         "search_authors_openalex",
+        "search_entities_openalex",
+        "search_papers_openalex_by_entity",
         "get_author_papers_openalex",
         "batch_get_authors",
         "search_snippets",
@@ -56,6 +59,12 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "get_paper_recommendations_post",
         "batch_get_papers",
         "get_paper_citation_formats",
+        "search_papers_serpapi_cited_by",
+        "search_papers_serpapi_versions",
+        "get_author_profile_serpapi",
+        "get_author_articles_serpapi",
+        "get_serpapi_account_status",
+        "get_provider_diagnostics",
         "search_papers_smart",
         "ask_result_set",
         "map_research_landscape",
@@ -110,11 +119,30 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "limit",
         "year",
     }
+    assert set(tool_map["paper_autocomplete_openalex"].inputSchema["properties"]) == {
+        "query",
+        "limit",
+    }
     assert set(tool_map["search_papers_openalex_bulk"].inputSchema["properties"]) == {
         "query",
         "limit",
         "year",
         "cursor",
+    }
+    assert set(tool_map["search_entities_openalex"].inputSchema["properties"]) == {
+        "query",
+        "entityType",
+        "limit",
+        "cursor",
+    }
+    assert set(
+        tool_map["search_papers_openalex_by_entity"].inputSchema["properties"]
+    ) == {
+        "entityType",
+        "entityId",
+        "limit",
+        "cursor",
+        "year",
     }
     assert set(tool_map["resolve_citation"].inputSchema["properties"]) == {
         "citation",
@@ -156,12 +184,28 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "year",
         "venue",
         "focus",
+        "latencyProfile",
+        "providerBudget",
     }
     assert set(tool_map["ask_result_set"].inputSchema["properties"]) == {
         "searchSessionId",
         "question",
         "topK",
         "answerMode",
+        "latencyProfile",
+    }
+    assert set(tool_map["map_research_landscape"].inputSchema["properties"]) == {
+        "searchSessionId",
+        "maxThemes",
+        "latencyProfile",
+    }
+    assert set(tool_map["expand_research_graph"].inputSchema["properties"]) == {
+        "seedPaperIds",
+        "seedSearchSessionId",
+        "direction",
+        "hops",
+        "perSeedLimit",
+        "latencyProfile",
     }
     assert tool_map["batch_get_papers"].inputSchema["required"] == ["paper_ids"]
     assert tool_map["batch_get_authors"].inputSchema["required"] == ["author_ids"]
@@ -169,6 +213,9 @@ async def test_list_tools_returns_expected_public_contract() -> None:
     assert "positivePaperIds" in post_rec_schema["required"]
     citation_schema = tool_map["get_paper_citation_formats"].inputSchema
     assert citation_schema["required"] == ["result_id"]
+    assert set(tool_map["get_provider_diagnostics"].inputSchema["properties"]) == {
+        "includeRecentOutcomes"
+    }
 
 
 @pytest.mark.asyncio
@@ -405,6 +452,176 @@ async def test_openalex_detail_and_author_tools_route_to_openalex_client(
     assert decode_bulk_cursor(author_papers["pagination"]["nextCursor"]).provider == (
         "openalex"
     )
+
+
+@pytest.mark.asyncio
+async def test_new_openalex_tools_route_and_wrap_bulk_cursors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    openalex = RecordingOpenAlexClient()
+    monkeypatch.setattr(server, "openalex_client", openalex)
+    monkeypatch.setattr(server, "enable_openalex", True)
+
+    autocomplete = _payload(
+        await server.call_tool(
+            "paper_autocomplete_openalex",
+            {"query": "transformer"},
+        )
+    )
+    entities = _payload(
+        await server.call_tool(
+            "search_entities_openalex",
+            {"query": "neurips", "entityType": "source"},
+        )
+    )
+    entity_papers = _payload(
+        await server.call_tool(
+            "search_papers_openalex_by_entity",
+            {"entityType": "source", "entityId": "S1"},
+        )
+    )
+
+    assert autocomplete["matches"][0]["source"] == "openalex"
+    assert openalex.calls[0] == (
+        "paper_autocomplete",
+        {"query": "transformer", "limit": 10},
+    )
+    assert openalex.calls[1] == (
+        "search_entities",
+        {"entity_type": "source", "query": "neurips", "limit": 10, "cursor": None},
+    )
+    assert decode_bulk_cursor(entities["pagination"]["nextCursor"]).provider == (
+        "openalex"
+    )
+    assert openalex.calls[2] == (
+        "search_works_by_entity",
+        {
+            "entity_type": "source",
+            "entity_id": "S1",
+            "limit": 100,
+            "cursor": None,
+            "year": None,
+        },
+    )
+    assert decode_bulk_cursor(entity_papers["pagination"]["nextCursor"]).provider == (
+        "openalex"
+    )
+
+
+@pytest.mark.asyncio
+async def test_new_serpapi_tools_and_provider_diagnostics_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RecordingSerpApiClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+
+        async def search_cited_by(self, **kwargs) -> dict:
+            self.calls.append(("search_cited_by", kwargs))
+            return {
+                "provider": "serpapi_google_scholar",
+                "total": 1,
+                "offset": 0,
+                "data": [
+                    {
+                        "paperId": "serp-cites-1",
+                        "source": "serpapi_google_scholar",
+                    }
+                ],
+                "pagination": {"hasMore": True, "nextCursor": "10"},
+            }
+
+        async def search_versions(self, **kwargs) -> dict:
+            self.calls.append(("search_versions", kwargs))
+            return {
+                "provider": "serpapi_google_scholar",
+                "total": 1,
+                "offset": 0,
+                "data": [
+                    {
+                        "paperId": "serp-version-1",
+                        "source": "serpapi_google_scholar",
+                    }
+                ],
+                "pagination": {"hasMore": True, "nextCursor": "10"},
+            }
+
+        async def get_author_profile(self, **kwargs) -> dict:
+            self.calls.append(("get_author_profile", kwargs))
+            return {
+                "provider": "serpapi_google_scholar",
+                "authorId": kwargs["author_id"],
+                "name": "Scholar Author",
+            }
+
+        async def get_author_articles(self, **kwargs) -> dict:
+            self.calls.append(("get_author_articles", kwargs))
+            return {
+                "provider": "serpapi_google_scholar",
+                "authorId": kwargs["author_id"],
+                "total": 1,
+                "offset": kwargs.get("start", 0),
+                "data": [
+                    {
+                        "paperId": "serp-author-1",
+                        "source": "serpapi_google_scholar",
+                    }
+                ],
+                "pagination": {"hasMore": True, "nextCursor": "10"},
+            }
+
+        async def get_account_status(self) -> dict:
+            self.calls.append(("get_account_status", {}))
+            return {
+                "provider": "serpapi_google_scholar",
+                "plan_searches_left": 42,
+            }
+
+    monkeypatch.setattr(server, "enable_serpapi", True)
+    monkeypatch.setattr(server, "serpapi_client", RecordingSerpApiClient())
+
+    cited_by = _payload(
+        await server.call_tool(
+            "search_papers_serpapi_cited_by",
+            {"citesId": "cites-1"},
+        )
+    )
+    versions = _payload(
+        await server.call_tool(
+            "search_papers_serpapi_versions",
+            {"clusterId": "cluster-1"},
+        )
+    )
+    author = _payload(
+        await server.call_tool(
+            "get_author_profile_serpapi",
+            {"authorId": "author-1"},
+        )
+    )
+    articles = _payload(
+        await server.call_tool(
+            "get_author_articles_serpapi",
+            {"authorId": "author-1"},
+        )
+    )
+    account = _payload(await server.call_tool("get_serpapi_account_status", {}))
+    diagnostics = _payload(await server.call_tool("get_provider_diagnostics", {}))
+
+    assert cited_by["data"][0]["paperId"] == "serp-cites-1"
+    assert decode_cursor(cited_by["pagination"]["nextCursor"]).provider == (
+        "serpapi_google_scholar"
+    )
+    assert versions["data"][0]["paperId"] == "serp-version-1"
+    assert decode_cursor(versions["pagination"]["nextCursor"]).provider == (
+        "serpapi_google_scholar"
+    )
+    assert author["authorId"] == "author-1"
+    assert articles["authorId"] == "author-1"
+    assert decode_cursor(articles["pagination"]["nextCursor"]).provider == (
+        "serpapi_google_scholar"
+    )
+    assert account["provider"] == "serpapi_google_scholar"
+    assert any(item["provider"] == "openai" for item in diagnostics["providers"])
 
 
 def test_package_import_and_module_entrypoints_keep_expected_targets() -> None:

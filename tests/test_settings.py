@@ -139,8 +139,8 @@ def test_app_settings_parses_agentic_configuration() -> None:
             "OPENAI_API_KEY": "sk-test",
             "SCHOLAR_SEARCH_ENABLE_AGENTIC": "true",
             "SCHOLAR_SEARCH_AGENTIC_PROVIDER": "openai",
-            "SCHOLAR_SEARCH_PLANNER_MODEL": "gpt-5.4-mini",
-            "SCHOLAR_SEARCH_SYNTHESIS_MODEL": "gpt-5.4",
+            "SCHOLAR_SEARCH_PLANNER_MODEL": "gpt-5.2-mini",
+            "SCHOLAR_SEARCH_SYNTHESIS_MODEL": "gpt-5.2",
             "SCHOLAR_SEARCH_EMBEDDING_MODEL": "text-embedding-3-large",
             "SCHOLAR_SEARCH_AGENTIC_INDEX_BACKEND": "memory",
             "SCHOLAR_SEARCH_SESSION_TTL_SECONDS": "900",
@@ -151,8 +151,8 @@ def test_app_settings_parses_agentic_configuration() -> None:
     assert settings.openai_api_key == "sk-test"
     assert settings.enable_agentic is True
     assert settings.agentic_provider == "openai"
-    assert settings.planner_model == "gpt-5.4-mini"
-    assert settings.synthesis_model == "gpt-5.4"
+    assert settings.planner_model == "gpt-5.2-mini"
+    assert settings.synthesis_model == "gpt-5.2"
     assert settings.embedding_model == "text-embedding-3-large"
     assert settings.agentic_index_backend == "memory"
     assert settings.session_ttl_seconds == 900
@@ -173,7 +173,7 @@ def test_app_settings_ignores_unrelated_azure_workflow_metadata() -> None:
     )
 
     assert settings.transport == "stdio"
-    assert settings.enable_core is True
+    assert settings.enable_core is False
     assert settings.enable_semantic_scholar is True
     assert settings.enable_serpapi is False
     assert settings.http_auth_token is None

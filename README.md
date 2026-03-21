@@ -8,7 +8,7 @@ The package now uses FastMCP for tool/resource/prompt registration, Pydantic for
 
 ## Features
 
-- **Search papers** – Keyword search with a configurable **fallback chain**: defaults to **CORE API** first (no key required; set `CORE_API_KEY` for higher limits), then **Semantic Scholar**, then optionally **SerpApi Google Scholar** (opt-in paid), then **arXiv**. You can keep the default broker behavior, set a `preferredProvider`, override `providerOrder`, or call provider-specific `search_papers_*` tools directly. Returns a single best-effort page — not paginated.
+- **Search papers** – Keyword search with a configurable **fallback chain**: defaults to **Semantic Scholar** first, then **arXiv**, then optionally **CORE** (disabled by default until explicitly enabled), then optionally **SerpApi Google Scholar** (opt-in paid). You can keep the default broker behavior, set a `preferredProvider`, override `providerOrder`, or call provider-specific `search_papers_*` tools directly. Returns a single best-effort page — not paginated.
 - **Bulk paper search** – Boolean-syntax search via `/paper/search/bulk` with cursor-based pagination (up to 1,000 returned papers/call). **The default ordering is NOT relevance-ranked** — bulk retrieval uses exhaustive corpus traversal with an internal ordering; every response includes a `retrievalNote` field describing the active ordering contract. For citation-ranked traversal pass `sort='citationCount:desc'`. The upstream bulk endpoint may ignore small `limit` values internally, so this server truncates returned data to the requested limit; use `search_papers` or `search_papers_semantic_scholar` for small targeted pages. Treat `pagination.nextCursor` as opaque and pass it back unchanged as `cursor`
 - **Best-match / autocomplete** – Single best title match and typeahead completions
 - **Paper details** – Full metadata (title, authors, abstract, citations, etc.)
@@ -19,11 +19,13 @@ The package now uses FastMCP for tool/resource/prompt registration, Pydantic for
 - **Batch lookup** – Fetch up to 500 papers in one call
 - **Recommendations** – Similar papers via single-seed GET or multi-seed POST
 - **Citation formats** – Get MLA, APA, BibTeX, and other citation export formats for a Google Scholar paper (requires SerpApi)
-- **OpenAlex-native workflows** – Explicit OpenAlex search, cursor-paginated retrieval, work lookup by DOI/OpenAlex ID, cited-by/reference traversal, and author pivots without forcing OpenAlex into the brokered Semantic-Scholar-shaped flow
+- **OpenAlex-native workflows** – Explicit OpenAlex search, cursor-paginated retrieval, work lookup by DOI/OpenAlex ID, autocomplete, source/institution/topic pivots, cited-by/reference traversal, and author pivots without forcing OpenAlex into the brokered Semantic-Scholar-shaped flow
+- **Provider execution policy** – Shared retries with jitter, bounded concurrency, suppression/circuit-breaker state, normalized provider outcomes, and a diagnostics tool for live provider health
 - **Shared rate limiter** – One 1 req/s pacing lock shared across all Semantic Scholar endpoints
 - **Structured FastMCP outputs** – Tools return structured content instead of JSON blobs embedded in text
 - **Agent onboarding aids** – Ships a workflow guide resource and a planning prompt alongside the tools
 - **Additive smart research layer** – `search_papers_smart`, `ask_result_set`, `map_research_landscape`, and `expand_research_graph` add concept-level discovery, grounded follow-up QA, theme mapping, and compact graph expansion without changing the existing raw-tool contract
+- **Latency profiles and provider budgets** – Smart tools accept `latencyProfile` (`fast`, `balanced`, `deep`) and `search_papers_smart` also accepts an optional `providerBudget` for guarded multi-provider fanout
 - **Compatibility-first agent UX** – Primary read tools now surface `agentHints`, `clarification`, `resourceUris`, and reusable `searchSessionId` handles so agents can keep moving without reading the full docs
 - **Microsoft-facing packaging assets** – Ships `mcp-tools.core.json`, `mcp-tools.full.json`, and `microsoft-plugin.sample.json` for Streamable HTTP deployments and declarative-agent packaging
 
@@ -129,10 +131,12 @@ context.
 
 **Default search fallback order:** When you call `search_papers`, the server tries sources in order and uses the first that succeeds:
 
-1. **CORE API** – Tried first; works without a key (subject to [rate limits](https://api.core.ac.uk/docs/v3#section/Rate-limits)). Set `CORE_API_KEY` for higher limits ([register](https://core.ac.uk/api-keys/register)).
-2. **Semantic Scholar** – Used if CORE fails; works without a key with lower limits. Set `SEMANTIC_SCHOLAR_API_KEY` for higher limits.
-3. **SerpApi Google Scholar** – Optional paid provider, skipped by default. Enable with `SCHOLAR_SEARCH_ENABLE_SERPAPI=true` and set `SERPAPI_API_KEY`. See [SerpApi pricing](https://serpapi.com/pricing).
-4. **arXiv** – Used as last fallback; no key required.
+1. **Semantic Scholar** – Primary scholarly graph. Works without a key with lower limits; set `SEMANTIC_SCHOLAR_API_KEY` for higher limits.
+2. **arXiv** – Free preprint and recency fallback; no key required.
+3. **CORE API** – Disabled by default until explicitly enabled. Set `SCHOLAR_SEARCH_ENABLE_CORE=true` to include it in the broker. `CORE_API_KEY` is optional and raises limits when present.
+4. **SerpApi Google Scholar** – Optional paid recall-recovery provider, disabled by default. Enable with `SCHOLAR_SEARCH_ENABLE_SERPAPI=true` and set `SERPAPI_API_KEY`. See [SerpApi pricing](https://serpapi.com/pricing).
+
+OpenAlex remains an explicit provider surface rather than a default broker hop. Use the `*_openalex` tools for autocomplete, institution/source/topic pivots, or OpenAlex-native citation and author workflows.
 
 `search_papers` is a **brokered single-page search**: it returns results from the first provider in the effective chain that succeeds and does **not** support cursor-based pagination. By default the effective chain is the order above, but you can:
 
@@ -219,11 +223,11 @@ Control which sources are used in the `search_papers` fallback chain via environ
 
 | Variable                                 | Default | Description                                                            |
 | ---------------------------------------- | ------- | ---------------------------------------------------------------------- |
-| `SCHOLAR_SEARCH_ENABLE_CORE`             | `true`  | Use CORE API. Set to `0`, `false`, or `no` to disable.                 |
+| `SCHOLAR_SEARCH_ENABLE_CORE`             | `false` | Use CORE API. Disabled by default until explicitly enabled.             |
 | `SCHOLAR_SEARCH_ENABLE_SEMANTIC_SCHOLAR` | `true`  | Use Semantic Scholar.                                                  |
 | `SCHOLAR_SEARCH_ENABLE_SERPAPI`          | `false` | Use SerpApi Google Scholar (opt-in, **paid**). Set `SERPAPI_API_KEY`.  |
-| `SCHOLAR_SEARCH_ENABLE_ARXIV`            | `true`  | Use arXiv (last-resort free fallback).                                 |
-| `SCHOLAR_SEARCH_PROVIDER_ORDER`          | `core,semantic_scholar,serpapi_google_scholar,arxiv` | Comma-separated default broker order for `search_papers`. Omit a provider to remove it from the default broker chain. Accepts `serpapi` as a shorthand for `serpapi_google_scholar`. |
+| `SCHOLAR_SEARCH_ENABLE_ARXIV`            | `true`  | Use arXiv as the default free fallback after Semantic Scholar.         |
+| `SCHOLAR_SEARCH_PROVIDER_ORDER`          | `semantic_scholar,arxiv,core,serpapi_google_scholar` | Comma-separated default broker order for `search_papers`. Omit a provider to remove it from the default broker chain. Accepts `serpapi` as a shorthand for `serpapi_google_scholar`. |
 
 SerpApi is disabled by default to prevent unexpected costs. When enabled without an API key, affected tool calls return a clear error rather than silently failing.
 
@@ -497,17 +501,20 @@ Primary defaults for agents:
 
 | Tool                             | Description                                                                                              |
 | -------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `search_papers_smart`            | Additive smart discovery entry point for concept-level research, literature reviews, known-item routing, and saved-result-set workflows. Returns smart-ranked hits plus `strategyMetadata`, `resourceUris`, `agentHints`, and a reusable `searchSessionId`. |
-| `ask_result_set`                 | Grounded follow-up over a saved `searchSessionId`. Supports `qa`, `claim_check`, and `comparison` modes and returns paper-level evidence plus suggested next questions. |
-| `map_research_landscape`         | Cluster a saved `searchSessionId` into 3-5 themes, representative papers, gaps, disagreements, and suggested next searches. |
-| `expand_research_graph`          | Expand one or more paper anchors or a saved `searchSessionId` into a compact citation/reference/author graph with frontier ranking and reusable resource handles. |
-| `search_papers`                  | Primary entry point for quick literature discovery. Single-page best-effort brokered search. Default order: CORE → Semantic Scholar → SerpApi Google Scholar → arXiv. Use `brokerMetadata` to see where results came from and decide whether to broaden, narrow, paginate, or pivot. Optional filters: `limit`, `fields`, `year`, `venue`, `preferredProvider`, `providerOrder`, `publicationDateOrYear`, `fieldsOfStudy`, `publicationTypes`, `openAccessPdf`, `minCitationCount`. No pagination — for paginated retrieval use `search_papers_bulk`. |
+| `search_papers_smart`            | Additive smart discovery entry point for concept-level research, literature reviews, known-item routing, and saved-result-set workflows. Supports `latencyProfile` (`fast`, `balanced`, `deep`) plus optional `providerBudget`, and returns smart-ranked hits plus `strategyMetadata`, `resourceUris`, `agentHints`, and a reusable `searchSessionId`. |
+| `ask_result_set`                 | Grounded follow-up over a saved `searchSessionId`. Supports `qa`, `claim_check`, and `comparison` modes, accepts optional `latencyProfile`, and returns paper-level evidence plus suggested next questions. |
+| `map_research_landscape`         | Cluster a saved `searchSessionId` into 3-5 themes, representative papers, gaps, disagreements, and suggested next searches. Accepts optional `latencyProfile`. |
+| `expand_research_graph`          | Expand one or more paper anchors or a saved `searchSessionId` into a compact citation/reference/author graph with frontier ranking and reusable resource handles. Accepts optional `latencyProfile`. |
+| `search_papers`                  | Primary entry point for quick literature discovery. Single-page best-effort brokered search. Default order: Semantic Scholar → arXiv → CORE → SerpApi Google Scholar, with CORE and SerpApi still subject to their enable flags. Use `brokerMetadata` to see where results came from and decide whether to broaden, narrow, paginate, or pivot. Optional filters: `limit`, `fields`, `year`, `venue`, `preferredProvider`, `providerOrder`, `publicationDateOrYear`, `fieldsOfStudy`, `publicationTypes`, `openAccessPdf`, `minCitationCount`. No pagination — for paginated retrieval use `search_papers_bulk`. |
 | `search_papers_core`             | Single-page CORE-only search with the same normalized response shape as `search_papers`. Exposes only the inputs CORE actually honors: `query`, `limit`, and `year`. |
 | `search_papers_semantic_scholar` | Single-page Semantic Scholar-only search with the same normalized response shape as `search_papers`. Exposes the Semantic Scholar-compatible inputs: `query`, `limit`, `fields`, `year`, `venue`, `publicationDateOrYear`, `fieldsOfStudy`, `publicationTypes`, `openAccessPdf`, and `minCitationCount`. |
 | `search_papers_serpapi`          | Single-page SerpApi Google Scholar-only search. **Requires SerpApi** (`SCHOLAR_SEARCH_ENABLE_SERPAPI=true` + `SERPAPI_API_KEY`). Exposes only the inputs SerpApi actually honors: `query`, `limit`, and `year`. |
 | `search_papers_arxiv`            | Single-page arXiv-only search with the same normalized response shape as `search_papers`. Exposes only the inputs arXiv actually honors: `query`, `limit`, and `year`. |
 | `search_papers_openalex`         | Single-page OpenAlex-only search with the same normalized top-level response shape as `search_papers`. Exposes only the inputs OpenAlex explicitly honors here: `query`, `limit`, and `year`. |
 | `search_papers_openalex_bulk`    | Cursor-paginated OpenAlex search for explicit OpenAlex retrieval flows. Treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and keep it scoped to the same tool/query flow; supports `query`, `limit`, and `year`. |
+| `paper_autocomplete_openalex`    | Lightweight OpenAlex work autocomplete for typeahead and known-item disambiguation before committing to a full work search. |
+| `search_entities_openalex`       | Search OpenAlex `source`, `institution`, or `topic` entities for two-step pivot workflows. |
+| `search_papers_openalex_by_entity` | Retrieve OpenAlex works constrained to one OpenAlex `source`, `institution`, or `topic` entity ID, with cursor pagination for explicit disambiguation workflows. |
 | `search_papers_bulk`             | Primary exhaustive retrieval tool. Paginated bulk paper search (Semantic Scholar) with advanced boolean query syntax (up to 1,000 returned papers/call). The upstream bulk endpoint may ignore small `limit` values internally, so this server truncates returned data to the requested limit; prefer `search_papers` or `search_papers_semantic_scholar` for small targeted pages. Treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and do not derive/edit/fabricate it; `pagination.hasMore` signals more results. |
 | `resolve_citation`               | First-class citation-repair workflow for incomplete, malformed, or almost-right references. Stages identifier extraction, title recovery, quote/snippet recovery, and sparse metadata search; returns the best canonical paper candidate, alternatives, confidence, conflicts, and reusable `searchSessionId` metadata. |
 | `search_papers_match`            | Known-item lookup for messy or partial titles; finds the single paper whose title best matches the query string, falls back to fuzzy Semantic Scholar title search on exact-match 400/404 misses, and returns a structured no-match payload when the item still cannot be recovered |
@@ -530,7 +537,13 @@ Primary defaults for agents:
 | `get_paper_recommendations`      | Similar papers for a given paper (GET single-seed)                                                       |
 | `get_paper_recommendations_post` | Similar papers from positive and negative seed sets (POST multi-seed)                                    |
 | `batch_get_papers`               | Details for up to 500 paper IDs                                                                          |
+| `search_papers_serpapi_cited_by` | Explicit Google Scholar cited-by expansion through SerpApi. Use when recall recovery or citation discovery matters more than latency. |
+| `search_papers_serpapi_versions` | Explicit Google Scholar all-versions expansion through SerpApi cluster IDs. |
+| `get_author_profile_serpapi`     | Google Scholar author profile retrieval through SerpApi for explicit author-centric workflows. |
+| `get_author_articles_serpapi`    | Paginated Google Scholar author article retrieval through SerpApi. |
 | `get_paper_citation_formats`     | Citation export step for MLA, APA, BibTeX, etc. from a Google Scholar paper. **Requires SerpApi** (`SCHOLAR_SEARCH_ENABLE_SERPAPI=true` + `SERPAPI_API_KEY`). Pass `result_id=paper.scholarResultId` (not `paper.sourceId`) from a `serpapi_google_scholar` result. Single non-paginated response. |
+| `get_serpapi_account_status`     | Read-only SerpApi quota and throughput snapshot for budget-aware routing and troubleshooting. |
+| `get_provider_diagnostics`       | Live provider diagnostics showing recent status buckets, throttling/suppression state, retries, and fallback reasons across providers. |
 
 
 ## Resources and prompts
@@ -754,9 +767,10 @@ For maintainer orientation after the module split, start with `docs/agent-handof
 - [Azure Deployment](docs/azure-deployment.md) - deployment modes, required secrets and variables, and validation paths for the private Azure rollout.
 - [Azure Architecture](docs/azure-architecture.md) - trust boundaries, runtime topology, and credential separation for the Azure scaffold.
 - [Azure Security Model](docs/azure-security-model.md) - credential classes, Key Vault usage, and backend-auth separation in the Azure rollout.
+- [Provider Upgrade Program](docs/provider-upgrade-program.md) - provider roles, latency profiles, diagnostics, benchmark corpus, and acceptance gates for the reliability-first provider upgrade.
 - [OpenAlex API Guide](docs/openalex-api-guide.md) - implementation-focused guidance for the repo's explicit OpenAlex MCP surface, including authentication, credit-based limits, paging, `/works` semantics, and normalization caveats.
 - [Semantic Scholar API Guide](docs/semantic-scholar-api-guide.md) - practical guidance for respectful and effective Semantic Scholar API usage with async rate limiting, retries, and `.env`-based local development.
-- [SerpApi Google Scholar Guide](docs/serpapi-google-scholar-api-guide.md) - deep research notes on SerpApi capabilities, tradeoffs, and cost/compliance considerations; only part of that surface is currently shipped here.
+- [SerpApi Google Scholar Guide](docs/serpapi-google-scholar-api-guide.md) - deep research notes on SerpApi capabilities, tradeoffs, and cost/compliance considerations; the repo now ships the explicit cited-by, versions, author, account, and citation-format flows documented there.
 - [FastMCP Migration Plan](docs/fastmcp-migration-plan.md) - historical architecture rationale for the FastMCP migration and compatibility surface.
 
 ## License

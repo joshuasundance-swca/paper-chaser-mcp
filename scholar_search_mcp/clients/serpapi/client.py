@@ -10,9 +10,14 @@ from .errors import (
     SerpApiQuotaError,
     SerpApiUpstreamError,
 )
-from .normalize import _parse_year_range, normalize_organic_result
+from .normalize import (
+    _parse_year_range,
+    normalize_author_article_result,
+    normalize_organic_result,
+)
 
 SERPAPI_BASE_URL = "https://serpapi.com/search"
+SERPAPI_ACCOUNT_URL = "https://serpapi.com/account.json"
 
 logger = logging.getLogger("scholar-search-mcp")
 
@@ -44,7 +49,12 @@ class SerpApiScholarClient:
                 "To disable this provider set SCHOLAR_SEARCH_ENABLE_SERPAPI=false."
             )
 
-    async def _get(self, params: dict[str, Any]) -> dict[str, Any]:
+    async def _get_json(
+        self,
+        *,
+        url: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
         """Perform an authenticated GET to the SerpApi endpoint.
 
         Injects ``api_key`` and translates HTTP/upstream errors into typed
@@ -57,7 +67,7 @@ class SerpApiScholarClient:
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.get(SERPAPI_BASE_URL, params=request_params)
+                response = await client.get(url, params=request_params)
         except Exception as exc:
             logger.warning("SerpApi request failed: %s", exc)
             raise SerpApiUpstreamError(
@@ -108,6 +118,41 @@ class SerpApiScholarClient:
 
         return data
 
+    async def _get(self, params: dict[str, Any]) -> dict[str, Any]:
+        return await self._get_json(url=SERPAPI_BASE_URL, params=params)
+
+    @staticmethod
+    def _normalize_query(value: str) -> str:
+        return " ".join(value.strip().split())
+
+    @staticmethod
+    def _pagination(next_start: int | None) -> dict[str, Any]:
+        return {
+            "pagination": {
+                "hasMore": next_start is not None,
+                "nextCursor": str(next_start) if next_start is not None else None,
+            }
+        }
+
+    @staticmethod
+    def _next_start(current_start: int, page_size: int, returned: int) -> int | None:
+        if returned < page_size:
+            return None
+        return current_start + returned
+
+    @staticmethod
+    def _normalize_search_results(
+        organic_results: list[dict[str, Any]],
+        *,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        papers: list[dict[str, Any]] = []
+        for result in organic_results[:limit]:
+            normalized = normalize_organic_result(result)
+            if normalized is not None:
+                papers.append(normalized)
+        return papers
+
     async def search(
         self,
         query: str,
@@ -127,7 +172,7 @@ class SerpApiScholarClient:
         params: dict[str, Any] = {
             "engine": "google_scholar",
             # Normalize whitespace for consistent cache hits.
-            "q": " ".join(query.strip().split()),
+            "q": self._normalize_query(query),
             "num": num,
             "hl": "en",
         }
@@ -140,13 +185,175 @@ class SerpApiScholarClient:
 
         data = await self._get(params)
         organic_results: list[dict[str, Any]] = data.get("organic_results") or []
+        return self._normalize_search_results(organic_results, limit=limit)
 
+    async def search_cited_by(
+        self,
+        cites_id: str,
+        *,
+        query: str | None = None,
+        limit: int = 10,
+        year: Optional[str] = None,
+        start: int = 0,
+    ) -> dict[str, Any]:
+        """Search within the citing-articles view for one Scholar cites_id."""
+
+        num = min(limit, 20)
+        params: dict[str, Any] = {
+            "engine": "google_scholar",
+            "cites": cites_id.strip(),
+            "num": num,
+            "start": max(start, 0),
+            "hl": "en",
+        }
+        if query:
+            params["q"] = self._normalize_query(query)
+        if year:
+            year_low, year_high = _parse_year_range(year)
+            if year_low is not None:
+                params["as_ylo"] = year_low
+            if year_high is not None:
+                params["as_yhi"] = year_high
+        data = await self._get(params)
+        organic_results: list[dict[str, Any]] = data.get("organic_results") or []
+        papers = self._normalize_search_results(organic_results, limit=limit)
+        next_start = self._next_start(start, num, len(organic_results))
+        return {
+            "provider": "serpapi_google_scholar",
+            "total": len(papers),
+            "offset": start,
+            "citesId": cites_id.strip(),
+            "data": papers,
+            **self._pagination(next_start),
+        }
+
+    async def search_versions(
+        self,
+        cluster_id: str,
+        *,
+        limit: int = 10,
+        start: int = 0,
+    ) -> dict[str, Any]:
+        """Return all-versions results for one Scholar cluster_id."""
+
+        num = min(limit, 20)
+        params: dict[str, Any] = {
+            "engine": "google_scholar",
+            "cluster": cluster_id.strip(),
+            "num": num,
+            "start": max(start, 0),
+            "hl": "en",
+        }
+        data = await self._get(params)
+        organic_results: list[dict[str, Any]] = data.get("organic_results") or []
+        papers = self._normalize_search_results(organic_results, limit=limit)
+        next_start = self._next_start(start, num, len(organic_results))
+        return {
+            "provider": "serpapi_google_scholar",
+            "total": len(papers),
+            "offset": start,
+            "clusterId": cluster_id.strip(),
+            "data": papers,
+            **self._pagination(next_start),
+        }
+
+    async def get_author_profile(self, author_id: str) -> dict[str, Any]:
+        """Return structured Google Scholar author profile metadata."""
+
+        data = await self._get(
+            {
+                "engine": "google_scholar_author",
+                "author_id": author_id.strip(),
+                "hl": "en",
+            }
+        )
+        author = data.get("author") or {}
+        cited_by = data.get("cited_by") or {}
+        table = cited_by.get("table") or []
+        total_citations: int | None = None
+        if isinstance(table, list):
+            for row in table:
+                if not isinstance(row, dict):
+                    continue
+                if str(row.get("citations") or "").strip().lower() == "all":
+                    try:
+                        total_citations = int(row.get("value"))
+                    except (TypeError, ValueError):
+                        total_citations = None
+                    break
+        interests = [
+            interest.get("title")
+            for interest in author.get("interests") or []
+            if isinstance(interest, dict) and interest.get("title")
+        ]
+        coauthors = [
+            {
+                "authorId": item.get("author_id"),
+                "name": item.get("name"),
+                "affiliations": item.get("affiliations"),
+                "link": item.get("link"),
+            }
+            for item in data.get("co_authors") or []
+            if isinstance(item, dict)
+        ]
+        return {
+            "provider": "serpapi_google_scholar",
+            "authorId": author.get("author_id") or author_id.strip(),
+            "name": author.get("name"),
+            "affiliations": (
+                [author.get("affiliations")]
+                if isinstance(author.get("affiliations"), str)
+                and author.get("affiliations").strip()
+                else []
+            ),
+            "homepage": author.get("website"),
+            "citationCount": total_citations,
+            "interests": interests,
+            "coAuthors": coauthors,
+        }
+
+    async def get_author_articles(
+        self,
+        author_id: str,
+        *,
+        limit: int = 10,
+        start: int = 0,
+        sort: str | None = None,
+    ) -> dict[str, Any]:
+        """Return normalized papers from one Scholar author profile."""
+
+        num = min(limit, 20)
+        params: dict[str, Any] = {
+            "engine": "google_scholar_author",
+            "author_id": author_id.strip(),
+            "hl": "en",
+            "num": num,
+            "start": max(start, 0),
+        }
+        if sort:
+            params["sort"] = sort
+        data = await self._get(params)
+        raw_articles: list[dict[str, Any]] = data.get("articles") or []
         papers: list[dict[str, Any]] = []
-        for result in organic_results[:limit]:
-            normalized = normalize_organic_result(result)
+        for article in raw_articles[:limit]:
+            normalized = normalize_author_article_result(article)
             if normalized is not None:
                 papers.append(normalized)
-        return papers
+        next_start = self._next_start(start, num, len(raw_articles))
+        return {
+            "provider": "serpapi_google_scholar",
+            "authorId": author_id.strip(),
+            "total": len(papers),
+            "offset": start,
+            "data": papers,
+            **self._pagination(next_start),
+        }
+
+    async def get_account_status(self) -> dict[str, Any]:
+        """Return SerpApi account and quota metadata without consuming credits."""
+
+        data = await self._get_json(url=SERPAPI_ACCOUNT_URL, params={})
+        return {"provider": "serpapi_google_scholar", **data}
 
     async def get_citation_formats(
         self,

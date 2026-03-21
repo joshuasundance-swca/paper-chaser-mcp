@@ -20,6 +20,12 @@ from .models.tools import (
     SearchPapersArgs,
     SearchProvider,
 )
+from .provider_runtime import (
+    ProviderDiagnosticsRegistry,
+    execute_provider_call,
+    provider_attempt_reason,
+    provider_status_to_attempt_status,
+)
 
 logger = logging.getLogger("scholar-search-mcp")
 
@@ -422,6 +428,19 @@ def _earlier_result_attempt(provider: SearchProvider) -> BrokerAttempt:
     )
 
 
+def _attempt_from_outcome(
+    provider: SearchProvider,
+    *,
+    status_bucket: str,
+    reason: str | None,
+) -> BrokerAttempt:
+    return BrokerAttempt(
+        provider=provider,
+        status=provider_status_to_attempt_status(status_bucket),
+        reason=reason,
+    )
+
+
 def _core_result(core_response: dict[str, Any], limit: int) -> SearchResponse:
     core_search = CoreSearchResponse.model_validate(core_response)
     return SearchResponse(
@@ -529,6 +548,7 @@ async def search_papers_with_fallback(
     min_citation_count: Optional[int] = None,
     preferred_provider: SearchProvider | None = None,
     provider_order: Sequence[SearchProvider] | None = None,
+    provider_registry: ProviderDiagnosticsRegistry | None = None,
 ) -> dict[str, Any]:
     """Execute the search broker chain using the configured provider order.
 
@@ -579,42 +599,51 @@ async def search_papers_with_fallback(
             if not enable_core:
                 attempts.append(_disabled_provider_attempt(provider))
                 continue
-            try:
-                core_response = await core_client.search(
+            core_call = await execute_provider_call(
+                provider=provider,
+                endpoint="search",
+                operation=lambda: core_client.search(
                     query=query,
                     limit=limit,
                     start=0,
                     year=year,
+                ),
+                registry=provider_registry,
+                is_empty=lambda payload: not _core_result(payload, limit).data,
+            )
+            attempts.append(
+                _attempt_from_outcome(
+                    provider,
+                    status_bucket=core_call.outcome.status_bucket,
+                    reason=provider_attempt_reason(core_call.outcome),
                 )
-                result = _core_result(core_response, limit)
+            )
+            if core_call.payload is not None:
+                result = _core_result(core_call.payload, limit)
                 if result.data:
                     provider_used = provider
-                    attempts.append(
-                        BrokerAttempt(provider=provider, status="returned_results")
-                    )
                     logger.info("search_papers: using CORE API results")
                     break
-                attempts.append(
-                    BrokerAttempt(provider=provider, status="returned_no_results")
-                )
-                result = None
-            except Exception as exc:
-                attempts.append(
-                    BrokerAttempt(provider=provider, status="failed", reason=str(exc))
+            else:
+                core_error = (
+                    core_call.outcome.error or core_call.outcome.fallback_reason
                 )
                 logger.info(
-                    "search_papers: CORE failed (%s), falling back to next channel",
-                    exc,
+                    "search_papers: CORE unavailable (%s), "
+                    "falling back to next channel",
+                    core_error,
                 )
-                result = None
+            result = None
             continue
 
         if provider == "semantic_scholar":
             if not enable_semantic_scholar:
                 attempts.append(_disabled_provider_attempt(provider))
                 continue
-            try:
-                s2_response = await semantic_client.search_papers(
+            semantic_call = await execute_provider_call(
+                provider=provider,
+                endpoint="search_papers",
+                operation=lambda: semantic_client.search_papers(
                     query=query,
                     limit=limit,
                     fields=fields,
@@ -625,29 +654,34 @@ async def search_papers_with_fallback(
                     publication_types=publication_types,
                     open_access_pdf=open_access_pdf,
                     min_citation_count=min_citation_count,
+                ),
+                registry=provider_registry,
+                is_empty=lambda payload: not _semantic_result(payload, limit).data,
+            )
+            attempts.append(
+                _attempt_from_outcome(
+                    provider,
+                    status_bucket=semantic_call.outcome.status_bucket,
+                    reason=provider_attempt_reason(semantic_call.outcome),
                 )
-                result = _semantic_result(s2_response, limit)
+            )
+            if semantic_call.payload is not None:
+                result = _semantic_result(semantic_call.payload, limit)
                 if result.data:
                     provider_used = provider
-                    attempts.append(
-                        BrokerAttempt(provider=provider, status="returned_results")
-                    )
                     logger.info("search_papers: using Semantic Scholar results")
                     break
-                attempts.append(
-                    BrokerAttempt(provider=provider, status="returned_no_results")
-                )
-                result = None
-            except Exception as exc:
-                attempts.append(
-                    BrokerAttempt(provider=provider, status="failed", reason=str(exc))
+            else:
+                semantic_error = (
+                    semantic_call.outcome.error
+                    or semantic_call.outcome.fallback_reason
                 )
                 logger.info(
-                    "search_papers: Semantic Scholar failed (%s), "
+                    "search_papers: Semantic Scholar unavailable (%s), "
                     "falling back to next channel",
-                    exc,
+                    semantic_error,
                 )
-                result = None
+            result = None
             continue
 
         if provider == "serpapi_google_scholar":
@@ -663,53 +697,71 @@ async def search_papers_with_fallback(
                     )
                 )
                 continue
-            try:
-                serpapi_papers = await serpapi_client.search(
+            serpapi_call = await execute_provider_call(
+                provider=provider,
+                endpoint="search",
+                operation=lambda: serpapi_client.search(
                     query=query,
                     limit=limit,
                     year=year,
+                ),
+                registry=provider_registry,
+                propagate_exceptions=(SerpApiKeyMissingError,),
+            )
+            attempts.append(
+                _attempt_from_outcome(
+                    provider,
+                    status_bucket=serpapi_call.outcome.status_bucket,
+                    reason=provider_attempt_reason(serpapi_call.outcome),
                 )
-                result = _serpapi_result(serpapi_papers, limit)
+            )
+            if serpapi_call.payload is not None:
+                result = _serpapi_result(serpapi_call.payload, limit)
                 if result.data:
                     provider_used = provider
-                    attempts.append(
-                        BrokerAttempt(provider=provider, status="returned_results")
-                    )
                     logger.info("search_papers: using SerpApi Google Scholar results")
                     break
-                attempts.append(
-                    BrokerAttempt(provider=provider, status="returned_no_results")
-                )
-                result = None
-            except SerpApiKeyMissingError:
-                raise
-            except Exception as exc:
-                attempts.append(
-                    BrokerAttempt(provider=provider, status="failed", reason=str(exc))
+            else:
+                serpapi_error = (
+                    serpapi_call.outcome.error
+                    or serpapi_call.outcome.fallback_reason
                 )
                 logger.info(
-                    "search_papers: SerpApi failed (%s), falling back to next channel",
-                    exc,
+                    "search_papers: SerpApi unavailable (%s), "
+                    "falling back to next channel",
+                    serpapi_error,
                 )
-                result = None
+            result = None
             continue
 
         if not enable_arxiv:
             attempts.append(_disabled_provider_attempt(provider))
             continue
 
-        arxiv_response = await arxiv_client.search(
-            query=query,
-            limit=limit,
-            year=year,
+        arxiv_call = await execute_provider_call(
+            provider=provider,
+            endpoint="search",
+            operation=lambda: arxiv_client.search(
+                query=query,
+                limit=limit,
+                year=year,
+            ),
+            registry=provider_registry,
+            is_empty=lambda payload: not _arxiv_result(payload, limit).data,
         )
-        result = _arxiv_result(arxiv_response, limit)
-        if result.data:
-            provider_used = provider
-            attempts.append(BrokerAttempt(provider=provider, status="returned_results"))
-            logger.info("search_papers: using arXiv results")
-            break
-        attempts.append(BrokerAttempt(provider=provider, status="returned_no_results"))
+        attempts.append(
+            _attempt_from_outcome(
+                provider,
+                status_bucket=arxiv_call.outcome.status_bucket,
+                reason=provider_attempt_reason(arxiv_call.outcome),
+            )
+        )
+        if arxiv_call.payload is not None:
+            result = _arxiv_result(arxiv_call.payload, limit)
+            if result.data:
+                provider_used = provider
+                logger.info("search_papers: using arXiv results")
+                break
         result = None
 
     if provider_used != "none":

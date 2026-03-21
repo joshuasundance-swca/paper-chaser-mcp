@@ -4,7 +4,13 @@ from typing import Any
 import pytest
 
 from scholar_search_mcp import server
+from scholar_search_mcp.provider_runtime import ProviderDiagnosticsRegistry
 from tests.helpers import RecordingSemanticClient, _payload
+
+
+@pytest.fixture(autouse=True)
+def _reset_provider_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(server, "provider_registry", ProviderDiagnosticsRegistry())
 
 
 @pytest.mark.asyncio
@@ -174,7 +180,7 @@ async def test_search_papers_preferred_provider_runs_first(
         "status": "returned_results",
         "reason": None,
     }
-    assert payload["brokerMetadata"]["attemptedProviders"][1]["provider"] == "core"
+    assert payload["brokerMetadata"]["attemptedProviders"][1]["provider"] == "arxiv"
     assert payload["brokerMetadata"]["attemptedProviders"][1]["status"] == "skipped"
     assert spy_core.called is False
 
@@ -830,14 +836,15 @@ async def test_search_papers_broker_metadata_reports_attempts_and_filter_routing
     assert broker_meta["providerUsed"] == "semantic_scholar"
     assert broker_meta["semanticScholarOnlyFilters"] == ["publicationDateOrYear"]
     assert broker_meta["recommendedPaginationTool"] == "search_papers_bulk"
-    assert broker_meta["attemptedProviders"][0]["provider"] == "core"
-    assert broker_meta["attemptedProviders"][0]["status"] == "skipped"
+    assert broker_meta["attemptedProviders"][0]["provider"] == "semantic_scholar"
+    assert broker_meta["attemptedProviders"][0]["status"] == "returned_results"
+    assert broker_meta["attemptedProviders"][0]["reason"] is None
+    assert broker_meta["attemptedProviders"][1]["provider"] == "arxiv"
+    assert broker_meta["attemptedProviders"][1]["status"] == "skipped"
     assert (
-        "Semantic Scholar-only filters"
-        in broker_meta["attemptedProviders"][0]["reason"]
+        "earlier provider already returned results"
+        in broker_meta["attemptedProviders"][1]["reason"]
     )
-    assert broker_meta["attemptedProviders"][1]["provider"] == "semantic_scholar"
-    assert broker_meta["attemptedProviders"][1]["status"] == "returned_results"
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,160 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "doi_lookup_known_item",
+      "category": "doi_lookup",
+      "tool": "get_paper_details",
+      "inputs": {
+        "paperId": "DOI:10.48550/arXiv.1706.03762"
+      },
+      "latencyProfile": "fast",
+      "expected": {
+        "goal": "exact_known_item_resolution",
+        "providers": [
+          "semantic_scholar",
+          "openalex"
+        ]
+      }
+    },
+    {
+      "id": "citation_repair_attention_is_all_you_need",
+      "category": "title_citation_repair",
+      "tool": "resolve_citation",
+      "inputs": {
+        "citation": "Attention is all you need 2017 Vaswani"
+      },
+      "latencyProfile": "balanced",
+      "expected": {
+        "goal": "canonical_citation_recovery"
+      }
+    },
+    {
+      "id": "author_disambiguation_common_name",
+      "category": "author_disambiguation",
+      "tool": "search_entities_openalex",
+      "inputs": {
+        "query": "MIT",
+        "entityType": "institution",
+        "limit": 5
+      },
+      "latencyProfile": "fast",
+      "expected": {
+        "goal": "entity_pivot_then_work_search"
+      }
+    },
+    {
+      "id": "broad_topical_discovery_transformer_alignment",
+      "category": "broad_topical_discovery",
+      "tool": "search_papers_smart",
+      "inputs": {
+        "query": "alignment methods for multimodal transformer systems",
+        "limit": 10,
+        "latencyProfile": "balanced"
+      },
+      "expected": {
+        "goal": "balanced_multi_step_discovery"
+      }
+    },
+    {
+      "id": "citation_expansion_serpapi_cited_by",
+      "category": "citation_expansion",
+      "tool": "search_papers_serpapi_cited_by",
+      "inputs": {
+        "citesId": "9943926152122871332",
+        "limit": 10
+      },
+      "latencyProfile": "deep",
+      "expected": {
+        "goal": "guarded_citation_discovery"
+      }
+    },
+    {
+      "id": "smart_landscape_mapping_rag",
+      "category": "smart_landscape_mapping",
+      "tool": "map_research_landscape",
+      "inputs": {
+        "query": "retrieval augmented generation evaluation methods",
+        "limit": 12,
+        "latencyProfile": "deep"
+      },
+      "expected": {
+        "goal": "theme_mapping_with_grounded_clusters"
+      }
+    },
+    {
+      "id": "provider_outage_semantic_scholar",
+      "category": "provider_outage",
+      "provider": "semantic_scholar",
+      "tool": "search_papers",
+      "inputs": {
+        "query": "vision transformers medical imaging"
+      },
+      "expected": {
+        "goal": "fallback_and_diagnostics_capture"
+      }
+    },
+    {
+      "id": "provider_outage_openalex",
+      "category": "provider_outage",
+      "provider": "openalex",
+      "tool": "search_papers_openalex",
+      "inputs": {
+        "query": "graph neural networks"
+      },
+      "expected": {
+        "goal": "explicit_provider_failure_reporting"
+      }
+    },
+    {
+      "id": "provider_outage_core",
+      "category": "provider_outage",
+      "provider": "core",
+      "tool": "search_papers_core",
+      "inputs": {
+        "query": "soil carbon sequestration"
+      },
+      "expected": {
+        "goal": "suppression_and_retry_policy_validation"
+      }
+    },
+    {
+      "id": "provider_outage_serpapi",
+      "category": "provider_outage",
+      "provider": "serpapi_google_scholar",
+      "tool": "search_papers_serpapi",
+      "inputs": {
+        "query": "federated learning robustness"
+      },
+      "expected": {
+        "goal": "quota_or_upstream_failure_visibility"
+      }
+    },
+    {
+      "id": "provider_outage_arxiv",
+      "category": "provider_outage",
+      "provider": "arxiv",
+      "tool": "search_papers_arxiv",
+      "inputs": {
+        "query": "diffusion models"
+      },
+      "expected": {
+        "goal": "fallback_or_empty_result_visibility"
+      }
+    },
+    {
+      "id": "provider_outage_openai",
+      "category": "provider_outage",
+      "provider": "openai",
+      "tool": "search_papers_smart",
+      "inputs": {
+        "query": "scientific literature retrieval evaluation",
+        "limit": 8,
+        "latencyProfile": "balanced"
+      },
+      "expected": {
+        "goal": "smart_fallback_without_model_corruption"
+      }
+    }
+  ]
+}

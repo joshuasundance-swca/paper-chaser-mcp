@@ -115,6 +115,18 @@ class RecordingOpenAlexClient:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []
 
+    async def paper_autocomplete(self, **kwargs) -> dict:
+        self.calls.append(("paper_autocomplete", kwargs))
+        return {
+            "matches": [
+                {
+                    "id": "W-auto-1",
+                    "displayName": "OpenAlex autocomplete",
+                    "source": "openalex",
+                }
+            ]
+        }
+
     async def search(self, **kwargs) -> dict:
         self.calls.append(("search", kwargs))
         return {
@@ -129,6 +141,33 @@ class RecordingOpenAlexClient:
             "total": 1,
             "data": [{"paperId": "W1", "source": "openalex"}],
             "pagination": {"hasMore": True, "nextCursor": "oa-next"},
+        }
+
+    async def search_entities(self, **kwargs) -> dict:
+        self.calls.append(("search_entities", kwargs))
+        return {
+            "entityType": kwargs["entity_type"],
+            "total": 1,
+            "offset": 0,
+            "data": [
+                {
+                    "entityId": "https://openalex.org/S1",
+                    "displayName": "OpenAlex Source",
+                    "source": "openalex",
+                }
+            ],
+            "pagination": {"hasMore": True, "nextCursor": "oa-entities"},
+        }
+
+    async def search_works_by_entity(self, **kwargs) -> dict:
+        self.calls.append(("search_works_by_entity", kwargs))
+        return {
+            "entityType": kwargs["entity_type"],
+            "entityId": kwargs["entity_id"],
+            "total": 1,
+            "offset": 0,
+            "data": [{"paperId": "W-entity-1", "source": "openalex"}],
+            "pagination": {"hasMore": True, "nextCursor": "oa-entity-papers"},
         }
 
     async def get_paper_details(self, **kwargs) -> dict:

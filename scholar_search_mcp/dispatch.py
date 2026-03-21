@@ -396,6 +396,7 @@ async def dispatch_tool(
     serpapi_client: Any = None,
     enable_serpapi: bool = False,
     provider_order: list[SearchProvider] | None = None,
+    provider_registry: Any = None,
     workspace_registry: Any = None,
     agentic_runtime: Any = None,
     ctx: Any = None,
@@ -428,6 +429,12 @@ async def dispatch_tool(
             year=smart_args.year,
             venue=smart_args.venue,
             focus=smart_args.focus,
+            latency_profile=smart_args.latency_profile,
+            provider_budget=(
+                smart_args.provider_budget.model_dump(by_alias=False)
+                if smart_args.provider_budget is not None
+                else None
+            ),
             ctx=ctx,
         )
 
@@ -451,6 +458,7 @@ async def dispatch_tool(
             question=ask_args.question,
             top_k=ask_args.top_k,
             answer_mode=ask_args.answer_mode,
+            latency_profile=ask_args.latency_profile,
             ctx=ctx,
         )
 
@@ -474,6 +482,7 @@ async def dispatch_tool(
         return await agentic_runtime.map_research_landscape(
             search_session_id=landscape_args.search_session_id,
             max_themes=landscape_args.max_themes,
+            latency_profile=landscape_args.latency_profile,
             ctx=ctx,
         )
 
@@ -500,8 +509,39 @@ async def dispatch_tool(
             direction=graph_args.direction,
             hops=graph_args.hops,
             per_seed_limit=graph_args.per_seed_limit,
+            latency_profile=graph_args.latency_profile,
             ctx=ctx,
         )
+
+    if name == "get_provider_diagnostics":
+        validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
+        args_dict = validated_payload.model_dump(by_alias=False)
+        if provider_registry is None:
+            return {
+                "generatedAt": None,
+                "providerOrder": list(provider_order or []),
+                "providers": [],
+            }
+        snapshot = provider_registry.snapshot(
+            enabled={
+                "semantic_scholar": enable_semantic_scholar,
+                "openalex": enable_openalex,
+                "core": enable_core,
+                "arxiv": enable_arxiv,
+                "serpapi_google_scholar": enable_serpapi,
+                "openai": agentic_runtime is not None,
+            },
+            provider_order=[
+                *(provider_order or []),
+                "openalex",
+                "openai",
+            ],
+        )
+        if not args_dict.get("include_recent_outcomes", True):
+            for provider in snapshot.get("providers", []):
+                if isinstance(provider, dict):
+                    provider["recentOutcomes"] = []
+        return snapshot
 
     if name == "search_papers":
         search_args = cast(
@@ -529,6 +569,7 @@ async def dispatch_tool(
             semantic_client=client,
             arxiv_client=arxiv_client,
             serpapi_client=serpapi_client,
+            provider_registry=provider_registry,
         )
         elicited = await _maybe_elicit_and_retry(
             tool_name=name,
@@ -545,6 +586,7 @@ async def dispatch_tool(
             enable_arxiv=enable_arxiv,
             enable_serpapi=enable_serpapi,
             provider_order=provider_order,
+            provider_registry=provider_registry,
             workspace_registry=workspace_registry,
             agentic_runtime=agentic_runtime,
             ctx=ctx,
@@ -590,6 +632,25 @@ async def dispatch_tool(
             workspace_registry=workspace_registry,
         )
 
+    if name == "paper_autocomplete_openalex":
+        if not enable_openalex:
+            raise ValueError(
+                "paper_autocomplete_openalex requires OpenAlex, which is disabled. "
+                "Set SCHOLAR_SEARCH_ENABLE_OPENALEX=true to use this tool."
+            )
+        validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
+        args_dict = validated_payload.model_dump(by_alias=False)
+        result = await openalex_client.paper_autocomplete(
+            query=args_dict["query"],
+            limit=args_dict.get("limit", 10),
+        )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            result,
+            workspace_registry=workspace_registry,
+        )
+
     if name == "search_papers_openalex":
         if not enable_openalex:
             raise ValueError(
@@ -607,6 +668,76 @@ async def dispatch_tool(
             name,
             arguments,
             result,
+            workspace_registry=workspace_registry,
+        )
+
+    if name == "search_entities_openalex":
+        if not enable_openalex:
+            raise ValueError(
+                "search_entities_openalex requires OpenAlex, which is disabled. "
+                "Set SCHOLAR_SEARCH_ENABLE_OPENALEX=true to use this tool."
+            )
+        validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
+        args_dict = validated_payload.model_dump(by_alias=False)
+        ctx_hash = compute_context_hash(name, args_dict)
+        result = await openalex_client.search_entities(
+            entity_type=args_dict["entity_type"],
+            query=args_dict["query"],
+            limit=args_dict.get("limit", 10),
+            cursor=_cursor_to_bulk_token(
+                args_dict.get("cursor"),
+                tool=name,
+                context_hash=ctx_hash,
+                expected_provider="openalex",
+            ),
+        )
+        serialized = dump_jsonable(result)
+        serialized = _encode_next_bulk_cursor(
+            serialized,
+            name,
+            context_hash=ctx_hash,
+            provider="openalex",
+        )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            serialized,
+            workspace_registry=workspace_registry,
+        )
+
+    if name == "search_papers_openalex_by_entity":
+        if not enable_openalex:
+            raise ValueError(
+                "search_papers_openalex_by_entity requires OpenAlex, "
+                "which is disabled. "
+                "Set SCHOLAR_SEARCH_ENABLE_OPENALEX=true to use this tool."
+            )
+        validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
+        args_dict = validated_payload.model_dump(by_alias=False)
+        ctx_hash = compute_context_hash(name, args_dict)
+        result = await openalex_client.search_works_by_entity(
+            entity_type=args_dict["entity_type"],
+            entity_id=args_dict["entity_id"],
+            limit=args_dict.get("limit", 100),
+            cursor=_cursor_to_bulk_token(
+                args_dict.get("cursor"),
+                tool=name,
+                context_hash=ctx_hash,
+                expected_provider="openalex",
+            ),
+            year=args_dict.get("year"),
+        )
+        serialized = dump_jsonable(result)
+        serialized = _encode_next_bulk_cursor(
+            serialized,
+            name,
+            context_hash=ctx_hash,
+            provider="openalex",
+        )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            serialized,
             workspace_registry=workspace_registry,
         )
 
@@ -644,6 +775,145 @@ async def dispatch_tool(
             workspace_registry=workspace_registry,
         )
 
+    if name == "search_papers_serpapi_cited_by":
+        if not enable_serpapi:
+            raise ValueError(
+                "search_papers_serpapi_cited_by requires SerpApi, "
+                "which is not enabled. "
+                "Set SCHOLAR_SEARCH_ENABLE_SERPAPI=true and provide SERPAPI_API_KEY."
+            )
+        validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
+        args_dict = validated_payload.model_dump(by_alias=False)
+        ctx_hash = compute_context_hash(name, args_dict)
+        result = await serpapi_client.search_cited_by(
+            cites_id=args_dict["cites_id"],
+            query=args_dict.get("query"),
+            limit=args_dict.get("limit", 10),
+            start=_cursor_to_offset(
+                args_dict.get("cursor"),
+                name,
+                context_hash=ctx_hash,
+                expected_provider="serpapi_google_scholar",
+            )
+            or 0,
+            year=args_dict.get("year"),
+        )
+        serialized = dump_jsonable(result)
+        serialized = _encode_next_cursor(
+            serialized,
+            name,
+            context_hash=ctx_hash,
+            provider="serpapi_google_scholar",
+        )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            serialized,
+            workspace_registry=workspace_registry,
+        )
+
+    if name == "search_papers_serpapi_versions":
+        if not enable_serpapi:
+            raise ValueError(
+                "search_papers_serpapi_versions requires SerpApi, "
+                "which is not enabled. "
+                "Set SCHOLAR_SEARCH_ENABLE_SERPAPI=true and provide SERPAPI_API_KEY."
+            )
+        validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
+        args_dict = validated_payload.model_dump(by_alias=False)
+        ctx_hash = compute_context_hash(name, args_dict)
+        result = await serpapi_client.search_versions(
+            cluster_id=args_dict["cluster_id"],
+            limit=args_dict.get("limit", 10),
+            start=_cursor_to_offset(
+                args_dict.get("cursor"),
+                name,
+                context_hash=ctx_hash,
+                expected_provider="serpapi_google_scholar",
+            )
+            or 0,
+        )
+        serialized = dump_jsonable(result)
+        serialized = _encode_next_cursor(
+            serialized,
+            name,
+            context_hash=ctx_hash,
+            provider="serpapi_google_scholar",
+        )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            serialized,
+            workspace_registry=workspace_registry,
+        )
+
+    if name == "get_author_profile_serpapi":
+        if not enable_serpapi:
+            raise ValueError(
+                "get_author_profile_serpapi requires SerpApi, which is not enabled. "
+                "Set SCHOLAR_SEARCH_ENABLE_SERPAPI=true and provide SERPAPI_API_KEY."
+            )
+        validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
+        args_dict = validated_payload.model_dump(by_alias=False)
+        result = await serpapi_client.get_author_profile(
+            author_id=args_dict["author_id"],
+        )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            result,
+            workspace_registry=workspace_registry,
+        )
+
+    if name == "get_author_articles_serpapi":
+        if not enable_serpapi:
+            raise ValueError(
+                "get_author_articles_serpapi requires SerpApi, which is not enabled. "
+                "Set SCHOLAR_SEARCH_ENABLE_SERPAPI=true and provide SERPAPI_API_KEY."
+            )
+        validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
+        args_dict = validated_payload.model_dump(by_alias=False)
+        ctx_hash = compute_context_hash(name, args_dict)
+        result = await serpapi_client.get_author_articles(
+            author_id=args_dict["author_id"],
+            limit=args_dict.get("limit", 10),
+            start=_cursor_to_offset(
+                args_dict.get("cursor"),
+                name,
+                context_hash=ctx_hash,
+                expected_provider="serpapi_google_scholar",
+            )
+            or 0,
+            sort=args_dict.get("sort"),
+        )
+        serialized = dump_jsonable(result)
+        serialized = _encode_next_cursor(
+            serialized,
+            name,
+            context_hash=ctx_hash,
+            provider="serpapi_google_scholar",
+        )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            serialized,
+            workspace_registry=workspace_registry,
+        )
+
+    if name == "get_serpapi_account_status":
+        if not enable_serpapi:
+            raise ValueError(
+                "get_serpapi_account_status requires SerpApi, which is not enabled. "
+                "Set SCHOLAR_SEARCH_ENABLE_SERPAPI=true and provide SERPAPI_API_KEY."
+            )
+        result = await serpapi_client.get_account_status()
+        return _finalize_tool_result(
+            name,
+            arguments,
+            result,
+            workspace_registry=workspace_registry,
+        )
+
     if name in PROVIDER_SEARCH_TOOLS:
         provider_arguments = cast(
             BasicSearchPapersArgs,
@@ -671,6 +941,7 @@ async def dispatch_tool(
             semantic_client=client,
             arxiv_client=arxiv_client,
             serpapi_client=serpapi_client,
+            provider_registry=provider_registry,
         )
         return _finalize_tool_result(
             name,
@@ -952,6 +1223,7 @@ async def dispatch_tool(
         enable_arxiv=enable_arxiv,
         enable_serpapi=enable_serpapi,
         provider_order=provider_order,
+        provider_registry=provider_registry,
         workspace_registry=workspace_registry,
         agentic_runtime=agentic_runtime,
         ctx=ctx,
@@ -977,7 +1249,10 @@ def _finalize_tool_result(
     """Add compatibility metadata to raw tool responses."""
     if not isinstance(result, dict):
         return dump_jsonable(result)
-    if tool_name in SMART_TOOLS or workspace_registry is None:
+    if tool_name in SMART_TOOLS or tool_name in {
+        "get_provider_diagnostics",
+        "get_serpapi_account_status",
+    } or workspace_registry is None:
         return result
     return augment_tool_result(
         tool_name=tool_name,
@@ -1003,6 +1278,7 @@ async def _maybe_elicit_and_retry(
     enable_arxiv: bool,
     enable_serpapi: bool,
     provider_order: list[SearchProvider] | None,
+    provider_registry: Any,
     workspace_registry: Any,
     agentic_runtime: Any,
     ctx: Any,
@@ -1070,6 +1346,7 @@ async def _maybe_elicit_and_retry(
         serpapi_client=serpapi_client,
         enable_serpapi=enable_serpapi,
         provider_order=provider_order,
+        provider_registry=provider_registry,
         workspace_registry=workspace_registry,
         agentic_runtime=agentic_runtime,
         ctx=ctx,

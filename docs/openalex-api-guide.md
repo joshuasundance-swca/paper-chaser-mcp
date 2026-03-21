@@ -20,6 +20,11 @@ The repo now exposes OpenAlex through dedicated tools rather than the default
 
 - `search_papers_openalex` for one explicit OpenAlex page
 - `search_papers_openalex_bulk` for OpenAlex cursor pagination
+- `paper_autocomplete_openalex` for lightweight title completion and
+  disambiguation
+- `search_entities_openalex` for `source`, `institution`, and `topic` search
+- `search_papers_openalex_by_entity` for explicit work pivots by OpenAlex
+  entity ID
 - `get_paper_details_openalex` for OpenAlex W-id / DOI lookup
 - `get_paper_citations_openalex` and `get_paper_references_openalex` for
   OpenAlex-native citation chasing
@@ -43,8 +48,11 @@ Current repo boundaries to keep in mind:
 
 - OpenAlex remains outside the default `search_papers` broker and the default
   provider-order configuration
-- the shipped OpenAlex MCP surface does not yet expose institution/source pivot
-  tools or OpenAlex autocomplete
+- production deployments should prefer `OPENALEX_API_KEY` plus
+  `OPENALEX_MAILTO` when available, while local development can still fall back
+  to mailto-only or anonymous access
+- OpenAlex is the repo's explicit secondary graph for
+  venue/topic/institution disambiguation rather than a hidden broker hop
 
 Primary references:
 
@@ -73,6 +81,10 @@ If you remember only a few things, make them these:
 
 OpenAlex does **not** require an API key for standard use. For most exploratory
 or low-volume MCP use, requests can be made anonymously.
+
+In this repo, production usage should still prefer `OPENALEX_API_KEY` when it
+is available. The no-key and mailto-only paths remain supported for local
+development, smoke tests, and low-volume exploration.
 
 However, two integration details still matter:
 
