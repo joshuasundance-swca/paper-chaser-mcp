@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..constants import SUPPORTED_AUTHOR_FIELDS, SUPPORTED_PAPER_FIELDS
 
@@ -49,6 +49,18 @@ SEMANTIC_SCHOLAR_EXPANSION_PAPER_ID_DESCRIPTION = (
     "paper.expansionIdStatus is not_portable, do not reuse brokered "
     "paperId/sourceId/canonicalId values directly; resolve the paper through a "
     "DOI or Semantic Scholar-native lookup first."
+)
+ENRICHMENT_PAPER_ID_DESCRIPTION = (
+    "Existing paper identifier for enrichment tools. Accepts a bare DOI, DOI URL, "
+    "canonicalId, recommendedExpansionId, or any paperId that already embeds a DOI."
+)
+DOI_INPUT_DESCRIPTION = (
+    "Bare DOI or DOI URL. When both doi and paper_id are supplied, the explicit doi "
+    "wins."
+)
+INCLUDE_ENRICHMENT_DESCRIPTION = (
+    "When true, add post-resolution Crossref and Unpaywall enrichment to the final "
+    "resolved paper output. Matching, ranking, and retrieval behavior stay unchanged."
 )
 
 
@@ -336,6 +348,11 @@ class BulkSearchPapersArgs(ToolArgsModel):
 class PaperMatchArgs(ToolArgsModel):
     query: str = Field(description="Paper title to find the best match for")
     fields: list[str] | None = Field(default=None, description="Fields to return")
+    include_enrichment: bool = Field(
+        default=False,
+        alias="includeEnrichment",
+        description=INCLUDE_ENRICHMENT_DESCRIPTION,
+    )
 
 
 class ResolveCitationArgs(ToolArgsModel):
@@ -376,6 +393,11 @@ class ResolveCitationArgs(ToolArgsModel):
         alias="doiHint",
         description="Optional DOI or DOI fragment hint.",
     )
+    include_enrichment: bool = Field(
+        default=False,
+        alias="includeEnrichment",
+        description=INCLUDE_ENRICHMENT_DESCRIPTION,
+    )
 
     @field_validator("max_candidates", mode="before")
     @classmethod
@@ -403,6 +425,50 @@ class OpenAlexPaperAutocompleteArgs(ToolArgsModel):
 class PaperLookupArgs(ToolArgsModel):
     paper_id: str = Field(description="Paper ID (DOI, ArXiv ID, S2 ID, etc.)")
     fields: list[str] | None = Field(default=None, description="Fields to return")
+    include_enrichment: bool = Field(
+        default=False,
+        alias="includeEnrichment",
+        description=INCLUDE_ENRICHMENT_DESCRIPTION,
+    )
+
+
+class PaperEnrichmentLookupArgs(ToolArgsModel):
+    paper_id: str | None = Field(
+        default=None,
+        description=ENRICHMENT_PAPER_ID_DESCRIPTION,
+    )
+    doi: str | None = Field(
+        default=None,
+        description=DOI_INPUT_DESCRIPTION,
+    )
+
+
+class CrossrefEnrichmentArgs(PaperEnrichmentLookupArgs):
+    query: str | None = Field(
+        default=None,
+        description=(
+            "Optional title or bibliographic query fallback used only when no DOI "
+            "can be resolved from the inputs."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def require_lookup_material(self) -> "CrossrefEnrichmentArgs":
+        if self.paper_id or self.doi or self.query:
+            return self
+        raise ValueError("Provide at least one of paper_id, doi, or query.")
+
+
+class UnpaywallEnrichmentArgs(PaperEnrichmentLookupArgs):
+    @model_validator(mode="after")
+    def require_identifier(self) -> "UnpaywallEnrichmentArgs":
+        if self.paper_id or self.doi:
+            return self
+        raise ValueError("Provide paper_id or doi for Unpaywall lookups.")
+
+
+class EnrichPaperArgs(CrossrefEnrichmentArgs):
+    """Run Crossref and Unpaywall enrichment for one known paper or DOI."""
 
 
 class OpenAlexPaperLookupArgs(ToolArgsModel):
@@ -949,6 +1015,14 @@ class SmartSearchPapersArgs(ToolArgsModel):
             "to cap total provider calls, provider-specific calls, or paid usage."
         ),
     )
+    include_enrichment: bool = Field(
+        default=False,
+        alias="includeEnrichment",
+        description=(
+            "When true, enrich only the final returned smart hits after retrieval, "
+            "fusion, and ranking complete."
+        ),
+    )
 
     @field_validator("limit", mode="before")
     @classmethod
@@ -1073,6 +1147,9 @@ TOOL_INPUT_MODELS: dict[str, type[ToolArgsModel]] = {
     "paper_autocomplete": PaperAutocompleteArgs,
     "paper_autocomplete_openalex": OpenAlexPaperAutocompleteArgs,
     "get_paper_details": PaperLookupArgs,
+    "get_paper_metadata_crossref": CrossrefEnrichmentArgs,
+    "get_paper_open_access_unpaywall": UnpaywallEnrichmentArgs,
+    "enrich_paper": EnrichPaperArgs,
     "get_paper_details_openalex": OpenAlexPaperLookupArgs,
     "get_paper_citations": PaperListArgs,
     "get_paper_citations_openalex": OpenAlexPaperListArgs,

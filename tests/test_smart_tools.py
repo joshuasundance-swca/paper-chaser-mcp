@@ -17,7 +17,14 @@ from scholar_search_mcp.agentic.planner import (
 )
 from scholar_search_mcp.agentic.ranking import merge_candidates, rerank_candidates
 from scholar_search_mcp.agentic.retrieval import RetrievedCandidate, retrieve_variant
-from tests.helpers import RecordingOpenAlexClient, RecordingSemanticClient, _payload
+from scholar_search_mcp.enrichment import PaperEnrichmentService
+from tests.helpers import (
+    RecordingCrossrefClient,
+    RecordingOpenAlexClient,
+    RecordingSemanticClient,
+    RecordingUnpaywallClient,
+    _payload,
+)
 
 
 class RecordingContext:
@@ -166,6 +173,54 @@ async def test_smart_search_and_follow_up_tools_work_with_deterministic_runtime(
     assert graph["nodes"]
     assert graph["edges"]
     assert graph["frontier"]
+
+
+@pytest.mark.asyncio
+async def test_search_papers_smart_include_enrichment_enriches_final_hits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    registry, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
+    crossref = RecordingCrossrefClient()
+    unpaywall = RecordingUnpaywallClient()
+    runtime._enrichment_service = PaperEnrichmentService(
+        crossref_client=crossref,
+        unpaywall_client=unpaywall,
+        enable_crossref=True,
+        enable_unpaywall=True,
+        provider_registry=server.provider_registry,
+    )
+
+    monkeypatch.setattr(server, "agentic_runtime", runtime)
+    monkeypatch.setattr(server, "workspace_registry", registry)
+
+    smart = _payload(
+        await server.call_tool(
+            "search_papers_smart",
+            {"query": "transformers", "includeEnrichment": True},
+        )
+    )
+    record = registry.get(smart["searchSessionId"])
+
+    assert smart["results"]
+    first_paper = smart["results"][0]["paper"]
+    assert first_paper["enrichments"]["crossref"]["doi"] == "10.1234/crossref-query"
+    assert first_paper["enrichments"]["unpaywall"]["isOa"] is True
+    assert (
+        record.papers[0]["enrichments"]["crossref"]["doi"]
+        == "10.1234/crossref-query"
+    )
+    assert any(
+        outcome["provider"] == "crossref"
+        for outcome in smart["strategyMetadata"]["providerOutcomes"]
+    )
+    assert any(
+        outcome["provider"] == "unpaywall"
+        for outcome in smart["strategyMetadata"]["providerOutcomes"]
+    )
+    assert crossref.calls
+    assert unpaywall.calls
 
 
 @pytest.mark.asyncio

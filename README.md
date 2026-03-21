@@ -276,6 +276,28 @@ OpenAlex tool year inputs currently accept `YYYY`, `YYYY:YYYY`, `YYYY-YYYY`,
 and retry defaults (`min_interval=0.05s`, `max_retries=2`) rather than extra
 environment variables.
 
+### Paper enrichment configuration
+
+Crossref and Unpaywall are exposed as explicit paper-enrichment tools rather
+than broker providers. They do not participate in `search_papers` ranking or
+fallback order. Use them after you already have a paper, DOI, or DOI-bearing
+identifier.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `SCHOLAR_SEARCH_ENABLE_CROSSREF` | `true` | Enable explicit Crossref paper enrichment |
+| `CROSSREF_MAILTO` | unset | Optional contact email included in Crossref requests and user agent metadata |
+| `CROSSREF_TIMEOUT_SECONDS` | `30` | Timeout for Crossref enrichment requests |
+| `SCHOLAR_SEARCH_ENABLE_UNPAYWALL` | `true` | Enable explicit Unpaywall OA enrichment |
+| `UNPAYWALL_EMAIL` | unset | Required contact email for Unpaywall lookups |
+| `UNPAYWALL_TIMEOUT_SECONDS` | `30` | Timeout for Unpaywall enrichment requests |
+
+Known-item tools (`search_papers_match`, `get_paper_details`,
+`resolve_citation`) and `search_papers_smart` also expose
+`includeEnrichment=true` for opt-in Crossref + Unpaywall augmentation on the
+final resolved paper or final smart hits. This enrichment is post-resolution and
+does not change provider ordering, retrieval, or ranking.
+
 ### AI augmentation configuration
 
 The raw retrieval tools remain the contract of record. The smart layer is
@@ -490,6 +512,9 @@ Primary defaults for agents:
 - For small targeted pages, prefer `search_papers` or `search_papers_semantic_scholar` instead of `search_papers_bulk`.
 - Use `resolve_citation` for incomplete references, broken bibliography lines, and almost-right citations.
 - Use `search_papers_match` or `get_paper_details` for known-item lookup.
+- Use `get_paper_metadata_crossref`, `get_paper_open_access_unpaywall`, or
+  `enrich_paper` once you already have a stable paper or DOI and want additive
+  metadata or OA/PDF discovery.
 - Expand with `get_paper_citations`, `get_paper_references`, and `search_authors`
   once you have a paper or author anchor.
 - Use the `*_openalex` tools when you explicitly want OpenAlex-native DOI/ID
@@ -516,10 +541,13 @@ Primary defaults for agents:
 | `search_entities_openalex`       | Search OpenAlex `source`, `institution`, or `topic` entities for two-step pivot workflows. |
 | `search_papers_openalex_by_entity` | Retrieve OpenAlex works constrained to one OpenAlex `source`, `institution`, or `topic` entity ID, with cursor pagination for explicit disambiguation workflows. |
 | `search_papers_bulk`             | Primary exhaustive retrieval tool. Paginated bulk paper search (Semantic Scholar) with advanced boolean query syntax (up to 1,000 returned papers/call). The upstream bulk endpoint may ignore small `limit` values internally, so this server truncates returned data to the requested limit; prefer `search_papers` or `search_papers_semantic_scholar` for small targeted pages. Treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and do not derive/edit/fabricate it; `pagination.hasMore` signals more results. |
-| `resolve_citation`               | First-class citation-repair workflow for incomplete, malformed, or almost-right references. Stages identifier extraction, title recovery, quote/snippet recovery, and sparse metadata search; returns the best canonical paper candidate, alternatives, confidence, conflicts, and reusable `searchSessionId` metadata. |
-| `search_papers_match`            | Known-item lookup for messy or partial titles; finds the single paper whose title best matches the query string, falls back to fuzzy Semantic Scholar title search on exact-match 400/404 misses, and returns a structured no-match payload when the item still cannot be recovered |
+| `resolve_citation`               | First-class citation-repair workflow for incomplete, malformed, or almost-right references. Stages identifier extraction, title recovery, quote/snippet recovery, and sparse metadata search; returns the best canonical paper candidate, alternatives, confidence, conflicts, and reusable `searchSessionId` metadata. Optional `includeEnrichment=true` enriches only `bestMatch.paper` after resolution. |
+| `search_papers_match`            | Known-item lookup for messy or partial titles; finds the single paper whose title best matches the query string, falls back to fuzzy Semantic Scholar title search on exact-match 400/404 misses, and returns a structured no-match payload when the item still cannot be recovered. Optional `includeEnrichment=true` adds post-match Crossref + Unpaywall metadata to the final paper only. |
 | `paper_autocomplete`             | Return paper title completions for a partial query (typeahead)                                           |
-| `get_paper_details`              | Known-item lookup by identifier: get one paper by DOI, ArXiv ID, S2 ID, or URL                         |
+| `get_paper_details`              | Known-item lookup by identifier: get one paper by DOI, ArXiv ID, S2 ID, or URL. Optional `includeEnrichment=true` adds post-lookup Crossref + Unpaywall metadata without changing the base lookup path. |
+| `get_paper_metadata_crossref`    | Explicit Crossref enrichment for one known paper or DOI. DOI-first, with optional title/bibliographic query fallback when no DOI can be resolved from the inputs. Returns a normalized Crossref work summary plus additive enrichment fields. |
+| `get_paper_open_access_unpaywall` | Explicit Unpaywall enrichment for one known paper or DOI. DOI-only lookup for OA status, best OA URL, PDF URL, license, and DOAJ signal. Requires `UNPAYWALL_EMAIL`. |
+| `enrich_paper`                   | Combined Crossref + Unpaywall enrichment orchestrator for one paper, DOI, or DOI-bearing identifier. Resolves DOI first, runs Crossref, then Unpaywall, and returns one merged `enrichments` payload plus per-provider results. |
 | `get_paper_details_openalex`     | Known-item lookup using OpenAlex semantics: get one work by OpenAlex W-id, OpenAlex work URL, or DOI, with abstract reconstruction from OpenAlex's `abstract_inverted_index` when possible |
 | `get_paper_citations`            | Citation chasing outward: papers that cite the given paper (`cited by`); for Semantic Scholar expansion prefer `paper.recommendedExpansionId`, and if `paper.expansionIdStatus` is `not_portable` resolve the paper through DOI or a Semantic Scholar-native lookup before expanding; treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and keep it scoped to the same tool/query flow |
 | `get_paper_citations_openalex`   | OpenAlex cited-by expansion using the work's `cited_by_api_url`; treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and keep it scoped to the same tool/query flow |

@@ -4,8 +4,15 @@ import scholar_search_mcp
 import scholar_search_mcp.__main__ as server_main
 import scholar_search_mcp.cli as cli
 from scholar_search_mcp import server
+from scholar_search_mcp.enrichment import PaperEnrichmentService
 from scholar_search_mcp.utils.cursor import decode_bulk_cursor, decode_cursor
-from tests.helpers import RecordingOpenAlexClient, RecordingSemanticClient, _payload
+from tests.helpers import (
+    RecordingCrossrefClient,
+    RecordingOpenAlexClient,
+    RecordingSemanticClient,
+    RecordingUnpaywallClient,
+    _payload,
+)
 
 
 def _assert_additive_metadata(
@@ -19,11 +26,31 @@ def _assert_additive_metadata(
         assert payload.get("searchSessionId")
 
 
+def _install_recording_enrichment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[RecordingCrossrefClient, RecordingUnpaywallClient]:
+    crossref = RecordingCrossrefClient()
+    unpaywall = RecordingUnpaywallClient()
+    service = PaperEnrichmentService(
+        crossref_client=crossref,
+        unpaywall_client=unpaywall,
+        enable_crossref=True,
+        enable_unpaywall=True,
+        provider_registry=server.provider_registry,
+    )
+    monkeypatch.setattr(server, "enable_crossref", True)
+    monkeypatch.setattr(server, "enable_unpaywall", True)
+    monkeypatch.setattr(server, "crossref_client", crossref)
+    monkeypatch.setattr(server, "unpaywall_client", unpaywall)
+    monkeypatch.setattr(server, "enrichment_service", service)
+    return crossref, unpaywall
+
+
 @pytest.mark.asyncio
 async def test_list_tools_returns_expected_public_contract() -> None:
     tools = await server.list_tools()
 
-    assert len(tools) == 43
+    assert len(tools) == 46
     tool_map = {tool.name: tool for tool in tools}
     assert set(tool_map) == {
         "search_papers",
@@ -39,6 +66,9 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "paper_autocomplete",
         "paper_autocomplete_openalex",
         "get_paper_details",
+        "get_paper_metadata_crossref",
+        "get_paper_open_access_unpaywall",
+        "enrich_paper",
         "get_paper_details_openalex",
         "get_paper_citations",
         "get_paper_citations_openalex",
@@ -152,6 +182,28 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "yearHint",
         "venueHint",
         "doiHint",
+        "includeEnrichment",
+    }
+    assert set(tool_map["get_paper_details"].inputSchema["properties"]) == {
+        "paper_id",
+        "fields",
+        "includeEnrichment",
+    }
+    assert set(tool_map["get_paper_metadata_crossref"].inputSchema["properties"]) == {
+        "paper_id",
+        "doi",
+        "query",
+    }
+    assert set(
+        tool_map["get_paper_open_access_unpaywall"].inputSchema["properties"]
+    ) == {
+        "paper_id",
+        "doi",
+    }
+    assert set(tool_map["enrich_paper"].inputSchema["properties"]) == {
+        "paper_id",
+        "doi",
+        "query",
     }
     search_tags = tool_map["search_papers"].meta or {}
     semantic_tags = tool_map["search_papers_semantic_scholar"].meta or {}
@@ -186,6 +238,7 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "focus",
         "latencyProfile",
         "providerBudget",
+        "includeEnrichment",
     }
     assert set(tool_map["ask_result_set"].inputSchema["properties"]) == {
         "searchSessionId",
@@ -315,6 +368,131 @@ async def test_call_tool_routes_non_search_tools(
         expect_search_session_id=tool_name
         in {"get_paper_citations", "get_paper_references", "get_author_papers"},
     )
+
+
+@pytest.mark.asyncio
+async def test_explicit_enrichment_tools_route_through_recording_clients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    crossref, unpaywall = _install_recording_enrichment(monkeypatch)
+
+    crossref_payload = _payload(
+        await server.call_tool(
+            "get_paper_metadata_crossref",
+            {"doi": "https://doi.org/10.1234/seed-doi"},
+        )
+    )
+    unpaywall_payload = _payload(
+        await server.call_tool(
+            "get_paper_open_access_unpaywall",
+            {"doi": "doi:10.1234/seed-doi"},
+        )
+    )
+    merged_payload = _payload(
+        await server.call_tool(
+            "enrich_paper",
+            {"query": "Crossref Query Paper"},
+        )
+    )
+
+    assert crossref.calls[0] == ("get_work", {"doi": "10.1234/seed-doi"})
+    assert crossref_payload["found"] is True
+    assert crossref_payload["resolvedDoi"] == "10.1234/seed-doi"
+    assert crossref_payload["work"]["publisher"] == "Crossref Publisher"
+    _assert_additive_metadata(crossref_payload)
+
+    assert unpaywall.calls[0] == ("get_open_access", {"doi": "10.1234/seed-doi"})
+    assert unpaywall_payload["found"] is True
+    assert unpaywall_payload["isOa"] is True
+    assert unpaywall_payload["pdfUrl"] == "https://oa.example/10.1234/seed-doi.pdf"
+    _assert_additive_metadata(unpaywall_payload)
+
+    assert ("search_work", {"query": "Crossref Query Paper"}) in crossref.calls
+    assert (
+        "get_open_access",
+        {"doi": "10.1234/crossref-query"},
+    ) in unpaywall.calls
+    assert merged_payload["doiResolution"]["resolvedDoi"] == "10.1234/crossref-query"
+    assert merged_payload["enrichments"]["crossref"]["doi"] == "10.1234/crossref-query"
+    assert merged_payload["enrichments"]["unpaywall"]["isOa"] is True
+    _assert_additive_metadata(merged_payload)
+
+
+@pytest.mark.asyncio
+async def test_search_papers_match_include_enrichment_is_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_client = RecordingSemanticClient()
+    crossref, unpaywall = _install_recording_enrichment(monkeypatch)
+    monkeypatch.setattr(server, "client", fake_client)
+
+    baseline = _payload(
+        await server.call_tool(
+            "search_papers_match",
+            {"query": "Best match"},
+        )
+    )
+    enriched = _payload(
+        await server.call_tool(
+            "search_papers_match",
+            {"query": "Best match", "includeEnrichment": True},
+        )
+    )
+
+    assert "enrichments" not in baseline
+    assert crossref.calls == [("search_work", {"query": "Best match"})]
+    assert unpaywall.calls == [("get_open_access", {"doi": "10.1234/crossref-query"})]
+    assert enriched["enrichments"]["crossref"]["doi"] == "10.1234/crossref-query"
+    assert enriched["enrichments"]["unpaywall"]["bestOaUrl"].endswith(
+        "10.1234/crossref-query"
+    )
+    assert fake_client.calls == [
+        ("search_papers_match", {"query": "Best match", "fields": None}),
+        ("search_papers_match", {"query": "Best match", "fields": None}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_paper_details_include_enrichment_uses_resolved_doi(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_client = RecordingSemanticClient()
+
+    async def fake_get_paper_details(**kwargs: dict) -> dict:
+        fake_client.calls.append(("get_paper_details", kwargs))
+        return {
+            "paperId": kwargs["paper_id"],
+            "title": "Detailed paper",
+            "canonicalId": "doi:10.5678/details-paper",
+        }
+
+    fake_client.get_paper_details = fake_get_paper_details  # type: ignore[method-assign]
+    crossref, unpaywall = _install_recording_enrichment(monkeypatch)
+    monkeypatch.setattr(server, "client", fake_client)
+
+    payload = _payload(
+        await server.call_tool(
+            "get_paper_details",
+            {"paper_id": "doi:10.5678/details-paper", "includeEnrichment": True},
+        )
+    )
+
+    assert fake_client.calls == [
+        (
+            "get_paper_details",
+            {
+                "paper_id": "doi:10.5678/details-paper",
+                "fields": None,
+            },
+        )
+    ]
+    assert crossref.calls == [("get_work", {"doi": "10.5678/details-paper"})]
+    assert unpaywall.calls == [
+        ("get_open_access", {"doi": "10.5678/details-paper"})
+    ]
+    assert payload["enrichments"]["crossref"]["publisher"] == "Crossref Publisher"
+    assert payload["enrichments"]["unpaywall"]["license"] == "cc-by"
+    _assert_additive_metadata(payload)
 
 
 @pytest.mark.asyncio
@@ -622,6 +800,32 @@ async def test_new_serpapi_tools_and_provider_diagnostics_route(
     )
     assert account["provider"] == "serpapi_google_scholar"
     assert any(item["provider"] == "openai" for item in diagnostics["providers"])
+
+
+@pytest.mark.asyncio
+async def test_provider_diagnostics_surface_crossref_and_unpaywall(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_recording_enrichment(monkeypatch)
+
+    await server.call_tool("get_paper_metadata_crossref", {"doi": "10.1234/diag"})
+    await server.call_tool(
+        "get_paper_open_access_unpaywall",
+        {"doi": "10.1234/diag"},
+    )
+    diagnostics = _payload(await server.call_tool("get_provider_diagnostics", {}))
+    provider_map = {
+        item["provider"]: item
+        for item in diagnostics["providers"]
+        if isinstance(item, dict)
+    }
+
+    assert provider_map["crossref"]["enabled"] is True
+    assert provider_map["unpaywall"]["enabled"] is True
+    assert provider_map["crossref"]["lastEndpoint"] == "get_work"
+    assert provider_map["unpaywall"]["lastEndpoint"] == "get_open_access"
+    assert provider_map["crossref"]["recentOutcomes"]
+    assert provider_map["unpaywall"]["recentOutcomes"]
 
 
 def test_package_import_and_module_entrypoints_keep_expected_targets() -> None:

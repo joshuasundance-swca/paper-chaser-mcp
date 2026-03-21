@@ -88,6 +88,20 @@ def _parse_positive_int(
     return parsed
 
 
+def _parse_positive_float(
+    env: Mapping[str, str],
+    key: str,
+    default: float,
+) -> float:
+    value = env.get(key)
+    if value is None or value == "":
+        return default
+    parsed = float(value)
+    if parsed <= 0:
+        raise ValueError(f"{key} must be a positive number.")
+    return parsed
+
+
 class AppSettings(BaseModel):
     """Typed application settings loaded from environment variables."""
 
@@ -99,11 +113,15 @@ class AppSettings(BaseModel):
     openalex_api_key: str | None = None
     openalex_mailto: str | None = None
     serpapi_api_key: str | None = None
+    crossref_mailto: str | None = None
+    unpaywall_email: str | None = None
     enable_core: bool = False
     enable_semantic_scholar: bool = True
     enable_openalex: bool = True
     enable_arxiv: bool = True
     enable_serpapi: bool = False
+    enable_crossref: bool = True
+    enable_unpaywall: bool = True
     provider_order: tuple[SearchProvider, ...] = DEFAULT_SEARCH_PROVIDER_ORDER
     transport: Literal["stdio", "http", "streamable-http", "sse"] = "stdio"
     http_host: str = "127.0.0.1"
@@ -120,6 +138,8 @@ class AppSettings(BaseModel):
     agentic_index_backend: AgenticIndexBackend = "memory"
     session_ttl_seconds: int = 1800
     enable_agentic_trace_log: bool = False
+    crossref_timeout_seconds: float = 30.0
+    unpaywall_timeout_seconds: float = 30.0
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "AppSettings":
@@ -134,6 +154,8 @@ class AppSettings(BaseModel):
             openalex_api_key=_parse_optional_string(env, "OPENALEX_API_KEY"),
             openalex_mailto=_parse_optional_string(env, "OPENALEX_MAILTO"),
             serpapi_api_key=_parse_optional_string(env, "SERPAPI_API_KEY"),
+            crossref_mailto=_parse_optional_string(env, "CROSSREF_MAILTO"),
+            unpaywall_email=_parse_optional_string(env, "UNPAYWALL_EMAIL"),
             enable_core=_parse_env_bool(env, "SCHOLAR_SEARCH_ENABLE_CORE", False),
             enable_semantic_scholar=_parse_env_bool(
                 env,
@@ -150,6 +172,16 @@ class AppSettings(BaseModel):
                 env,
                 "SCHOLAR_SEARCH_ENABLE_SERPAPI",
                 False,
+            ),
+            enable_crossref=_parse_env_bool(
+                env,
+                "SCHOLAR_SEARCH_ENABLE_CROSSREF",
+                True,
+            ),
+            enable_unpaywall=_parse_env_bool(
+                env,
+                "SCHOLAR_SEARCH_ENABLE_UNPAYWALL",
+                True,
             ),
             provider_order=_parse_provider_order(env, "SCHOLAR_SEARCH_PROVIDER_ORDER"),
             transport=cast_transport(env.get("SCHOLAR_SEARCH_TRANSPORT")),
@@ -192,6 +224,16 @@ class AppSettings(BaseModel):
                 env,
                 "SCHOLAR_SEARCH_ENABLE_AGENTIC_TRACE_LOG",
                 False,
+            ),
+            crossref_timeout_seconds=_parse_positive_float(
+                env,
+                "CROSSREF_TIMEOUT_SECONDS",
+                30.0,
+            ),
+            unpaywall_timeout_seconds=_parse_positive_float(
+                env,
+                "UNPAYWALL_TIMEOUT_SECONDS",
+                30.0,
             ),
         )
 

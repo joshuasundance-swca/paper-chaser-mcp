@@ -225,6 +225,28 @@ def build_agent_hints(
             warnings=warnings,
         )
     if tool_name in {
+        "get_paper_metadata_crossref",
+        "get_paper_open_access_unpaywall",
+        "enrich_paper",
+    }:
+        return AgentHints(
+            nextToolCandidates=[
+                "get_paper_details",
+                "get_paper_citations",
+                "get_paper_references",
+                "expand_research_graph",
+            ],
+            whyThisNextStep=(
+                "Enrichment works best after a paper is resolved, so the next "
+                "high-value move is usually inspection or citation expansion."
+            ),
+            safeRetry=(
+                "Retry with a DOI-bearing identifier when possible. Crossref can "
+                "also fall back to a title-style query, but Unpaywall is DOI-only."
+            ),
+            warnings=warnings,
+        )
+    if tool_name in {
         "get_paper_citations",
         "get_paper_citations_openalex",
         "get_paper_references",

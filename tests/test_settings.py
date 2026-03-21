@@ -57,6 +57,12 @@ def test_app_settings_serpapi_disabled_by_default() -> None:
     assert settings.enable_openalex is True
     assert settings.openalex_api_key is None
     assert settings.openalex_mailto is None
+    assert settings.enable_crossref is True
+    assert settings.enable_unpaywall is True
+    assert settings.crossref_mailto is None
+    assert settings.unpaywall_email is None
+    assert settings.crossref_timeout_seconds == 30.0
+    assert settings.unpaywall_timeout_seconds == 30.0
 
 
 def test_app_settings_serpapi_enabled_via_env() -> None:
@@ -86,6 +92,26 @@ def test_app_settings_openalex_enabled_with_optional_mailto_and_key() -> None:
     assert settings.openalex_mailto == "team@example.com"
 
 
+def test_app_settings_parses_crossref_and_unpaywall_configuration() -> None:
+    settings = AppSettings.from_env(
+        {
+            "SCHOLAR_SEARCH_ENABLE_CROSSREF": "true",
+            "CROSSREF_MAILTO": "ops@example.com",
+            "CROSSREF_TIMEOUT_SECONDS": "12.5",
+            "SCHOLAR_SEARCH_ENABLE_UNPAYWALL": "true",
+            "UNPAYWALL_EMAIL": "oa@example.com",
+            "UNPAYWALL_TIMEOUT_SECONDS": "9",
+        }
+    )
+
+    assert settings.enable_crossref is True
+    assert settings.crossref_mailto == "ops@example.com"
+    assert settings.crossref_timeout_seconds == 12.5
+    assert settings.enable_unpaywall is True
+    assert settings.unpaywall_email == "oa@example.com"
+    assert settings.unpaywall_timeout_seconds == 9.0
+
+
 def test_app_settings_normalizes_blank_optional_values_to_none() -> None:
     settings = AppSettings.from_env(
         {
@@ -94,6 +120,8 @@ def test_app_settings_normalizes_blank_optional_values_to_none() -> None:
             "OPENALEX_API_KEY": "   ",
             "OPENALEX_MAILTO": "",
             "SERPAPI_API_KEY": "   ",
+            "CROSSREF_MAILTO": " ",
+            "UNPAYWALL_EMAIL": " ",
             "OPENAI_API_KEY": "  ",
             "SCHOLAR_SEARCH_HTTP_AUTH_TOKEN": "",
         }
@@ -105,6 +133,8 @@ def test_app_settings_normalizes_blank_optional_values_to_none() -> None:
     assert settings.openalex_api_key is None
     assert settings.openalex_mailto is None
     assert settings.serpapi_api_key is None
+    assert settings.crossref_mailto is None
+    assert settings.unpaywall_email is None
     assert settings.http_auth_token is None
 
 

@@ -26,6 +26,8 @@ ProviderName = Literal[
     "core",
     "arxiv",
     "serpapi_google_scholar",
+    "crossref",
+    "unpaywall",
     "openai",
 ]
 ProviderStatusBucket = Literal[
@@ -94,6 +96,20 @@ DEFAULT_PROVIDER_POLICIES: dict[str, ProviderPolicy] = {
         failure_threshold=1,
         suppression_seconds=300.0,
         paywalled=True,
+    ),
+    "crossref": ProviderPolicy(
+        concurrency_limit=2,
+        max_attempts=2,
+        base_delay_seconds=0.5,
+        failure_threshold=2,
+        suppression_seconds=60.0,
+    ),
+    "unpaywall": ProviderPolicy(
+        concurrency_limit=2,
+        max_attempts=2,
+        base_delay_seconds=0.5,
+        failure_threshold=2,
+        suppression_seconds=60.0,
     ),
     "openai": ProviderPolicy(
         concurrency_limit=2,

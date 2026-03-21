@@ -5,6 +5,7 @@ from typing import Any, Callable, cast
 from .citation_repair import looks_like_paper_identifier, resolve_citation
 from .clients.serpapi import SerpApiKeyMissingError
 from .compat import augment_tool_result, build_clarification
+from .enrichment import PaperEnrichmentService
 from .models import TOOL_INPUT_MODELS, CitationFormatsResponse, dump_jsonable
 from .models.common import CitationFormat, ExportLink
 from .models.tools import (
@@ -13,6 +14,8 @@ from .models.tools import (
     ExpandResearchGraphArgs,
     GetCitationFormatsArgs,
     MapResearchLandscapeArgs,
+    PaperLookupArgs,
+    PaperMatchArgs,
     ResolveCitationArgs,
     SearchPapersArgs,
     SearchProvider,
@@ -395,6 +398,11 @@ async def dispatch_tool(
     enable_arxiv: bool,
     serpapi_client: Any = None,
     enable_serpapi: bool = False,
+    crossref_client: Any = None,
+    unpaywall_client: Any = None,
+    enable_crossref: bool = True,
+    enable_unpaywall: bool = True,
+    enrichment_service: PaperEnrichmentService | None = None,
     provider_order: list[SearchProvider] | None = None,
     provider_registry: Any = None,
     workspace_registry: Any = None,
@@ -403,6 +411,13 @@ async def dispatch_tool(
     allow_elicitation: bool = True,
 ) -> dict[str, Any]:
     """Dispatch one MCP tool call to the correct backend implementation."""
+    resolved_enrichment_service = enrichment_service or PaperEnrichmentService(
+        crossref_client=crossref_client,
+        unpaywall_client=unpaywall_client,
+        enable_crossref=enable_crossref,
+        enable_unpaywall=enable_unpaywall,
+        provider_registry=provider_registry,
+    )
     if name == "search_papers_smart":
         smart_args = cast(
             SmartSearchPapersArgs,
@@ -435,6 +450,7 @@ async def dispatch_tool(
                 if smart_args.provider_budget is not None
                 else None
             ),
+            include_enrichment=smart_args.include_enrichment,
             ctx=ctx,
         )
 
@@ -529,11 +545,15 @@ async def dispatch_tool(
                 "core": enable_core,
                 "arxiv": enable_arxiv,
                 "serpapi_google_scholar": enable_serpapi,
+                "crossref": enable_crossref,
+                "unpaywall": enable_unpaywall,
                 "openai": agentic_runtime is not None,
             },
             provider_order=[
                 *(provider_order or []),
                 "openalex",
+                "crossref",
+                "unpaywall",
                 "openai",
             ],
         )
@@ -542,6 +562,45 @@ async def dispatch_tool(
                 if isinstance(provider, dict):
                     provider["recentOutcomes"] = []
         return snapshot
+
+    if name == "get_paper_metadata_crossref":
+        result = await resolved_enrichment_service.get_crossref_metadata(
+            **TOOL_INPUT_MODELS[name].model_validate(arguments).model_dump(
+                by_alias=False
+            )
+        )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            dump_jsonable(result),
+            workspace_registry=workspace_registry,
+        )
+
+    if name == "get_paper_open_access_unpaywall":
+        result = await resolved_enrichment_service.get_unpaywall_open_access(
+            **TOOL_INPUT_MODELS[name].model_validate(arguments).model_dump(
+                by_alias=False
+            )
+        )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            dump_jsonable(result),
+            workspace_registry=workspace_registry,
+        )
+
+    if name == "enrich_paper":
+        result = await resolved_enrichment_service.enrich_paper(
+            **TOOL_INPUT_MODELS[name].model_validate(arguments).model_dump(
+                by_alias=False
+            )
+        )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            dump_jsonable(result),
+            workspace_registry=workspace_registry,
+        )
 
     if name == "search_papers":
         search_args = cast(
@@ -580,14 +639,19 @@ async def dispatch_tool(
             openalex_client=openalex_client,
             arxiv_client=arxiv_client,
             serpapi_client=serpapi_client,
+            crossref_client=crossref_client,
+            unpaywall_client=unpaywall_client,
             enable_core=enable_core,
             enable_semantic_scholar=enable_semantic_scholar,
             enable_openalex=enable_openalex,
             enable_arxiv=enable_arxiv,
             enable_serpapi=enable_serpapi,
+            enable_crossref=enable_crossref,
+            enable_unpaywall=enable_unpaywall,
             provider_order=provider_order,
             provider_registry=provider_registry,
             workspace_registry=workspace_registry,
+            enrichment_service=resolved_enrichment_service,
             agentic_runtime=agentic_runtime,
             ctx=ctx,
             allow_elicitation=allow_elicitation,
@@ -598,6 +662,83 @@ async def dispatch_tool(
             name,
             arguments,
             result,
+            workspace_registry=workspace_registry,
+        )
+
+    if name == "search_papers_match":
+        match_args = cast(
+            PaperMatchArgs,
+            TOOL_INPUT_MODELS[name].model_validate(arguments),
+        )
+        serialized = dump_jsonable(
+            await client.search_papers_match(
+                query=match_args.query,
+                fields=match_args.fields,
+            )
+        )
+        if (
+            match_args.include_enrichment
+            and isinstance(serialized, dict)
+            and serialized.get("matchFound", True) is not False
+        ):
+            serialized = await resolved_enrichment_service.enrich_paper_payload(
+                serialized,
+                query=match_args.query,
+            )
+        elicited = await _maybe_elicit_and_retry(
+            tool_name=name,
+            arguments=arguments,
+            result=serialized,
+            client=client,
+            core_client=core_client,
+            openalex_client=openalex_client,
+            arxiv_client=arxiv_client,
+            serpapi_client=serpapi_client,
+            crossref_client=crossref_client,
+            unpaywall_client=unpaywall_client,
+            enable_core=enable_core,
+            enable_semantic_scholar=enable_semantic_scholar,
+            enable_openalex=enable_openalex,
+            enable_arxiv=enable_arxiv,
+            enable_serpapi=enable_serpapi,
+            enable_crossref=enable_crossref,
+            enable_unpaywall=enable_unpaywall,
+            provider_order=provider_order,
+            provider_registry=provider_registry,
+            workspace_registry=workspace_registry,
+            enrichment_service=resolved_enrichment_service,
+            agentic_runtime=agentic_runtime,
+            ctx=ctx,
+            allow_elicitation=allow_elicitation,
+        )
+        if elicited is not None:
+            return elicited
+        return _finalize_tool_result(
+            name,
+            arguments,
+            serialized,
+            workspace_registry=workspace_registry,
+        )
+
+    if name == "get_paper_details":
+        paper_lookup_args = cast(
+            PaperLookupArgs,
+            TOOL_INPUT_MODELS[name].model_validate(arguments),
+        )
+        serialized = dump_jsonable(
+            await client.get_paper_details(
+                paper_id=paper_lookup_args.paper_id,
+                fields=paper_lookup_args.fields,
+            )
+        )
+        if paper_lookup_args.include_enrichment and isinstance(serialized, dict):
+            serialized = await resolved_enrichment_service.enrich_paper_payload(
+                serialized
+            )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            serialized,
             workspace_registry=workspace_registry,
         )
 
@@ -624,6 +765,8 @@ async def dispatch_tool(
             year_hint=citation_args.year_hint,
             venue_hint=citation_args.venue_hint,
             doi_hint=citation_args.doi_hint,
+            include_enrichment=citation_args.include_enrichment,
+            enrichment_service=resolved_enrichment_service,
         )
         return _finalize_tool_result(
             name,
@@ -1217,14 +1360,19 @@ async def dispatch_tool(
         openalex_client=openalex_client,
         arxiv_client=arxiv_client,
         serpapi_client=serpapi_client,
+        crossref_client=crossref_client,
+        unpaywall_client=unpaywall_client,
         enable_core=enable_core,
         enable_semantic_scholar=enable_semantic_scholar,
         enable_openalex=enable_openalex,
         enable_arxiv=enable_arxiv,
         enable_serpapi=enable_serpapi,
+        enable_crossref=enable_crossref,
+        enable_unpaywall=enable_unpaywall,
         provider_order=provider_order,
         provider_registry=provider_registry,
         workspace_registry=workspace_registry,
+        enrichment_service=resolved_enrichment_service,
         agentic_runtime=agentic_runtime,
         ctx=ctx,
         allow_elicitation=allow_elicitation,
@@ -1272,14 +1420,19 @@ async def _maybe_elicit_and_retry(
     openalex_client: Any,
     arxiv_client: Any,
     serpapi_client: Any,
+    crossref_client: Any,
+    unpaywall_client: Any,
     enable_core: bool,
     enable_semantic_scholar: bool,
     enable_openalex: bool,
     enable_arxiv: bool,
     enable_serpapi: bool,
+    enable_crossref: bool,
+    enable_unpaywall: bool,
     provider_order: list[SearchProvider] | None,
     provider_registry: Any,
     workspace_registry: Any,
+    enrichment_service: PaperEnrichmentService | None,
     agentic_runtime: Any,
     ctx: Any,
     allow_elicitation: bool,
@@ -1317,12 +1470,20 @@ async def _maybe_elicit_and_retry(
             fields=arguments.get("fields"),
         )
         resolved_result = dict(dump_jsonable(resolved))
+        if arguments.get("includeEnrichment") and enrichment_service is not None:
+            resolved_result = await enrichment_service.enrich_paper_payload(
+                resolved_result
+            )
         resolved_result["matchFound"] = True
         resolved_result["matchStrategy"] = "elicited_identifier"
         resolved_result["normalizedQuery"] = refinement
         return _finalize_tool_result(
             "search_papers_match",
-            {"query": refinement, "fields": arguments.get("fields")},
+            {
+                "query": refinement,
+                "fields": arguments.get("fields"),
+                "includeEnrichment": arguments.get("includeEnrichment", False),
+            },
             resolved_result,
             workspace_registry=workspace_registry,
         )
@@ -1345,6 +1506,11 @@ async def _maybe_elicit_and_retry(
         enable_arxiv=enable_arxiv,
         serpapi_client=serpapi_client,
         enable_serpapi=enable_serpapi,
+        crossref_client=crossref_client,
+        unpaywall_client=unpaywall_client,
+        enable_crossref=enable_crossref,
+        enable_unpaywall=enable_unpaywall,
+        enrichment_service=enrichment_service,
         provider_order=provider_order,
         provider_registry=provider_registry,
         workspace_registry=workspace_registry,

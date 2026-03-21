@@ -12,6 +12,7 @@ from fastmcp import Context
 
 from ..citation_repair import resolve_citation
 from ..compat import build_agent_hints, build_resource_uris
+from ..enrichment import PaperEnrichmentService
 from ..models import Paper, dump_jsonable
 from ..provider_runtime import (
     ProviderBudgetState,
@@ -97,6 +98,7 @@ class AgenticRuntime:
         enable_arxiv: bool,
         enable_serpapi: bool,
         provider_registry: ProviderDiagnosticsRegistry | None = None,
+        enrichment_service: PaperEnrichmentService | None = None,
     ) -> None:
         self._config = config
         self._provider_bundle = provider_bundle
@@ -113,6 +115,7 @@ class AgenticRuntime:
         self._enable_arxiv = enable_arxiv
         self._enable_serpapi = enable_serpapi
         self._provider_registry = provider_registry
+        self._enrichment_service = enrichment_service
         self._compiled_graphs = self._maybe_compile_graphs()
 
     def _provider_bundle_for_profile(
@@ -176,6 +179,7 @@ class AgenticRuntime:
         focus: str | None = None,
         latency_profile: LatencyProfile = "balanced",
         provider_budget: dict[str, Any] | None = None,
+        include_enrichment: bool = False,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         """Smart concept-level discovery with grounded expansion and fusion."""
@@ -225,6 +229,8 @@ class AgenticRuntime:
                 search_session_id=search_session_id,
                 latency_profile=latency_profile,
                 request_id=request_id,
+                include_enrichment=include_enrichment,
+                provider_outcomes=provider_outcomes,
                 ctx=ctx,
             )
 
@@ -522,6 +528,24 @@ class AgenticRuntime:
             )
             for index, candidate in enumerate(top_candidates, start=1)
         ]
+        if include_enrichment and self._enrichment_service is not None and smart_hits:
+            await self._emit_smart_search_status(
+                ctx=ctx,
+                request_id=request_id,
+                progress=85,
+                message="Applying paper enrichment",
+                detail=(
+                    "Enriching the final smart-ranked hits with Crossref and "
+                    "Unpaywall metadata."
+                ),
+            )
+            smart_hits = await self._enrich_smart_hits(
+                smart_hits=smart_hits,
+                query=normalized_query,
+                request_id=request_id,
+                provider_outcomes=provider_outcomes,
+            )
+            strategy_metadata.provider_outcomes = provider_outcomes
 
         response = SmartSearchResponse(
             results=smart_hits,
@@ -1110,6 +1134,29 @@ class AgenticRuntime:
             )
         return candidates
 
+    async def _enrich_smart_hits(
+        self,
+        *,
+        smart_hits: list[SmartPaperHit],
+        query: str,
+        request_id: str,
+        provider_outcomes: list[dict[str, Any]],
+    ) -> list[SmartPaperHit]:
+        if self._enrichment_service is None:
+            return smart_hits
+        enriched_hits: list[SmartPaperHit] = []
+        for hit in smart_hits:
+            enriched_paper = await self._enrichment_service.enrich_paper_payload(
+                hit.paper,
+                query=query,
+                request_id=request_id,
+                request_outcomes=provider_outcomes,
+            )
+            enriched_hits.append(
+                hit.model_copy(update={"paper": Paper.model_validate(enriched_paper)})
+            )
+        return enriched_hits
+
     async def _search_known_item(
         self,
         *,
@@ -1119,6 +1166,8 @@ class AgenticRuntime:
         search_session_id: str | None,
         latency_profile: LatencyProfile,
         request_id: str,
+        include_enrichment: bool,
+        provider_outcomes: list[dict[str, Any]],
         ctx: Context | None,
     ) -> dict[str, Any]:
         await self._emit_smart_search_status(
@@ -1142,6 +1191,23 @@ class AgenticRuntime:
                     "search_papers",
                 ],
             )
+        if include_enrichment and self._enrichment_service is not None:
+            await self._emit_smart_search_status(
+                ctx=ctx,
+                request_id=request_id,
+                progress=70,
+                message="Applying paper enrichment",
+                detail=(
+                    "Enriching the resolved known item with Crossref and "
+                    "Unpaywall metadata."
+                ),
+            )
+            known_item = await self._enrichment_service.enrich_paper_payload(
+                known_item,
+                query=query,
+                request_id=request_id,
+                request_outcomes=provider_outcomes,
+            )
         hit = SmartPaperHit(
             paper=Paper.model_validate(known_item),
             rank=1,
@@ -1161,6 +1227,7 @@ class AgenticRuntime:
             providersUsed=[str(known_item.get("source") or "semantic_scholar")],
             resultCoverage="known_item",
             driftWarnings=[],
+            providerOutcomes=provider_outcomes,
         )
         response = SmartSearchResponse(
             results=[hit][:limit],

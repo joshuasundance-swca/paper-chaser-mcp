@@ -219,6 +219,7 @@ async def test_fastmcp_resource_and_prompt_support_agent_onboarding() -> None:
     assert any(prompt.name == "plan_citation_chase" for prompt in prompts)
     assert any(prompt.name == "refine_query" for prompt in prompts)
     assert "search_papers_bulk" in guide[0].text
+    assert "enrich_paper" in guide[0].text
     assert "Quick literature discovery" in guide[0].text
     assert "search_papers_smart" in guide[0].text
     assert "resolve_citation" in guide[0].text

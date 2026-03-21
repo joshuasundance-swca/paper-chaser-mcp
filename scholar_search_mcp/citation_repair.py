@@ -258,6 +258,8 @@ async def resolve_citation(
     year_hint: str | None = None,
     venue_hint: str | None = None,
     doi_hint: str | None = None,
+    include_enrichment: bool = False,
+    enrichment_service: Any = None,
 ) -> dict[str, Any]:
     """Resolve an incomplete or almost-right citation to canonical papers."""
     parsed = parse_citation(
@@ -284,11 +286,17 @@ async def resolve_citation(
             )
             stage_order.append("identifier")
             if identifier_candidate.score >= 0.95:
-                return _serialize_citation_response(
+                response = _serialize_citation_response(
                     citation=citation,
                     parsed=parsed,
                     candidates=[identifier_candidate],
                 )
+                if include_enrichment and enrichment_service is not None:
+                    response = await _enrich_best_match(
+                        response,
+                        enrichment_service=enrichment_service,
+                    )
+                return response
 
     title_candidates = parsed.title_candidates[:3]
     if title_candidates:
@@ -341,6 +349,11 @@ async def resolve_citation(
         parsed=parsed,
         candidates=ranked_candidates,
     )
+    if include_enrichment and enrichment_service is not None:
+        response = await _enrich_best_match(
+            response,
+            enrichment_service=enrichment_service,
+        )
     if stage_order:
         response["resolutionStrategy"] = (
             ranked_candidates[0].resolution_strategy
@@ -348,6 +361,28 @@ async def resolve_citation(
             else stage_order[-1]
         )
     return response
+
+
+async def _enrich_best_match(
+    response: dict[str, Any],
+    *,
+    enrichment_service: Any,
+) -> dict[str, Any]:
+    best_match = response.get("bestMatch")
+    if not isinstance(best_match, dict) or not isinstance(
+        best_match.get("paper"),
+        dict,
+    ):
+        return response
+    enriched_paper = await enrichment_service.enrich_paper_payload(
+        best_match["paper"],
+        query=response.get("normalizedCitation"),
+    )
+    updated_response = dict(response)
+    updated_best_match = dict(best_match)
+    updated_best_match["paper"] = enriched_paper
+    updated_response["bestMatch"] = updated_best_match
+    return updated_response
 
 
 def _serialize_citation_response(

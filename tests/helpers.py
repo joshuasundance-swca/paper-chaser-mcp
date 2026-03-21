@@ -215,6 +215,58 @@ class RecordingOpenAlexClient:
         }
 
 
+class RecordingCrossrefClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    async def get_work(self, doi: str) -> dict:
+        self.calls.append(("get_work", {"doi": doi}))
+        return {
+            "doi": doi,
+            "title": "Crossref Paper",
+            "authors": [{"name": "Crossref Author"}],
+            "venue": "Journal of Tests",
+            "publisher": "Crossref Publisher",
+            "publicationType": "journal-article",
+            "publicationDate": "2024-05-01",
+            "year": 2024,
+            "url": f"https://doi.org/{doi}",
+            "citationCount": 42,
+        }
+
+    async def search_work(self, query: str) -> dict:
+        self.calls.append(("search_work", {"query": query}))
+        return {
+            "doi": "10.1234/crossref-query",
+            "title": "Crossref Query Paper",
+            "authors": [{"name": "Crossref Query Author"}],
+            "venue": "Journal of Query Tests",
+            "publisher": "Crossref Publisher",
+            "publicationType": "journal-article",
+            "publicationDate": "2023-02-15",
+            "year": 2023,
+            "url": "https://doi.org/10.1234/crossref-query",
+            "citationCount": 7,
+        }
+
+
+class RecordingUnpaywallClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    async def get_open_access(self, doi: str) -> dict:
+        self.calls.append(("get_open_access", {"doi": doi}))
+        return {
+            "doi": doi,
+            "isOa": True,
+            "oaStatus": "gold",
+            "bestOaUrl": f"https://oa.example/{doi}",
+            "pdfUrl": f"https://oa.example/{doi}.pdf",
+            "license": "cc-by",
+            "journalIsInDoaj": True,
+        }
+
+
 def _payload(response: list) -> Any:
     assert len(response) == 1
     return json.loads(response[0].text)

@@ -17,7 +17,14 @@ from .agentic import (
     WorkspaceRegistry,
     resolve_provider_bundle,
 )
-from .clients import ArxivClient, CoreApiClient, OpenAlexClient, SemanticScholarClient
+from .clients import (
+    ArxivClient,
+    CoreApiClient,
+    CrossrefClient,
+    OpenAlexClient,
+    SemanticScholarClient,
+    UnpaywallClient,
+)
 from .clients.serpapi import SerpApiScholarClient
 from .compat import sanitize_published_schema
 from .constants import (
@@ -34,6 +41,7 @@ from .constants import (
     SEMANTIC_SCHOLAR_MIN_INTERVAL,
 )
 from .dispatch import dispatch_tool
+from .enrichment import PaperEnrichmentService
 from .models import TOOL_INPUT_MODELS, dump_jsonable
 from .parsing import _arxiv_id_from_url, _text
 from .provider_runtime import ProviderDiagnosticsRegistry
@@ -61,27 +69,36 @@ Decision tree for tool selection:
 4. CITATION REPAIR / ALMOST-RIGHT REFERENCES → resolve_citation
 5. KNOWN ITEM (messy title) → search_papers_match
 6. KNOWN ITEM (DOI / arXiv / URL) → get_paper_details
-7. GROUNDED FOLLOW-UP → ask_result_set or map_research_landscape using searchSessionId
-8. CITATION EXPANSION → get_paper_citations (cited-by) or get_paper_references (refs)
-9. AUTHOR PIVOT → search_authors → get_author_info → get_author_papers
-10. PHRASE / QUOTE RECOVERY → search_snippets (last resort)
-11. OPENALEX-SPECIFIC PATHS → use the *_openalex tools when you explicitly need
+7. PAPER ENRICHMENT / OA CHECK → get_paper_metadata_crossref,
+   get_paper_open_access_unpaywall, or enrich_paper after you already have a
+   concrete paper, DOI, or DOI-bearing identifier
+8. GROUNDED FOLLOW-UP → ask_result_set or map_research_landscape using searchSessionId
+9. CITATION EXPANSION → get_paper_citations (cited-by) or get_paper_references (refs)
+10. AUTHOR PIVOT → search_authors → get_author_info → get_author_papers
+11. PHRASE / QUOTE RECOVERY → search_snippets (last resort)
+12. OPENALEX-SPECIFIC PATHS → use the *_openalex tools when you explicitly need
    OpenAlex-native DOI/ID lookup, OpenAlex cursor paging, author pivots, or
    source/institution/topic pivots via search_entities_openalex and
    search_papers_openalex_by_entity
-12. SERPAPI RECOVERY PATHS → use search_papers_serpapi_cited_by,
+13. SERPAPI RECOVERY PATHS → use search_papers_serpapi_cited_by,
    search_papers_serpapi_versions, get_author_profile_serpapi,
    get_author_articles_serpapi, or get_serpapi_account_status only when
    SCHOLAR_SEARCH_ENABLE_SERPAPI=true and the workflow justifies paid recall recovery
-13. PROVIDER HEALTH / DEBUGGING → get_provider_diagnostics
+14. PROVIDER HEALTH / DEBUGGING → get_provider_diagnostics
 
 After search_papers: read brokerMetadata.nextStepHint for the recommended next move.
 After search_papers_smart: reuse searchSessionId for ask_result_set,
 map_research_landscape, or expand_research_graph, and inspect acceptedExpansions,
 rejectedExpansions, speculativeExpansions, providersUsed, driftWarnings,
-latencyProfile, providerBudgetApplied, and providerOutcomes.
+latencyProfile, providerBudgetApplied, and providerOutcomes. Set
+includeEnrichment=true only when you want Crossref and Unpaywall metadata on the
+final smart-ranked hits; enrichment is post-ranking only and never changes
+retrieval or provider ordering.
 Primary read tools now also return agentHints, clarification, resourceUris, and,
 when they produce reusable result sets, searchSessionId.
+For known-item flows, includeEnrichment=true on search_papers_match,
+get_paper_details, or resolve_citation adds Crossref and Unpaywall metadata only
+after the base paper resolution succeeds.
 For Semantic Scholar expansion tools, prefer paper.recommendedExpansionId when
 present. If paper.expansionIdStatus is not_portable, do not retry with brokered
 paperId/sourceId/canonicalId values; resolve the paper through DOI or a
@@ -139,6 +156,11 @@ AGENT_WORKFLOW_GUIDE = """
 - **Citation repair / incomplete references**: `resolve_citation`
 - **Known-item lookup (messy title)**: `search_papers_match`
 - **Known-item lookup (DOI / arXiv / URL / S2 ID)**: `get_paper_details`
+- **Post-resolution paper enrichment**: `get_paper_metadata_crossref`,
+  `get_paper_open_access_unpaywall`, or `enrich_paper` after you already have a
+  paper or DOI. For known-item and smart flows, opt in with
+  `includeEnrichment=true` when you want additive metadata without changing the
+  retrieval path.
 - **Citation chasing (cited-by expansion)**: `get_paper_citations`
 - **Citation chasing (backward references)**: `get_paper_references`
 - **Author-centric workflows**: `search_authors` → `get_author_info` →
@@ -255,9 +277,11 @@ __all__ = [
     "SEMANTIC_SCHOLAR_MIN_INTERVAL",
     "SemanticScholarClient",
     "CoreApiClient",
+    "CrossrefClient",
     "OpenAlexClient",
     "ArxivClient",
     "SerpApiScholarClient",
+    "UnpaywallClient",
     "_arxiv_id_from_url",
     "_text",
     "_core_response_to_merged",
@@ -276,17 +300,24 @@ __all__ = [
     "serpapi_api_key",
     "openalex_api_key",
     "openalex_mailto",
+    "crossref_mailto",
+    "unpaywall_email",
     "enable_core",
     "enable_semantic_scholar",
     "enable_openalex",
     "enable_arxiv",
     "enable_serpapi",
+    "enable_crossref",
+    "enable_unpaywall",
     "client",
     "core_client",
+    "crossref_client",
     "openalex_client",
     "arxiv_client",
     "serpapi_client",
+    "unpaywall_client",
     "provider_registry",
+    "enrichment_service",
     "workspace_registry",
     "provider_bundle",
     "agentic_runtime",
@@ -366,6 +397,17 @@ def _tool_tags(name: str) -> set[str]:
             "provider-specific",
             "provider:serpapi_google_scholar",
         },
+        "get_paper_metadata_crossref": {
+            "paper",
+            "provider-specific",
+            "provider:crossref",
+        },
+        "get_paper_open_access_unpaywall": {
+            "paper",
+            "provider-specific",
+            "provider:unpaywall",
+        },
+        "enrich_paper": {"paper", "enrichment"},
         "get_provider_diagnostics": {"diagnostics", "provider-health"},
         "ask_result_set": {"smart", "grounded-answer"},
         "map_research_landscape": {"smart", "landscape"},
@@ -474,6 +516,11 @@ async def _execute_tool(
         enable_arxiv=enable_arxiv,
         serpapi_client=serpapi_client,
         enable_serpapi=enable_serpapi,
+        crossref_client=crossref_client,
+        unpaywall_client=unpaywall_client,
+        enable_crossref=enable_crossref,
+        enable_unpaywall=enable_unpaywall,
+        enrichment_service=enrichment_service,
         provider_order=provider_order,
         provider_registry=provider_registry,
         workspace_registry=workspace_registry,
@@ -490,18 +537,37 @@ core_api_key = settings.core_api_key
 openalex_api_key = settings.openalex_api_key
 openalex_mailto = settings.openalex_mailto
 serpapi_api_key = settings.serpapi_api_key
+crossref_mailto = settings.crossref_mailto
+unpaywall_email = settings.unpaywall_email
 enable_core = settings.enable_core
 enable_semantic_scholar = settings.enable_semantic_scholar
 enable_openalex = settings.enable_openalex
 enable_arxiv = settings.enable_arxiv
 enable_serpapi = settings.enable_serpapi
+enable_crossref = settings.enable_crossref
+enable_unpaywall = settings.enable_unpaywall
 provider_order = list(settings.provider_order)
 client = SemanticScholarClient(api_key=api_key)
 core_client = CoreApiClient(api_key=core_api_key)
+crossref_client = CrossrefClient(
+    mailto=crossref_mailto,
+    timeout=settings.crossref_timeout_seconds,
+)
 openalex_client = OpenAlexClient(api_key=openalex_api_key, mailto=openalex_mailto)
 arxiv_client = ArxivClient()
 serpapi_client = SerpApiScholarClient(api_key=serpapi_api_key)
+unpaywall_client = UnpaywallClient(
+    email=unpaywall_email,
+    timeout=settings.unpaywall_timeout_seconds,
+)
 provider_registry = ProviderDiagnosticsRegistry()
+enrichment_service = PaperEnrichmentService(
+    crossref_client=crossref_client,
+    unpaywall_client=unpaywall_client,
+    enable_crossref=enable_crossref,
+    enable_unpaywall=enable_unpaywall,
+    provider_registry=provider_registry,
+)
 provider_bundle = resolve_provider_bundle(
     agentic_config,
     openai_api_key=openai_api_key,
@@ -530,6 +596,7 @@ agentic_runtime = AgenticRuntime(
     enable_arxiv=enable_arxiv,
     enable_serpapi=enable_serpapi,
     provider_registry=provider_registry,
+    enrichment_service=enrichment_service,
 )
 
 app = FastMCP(
@@ -761,7 +828,11 @@ def plan_scholar_search(
         "and get_paper_details for DOI, arXiv ID, URL, or canonical IDs. Treat a "
         "structured no-match from search_papers_match as a hint that the item may "
         "be a dissertation, software release, report, or other output outside the "
-        "indexed paper surface. "
+        "indexed paper surface. Once you have a stable paper anchor, use "
+        "get_paper_metadata_crossref, get_paper_open_access_unpaywall, or "
+        "enrich_paper for additive metadata and OA/PDF discovery. Known-item "
+        "tools and search_papers_smart also expose includeEnrichment=true when "
+        "you want post-resolution enrichment without changing ranking. "
         "If the task starts from a known paper, use get_paper_citations for cited-by "
         "expansion and get_paper_references for backward references, and explain "
         "that direction clearly. "
@@ -818,6 +889,9 @@ def plan_smart_scholar_search(
         "cannot stay grounded, drop to raw tools: search_papers, search_papers_bulk, "
         "get_paper_details, resolve_citation, get_paper_citations, "
         "get_paper_references, search_authors, and get_author_papers."
+        " When you already have the right paper and want richer metadata or OA "
+        "signals, use includeEnrichment=true on the smart or known-item path, or "
+        "call enrich_paper explicitly."
     )
 
 
@@ -835,7 +909,9 @@ def triage_literature(
         "search_papers_smart. Inspect strategyMetadata, "
         "acceptedExpansions, rejectedExpansions, resourceUris, and "
         "agentHints. Save the searchSessionId, then ask one grounded question with "
-        "ask_result_set and one clustering question with map_research_landscape."
+        "ask_result_set and one clustering question with map_research_landscape. "
+        "If one hit becomes a strong anchor, optionally enrich it with Crossref "
+        "and Unpaywall before the next citation or QA step."
     )
 
 

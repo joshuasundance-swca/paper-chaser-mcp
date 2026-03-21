@@ -105,6 +105,8 @@ TOOL_DESCRIPTIONS = {
         "whose title best matches the query string. If the upstream exact-match "
         "endpoint misses a punctuation-heavy title, the server falls back to a "
         "fuzzy Semantic Scholar title search instead of surfacing a raw 404. "
+        "Optional includeEnrichment=true adds Crossref and Unpaywall metadata "
+        "only to the final matched paper, never to the candidate-selection path. "
         "A no-match payload can still mean the item is a dissertation, software "
         "release, report, or other output outside the indexed paper surface."
     ),
@@ -114,7 +116,8 @@ TOOL_DESCRIPTIONS = {
         "tries title-style recovery, quote/snippet recovery, and sparse "
         "metadata search to return the most likely canonical paper plus "
         "alternatives, confidence, disagreements, and the fastest next step "
-        "for disambiguation."
+        "for disambiguation. Optional includeEnrichment=true enriches only the "
+        "final bestMatch.paper after resolution."
     ),
     "paper_autocomplete": (
         "Return paper title completions for a partial query string."
@@ -126,7 +129,29 @@ TOOL_DESCRIPTIONS = {
     ),
     "get_paper_details": (
         "Known-item lookup when you already have an identifier. Get paper "
-        "details from a DOI, ArXiv ID, Semantic Scholar ID, or URL."
+        "details from a DOI, ArXiv ID, Semantic Scholar ID, or URL. "
+        "Optional includeEnrichment=true adds post-resolution Crossref and "
+        "Unpaywall metadata to the final paper without changing the lookup path."
+    ),
+    "get_paper_metadata_crossref": (
+        "Explicit Crossref paper enrichment. Use this after you already have a "
+        "paper, DOI, or DOI-bearing identifier and want Crossref's DOI, "
+        "publisher, venue/container, publication date, type, and citation-count "
+        "metadata. Accepts paper_id or doi, and Crossref alone also allows a "
+        "query fallback when no DOI can be resolved."
+    ),
+    "get_paper_open_access_unpaywall": (
+        "Explicit Unpaywall open-access enrichment. Use this after you already "
+        "have a DOI or DOI-bearing identifier and want OA status, best OA URL, "
+        "PDF URL, license, and DOAJ status. Requires UNPAYWALL_EMAIL because "
+        "the upstream API is DOI-based and expects a contact email."
+    ),
+    "enrich_paper": (
+        "Combined Crossref + Unpaywall enrichment for one known paper, DOI, or "
+        "DOI-bearing identifier. Runs DOI resolution first, then Crossref, then "
+        "Unpaywall, and returns one merged enrichments object plus per-provider "
+        "results. This is additive metadata only; it does not re-rank or "
+        "re-resolve the base paper."
     ),
     "get_paper_details_openalex": (
         "Known-item lookup using OpenAlex semantics. Get one OpenAlex work by "
@@ -286,9 +311,10 @@ TOOL_DESCRIPTIONS = {
     ),
     "get_provider_diagnostics": (
         "Return shared provider-health diagnostics for Semantic Scholar, OpenAlex, "
-        "CORE, arXiv, SerpApi, and OpenAI. Includes suppression state, recent "
-        "rate limits and failures, and normalized outcome envelopes so transport "
-        "and provider issues are visible without reading raw logs."
+        "CORE, arXiv, SerpApi, Crossref, Unpaywall, and OpenAI. Includes "
+        "suppression state, recent rate limits and failures, and normalized "
+        "outcome envelopes so transport and provider issues are visible without "
+        "reading raw logs."
     ),
     "search_papers_smart": (
         "Agent-oriented concept and literature-review search. Starts from a broad "
@@ -296,10 +322,11 @@ TOOL_DESCRIPTIONS = {
         "expansion, multi-provider retrieval, deduplication, reranking, and stores "
         "the result set under searchSessionId for follow-up QA, landscape mapping, "
         "and graph expansion. Optional latencyProfile supports fast, balanced, and "
-        "deep execution modes, and providerBudget lets advanced clients cap total, "
-        "per-provider, or paid usage for one smart search. Returns compact smart "
-        "hits, strategyMetadata, agentHints, resourceUris, and a concrete next-step "
-        "recommendation."
+        "deep execution modes, providerBudget lets advanced clients cap total, "
+        "per-provider, or paid usage for one smart search, and includeEnrichment "
+        "adds Crossref + Unpaywall metadata only to the final returned hits after "
+        "ranking is complete. Returns compact smart hits, strategyMetadata, "
+        "agentHints, resourceUris, and a concrete next-step recommendation."
     ),
     "ask_result_set": (
         "Grounded follow-up over a saved searchSessionId. Answer a question using "

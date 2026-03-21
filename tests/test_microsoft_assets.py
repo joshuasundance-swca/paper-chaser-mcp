@@ -30,6 +30,9 @@ def test_core_and_full_tool_assets_exist_and_use_streamable_http() -> None:
         "resolve_citation",
         "search_papers_match",
         "get_paper_details",
+        "get_paper_metadata_crossref",
+        "get_paper_open_access_unpaywall",
+        "enrich_paper",
         "search_papers_bulk",
         "get_paper_citations",
         "get_paper_references",
@@ -39,6 +42,9 @@ def test_core_and_full_tool_assets_exist_and_use_streamable_http() -> None:
     ]
     assert "search_papers_smart" in full["tools"]
     assert "resolve_citation" in full["tools"]
+    assert "get_paper_metadata_crossref" in full["tools"]
+    assert "get_paper_open_access_unpaywall" in full["tools"]
+    assert "enrich_paper" in full["tools"]
     assert "ask_result_set" in full["tools"]
     assert "map_research_landscape" in full["tools"]
     assert "expand_research_graph" in full["tools"]
