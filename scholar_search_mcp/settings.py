@@ -114,8 +114,8 @@ class AppSettings(BaseModel):
     allowed_origins: tuple[str, ...] = ()
     enable_agentic: bool = False
     agentic_provider: AgenticProvider = "openai"
-    planner_model: str = "gpt-5.2-mini"
-    synthesis_model: str = "gpt-5.2"
+    planner_model: str = "gpt-5.4-mini"
+    synthesis_model: str = "gpt-5.4"
     embedding_model: str = "text-embedding-3-large"
     agentic_index_backend: AgenticIndexBackend = "memory"
     session_ttl_seconds: int = 1800
@@ -174,8 +174,8 @@ class AppSettings(BaseModel):
             agentic_provider=cast_agentic_provider(
                 env.get("SCHOLAR_SEARCH_AGENTIC_PROVIDER")
             ),
-            planner_model=env.get("SCHOLAR_SEARCH_PLANNER_MODEL", "gpt-5.2-mini"),
-            synthesis_model=env.get("SCHOLAR_SEARCH_SYNTHESIS_MODEL", "gpt-5.2"),
+            planner_model=env.get("SCHOLAR_SEARCH_PLANNER_MODEL", "gpt-5.4-mini"),
+            synthesis_model=env.get("SCHOLAR_SEARCH_SYNTHESIS_MODEL", "gpt-5.4"),
             embedding_model=env.get(
                 "SCHOLAR_SEARCH_EMBEDDING_MODEL",
                 "text-embedding-3-large",
