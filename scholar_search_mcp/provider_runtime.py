@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 import re
 import time
@@ -16,6 +17,8 @@ from .clients.serpapi import (
     SerpApiQuotaError,
     SerpApiUpstreamError,
 )
+
+logger = logging.getLogger("scholar-search-mcp")
 
 ProviderName = Literal[
     "semantic_scholar",
@@ -165,17 +168,20 @@ class ProviderBudgetState:
         if not raw:
             return None
         values = dict(raw)
-        if not any(
-            values.get(key) is not None
-            for key in (
-                "max_total_calls",
-                "max_semantic_scholar_calls",
-                "max_openalex_calls",
-                "max_core_calls",
-                "max_arxiv_calls",
-                "max_serpapi_calls",
+        if (
+            not any(
+                values.get(key) is not None
+                for key in (
+                    "max_total_calls",
+                    "max_semantic_scholar_calls",
+                    "max_openalex_calls",
+                    "max_core_calls",
+                    "max_arxiv_calls",
+                    "max_serpapi_calls",
+                )
             )
-        ) and values.get("allow_paid_providers", True) is True:
+            and values.get("allow_paid_providers", True) is True
+        ):
             return None
         return cls(
             max_total_calls=values.get("max_total_calls"),
@@ -302,8 +308,7 @@ class ProviderDiagnosticsRegistry:
                     300.0,
                 )
             elif (
-                self._consecutive_failures[outcome.provider]
-                >= policy.failure_threshold
+                self._consecutive_failures[outcome.provider] >= policy.failure_threshold
             ):
                 self._suppressed_until[outcome.provider] = (
                     time.time() + policy.suppression_seconds
@@ -322,9 +327,7 @@ class ProviderDiagnosticsRegistry:
         ordered_providers = list(provider_order or [])
         ordered_providers.extend(
             sorted(
-                provider
-                for provider in providers
-                if provider not in ordered_providers
+                provider for provider in providers if provider not in ordered_providers
             )
         )
         return {
@@ -447,6 +450,44 @@ def _quota_metadata_from_payload(payload: Any) -> dict[str, Any]:
     return metadata
 
 
+def _shorten_runtime_log_text(text: str | None, *, limit: int = 120) -> str | None:
+    if text is None:
+        return None
+    normalized = " ".join(text.split())
+    if len(normalized) <= limit:
+        return normalized
+    return f"{normalized[: max(limit - 3, 1)].rstrip()}..."
+
+
+def _log_request_scoped_provider_event(
+    *,
+    request_id: str | None,
+    provider: str,
+    endpoint: str,
+    status: str,
+    latency_ms: int | None = None,
+    retries: int | None = None,
+    reason: str | None = None,
+) -> None:
+    if request_id is None:
+        return
+    parts = [f"status={status}"]
+    if latency_ms is not None:
+        parts.append(f"latency_ms={latency_ms}")
+    if retries is not None:
+        parts.append(f"retries={retries}")
+    short_reason = _shorten_runtime_log_text(reason)
+    if short_reason:
+        parts.append(f"reason={short_reason!r}")
+    logger.info(
+        "provider-call[%s] provider=%s endpoint=%s %s",
+        request_id,
+        provider,
+        endpoint,
+        " ".join(parts),
+    )
+
+
 async def execute_provider_call(
     *,
     provider: str,
@@ -478,6 +519,13 @@ async def execute_provider_call(
         registry.record(outcome, policy=resolved_policy)
         if request_outcomes is not None:
             request_outcomes.append(outcome.to_dict())
+        _log_request_scoped_provider_event(
+            request_id=request_id,
+            provider=provider,
+            endpoint=endpoint,
+            status="suppressed",
+            reason=outcome.fallback_reason,
+        )
         return ProviderCallResult(payload=None, outcome=outcome)
 
     if budget is not None:
@@ -497,6 +545,13 @@ async def execute_provider_call(
                 registry.record(outcome, policy=resolved_policy)
             if request_outcomes is not None:
                 request_outcomes.append(outcome.to_dict())
+            _log_request_scoped_provider_event(
+                request_id=request_id,
+                provider=provider,
+                endpoint=endpoint,
+                status="skipped",
+                reason=outcome.fallback_reason,
+            )
             return ProviderCallResult(payload=None, outcome=outcome)
 
     semaphore = (
@@ -506,6 +561,12 @@ async def execute_provider_call(
     )
     if semaphore is not None:
         await semaphore.acquire()
+    _log_request_scoped_provider_event(
+        request_id=request_id,
+        provider=provider,
+        endpoint=endpoint,
+        status="started",
+    )
     try:
         for attempt in range(max(resolved_policy.max_attempts, 1)):
             started = time.perf_counter()
@@ -518,6 +579,16 @@ async def execute_provider_call(
                 if status_bucket in _RETRYABLE_STATUSES and attempt + 1 < max(
                     resolved_policy.max_attempts, 1
                 ):
+                    retry_reason = str(exc)
+                    _log_request_scoped_provider_event(
+                        request_id=request_id,
+                        provider=provider,
+                        endpoint=endpoint,
+                        status="retrying",
+                        latency_ms=latency_ms,
+                        retries=attempt + 1,
+                        reason=retry_reason,
+                    )
                     await asyncio.sleep(
                         _retry_delay_seconds(attempt, policy=resolved_policy)
                     )
@@ -536,6 +607,15 @@ async def execute_provider_call(
                     registry.record(outcome, policy=resolved_policy)
                 if request_outcomes is not None:
                     request_outcomes.append(outcome.to_dict())
+                _log_request_scoped_provider_event(
+                    request_id=request_id,
+                    provider=provider,
+                    endpoint=endpoint,
+                    status=outcome.status_bucket,
+                    latency_ms=latency_ms,
+                    retries=retries,
+                    reason=outcome.error or outcome.fallback_reason,
+                )
                 if isinstance(exc, propagate_exceptions):
                     raise
                 return ProviderCallResult(payload=None, outcome=outcome)
@@ -555,6 +635,14 @@ async def execute_provider_call(
                 registry.record(outcome, policy=resolved_policy)
             if request_outcomes is not None:
                 request_outcomes.append(outcome.to_dict())
+            _log_request_scoped_provider_event(
+                request_id=request_id,
+                provider=provider,
+                endpoint=endpoint,
+                status=outcome.status_bucket,
+                latency_ms=outcome.latency_ms,
+                retries=attempt,
+            )
             return ProviderCallResult(payload=payload, outcome=outcome)
     finally:
         if semaphore is not None:

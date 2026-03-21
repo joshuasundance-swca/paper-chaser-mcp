@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import statistics
 from typing import Any
 from uuid import uuid4
@@ -42,12 +43,20 @@ from .planner import (
 )
 from .providers import DeterministicProviderBundle, ModelProviderBundle
 from .ranking import evaluate_speculative_variants, merge_candidates, rerank_candidates
-from .retrieval import SMART_RETRIEVAL_FIELDS, RetrievedCandidate, retrieve_variant
+from .retrieval import (
+    SMART_RETRIEVAL_FIELDS,
+    RetrievalBatch,
+    RetrievedCandidate,
+    retrieve_variant,
+)
 from .workspace import (
     ExpiredSearchSessionError,
     SearchSessionNotFoundError,
     WorkspaceRegistry,
 )
+
+logger = logging.getLogger("scholar-search-mcp")
+SMART_SEARCH_PROGRESS_TOTAL = 100.0
 
 InMemorySaver: Any = None
 StateGraph: Any = None
@@ -115,6 +124,46 @@ class AgenticRuntime:
             return self._deterministic_bundle
         return self._provider_bundle
 
+    async def _emit_smart_search_status(
+        self,
+        *,
+        ctx: Context | None,
+        request_id: str,
+        progress: float | None = None,
+        message: str | None = None,
+        detail: str | None = None,
+    ) -> None:
+        log_message = detail or message
+        if log_message:
+            logger.info("smart-search[%s] %s", request_id, log_message)
+        if ctx is None:
+            return
+        if progress is not None and message is not None:
+            await ctx.report_progress(
+                progress=progress,
+                total=SMART_SEARCH_PROGRESS_TOTAL,
+                message=message,
+            )
+        if detail:
+            await ctx.info(detail, logger_name="scholar-search")
+
+    @staticmethod
+    def _describe_retrieval_batch(batch: RetrievalBatch) -> str:
+        providers_text = (
+            ", ".join(batch.providers_used) if batch.providers_used else "none"
+        )
+        message = (
+            f"Variant '{_truncate_text(batch.variant)}' finished with "
+            f"{len(batch.candidates)} candidate(s) from {providers_text}."
+        )
+        if batch.provider_errors:
+            errors_text = "; ".join(
+                f"{provider}: {_truncate_text(error, limit=90)}"
+                for provider, error in sorted(batch.provider_errors.items())
+            )
+            message = f"{message} Errors: {errors_text}."
+        return message
+
     async def search_papers_smart(
         self,
         *,
@@ -156,12 +205,17 @@ class AgenticRuntime:
             focus=focus,
             provider_bundle=provider_bundle,
         )
-        if ctx is not None:
-            await ctx.report_progress(
-                progress=1,
-                total=5,
-                message="Planning smart search",
-            )
+        await self._emit_smart_search_status(
+            ctx=ctx,
+            request_id=request_id,
+            progress=5,
+            message="Planning smart search",
+            detail=(
+                f"Intent '{planner.intent}' selected for "
+                f"'{_truncate_text(normalized_query, limit=96)}' with "
+                f"latency profile '{latency_profile}'."
+            ),
+        )
 
         if planner.intent == "known_item":
             return await self._search_known_item(
@@ -170,9 +224,20 @@ class AgenticRuntime:
                 planner_intent=planner.intent,
                 search_session_id=search_session_id,
                 latency_profile=latency_profile,
+                request_id=request_id,
                 ctx=ctx,
             )
 
+        await self._emit_smart_search_status(
+            ctx=ctx,
+            request_id=request_id,
+            progress=15,
+            message="Running initial retrieval",
+            detail=(
+                f"Searching the literal query across enabled providers for "
+                f"'{_truncate_text(normalized_query, limit=96)}'."
+            ),
+        )
         first_batch = await retrieve_variant(
             variant=normalized_query,
             variant_source="from_input",
@@ -198,6 +263,13 @@ class AgenticRuntime:
             provider_budget=budget_state,
             request_outcomes=provider_outcomes,
             request_id=request_id,
+        )
+        await self._emit_smart_search_status(
+            ctx=ctx,
+            request_id=request_id,
+            progress=30,
+            message="Initial retrieval complete",
+            detail=self._describe_retrieval_batch(first_batch),
         )
         first_pass_papers = [candidate.paper for candidate in first_batch.candidates]
         if search_session_id:
@@ -232,49 +304,108 @@ class AgenticRuntime:
             config=profile_settings.search_config,
         )
 
-        if ctx is not None:
-            await ctx.report_progress(
-                progress=2,
-                total=5,
+        expansion_variants = variants[1:]
+        grounded_count = sum(
+            1 for candidate in expansion_variants if candidate.source != "speculative"
+        )
+        speculative_count = len(expansion_variants) - grounded_count
+        expansion_preview = ", ".join(
+            f"'{_truncate_text(candidate.variant, limit=48)}'"
+            for candidate in expansion_variants[:3]
+        )
+        if expansion_variants:
+            await self._emit_smart_search_status(
+                ctx=ctx,
+                request_id=request_id,
+                progress=40,
+                message="Expansion plan ready",
+                detail=(
+                    f"Prepared {len(expansion_variants)} expansion variant(s): "
+                    f"{grounded_count} grounded and {speculative_count} speculative. "
+                    f"Preview: {expansion_preview}."
+                ),
+            )
+            await self._emit_smart_search_status(
+                ctx=ctx,
+                request_id=request_id,
+                progress=45,
                 message="Running grounded expansions",
+                detail=(
+                    f"Running {len(expansion_variants)} expansion variant(s) in "
+                    "parallel across the enabled provider family."
+                ),
+            )
+        else:
+            await self._emit_smart_search_status(
+                ctx=ctx,
+                request_id=request_id,
+                progress=70,
+                message="No grounded expansions to run",
+                detail=(
+                    "Initial retrieval stayed close to the query, so no additional "
+                    "grounded or speculative variants were scheduled."
+                ),
             )
 
-        remaining_batches = (
-            await asyncio.gather(
-                *[
-                    retrieve_variant(
-                        variant=candidate.variant,
-                        variant_source=candidate.source,
-                        intent=planner.intent,
-                        year=year,
-                        venue=venue,
-                        enable_core=self._enable_core,
-                        enable_semantic_scholar=self._enable_semantic_scholar,
-                        enable_openalex=self._enable_openalex,
-                        enable_arxiv=self._enable_arxiv,
-                        enable_serpapi=self._enable_serpapi,
-                        core_client=self._core_client,
-                        semantic_client=self._client,
-                        openalex_client=self._openalex_client,
-                        arxiv_client=self._arxiv_client,
-                        serpapi_client=self._serpapi_client,
-                        widened=planner.intent == "review",
-                        allow_serpapi=(
-                            self._enable_serpapi
-                            and profile_settings.allow_serpapi_on_expansions
-                        ),
-                        latency_profile=latency_profile,
-                        provider_registry=self._provider_registry,
-                        provider_budget=budget_state,
-                        request_outcomes=provider_outcomes,
-                        request_id=request_id,
-                    )
-                    for candidate in variants[1:]
-                ]
+        remaining_batches: list[RetrievalBatch] = []
+        expansion_tasks = [
+            asyncio.create_task(
+                retrieve_variant(
+                    variant=candidate.variant,
+                    variant_source=candidate.source,
+                    intent=planner.intent,
+                    year=year,
+                    venue=venue,
+                    enable_core=self._enable_core,
+                    enable_semantic_scholar=self._enable_semantic_scholar,
+                    enable_openalex=self._enable_openalex,
+                    enable_arxiv=self._enable_arxiv,
+                    enable_serpapi=self._enable_serpapi,
+                    core_client=self._core_client,
+                    semantic_client=self._client,
+                    openalex_client=self._openalex_client,
+                    arxiv_client=self._arxiv_client,
+                    serpapi_client=self._serpapi_client,
+                    widened=planner.intent == "review",
+                    allow_serpapi=(
+                        self._enable_serpapi
+                        and profile_settings.allow_serpapi_on_expansions
+                    ),
+                    latency_profile=latency_profile,
+                    provider_registry=self._provider_registry,
+                    provider_budget=budget_state,
+                    request_outcomes=provider_outcomes,
+                    request_id=request_id,
+                )
             )
-            if len(variants) > 1
-            else []
-        )
+            for candidate in expansion_variants
+        ]
+        if expansion_tasks:
+            try:
+                for completed_index, task in enumerate(
+                    asyncio.as_completed(expansion_tasks),
+                    start=1,
+                ):
+                    batch = await task
+                    remaining_batches.append(batch)
+                    expansion_progress = 45 + (
+                        (completed_index / len(expansion_tasks)) * 25
+                    )
+                    await self._emit_smart_search_status(
+                        ctx=ctx,
+                        request_id=request_id,
+                        progress=expansion_progress,
+                        message=(
+                            f"Expansion {completed_index}/{len(expansion_tasks)} "
+                            "complete"
+                        ),
+                        detail=self._describe_retrieval_batch(batch),
+                    )
+            except Exception:
+                for task in expansion_tasks:
+                    task.cancel()
+                await asyncio.gather(*expansion_tasks, return_exceptions=True)
+                raise
 
         recommendation_candidates = await self._semantic_recommendation_candidates(
             seed_candidates=first_batch.candidates,
@@ -284,6 +415,17 @@ class AgenticRuntime:
             provider_outcomes=provider_outcomes,
             provider_budget=budget_state,
         )
+        if profile_settings.enable_deep_recommendations:
+            await self._emit_smart_search_status(
+                ctx=ctx,
+                request_id=request_id,
+                progress=78,
+                message="Recommendation fetch complete",
+                detail=(
+                    "Semantic Scholar recommendation expansion returned "
+                    f"{len(recommendation_candidates)} candidate(s)."
+                ),
+            )
 
         all_candidates = list(first_batch.candidates)
         for batch in remaining_batches:
@@ -314,12 +456,16 @@ class AgenticRuntime:
             )
         ]
 
-        if ctx is not None:
-            await ctx.report_progress(
-                progress=3,
-                total=5,
-                message="Reranking and deduplicating papers",
-            )
+        await self._emit_smart_search_status(
+            ctx=ctx,
+            request_id=request_id,
+            progress=80,
+            message="Reranking and deduplicating papers",
+            detail=(
+                f"Fusing {len(all_candidates)} candidate(s) into "
+                f"{len(filtered_ranked)} unique ranked paper(s)."
+            ),
+        )
 
         strategy_metadata = SearchStrategyMetadata(
             intent=planner.intent,
@@ -392,6 +538,15 @@ class AgenticRuntime:
             ),
             resourceUris=[],
         )
+        await self._emit_smart_search_status(
+            ctx=ctx,
+            request_id=request_id,
+            progress=90,
+            message="Saving reusable result set",
+            detail=(
+                f"Saving {len(smart_hits)} ranked result(s) to the workspace registry."
+            ),
+        )
         response_dict = dump_jsonable(response)
         record = self._workspace_registry.save_result_set(
             source_tool="search_papers_smart",
@@ -421,12 +576,16 @@ class AgenticRuntime:
                     ),
                 },
             )
-        if ctx is not None:
-            await ctx.report_progress(
-                progress=5,
-                total=5,
-                message="Smart search complete",
-            )
+        await self._emit_smart_search_status(
+            ctx=ctx,
+            request_id=request_id,
+            progress=100,
+            message="Smart search complete",
+            detail=(
+                f"Smart search complete with {len(smart_hits)} ranked result(s). "
+                f"searchSessionId={record.search_session_id}."
+            ),
+        )
         return dump_jsonable(response)
 
     async def ask_result_set(
@@ -506,7 +665,9 @@ class AgenticRuntime:
             evidence=evidence,
             unsupportedAsks=list(synthesis.get("unsupportedAsks") or []),
             followUpQuestions=list(synthesis.get("followUpQuestions") or []),
-            confidence=provider_bundle.normalize_confidence(synthesis.get("confidence")),
+            confidence=provider_bundle.normalize_confidence(
+                synthesis.get("confidence")
+            ),
             searchSessionId=search_session_id,
             agentHints=build_agent_hints("ask_result_set", {}),
             resourceUris=build_resource_uris(
@@ -957,14 +1118,19 @@ class AgenticRuntime:
         planner_intent: str,
         search_session_id: str | None,
         latency_profile: LatencyProfile,
+        request_id: str,
         ctx: Context | None,
     ) -> dict[str, Any]:
-        if ctx is not None:
-            await ctx.report_progress(
-                progress=2,
-                total=5,
-                message="Resolving known item",
-            )
+        await self._emit_smart_search_status(
+            ctx=ctx,
+            request_id=request_id,
+            progress=20,
+            message="Resolving known item",
+            detail=(
+                f"Attempting direct known-item resolution for "
+                f"'{_truncate_text(query, limit=96)}'."
+            ),
+        )
         known_item = await self._resolve_known_item(query)
         if known_item is None:
             return self._feature_not_configured(
@@ -1010,6 +1176,13 @@ class AgenticRuntime:
             ),
             resourceUris=[],
         )
+        await self._emit_smart_search_status(
+            ctx=ctx,
+            request_id=request_id,
+            progress=90,
+            message="Saving reusable result set",
+            detail="Saving the resolved known item as a reusable search session.",
+        )
         record = self._workspace_registry.save_result_set(
             source_tool="search_papers_smart",
             payload=dump_jsonable(response),
@@ -1023,12 +1196,16 @@ class AgenticRuntime:
             {"results": [{"paper": known_item}]},
             record.search_session_id,
         )
-        if ctx is not None:
-            await ctx.report_progress(
-                progress=5,
-                total=5,
-                message="Known-item resolution complete",
-            )
+        await self._emit_smart_search_status(
+            ctx=ctx,
+            request_id=request_id,
+            progress=100,
+            message="Known-item resolution complete",
+            detail=(
+                "Known-item resolution complete. "
+                f"searchSessionId={record.search_session_id}."
+            ),
+        )
         return dump_jsonable(response)
 
     async def _resolve_known_item(self, query: str) -> dict[str, Any] | None:
@@ -1288,6 +1465,13 @@ def _paper_text(paper: dict[str, Any]) -> str:
         ]
         if part
     )
+
+
+def _truncate_text(value: str, *, limit: int = 72) -> str:
+    normalized = " ".join(value.split())
+    if len(normalized) <= limit:
+        return normalized
+    return f"{normalized[: max(limit - 3, 1)].rstrip()}..."
 
 
 def _top_terms_for_cluster(papers: list[dict[str, Any]]) -> list[str]:

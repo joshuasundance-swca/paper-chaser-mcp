@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from scholar_search_mcp import server
@@ -16,6 +18,41 @@ from scholar_search_mcp.agentic.planner import (
 from scholar_search_mcp.agentic.ranking import merge_candidates, rerank_candidates
 from scholar_search_mcp.agentic.retrieval import RetrievedCandidate, retrieve_variant
 from tests.helpers import RecordingOpenAlexClient, RecordingSemanticClient, _payload
+
+
+class RecordingContext:
+    def __init__(self) -> None:
+        self.progress_updates: list[dict[str, object]] = []
+        self.info_messages: list[dict[str, object]] = []
+
+    async def report_progress(
+        self,
+        *,
+        progress: float,
+        total: float | None = None,
+        message: str | None = None,
+    ) -> None:
+        self.progress_updates.append(
+            {
+                "progress": progress,
+                "total": total,
+                "message": message,
+            }
+        )
+
+    async def info(
+        self,
+        message: str,
+        logger_name: str | None = None,
+        extra: dict[str, object] | None = None,
+    ) -> None:
+        self.info_messages.append(
+            {
+                "message": message,
+                "logger_name": logger_name,
+                "extra": extra,
+            }
+        )
 
 
 def _deterministic_runtime(
@@ -129,6 +166,49 @@ async def test_smart_search_and_follow_up_tools_work_with_deterministic_runtime(
     assert graph["nodes"]
     assert graph["edges"]
     assert graph["frontier"]
+
+
+@pytest.mark.asyncio
+async def test_search_papers_smart_emits_progress_logs_and_provider_events(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    _, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
+    ctx = RecordingContext()
+
+    caplog.set_level(logging.INFO, logger="scholar-search-mcp")
+
+    payload = await runtime.search_papers_smart(
+        query="transformers",
+        focus="literature review",
+        limit=5,
+        latency_profile="fast",
+        ctx=ctx,
+    )
+
+    assert payload["results"]
+    progress_messages = [
+        update["message"] for update in ctx.progress_updates if update["message"]
+    ]
+    assert "Planning smart search" in progress_messages
+    assert "Running initial retrieval" in progress_messages
+    assert "Expansion plan ready" in progress_messages
+    assert any(
+        str(message).startswith("Expansion 1/1 complete")
+        for message in progress_messages
+    )
+    assert "Smart search complete" in progress_messages
+
+    info_messages = [entry["message"] for entry in ctx.info_messages]
+    assert any(
+        "Prepared 1 expansion variant(s)" in str(message) for message in info_messages
+    )
+    assert any("searchSessionId=" in str(message) for message in info_messages)
+
+    log_messages = [record.getMessage() for record in caplog.records]
+    assert any("smart-search[" in message for message in log_messages)
+    assert any("provider-call[" in message for message in log_messages)
 
 
 @pytest.mark.asyncio
