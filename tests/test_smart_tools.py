@@ -1,4 +1,6 @@
+import asyncio
 import logging
+from typing import Any, cast
 
 import pytest
 
@@ -127,6 +129,7 @@ async def test_smart_search_and_follow_up_tools_work_with_deterministic_runtime(
     assert smart["searchSessionId"]
     assert smart["results"]
     assert smart["strategyMetadata"]["queryVariantsTried"]
+    assert smart["strategyMetadata"]["stageTimingsMs"]
     assert "semantic_scholar" in smart["strategyMetadata"]["providersUsed"]
     assert "resourceUris" in smart
     assert "agentHints" in smart
@@ -208,8 +211,7 @@ async def test_search_papers_smart_include_enrichment_enriches_final_hits(
     assert first_paper["enrichments"]["crossref"]["doi"] == "10.1234/crossref-query"
     assert first_paper["enrichments"]["unpaywall"]["isOa"] is True
     assert (
-        record.papers[0]["enrichments"]["crossref"]["doi"]
-        == "10.1234/crossref-query"
+        record.papers[0]["enrichments"]["crossref"]["doi"] == "10.1234/crossref-query"
     )
     assert any(
         outcome["provider"] == "crossref"
@@ -239,8 +241,9 @@ async def test_search_papers_smart_emits_progress_logs_and_provider_events(
         focus="literature review",
         limit=5,
         latency_profile="fast",
-        ctx=ctx,
+        ctx=cast(Any, ctx),
     )
+    await asyncio.sleep(0)
 
     assert payload["results"]
     progress_messages = [
@@ -264,6 +267,111 @@ async def test_search_papers_smart_emits_progress_logs_and_provider_events(
     log_messages = [record.getMessage() for record in caplog.records]
     assert any("smart-search[" in message for message in log_messages)
     assert any("provider-call[" in message for message in log_messages)
+
+
+@pytest.mark.asyncio
+async def test_smart_search_does_not_block_on_slow_context_notifications() -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    _, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
+    blocker = asyncio.Event()
+
+    class SlowContext:
+        async def report_progress(self, **kwargs: object) -> None:
+            del kwargs
+            await blocker.wait()
+
+        async def info(self, *args: object, **kwargs: object) -> None:
+            del args, kwargs
+            await blocker.wait()
+
+    payload = await asyncio.wait_for(
+        runtime.search_papers_smart(
+            query="transformers",
+            limit=3,
+            latency_profile="fast",
+            ctx=cast(Any, SlowContext()),
+        ),
+        timeout=2.0,
+    )
+
+    assert payload["results"]
+    for task in list(runtime._background_tasks):
+        task.cancel()
+    await asyncio.gather(*runtime._background_tasks, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_ask_result_set_runs_synthesis_and_scoring_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    registry, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
+    record = registry.save_result_set(
+        source_tool="search_papers_smart",
+        payload={
+            "data": [
+                {
+                    "paperId": "paper-1",
+                    "title": "Retrieval-Augmented Agents",
+                    "abstract": "Vector retrieval grounds agent answers.",
+                }
+            ]
+        },
+    )
+    answer_started = asyncio.Event()
+    scoring_started = asyncio.Event()
+    overlap = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _aanswer_question(**kwargs: object) -> dict[str, object]:
+        del kwargs
+        answer_started.set()
+        if scoring_started.is_set():
+            overlap.set()
+        await release.wait()
+        return {
+            "answer": "Concurrent answer",
+            "confidence": "high",
+            "unsupportedAsks": [],
+            "followUpQuestions": [],
+        }
+
+    async def _abatched_similarity(
+        query: str,
+        texts: list[str],
+        **kwargs: object,
+    ) -> list[float]:
+        del query, texts, kwargs
+        scoring_started.set()
+        if answer_started.is_set():
+            overlap.set()
+        await release.wait()
+        return [0.92]
+
+    monkeypatch.setattr(runtime._provider_bundle, "aanswer_question", _aanswer_question)
+    monkeypatch.setattr(
+        runtime._provider_bundle,
+        "abatched_similarity",
+        _abatched_similarity,
+    )
+
+    task = asyncio.create_task(
+        runtime.ask_result_set(
+            search_session_id=record.search_session_id,
+            question="What does this result set say about retrieval?",
+            top_k=1,
+            answer_mode="synthesis",
+        )
+    )
+
+    await asyncio.wait_for(overlap.wait(), timeout=1.0)
+    release.set()
+    ask = await task
+
+    assert ask["answer"] == "Concurrent answer"
+    assert ask["evidence"][0]["paper"]["paperId"] == "paper-1"
 
 
 @pytest.mark.asyncio
@@ -317,6 +425,112 @@ async def test_ask_result_set_normalizes_non_literal_confidence_values(
 
 
 @pytest.mark.asyncio
+async def test_enrich_paper_parallelizes_doi_known_crossref_and_unpaywall() -> None:
+    crossref_started = asyncio.Event()
+    unpaywall_started = asyncio.Event()
+    overlap = asyncio.Event()
+    release = asyncio.Event()
+
+    class SlowCrossrefClient:
+        async def get_work(self, doi: str) -> dict[str, object]:
+            crossref_started.set()
+            if unpaywall_started.is_set():
+                overlap.set()
+            await release.wait()
+            return {
+                "doi": doi,
+                "title": "Crossref Paper",
+                "publisher": "Crossref Publisher",
+                "publicationType": "journal-article",
+            }
+
+    class SlowUnpaywallClient:
+        async def get_open_access(self, doi: str) -> dict[str, object]:
+            unpaywall_started.set()
+            if crossref_started.is_set():
+                overlap.set()
+            await release.wait()
+            return {
+                "doi": doi,
+                "isOa": True,
+                "oaStatus": "gold",
+                "bestOaUrl": "https://oa.example/landing",
+                "pdfUrl": "https://oa.example/file.pdf",
+                "license": "cc-by",
+                "journalIsInDoaj": True,
+            }
+
+    service = PaperEnrichmentService(
+        crossref_client=SlowCrossrefClient(),  # type: ignore[arg-type]
+        unpaywall_client=SlowUnpaywallClient(),  # type: ignore[arg-type]
+        enable_crossref=True,
+        enable_unpaywall=True,
+    )
+
+    task = asyncio.create_task(service.enrich_paper(doi="10.1234/example"))
+
+    await asyncio.wait_for(overlap.wait(), timeout=1.0)
+    release.set()
+    response = await task
+
+    assert response.crossref is not None
+    assert response.unpaywall is not None
+    assert response.crossref.found is True
+    assert response.unpaywall.found is True
+    assert response.doi_resolution.resolved_doi == "10.1234/example"
+
+
+@pytest.mark.asyncio
+async def test_enrich_paper_reuses_existing_enrichments_without_refetching() -> None:
+    class UnexpectedCrossrefClient:
+        async def get_work(self, doi: str) -> dict[str, object]:
+            raise AssertionError(f"Crossref should not be called for {doi}")
+
+    class UnexpectedUnpaywallClient:
+        async def get_open_access(self, doi: str) -> dict[str, object]:
+            raise AssertionError(f"Unpaywall should not be called for {doi}")
+
+    service = PaperEnrichmentService(
+        crossref_client=UnexpectedCrossrefClient(),  # type: ignore[arg-type]
+        unpaywall_client=UnexpectedUnpaywallClient(),  # type: ignore[arg-type]
+        enable_crossref=True,
+        enable_unpaywall=True,
+    )
+
+    response = await service.enrich_paper(
+        paper={
+            "paperId": "paper-1",
+            "title": "Existing enrichments",
+            "enrichments": {
+                "crossref": {
+                    "doi": "10.1234/existing",
+                    "publisher": "Existing Publisher",
+                },
+                "unpaywall": {
+                    "doi": "10.1234/existing",
+                    "isOa": True,
+                    "oaStatus": "gold",
+                    "bestOaUrl": "https://oa.example/landing",
+                    "pdfUrl": "https://oa.example/file.pdf",
+                    "license": "cc-by",
+                    "journalIsInDoaj": True,
+                },
+            },
+        }
+    )
+
+    assert response.crossref is not None
+    assert response.crossref.enrichment is not None
+    assert response.unpaywall is not None
+    assert response.unpaywall.enrichment is not None
+    assert response.crossref.found is True
+    assert response.crossref.enrichment.doi == "10.1234/existing"
+    assert response.unpaywall.found is True
+    assert response.unpaywall.enrichment.is_oa is True
+    assert response.doi_resolution.resolution_source == "existing_enrichment"
+
+
+@pytest.mark.asyncio
 async def test_expand_research_graph_returns_structured_error_for_non_portable_seed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -355,6 +569,85 @@ async def test_expand_research_graph_returns_structured_error_for_non_portable_s
     assert "portable" in graph["message"]
 
 
+@pytest.mark.asyncio
+async def test_expand_research_graph_uses_scored_frontier_for_next_hop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class GraphSemanticClient(RecordingSemanticClient):
+        async def get_paper_citations(self, **kwargs) -> dict:
+            self.calls.append(("get_paper_citations", kwargs))
+            paper_id = kwargs["paper_id"]
+            if paper_id == "seed-1":
+                return {
+                    "data": [
+                        {"paperId": f"low-{index}", "title": f"Low {index}"}
+                        for index in range(1, 6)
+                    ]
+                    + [{"paperId": "high-6", "title": "High 6"}]
+                }
+            if paper_id == "high-6":
+                return {
+                    "data": [
+                        {
+                            "paperId": "grandchild-1",
+                            "title": "Grandchild node",
+                        }
+                    ]
+                }
+            return {"data": []}
+
+    semantic = GraphSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    registry, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
+    record = registry.save_result_set(
+        source_tool="search_papers_smart",
+        payload={
+            "data": [
+                {
+                    "paperId": "seed-1",
+                    "title": "Seed paper",
+                    "canonicalId": "seed-1",
+                    "recommendedExpansionId": "seed-1",
+                    "expansionIdStatus": "portable",
+                    "source": "semantic_scholar",
+                }
+            ]
+        },
+    )
+
+    async def _fake_frontier_scores(
+        *,
+        seed: dict[str, Any],
+        related_papers: list[dict[str, Any]],
+        provider_bundle: Any,
+    ) -> list[float]:
+        del seed, provider_bundle
+        if related_papers and related_papers[0]["paperId"] == "low-1":
+            return [0.1, 0.2, 0.3, 0.4, 0.5, 0.99]
+        return [0.8 for _ in related_papers]
+
+    monkeypatch.setattr(
+        "scholar_search_mcp.agentic.graphs._graph_frontier_scores",
+        _fake_frontier_scores,
+    )
+
+    graph = await runtime.expand_research_graph(
+        seed_paper_ids=None,
+        seed_search_session_id=record.search_session_id,
+        direction="citations",
+        hops=2,
+        per_seed_limit=6,
+    )
+
+    node_ids = {node["id"] for node in graph["nodes"]}
+
+    assert "grandchild-1" in node_ids
+    assert any(
+        call[0] == "get_paper_citations" and call[1]["paper_id"] == "high-6"
+        for call in semantic.calls
+    )
+
+
 def test_grounded_expansions_filter_stopwords_and_single_paper_noise() -> None:
     config = _deterministic_config()
 
@@ -386,16 +679,17 @@ def test_grounded_expansions_filter_stopwords_and_single_paper_noise() -> None:
     assert all(" inhibitors" not in variant for variant in expanded)
 
 
-def test_classify_query_respects_explicit_review_mode() -> None:
+@pytest.mark.asyncio
+async def test_classify_query_respects_explicit_review_mode() -> None:
     class _Bundle:
-        def plan_search(self, **kwargs: object) -> PlannerDecision:
+        async def aplan_search(self, **kwargs: object) -> PlannerDecision:
             return PlannerDecision(
                 intent="discovery",
                 candidateConcepts=["agents"],
                 followUpMode="qa",
             )
 
-    _, planner = classify_query(
+    _, planner = await classify_query(
         query="tool-using agents for literature review",
         mode="review",
         year=None,
@@ -409,16 +703,17 @@ def test_classify_query_respects_explicit_review_mode() -> None:
     assert "literature review" in planner.candidate_concepts
 
 
-def test_classify_query_treats_citation_like_input_as_known_item() -> None:
+@pytest.mark.asyncio
+async def test_classify_query_treats_citation_like_input_as_known_item() -> None:
     class _Bundle:
-        def plan_search(self, **kwargs: object) -> PlannerDecision:
+        async def aplan_search(self, **kwargs: object) -> PlannerDecision:
             return PlannerDecision(
                 intent="discovery",
                 candidateConcepts=["planetary boundaries"],
                 followUpMode="qa",
             )
 
-    _, planner = classify_query(
+    _, planner = await classify_query(
         query="Rockstrom et al planetary boundaries 2009 Nature 461 472",
         mode="auto",
         year=None,
@@ -435,16 +730,17 @@ def test_looks_like_exact_title_identifies_title_cased_paper_queries() -> None:
     assert not looks_like_exact_title("tool-using agents for literature review")
 
 
-def test_classify_query_routes_title_like_query_to_known_item() -> None:
+@pytest.mark.asyncio
+async def test_classify_query_routes_title_like_query_to_known_item() -> None:
     class _Bundle:
-        def plan_search(self, **kwargs: object) -> PlannerDecision:
+        async def aplan_search(self, **kwargs: object) -> PlannerDecision:
             return PlannerDecision(
                 intent="discovery",
                 candidateConcepts=["transformers"],
                 followUpMode="qa",
             )
 
-    _, planner = classify_query(
+    _, planner = await classify_query(
         query="Attention Is All You Need",
         mode="auto",
         year=None,
@@ -456,12 +752,13 @@ def test_classify_query_routes_title_like_query_to_known_item() -> None:
     assert planner.intent == "known_item"
 
 
-def test_rerank_candidates_prefers_multi_facet_consensus_match() -> None:
+@pytest.mark.asyncio
+async def test_rerank_candidates_prefers_multi_facet_consensus_match() -> None:
     provider_bundle = resolve_provider_bundle(
         _deterministic_config(),
         openai_api_key=None,
     )
-    ranked = rerank_candidates(
+    ranked = await rerank_candidates(
         query="tool-using agents for literature review",
         merged_candidates=[
             {
@@ -582,14 +879,13 @@ def test_merge_candidates_merges_same_title_and_year_with_mismatched_authors() -
     assert merged[0]["providers"] == ["openalex", "semantic_scholar"]
 
 
-def test_rerank_candidates_downweights_serpapi_snippet_echo_without_title_match() -> (
-    None
-):
+@pytest.mark.asyncio
+async def test_rerank_candidates_downweights_serpapi_echo_without_title_match() -> None:
     provider_bundle = resolve_provider_bundle(
         _deterministic_config(),
         openai_api_key=None,
     )
-    ranked = rerank_candidates(
+    ranked = await rerank_candidates(
         query="tool-using agents for literature review",
         merged_candidates=[
             {
@@ -640,12 +936,13 @@ def test_rerank_candidates_downweights_serpapi_snippet_echo_without_title_match(
     )
 
 
-def test_rerank_candidates_penalizes_review_papers_missing_title_anchor_terms() -> None:
+@pytest.mark.asyncio
+async def test_rerank_candidates_penalizes_review_papers_missing_anchor_terms() -> None:
     provider_bundle = resolve_provider_bundle(
         _deterministic_config(),
         openai_api_key=None,
     )
-    ranked = rerank_candidates(
+    ranked = await rerank_candidates(
         query="tool-using agents for literature review",
         merged_candidates=[
             {

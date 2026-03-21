@@ -50,6 +50,7 @@ async def test_unpaywall_get_open_access_normalizes_payload(
         "https://doi.org/10.1234/example"
     )
 
+    assert result is not None
     assert result["doi"] == "10.1234/example"
     assert result["isOa"] is True
     assert result["bestOaUrl"] == "https://oa.example/landing"
@@ -113,6 +114,7 @@ async def test_unpaywall_get_open_access_retries_transient_server_error(
 
     assert queue.calls == 2
     assert sleep_calls == [0.5]
+    assert result is not None
     assert result["doi"] == "10.1234/recovered"
     assert result["oaStatus"] == "closed"
 
@@ -141,3 +143,59 @@ async def test_unpaywall_get_open_access_returns_none_on_404(
     )
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_unpaywall_client_reuses_lazy_async_client_and_closes_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created_clients: list["ReusableAsyncClient"] = []
+
+    class ReusableAsyncClient:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+            self.closed = False
+
+        async def get(self, url: str, **kwargs):
+            del kwargs
+            self.calls.append(url)
+            suffix = self.calls[-1].rsplit("/", 1)[-1]
+            return DummyResponse(
+                status_code=200,
+                payload={
+                    "doi": suffix.replace("%2F", "/"),
+                    "is_oa": True,
+                    "oa_status": "gold",
+                    "best_oa_location": None,
+                    "oa_locations": [],
+                },
+            )
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    def _factory(timeout: float) -> ReusableAsyncClient:
+        del timeout
+        client = ReusableAsyncClient()
+        created_clients.append(client)
+        return client
+
+    monkeypatch.setattr(
+        "scholar_search_mcp.clients.unpaywall.client.httpx.AsyncClient",
+        _factory,
+    )
+
+    client = UnpaywallClient(email="oa@example.com")
+    await client.get_open_access("10.1234/first")
+    result = await client.get_open_access("10.1234/second")
+
+    assert len(created_clients) == 1
+    assert result is not None
+    assert created_clients[0].calls == [
+        "https://api.unpaywall.org/v2/10.1234%2Ffirst",
+        "https://api.unpaywall.org/v2/10.1234%2Fsecond",
+    ]
+
+    await client.aclose()
+
+    assert created_clients[0].closed is True

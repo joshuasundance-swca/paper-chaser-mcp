@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -9,7 +10,7 @@ import re
 import time
 import uuid
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -127,6 +128,9 @@ class SearchSessionRecord:
     authors: list[dict[str, Any]] = field(default_factory=list)
     indexed_papers: list[IndexedPaper] = field(default_factory=list)
     vector_store: Any | None = None
+    vector_store_status: str = "unavailable"
+    vector_store_error: str | None = None
+    vector_index_task: asyncio.Task[Any] | None = None
     trace: list[dict[str, Any]] = field(default_factory=list)
 
     def is_expired(self, now: float | None = None) -> bool:
@@ -143,6 +147,15 @@ class WorkspaceRegistry:
         enable_trace_log: bool = False,
         index_backend: str = "memory",
         similarity_fn: Callable[[str, str], float] | None = None,
+        async_batched_similarity_fn: Callable[[str, list[str]], Awaitable[list[float]]]
+        | None = None,
+        async_embed_query_fn: Callable[[str], Awaitable[tuple[float, ...] | None]]
+        | None = None,
+        async_embed_texts_fn: Callable[
+            [list[str]],
+            Awaitable[list[tuple[float, ...] | None]],
+        ]
+        | None = None,
         embed_query_fn: Callable[[str], tuple[float, ...] | None] | None = None,
         embed_texts_fn: Callable[[list[str]], list[tuple[float, ...] | None]]
         | None = None,
@@ -151,9 +164,13 @@ class WorkspaceRegistry:
         self._enable_trace_log = enable_trace_log
         self._index_backend = index_backend
         self._similarity_fn = similarity_fn
+        self._async_batched_similarity_fn = async_batched_similarity_fn
+        self._async_embed_query_fn = async_embed_query_fn
+        self._async_embed_texts_fn = async_embed_texts_fn
         self._embed_query_fn = embed_query_fn
         self._embed_texts_fn = embed_texts_fn
         self._records: dict[str, SearchSessionRecord] = {}
+        self._background_tasks: set[asyncio.Task[Any]] = set()
 
     def _cleanup(self) -> None:
         now = _now()
@@ -163,7 +180,9 @@ class WorkspaceRegistry:
             if record.is_expired(now)
         ]
         for search_session_id in expired:
-            self._records.pop(search_session_id, None)
+            record = self._records.pop(search_session_id, None)
+            if record is not None:
+                self._cancel_record_index_task(record)
 
     def save_result_set(
         self,
@@ -176,31 +195,54 @@ class WorkspaceRegistry:
     ) -> SearchSessionRecord:
         """Persist a tool result and return the saved search-session record."""
         self._cleanup()
-        papers = self._extract_papers(payload)
-        authors = self._extract_authors(payload)
-        record = SearchSessionRecord(
-            search_session_id=search_session_id or self._new_search_session_id(),
+        record = self._build_record(
             source_tool=source_tool,
-            created_at=_now(),
-            expires_at=_now() + self._ttl_seconds,
             payload=payload,
             query=query,
-            metadata=dict(metadata or {}),
-            papers=papers,
-            authors=authors,
-            indexed_papers=[
-                IndexedPaper(
-                    paper=paper,
-                    text=paper_search_text(paper),
-                    vector=_vectorize(paper_search_text(paper)),
-                )
-                for paper in papers
-                if paper_search_text(paper)
-            ],
+            metadata=metadata,
+            search_session_id=search_session_id,
         )
-        if record.indexed_papers:
+        if record.indexed_papers and self._can_build_vector_store_sync():
             record.vector_store = self._build_vector_store(record.indexed_papers)
-        self._records[record.search_session_id] = record
+            if record.vector_store is not None:
+                record.vector_store_status = "ready"
+            else:
+                record.vector_store_status = "failed"
+                record.vector_store_error = (
+                    "FAISS index creation failed; using in-memory similarity scoring."
+                )
+        elif record.vector_store_status == "pending":
+            record.vector_store_status = "unavailable"
+        self._store_record(record)
+        return record
+
+    async def asave_result_set(
+        self,
+        *,
+        source_tool: str,
+        payload: dict[str, Any],
+        query: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        search_session_id: str | None = None,
+    ) -> SearchSessionRecord:
+        """Persist a tool result without blocking on background index creation."""
+        self._cleanup()
+        record = self._build_record(
+            source_tool=source_tool,
+            payload=payload,
+            query=query,
+            metadata=metadata,
+            search_session_id=search_session_id,
+        )
+        self._store_record(record)
+        if record.indexed_papers and self._can_build_vector_store_async():
+            task = asyncio.create_task(self._populate_vector_store(record))
+            record.vector_index_task = task
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
+            task.add_done_callback(self._consume_background_task)
+        elif record.vector_store_status == "pending":
+            record.vector_store_status = "unavailable"
         return record
 
     def get(self, search_session_id: str) -> SearchSessionRecord:
@@ -250,6 +292,47 @@ class WorkspaceRegistry:
                 reverse=True,
             )
         return [paper for score, paper in ranked[:top_k] if score > 0]
+
+    async def asearch_papers(
+        self,
+        search_session_id: str,
+        query: str,
+        top_k: int = 8,
+    ) -> list[dict[str, Any]]:
+        """Async retrieval optimized for batched semantic ranking."""
+        record = self.get(search_session_id)
+        if record.vector_store is not None:
+            papers = await self._asearch_vector_store(record, query=query, top_k=top_k)
+            if papers:
+                return papers
+        if self._async_batched_similarity_fn is not None:
+            texts = [item.text for item in record.indexed_papers]
+            scores = await self._async_batched_similarity_fn(query, texts)
+            ranked = sorted(
+                zip(
+                    scores, (item.paper for item in record.indexed_papers), strict=False
+                ),
+                key=lambda item: item[0],
+                reverse=True,
+            )
+            return [paper for score, paper in ranked[:top_k] if score > 0]
+        return self.search_papers(search_session_id, query, top_k=top_k)
+
+    async def aclose(self) -> None:
+        """Cancel any in-flight async index builds owned by the registry."""
+        tasks = [
+            record.vector_index_task
+            for record in self._records.values()
+            if (
+                record.vector_index_task is not None
+                and not record.vector_index_task.done()
+            )
+        ]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._background_tasks.clear()
 
     def record_trace(
         self,
@@ -372,6 +455,107 @@ class WorkspaceRegistry:
     def _new_search_session_id(self) -> str:
         return f"ssn_{uuid.uuid4().hex[:12]}"
 
+    def _build_record(
+        self,
+        *,
+        source_tool: str,
+        payload: dict[str, Any],
+        query: str | None,
+        metadata: dict[str, Any] | None,
+        search_session_id: str | None,
+    ) -> SearchSessionRecord:
+        papers = self._extract_papers(payload)
+        authors = self._extract_authors(payload)
+        created_at = _now()
+        record = SearchSessionRecord(
+            search_session_id=search_session_id or self._new_search_session_id(),
+            source_tool=source_tool,
+            created_at=created_at,
+            expires_at=created_at + self._ttl_seconds,
+            payload=payload,
+            query=query,
+            metadata=dict(metadata or {}),
+            papers=papers,
+            authors=authors,
+            indexed_papers=[
+                IndexedPaper(
+                    paper=paper,
+                    text=text,
+                    vector=_vectorize(text),
+                )
+                for paper in papers
+                if (text := paper_search_text(paper))
+            ],
+        )
+        if self._index_backend == "faiss" and record.indexed_papers:
+            record.vector_store_status = "pending"
+        return record
+
+    def _store_record(self, record: SearchSessionRecord) -> None:
+        existing = self._records.get(record.search_session_id)
+        if existing is not None and existing is not record:
+            self._cancel_record_index_task(existing)
+        self._records[record.search_session_id] = record
+
+    @staticmethod
+    def _cancel_record_index_task(record: SearchSessionRecord) -> None:
+        task = record.vector_index_task
+        if task is not None and not task.done():
+            task.cancel()
+
+    @staticmethod
+    def _consume_background_task(task: asyncio.Task[Any]) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.debug("Background vector index build failed.", exc_info=True)
+
+    def _can_build_vector_store_sync(self) -> bool:
+        return (
+            self._index_backend == "faiss"
+            and self._embed_query_fn is not None
+            and self._embed_texts_fn is not None
+        )
+
+    def _can_build_vector_store_async(self) -> bool:
+        return self._index_backend == "faiss" and (
+            (
+                self._async_embed_query_fn is not None
+                and self._async_embed_texts_fn is not None
+            )
+            or self._can_build_vector_store_sync()
+        )
+
+    async def _populate_vector_store(self, record: SearchSessionRecord) -> None:
+        try:
+            vector_store = await self._abuild_vector_store(record.indexed_papers)
+        except asyncio.CancelledError:
+            record.vector_index_task = None
+            raise
+        except Exception as error:
+            record.vector_store = None
+            record.vector_store_status = "failed"
+            record.vector_store_error = str(error)
+            record.vector_index_task = None
+            logger.exception(
+                "Async FAISS index creation failed; falling back to in-memory "
+                "similarity scoring."
+            )
+            return
+
+        record.vector_store = vector_store
+        record.vector_index_task = None
+        if vector_store is not None:
+            record.vector_store_status = "ready"
+            record.vector_store_error = None
+            return
+        record.vector_store_status = "failed"
+        record.vector_store_error = (
+            "FAISS index creation failed; using in-memory similarity scoring."
+        )
+
     def _build_vector_store(self, indexed_papers: list[IndexedPaper]) -> Any | None:
         if (
             self._index_backend != "faiss"
@@ -396,9 +580,21 @@ class WorkspaceRegistry:
                 *,
                 embed_query_fn: Callable[[str], tuple[float, ...] | None],
                 embed_texts_fn: Callable[[list[str]], list[tuple[float, ...] | None]],
+                async_embed_query_fn: Callable[
+                    [str],
+                    Awaitable[tuple[float, ...] | None],
+                ]
+                | None = None,
+                async_embed_texts_fn: Callable[
+                    [list[str]],
+                    Awaitable[list[tuple[float, ...] | None]],
+                ]
+                | None = None,
             ) -> None:
                 self._embed_query_fn = embed_query_fn
                 self._embed_texts_fn = embed_texts_fn
+                self._async_embed_query_fn = async_embed_query_fn
+                self._async_embed_texts_fn = async_embed_texts_fn
 
             def embed_documents(self, texts: list[str]) -> list[list[float]]:
                 vectors = self._embed_texts_fn(texts)
@@ -419,6 +615,29 @@ class WorkspaceRegistry:
                     )
                 return list(vector)
 
+            async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+                if self._async_embed_texts_fn is not None:
+                    vectors = await self._async_embed_texts_fn(texts)
+                    normalized_vectors: list[list[float]] = []
+                    for text, vector in zip(texts, vectors, strict=False):
+                        if vector is None:
+                            raise ValueError(
+                                f"No embedding vector was generated for {text!r}."
+                            )
+                        normalized_vectors.append(list(vector))
+                    return normalized_vectors
+                return self.embed_documents(texts)
+
+            async def aembed_query(self, text: str) -> list[float]:
+                if self._async_embed_query_fn is not None:
+                    vector = await self._async_embed_query_fn(text)
+                    if vector is None:
+                        raise ValueError(
+                            "No embedding vector was generated for the query text."
+                        )
+                    return list(vector)
+                return self.embed_query(text)
+
         documents = [
             Document(page_content=item.text, metadata={"paper": item.paper})
             for item in indexed_papers
@@ -429,12 +648,127 @@ class WorkspaceRegistry:
                 _CallableEmbeddings(
                     embed_query_fn=self._embed_query_fn,
                     embed_texts_fn=self._embed_texts_fn,
+                    async_embed_query_fn=self._async_embed_query_fn,
+                    async_embed_texts_fn=self._async_embed_texts_fn,
                 ),
             )
         except Exception:
             logger.exception(
                 "FAISS index creation failed; falling back to in-memory similarity "
                 "scoring."
+            )
+            return None
+
+    async def _abuild_vector_store(
+        self, indexed_papers: list[IndexedPaper]
+    ) -> Any | None:
+        if self._index_backend != "faiss":
+            return None
+        if (
+            self._async_embed_query_fn is None or self._async_embed_texts_fn is None
+        ) and not self._can_build_vector_store_sync():
+            return None
+        try:
+            from langchain_community.vectorstores import FAISS
+            from langchain_core.documents import Document
+            from langchain_core.embeddings import Embeddings
+        except ImportError:
+            logger.info(
+                "FAISS backend requested but optional ai-faiss extras are not "
+                "installed; falling back to in-memory similarity scoring."
+            )
+            return None
+
+        class _CallableEmbeddings(Embeddings):
+            def __init__(
+                self,
+                *,
+                embed_query_fn: Callable[[str], tuple[float, ...] | None] | None,
+                embed_texts_fn: Callable[
+                    [list[str]],
+                    list[tuple[float, ...] | None],
+                ]
+                | None,
+                async_embed_query_fn: Callable[
+                    [str],
+                    Awaitable[tuple[float, ...] | None],
+                ]
+                | None,
+                async_embed_texts_fn: Callable[
+                    [list[str]],
+                    Awaitable[list[tuple[float, ...] | None]],
+                ]
+                | None,
+            ) -> None:
+                self._embed_query_fn = embed_query_fn
+                self._embed_texts_fn = embed_texts_fn
+                self._async_embed_query_fn = async_embed_query_fn
+                self._async_embed_texts_fn = async_embed_texts_fn
+
+            def embed_documents(self, texts: list[str]) -> list[list[float]]:
+                if self._embed_texts_fn is None:
+                    raise ValueError("No sync embedding hook is configured.")
+                vectors = self._embed_texts_fn(texts)
+                normalized_vectors: list[list[float]] = []
+                for text, vector in zip(texts, vectors, strict=False):
+                    if vector is None:
+                        raise ValueError(
+                            f"No embedding vector was generated for {text!r}."
+                        )
+                    normalized_vectors.append(list(vector))
+                return normalized_vectors
+
+            def embed_query(self, text: str) -> list[float]:
+                if self._embed_query_fn is None:
+                    raise ValueError("No sync query embedding hook is configured.")
+                vector = self._embed_query_fn(text)
+                if vector is None:
+                    raise ValueError(
+                        "No embedding vector was generated for the query text."
+                    )
+                return list(vector)
+
+            async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+                if self._async_embed_texts_fn is not None:
+                    vectors = await self._async_embed_texts_fn(texts)
+                    normalized_vectors: list[list[float]] = []
+                    for text, vector in zip(texts, vectors, strict=False):
+                        if vector is None:
+                            raise ValueError(
+                                f"No embedding vector was generated for {text!r}."
+                            )
+                        normalized_vectors.append(list(vector))
+                    return normalized_vectors
+                return self.embed_documents(texts)
+
+            async def aembed_query(self, text: str) -> list[float]:
+                if self._async_embed_query_fn is not None:
+                    vector = await self._async_embed_query_fn(text)
+                    if vector is None:
+                        raise ValueError(
+                            "No embedding vector was generated for the query text."
+                        )
+                    return list(vector)
+                return self.embed_query(text)
+
+        documents = [
+            Document(page_content=item.text, metadata={"paper": item.paper})
+            for item in indexed_papers
+        ]
+        try:
+            return await FAISS.afrom_documents(
+                documents,
+                _CallableEmbeddings(
+                    embed_query_fn=self._embed_query_fn,
+                    embed_texts_fn=self._embed_texts_fn,
+                    async_embed_query_fn=self._async_embed_query_fn,
+                    async_embed_texts_fn=self._async_embed_texts_fn,
+                ),
+            )
+        except Exception:
+            logger.exception(
+                "Async FAISS index creation failed; falling back to in-memory "
+                "similarity scoring."
             )
             return None
 
@@ -453,6 +787,33 @@ class WorkspaceRegistry:
         except Exception:
             logger.exception(
                 "FAISS similarity search failed; falling back to in-memory "
+                "similarity scoring."
+            )
+            return []
+
+        papers: list[dict[str, Any]] = []
+        for document in documents:
+            metadata = getattr(document, "metadata", {})
+            paper = metadata.get("paper")
+            if isinstance(paper, dict):
+                papers.append(paper)
+        return papers
+
+    async def _asearch_vector_store(
+        self,
+        record: SearchSessionRecord,
+        *,
+        query: str,
+        top_k: int,
+    ) -> list[dict[str, Any]]:
+        vector_store = record.vector_store
+        if vector_store is None:
+            return []
+        try:
+            documents = await vector_store.asimilarity_search(query, k=top_k)
+        except Exception:
+            logger.exception(
+                "Async FAISS similarity search failed; falling back to in-memory "
                 "similarity scoring."
             )
             return []

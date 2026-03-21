@@ -99,6 +99,10 @@ class SearchStrategyMetadata(ApiModel):
         default_factory=list,
         alias="providerOutcomes",
     )
+    stage_timings_ms: dict[str, int] = Field(
+        default_factory=dict,
+        alias="stageTimingsMs",
+    )
 
 
 class ScoreBreakdown(ApiModel):

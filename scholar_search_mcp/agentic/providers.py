@@ -2,23 +2,27 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
 import re
 from collections import Counter
-from typing import Any, Literal
+from typing import Any, Literal, TypeVar
 
 from pydantic import BaseModel, Field, SecretStr
 
 from ..provider_runtime import (
     ProviderDiagnosticsRegistry,
+    execute_provider_call,
     execute_provider_call_sync,
 )
+from ..transport import maybe_close_async_resource
 from .config import AgenticConfig
 from .models import ExpansionCandidate, PlannerDecision
 
 logger = logging.getLogger("scholar-search-mcp")
+_ResponseModelT = TypeVar("_ResponseModelT", bound=BaseModel)
 
 TOKEN_RE = re.compile(r"[a-z0-9]{3,}")
 COMMON_QUERY_WORDS = {
@@ -180,6 +184,26 @@ class ModelProviderBundle:
     ) -> PlannerDecision:
         raise NotImplementedError
 
+    async def aplan_search(
+        self,
+        *,
+        query: str,
+        mode: str,
+        year: str | None = None,
+        venue: str | None = None,
+        focus: str | None = None,
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+    ) -> PlannerDecision:
+        del request_outcomes, request_id
+        return self.plan_search(
+            query=query,
+            mode=mode,
+            year=year,
+            venue=venue,
+            focus=focus,
+        )
+
     def suggest_speculative_expansions(
         self,
         *,
@@ -189,6 +213,22 @@ class ModelProviderBundle:
     ) -> list[ExpansionCandidate]:
         return []
 
+    async def asuggest_speculative_expansions(
+        self,
+        *,
+        query: str,
+        evidence_texts: list[str],
+        max_variants: int,
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+    ) -> list[ExpansionCandidate]:
+        del request_outcomes, request_id
+        return self.suggest_speculative_expansions(
+            query=query,
+            evidence_texts=evidence_texts,
+            max_variants=max_variants,
+        )
+
     def label_theme(
         self,
         *,
@@ -197,6 +237,17 @@ class ModelProviderBundle:
     ) -> str:
         raise NotImplementedError
 
+    async def alabel_theme(
+        self,
+        *,
+        seed_terms: list[str],
+        papers: list[dict[str, Any]],
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+    ) -> str:
+        del request_outcomes, request_id
+        return self.label_theme(seed_terms=seed_terms, papers=papers)
+
     def summarize_theme(
         self,
         *,
@@ -204,6 +255,17 @@ class ModelProviderBundle:
         papers: list[dict[str, Any]],
     ) -> str:
         raise NotImplementedError
+
+    async def asummarize_theme(
+        self,
+        *,
+        title: str,
+        papers: list[dict[str, Any]],
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+    ) -> str:
+        del request_outcomes, request_id
+        return self.summarize_theme(title=title, papers=papers)
 
     def answer_question(
         self,
@@ -214,11 +276,47 @@ class ModelProviderBundle:
     ) -> dict[str, Any]:
         raise NotImplementedError
 
+    async def aanswer_question(
+        self,
+        *,
+        question: str,
+        evidence_papers: list[dict[str, Any]],
+        answer_mode: str,
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        del request_outcomes, request_id
+        return self.answer_question(
+            question=question,
+            evidence_papers=evidence_papers,
+            answer_mode=answer_mode,
+        )
+
     def embed_query(self, text: str) -> tuple[float, ...] | None:
         return None
 
+    async def aembed_query(
+        self,
+        text: str,
+        *,
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+    ) -> tuple[float, ...] | None:
+        del request_outcomes, request_id
+        return self.embed_query(text)
+
     def embed_texts(self, texts: list[str]) -> list[tuple[float, ...] | None]:
         return [self.embed_query(text) for text in texts]
+
+    async def aembed_texts(
+        self,
+        texts: list[str],
+        *,
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+    ) -> list[tuple[float, ...] | None]:
+        del request_outcomes, request_id
+        return self.embed_texts(texts)
 
     def similarity(self, left: str, right: str) -> float:
         return _lexical_similarity(left, right)
@@ -226,8 +324,22 @@ class ModelProviderBundle:
     def batched_similarity(self, query: str, texts: list[str]) -> list[float]:
         return [self.similarity(query, text) for text in texts]
 
+    async def abatched_similarity(
+        self,
+        query: str,
+        texts: list[str],
+        *,
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+    ) -> list[float]:
+        del request_outcomes, request_id
+        return self.batched_similarity(query, texts)
+
     def normalize_confidence(self, value: Any) -> Literal["high", "medium", "low"]:
         return _normalize_confidence_label(value)
+
+    async def aclose(self) -> None:
+        """Close any provider-specific resources."""
 
 
 class DeterministicProviderBundle(ModelProviderBundle):
@@ -451,6 +563,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         self._api_key = api_key
         self._provider_registry = provider_registry
         self._openai_client: Any | None = None
+        self._async_openai_client: Any | None = None
         self._planner: Any | None = None
         self._synthesizer: Any | None = None
         self._embeddings: Any | None = None
@@ -471,6 +584,22 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             return None
         self._openai_client = OpenAI(api_key=self._api_key)
         return self._openai_client
+
+    def _load_async_openai_client(self) -> Any | None:
+        if self._async_openai_client is not None:
+            return self._async_openai_client
+        if not self._api_key:
+            return None
+        try:
+            from openai import AsyncOpenAI
+        except ImportError:
+            logger.info(
+                "openai is not installed; falling back to deterministic "
+                "smart-provider adapters."
+            )
+            return None
+        self._async_openai_client = AsyncOpenAI(api_key=self._api_key)
+        return self._async_openai_client
 
     def _load_models(self) -> tuple[Any | None, Any | None]:
         if self._planner is not None or self._synthesizer is not None:
@@ -526,6 +655,13 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         self._embedding_cache[normalized] = cached
         return cached
 
+    async def aclose(self) -> None:
+        """Close any lazily created OpenAI clients."""
+        async_client, self._async_openai_client = self._async_openai_client, None
+        sync_client, self._openai_client = self._openai_client, None
+        await maybe_close_async_resource(async_client)
+        await maybe_close_async_resource(sync_client)
+
     @staticmethod
     def _responses_input(
         system_prompt: str,
@@ -551,8 +687,8 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
     @staticmethod
     def _extract_response_parsed(
         response: Any,
-        response_model: type[BaseModel],
-    ) -> BaseModel:
+        response_model: type[_ResponseModelT],
+    ) -> _ResponseModelT:
         parsed = getattr(response, "output_parsed", None)
         if parsed is not None:
             if isinstance(parsed, response_model):
@@ -578,11 +714,11 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         *,
         endpoint: str,
         model_name: str,
-        response_model: type[BaseModel],
+        response_model: type[_ResponseModelT],
         system_prompt: str,
         payload: dict[str, Any],
         previous_response_id: str | None = None,
-    ) -> BaseModel | None:
+    ) -> _ResponseModelT | None:
         client = self._load_openai_client()
         if client is None or not hasattr(client, "responses"):
             return None
@@ -648,6 +784,95 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             endpoint=endpoint,
             operation=_call,
             registry=self._provider_registry,
+        )
+        if response.payload is None:
+            return None
+        text = self._extract_response_text(response.payload)
+        return text or None
+
+    async def _aresponses_parse(
+        self,
+        *,
+        endpoint: str,
+        model_name: str,
+        response_model: type[_ResponseModelT],
+        system_prompt: str,
+        payload: dict[str, Any],
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+        previous_response_id: str | None = None,
+    ) -> _ResponseModelT | None:
+        client = self._load_async_openai_client()
+        if client is None or not hasattr(client, "responses"):
+            return None
+        if not hasattr(client.responses, "parse"):
+            return None
+
+        async def _call() -> Any:
+            kwargs: dict[str, Any] = {
+                "model": model_name,
+                "input": self._responses_input(system_prompt, payload),
+                "text_format": response_model,
+            }
+            if previous_response_id:
+                kwargs["previous_response_id"] = previous_response_id
+            return await client.responses.parse(**kwargs)
+
+        response = await execute_provider_call(
+            provider="openai",
+            endpoint=endpoint,
+            operation=_call,
+            registry=self._provider_registry,
+            request_outcomes=request_outcomes,
+            request_id=request_id,
+        )
+        if response.payload is None:
+            logger.warning(
+                "OpenAI Responses structured call failed for %s: %s",
+                endpoint,
+                response.outcome.error or response.outcome.fallback_reason,
+            )
+            return None
+        try:
+            return self._extract_response_parsed(response.payload, response_model)
+        except Exception:
+            logger.exception("OpenAI Responses parse failed for %s.", endpoint)
+            return None
+
+    async def _aresponses_text(
+        self,
+        *,
+        endpoint: str,
+        model_name: str,
+        system_prompt: str,
+        payload: dict[str, Any],
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+        max_output_tokens: int | None = None,
+        previous_response_id: str | None = None,
+    ) -> str | None:
+        client = self._load_async_openai_client()
+        if client is None or not hasattr(client, "responses"):
+            return None
+
+        async def _call() -> Any:
+            kwargs: dict[str, Any] = {
+                "model": model_name,
+                "input": self._responses_input(system_prompt, payload),
+            }
+            if max_output_tokens is not None:
+                kwargs["max_output_tokens"] = max_output_tokens
+            if previous_response_id:
+                kwargs["previous_response_id"] = previous_response_id
+            return await client.responses.create(**kwargs)
+
+        response = await execute_provider_call(
+            provider="openai",
+            endpoint=endpoint,
+            operation=_call,
+            registry=self._provider_registry,
+            request_outcomes=request_outcomes,
+            request_id=request_id,
         )
         if response.payload is None:
             return None
@@ -783,6 +1008,349 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             semantic = _cosine_similarity(query_embedding, embedding)
             scores.append(max(0.0, min(1.0, 0.55 * semantic + 0.45 * lexical)))
         return scores
+
+    async def aembed_query(
+        self,
+        text: str,
+        *,
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+    ) -> tuple[float, ...] | None:
+        embeddings = await self.aembed_texts(
+            [text],
+            request_outcomes=request_outcomes,
+            request_id=request_id,
+        )
+        return embeddings[0] if embeddings else None
+
+    async def aembed_texts(
+        self,
+        texts: list[str],
+        *,
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+    ) -> list[tuple[float, ...] | None]:
+        normalized_texts = [_normalized_embedding_text(text) for text in texts]
+        pending = [
+            text
+            for text in normalized_texts
+            if text and text not in self._embedding_cache
+        ]
+        client = self._load_async_openai_client()
+        if client is not None and hasattr(client, "embeddings") and pending:
+            response = await execute_provider_call(
+                provider="openai",
+                endpoint="embeddings.create",
+                operation=lambda: client.embeddings.create(
+                    model=self.embedding_model_name,
+                    input=pending,
+                ),
+                registry=self._provider_registry,
+                request_outcomes=request_outcomes,
+                request_id=request_id,
+            )
+            if response.payload is not None:
+                vectors = self._embedding_vectors(response.payload)
+                for text, vector in zip(pending, vectors):
+                    self._cache_embedding(text, vector)
+            else:
+                logger.warning(
+                    "Async OpenAI embeddings failed for %s: %s",
+                    request_id or "request",
+                    response.outcome.error or response.outcome.fallback_reason,
+                )
+        pending = [
+            text
+            for text in normalized_texts
+            if text and text not in self._embedding_cache
+        ]
+        if pending:
+            try:
+                await asyncio.to_thread(self.embed_texts, pending)
+            except Exception:
+                logger.exception(
+                    "Sync embedding fallback failed for %s after async embedding "
+                    "degradation.",
+                    request_id or "request",
+                )
+        return [
+            self._embedding_cache.get(text) if text else None
+            for text in normalized_texts
+        ]
+
+    async def abatched_similarity(
+        self,
+        query: str,
+        texts: list[str],
+        *,
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+    ) -> list[float]:
+        lexical_scores = [super().similarity(query, text) for text in texts]
+        query_embedding = await self.aembed_query(
+            query,
+            request_outcomes=request_outcomes,
+            request_id=request_id,
+        )
+        if query_embedding is None:
+            return lexical_scores
+
+        text_embeddings = await self.aembed_texts(
+            texts,
+            request_outcomes=request_outcomes,
+            request_id=request_id,
+        )
+        scores: list[float] = []
+        for lexical, embedding in zip(lexical_scores, text_embeddings):
+            if embedding is None:
+                scores.append(lexical)
+                continue
+            semantic = _cosine_similarity(query_embedding, embedding)
+            scores.append(max(0.0, min(1.0, 0.55 * semantic + 0.45 * lexical)))
+        return scores
+
+    async def aplan_search(
+        self,
+        *,
+        query: str,
+        mode: str,
+        year: str | None = None,
+        venue: str | None = None,
+        focus: str | None = None,
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+    ) -> PlannerDecision:
+        try:
+            direct = await self._aresponses_parse(
+                endpoint="responses.parse:planner",
+                model_name=self.planner_model_name,
+                response_model=_PlannerResponseSchema,
+                system_prompt=(
+                    "Plan a grounded literature-search workflow. Keep providerPlan "
+                    "limited to semantic_scholar, openalex, core, and arxiv. "
+                    "Return compact structured output only."
+                ),
+                payload={
+                    "query": query,
+                    "mode": mode,
+                    "year": year,
+                    "venue": venue,
+                    "focus": focus,
+                },
+                request_outcomes=request_outcomes,
+                request_id=request_id,
+            )
+            if direct is not None:
+                return direct.to_planner_decision()
+        except Exception:
+            logger.exception(
+                "Async OpenAI planner failed; falling back to deterministic planning."
+            )
+        return super().plan_search(
+            query=query,
+            mode=mode,
+            year=year,
+            venue=venue,
+            focus=focus,
+        )
+
+    async def asuggest_speculative_expansions(
+        self,
+        *,
+        query: str,
+        evidence_texts: list[str],
+        max_variants: int,
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+    ) -> list[ExpansionCandidate]:
+        try:
+            from pydantic import BaseModel, Field
+
+            class ExpansionSchema(BaseModel):
+                variant: str
+                source: str = Field(default="speculative")
+                rationale: str = Field(default="")
+
+            class ExpansionListSchema(BaseModel):
+                expansions: list[ExpansionSchema] = Field(default_factory=list)
+
+            response = await self._aresponses_parse(
+                endpoint="responses.parse:expansions",
+                model_name=self.planner_model_name,
+                response_model=ExpansionListSchema,
+                system_prompt=(
+                    "Suggest at most three short literature-search expansions. "
+                    "Each expansion must preserve the user's research intent, "
+                    "must not add unrelated domains, and must avoid stopwords, "
+                    "generic verbs, or filler terms. Label each expansion as "
+                    "from_input, from_retrieved_evidence, or speculative."
+                ),
+                payload={
+                    "query": query,
+                    "evidence": evidence_texts[:5],
+                    "max_variants": max_variants,
+                },
+                request_outcomes=request_outcomes,
+                request_id=request_id,
+            )
+            if response is None:
+                return super().suggest_speculative_expansions(
+                    query=query,
+                    evidence_texts=evidence_texts,
+                    max_variants=max_variants,
+                )
+            variants: list[ExpansionCandidate] = []
+            query_tokens = set(_tokenize(query))
+            for item in response.expansions[:max_variants]:
+                variant = item.variant.strip()
+                if not variant:
+                    continue
+                new_tokens = [
+                    token for token in _tokenize(variant) if token not in query_tokens
+                ]
+                if not new_tokens or all(
+                    token in COMMON_QUERY_WORDS for token in new_tokens
+                ):
+                    continue
+                variants.append(ExpansionCandidate.model_validate(item.model_dump()))
+            return variants
+        except Exception:
+            logger.exception(
+                "Async OpenAI variant generation failed; falling back to "
+                "deterministic expansions."
+            )
+            return super().suggest_speculative_expansions(
+                query=query,
+                evidence_texts=evidence_texts,
+                max_variants=max_variants,
+            )
+
+    async def alabel_theme(
+        self,
+        *,
+        seed_terms: list[str],
+        papers: list[dict[str, Any]],
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+    ) -> str:
+        try:
+            direct = await self._aresponses_text(
+                endpoint="responses.create:label_theme",
+                model_name=self.synthesis_model_name,
+                system_prompt="Write a very short literature theme label.",
+                payload={
+                    "seed_terms": seed_terms,
+                    "titles": [paper.get("title") for paper in papers[:6]],
+                },
+                request_outcomes=request_outcomes,
+                request_id=request_id,
+                max_output_tokens=40,
+            )
+            if direct:
+                return direct.strip().strip('"')
+        except Exception:
+            logger.exception(
+                "Async OpenAI theme labeling failed; falling back to deterministic "
+                "theme labels."
+            )
+        return super().label_theme(seed_terms=seed_terms, papers=papers)
+
+    async def asummarize_theme(
+        self,
+        *,
+        title: str,
+        papers: list[dict[str, Any]],
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+    ) -> str:
+        try:
+            direct = await self._aresponses_text(
+                endpoint="responses.create:summarize_theme",
+                model_name=self.synthesis_model_name,
+                system_prompt="Summarize one literature cluster in two sentences.",
+                payload={
+                    "title": title,
+                    "papers": [
+                        {
+                            "title": paper.get("title"),
+                            "abstract": paper.get("abstract"),
+                            "venue": paper.get("venue"),
+                            "year": paper.get("year"),
+                        }
+                        for paper in papers[:5]
+                    ],
+                },
+                request_outcomes=request_outcomes,
+                request_id=request_id,
+                max_output_tokens=180,
+            )
+            if direct:
+                return direct
+        except Exception:
+            logger.exception(
+                "Async OpenAI theme summarization failed; falling back to "
+                "deterministic summaries."
+            )
+        return super().summarize_theme(title=title, papers=papers)
+
+    async def aanswer_question(
+        self,
+        *,
+        question: str,
+        evidence_papers: list[dict[str, Any]],
+        answer_mode: str,
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        try:
+            from pydantic import BaseModel, Field
+
+            class AnswerSchema(BaseModel):
+                answer: str = Field(default="")
+                unsupportedAsks: list[str] = Field(default_factory=list)
+                followUpQuestions: list[str] = Field(default_factory=list)
+                confidence: Literal["high", "medium", "low"] = "medium"
+
+            direct = await self._aresponses_parse(
+                endpoint="responses.parse:answer",
+                model_name=self.synthesis_model_name,
+                response_model=AnswerSchema,
+                system_prompt=(
+                    "Answer only from the supplied papers. If evidence is weak, "
+                    "say so. Confidence must be exactly one of: high, medium, low."
+                ),
+                payload={
+                    "question": question,
+                    "answer_mode": answer_mode,
+                    "evidence": [
+                        {
+                            "title": paper.get("title"),
+                            "abstract": paper.get("abstract"),
+                            "venue": paper.get("venue"),
+                            "year": paper.get("year"),
+                        }
+                        for paper in evidence_papers[:6]
+                    ],
+                },
+                request_outcomes=request_outcomes,
+                request_id=request_id,
+            )
+            if direct is not None:
+                parsed = direct.model_dump()
+                parsed["confidence"] = self.normalize_confidence(
+                    parsed.get("confidence")
+                )
+                return parsed
+        except Exception:
+            logger.exception(
+                "Async OpenAI synthesis failed; falling back to deterministic "
+                "answer generation."
+            )
+        return super().answer_question(
+            question=question,
+            evidence_papers=evidence_papers,
+            answer_mode=answer_mode,
+        )
 
     def plan_search(
         self,

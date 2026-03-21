@@ -9,7 +9,7 @@ from defusedxml import ElementTree as ET
 from ...constants import ARXIV_API_BASE, ARXIV_NS, ATOM_NS, OPENSEARCH_NS
 from ...models import ArxivSearchResponse, Author, Paper, dump_jsonable
 from ...parsing import _arxiv_id_from_url, _text
-from ...transport import httpx
+from ...transport import httpx, maybe_close_async_resource
 
 logger = logging.getLogger("scholar-search-mcp")
 
@@ -19,6 +19,12 @@ class ArxivClient:
 
     def __init__(self, timeout: float = 30.0):
         self.timeout = timeout
+        self._http_client: Any | None = None
+
+    def _get_http_client(self) -> Any:
+        if self._http_client is None:
+            self._http_client = httpx.AsyncClient(timeout=self.timeout)
+        return self._http_client
 
     async def search(
         self,
@@ -63,9 +69,9 @@ class ArxivClient:
             f"&sortBy={params['sortBy']}&sortOrder={params['sortOrder']}"
         )
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.get(url)
-                response.raise_for_status()
+            client = self._get_http_client()
+            response = await client.get(url)
+            response.raise_for_status()
         except Exception as exc:
             logger.warning("arXiv search failed: %s", exc)
             return dump_jsonable(ArxivSearchResponse())
@@ -86,6 +92,11 @@ class ArxivClient:
         return dump_jsonable(
             ArxivSearchResponse(totalResults=total_results, entries=entries)
         )
+
+    async def aclose(self) -> None:
+        """Close the shared HTTP client, if one has been created."""
+        client, self._http_client = self._http_client, None
+        await maybe_close_async_resource(client)
 
     def _entry_to_paper(self, entry: Any) -> Optional[dict[str, Any]]:
         """Convert one Atom entry to an S2-compatible paper dict."""

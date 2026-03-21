@@ -487,9 +487,7 @@ async def test_get_paper_details_include_enrichment_uses_resolved_doi(
         )
     ]
     assert crossref.calls == [("get_work", {"doi": "10.5678/details-paper"})]
-    assert unpaywall.calls == [
-        ("get_open_access", {"doi": "10.5678/details-paper"})
-    ]
+    assert unpaywall.calls == [("get_open_access", {"doi": "10.5678/details-paper"})]
     assert payload["enrichments"]["crossref"]["publisher"] == "Crossref Publisher"
     assert payload["enrichments"]["unpaywall"]["license"] == "cc-by"
     _assert_additive_metadata(payload)

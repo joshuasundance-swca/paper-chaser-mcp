@@ -144,17 +144,65 @@ def merge_candidates(candidates: list[RetrievedCandidate]) -> list[dict[str, Any
     return merged_list
 
 
-def rerank_candidates(
+async def rerank_candidates(
     *,
     query: str,
     merged_candidates: list[dict[str, Any]],
     provider_bundle: ModelProviderBundle,
     candidate_concepts: list[str],
+    candidate_pool_size: int | None = None,
+    request_outcomes: list[dict[str, Any]] | None = None,
+    request_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Score and rank the merged candidate pool."""
+    if not merged_candidates:
+        return []
     current_year = time.gmtime().tm_year
     paper_texts = [_paper_text(item["paper"]) for item in merged_candidates]
-    query_similarities = provider_bundle.batched_similarity(query, paper_texts)
+    if candidate_pool_size is not None and len(merged_candidates) > candidate_pool_size:
+        pre_ranked: list[tuple[float, dict[str, Any], str]] = []
+        for item, paper_text in zip(merged_candidates, paper_texts):
+            paper = item["paper"]
+            fused_rank_score = sum(
+                1.0 / (60.0 + rank) for rank in item["providerRanks"].values()
+            )
+            provider_bonus = max(
+                (
+                    PROVIDER_QUALITY_BONUS.get(provider, 0.0)
+                    for provider in item["providers"]
+                ),
+                default=0.0,
+            )
+            provider_bonus += min(max(len(item["providers"]) - 1, 0) * 0.02, 0.06)
+            citation_count = paper.get("citationCount")
+            citation_bonus = 0.0
+            if isinstance(citation_count, int) and citation_count > 0:
+                citation_bonus += min(math.log1p(citation_count) / 25.0, 0.12)
+            year = paper.get("year")
+            if isinstance(year, int) and year <= current_year:
+                age = max(current_year - year, 0)
+                citation_bonus += max(0.0, 0.05 - min(age * 0.004, 0.05))
+            pre_ranked.append(
+                (
+                    _lexical_similarity(query, paper_text)
+                    + fused_rank_score
+                    + provider_bonus
+                    + citation_bonus,
+                    item,
+                    paper_text,
+                )
+            )
+        pre_ranked.sort(key=lambda item: item[0], reverse=True)
+        trimmed = pre_ranked[:candidate_pool_size]
+        merged_candidates = [item for _, item, _ in trimmed]
+        paper_texts = [paper_text for _, _, paper_text in trimmed]
+
+    query_similarities = await provider_bundle.abatched_similarity(
+        query,
+        paper_texts,
+        request_outcomes=request_outcomes,
+        request_id=request_id,
+    )
     facets = query_facets(query)
     terms = query_terms(query)
     anchor_terms = [term for term in terms if term not in GENERIC_RESEARCH_TERMS]
@@ -392,6 +440,15 @@ def _paper_title_text(paper: dict[str, Any]) -> str:
         ]
         if part
     )
+
+
+def _lexical_similarity(left: str, right: str) -> float:
+    left_tokens = _tokenize_text(left)
+    right_tokens = _tokenize_text(right)
+    if not left_tokens or not right_tokens:
+        return 0.0
+    intersection = len(left_tokens & right_tokens)
+    return intersection / math.sqrt(len(left_tokens) * len(right_tokens))
 
 
 def _tokenize_text(text: str) -> set[str]:

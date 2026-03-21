@@ -423,7 +423,10 @@ def _classify_exception(exc: Exception) -> ProviderStatusBucket:
 
 def _retry_delay_seconds(attempt: int, *, policy: ProviderPolicy) -> float:
     base = min(policy.base_delay_seconds * (2**attempt), policy.max_delay_seconds)
-    return max(0.0, base + random.uniform(0.0, min(0.25, base / 4 or 0.05)))
+    return max(
+        0.0,
+        base + random.uniform(0.0, min(0.25, base / 4 or 0.05)),  # nosec B311
+    )
 
 
 def _empty_payload(payload: Any) -> bool:

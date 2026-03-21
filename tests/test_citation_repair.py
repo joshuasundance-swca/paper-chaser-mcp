@@ -173,9 +173,7 @@ async def test_resolve_citation_include_enrichment_only_updates_best_match(
     assert crossref.calls == [
         ("search_work", {"query": "Climate adaptation pathways 2021 lead author"})
     ]
-    assert unpaywall.calls == [
-        ("get_open_access", {"doi": "10.1234/crossref-query"})
-    ]
+    assert unpaywall.calls == [("get_open_access", {"doi": "10.1234/crossref-query"})]
 
 
 @pytest.mark.asyncio

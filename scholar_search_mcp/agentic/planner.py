@@ -160,7 +160,7 @@ def looks_like_exact_title(query: str) -> bool:
     return len(title_like_words) >= max(2, int(len(significant_words) * 0.6))
 
 
-def classify_query(
+async def classify_query(
     *,
     query: str,
     mode: str,
@@ -168,15 +168,19 @@ def classify_query(
     venue: str | None,
     focus: str | None,
     provider_bundle: ModelProviderBundle,
+    request_outcomes: list[dict[str, Any]] | None = None,
+    request_id: str | None = None,
 ) -> tuple[str, PlannerDecision]:
     """Normalize and classify a smart-search request."""
     normalized = normalize_query(query)
-    planner = provider_bundle.plan_search(
+    planner = await provider_bundle.aplan_search(
         query=normalized,
         mode=mode,
         year=year,
         venue=venue,
         focus=focus,
+        request_outcomes=request_outcomes,
+        request_id=request_id,
     )
     if mode != "auto":
         planner.intent = cast(
@@ -268,12 +272,14 @@ def grounded_expansion_candidates(
     return deduped[: config.max_grounded_variants]
 
 
-def speculative_expansion_candidates(
+async def speculative_expansion_candidates(
     *,
     original_query: str,
     papers: list[dict[str, Any]],
     config: AgenticConfig,
     provider_bundle: ModelProviderBundle,
+    request_outcomes: list[dict[str, Any]] | None = None,
+    request_id: str | None = None,
 ) -> list[ExpansionCandidate]:
     """Generate bounded speculative variants through the provider bundle."""
     evidence_texts = [
@@ -287,10 +293,14 @@ def speculative_expansion_candidates(
         )
         for paper in papers[:8]
     ]
-    return provider_bundle.suggest_speculative_expansions(
-        query=normalize_query(original_query),
-        evidence_texts=[text for text in evidence_texts if text],
-        max_variants=config.max_speculative_variants,
+    return (
+        await provider_bundle.asuggest_speculative_expansions(
+            query=normalize_query(original_query),
+            evidence_texts=[text for text in evidence_texts if text],
+            max_variants=config.max_speculative_variants,
+            request_outcomes=request_outcomes,
+            request_id=request_id,
+        )
     )[: config.max_speculative_variants]
 
 

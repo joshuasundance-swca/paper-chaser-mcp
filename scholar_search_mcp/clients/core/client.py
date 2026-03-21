@@ -5,7 +5,7 @@ from typing import Any, Literal, Optional
 
 from ...constants import CORE_API_BASE
 from ...models import Author, CoreSearchResponse, Paper, dump_jsonable
-from ...transport import asyncio, httpx
+from ...transport import asyncio, httpx, maybe_close_async_resource
 
 logger = logging.getLogger("scholar-search-mcp")
 
@@ -24,6 +24,12 @@ class CoreApiClient:
         self.timeout = timeout
         self.max_retries = max_retries
         self.base_delay = base_delay
+        self._http_client: Any | None = None
+
+    def _get_http_client(self) -> Any:
+        if self._http_client is None:
+            self._http_client = httpx.AsyncClient(timeout=self.timeout)
+        return self._http_client
 
     async def search(
         self,
@@ -60,27 +66,27 @@ class CoreApiClient:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                for attempt in range(self.max_retries + 1):
-                    response = await client.get(
-                        CORE_API_BASE,
-                        params=params,
-                        headers=headers,
-                        follow_redirects=True,
+            client = self._get_http_client()
+            for attempt in range(self.max_retries + 1):
+                response = await client.get(
+                    CORE_API_BASE,
+                    params=params,
+                    headers=headers,
+                    follow_redirects=True,
+                )
+                if response.status_code >= 500 and attempt < self.max_retries:
+                    delay = self.base_delay * (2**attempt)
+                    logger.warning(
+                        "CORE search returned %s, retrying in %.1fs (%s/%s)",
+                        response.status_code,
+                        delay,
+                        attempt + 1,
+                        self.max_retries,
                     )
-                    if response.status_code >= 500 and attempt < self.max_retries:
-                        delay = self.base_delay * (2**attempt)
-                        logger.warning(
-                            "CORE search returned %s, retrying in %.1fs (%s/%s)",
-                            response.status_code,
-                            delay,
-                            attempt + 1,
-                            self.max_retries,
-                        )
-                        await asyncio.sleep(delay)
-                        continue
-                    response.raise_for_status()
-                    break
+                    await asyncio.sleep(delay)
+                    continue
+                response.raise_for_status()
+                break
         except Exception as exc:
             logger.warning("CORE search request failed: %s", exc)
             raise
@@ -105,6 +111,11 @@ class CoreApiClient:
                 entries=entries,
             )
         )
+
+    async def aclose(self) -> None:
+        """Close the shared HTTP client, if one has been created."""
+        client, self._http_client = self._http_client, None
+        await maybe_close_async_resource(client)
 
     def _result_to_paper(self, result: dict[str, Any]) -> Optional[dict[str, Any]]:
         """Convert one CORE result to an S2-compatible paper dict."""

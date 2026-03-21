@@ -2,6 +2,7 @@
 
 import json
 import logging
+from contextlib import asynccontextmanager
 from inspect import Parameter, Signature
 from typing import Any, Literal, cast
 
@@ -49,7 +50,7 @@ from .runtime import run_server
 from .search import _core_response_to_merged, _merge_search_results
 from .settings import AppSettings, _env_bool
 from .tools import TOOL_DESCRIPTIONS
-from .transport import asyncio, httpx
+from .transport import asyncio, httpx, maybe_close_async_resource
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("scholar-search-mcp")
@@ -578,6 +579,9 @@ workspace_registry = WorkspaceRegistry(
     enable_trace_log=settings.enable_agentic_trace_log,
     index_backend=settings.agentic_index_backend,
     similarity_fn=provider_bundle.similarity,
+    async_batched_similarity_fn=provider_bundle.abatched_similarity,
+    async_embed_query_fn=provider_bundle.aembed_query,
+    async_embed_texts_fn=provider_bundle.aembed_texts,
     embed_query_fn=provider_bundle.embed_query,
     embed_texts_fn=provider_bundle.embed_texts,
 )
@@ -599,9 +603,26 @@ agentic_runtime = AgenticRuntime(
     enrichment_service=enrichment_service,
 )
 
+
+@asynccontextmanager
+async def _server_lifespan(_: FastMCP):
+    try:
+        yield
+    finally:
+        await agentic_runtime.aclose()
+        await maybe_close_async_resource(client)
+        await maybe_close_async_resource(core_client)
+        await maybe_close_async_resource(openalex_client)
+        await maybe_close_async_resource(arxiv_client)
+        await maybe_close_async_resource(serpapi_client)
+        await maybe_close_async_resource(crossref_client)
+        await maybe_close_async_resource(unpaywall_client)
+
+
 app = FastMCP(
     "scholar-search",
     instructions=SERVER_INSTRUCTIONS,
+    lifespan=_server_lifespan,
     strict_input_validation=True,
 )
 app.add_middleware(TimingMiddleware(logger=logger))

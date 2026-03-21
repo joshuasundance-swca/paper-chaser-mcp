@@ -120,6 +120,51 @@ async def test_get_recommendations_uses_recommendations_base_url(
 
 
 @pytest.mark.asyncio
+async def test_semantic_scholar_client_reuses_lazy_async_client_and_closes_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created_clients: list["ReusableAsyncClient"] = []
+
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    class ReusableAsyncClient:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+            self.closed = False
+
+        async def request(self, **kwargs):
+            self.calls.append(kwargs)
+            return DummyResponse(
+                status_code=200,
+                payload={"data": [{"paperId": f"ok-{len(self.calls)}"}]},
+            )
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    def _factory(timeout: float) -> ReusableAsyncClient:
+        del timeout
+        client = ReusableAsyncClient()
+        created_clients.append(client)
+        return client
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", _factory)
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    client = server.SemanticScholarClient(api_key="test-key")
+    await client._request("GET", "paper/search", params={"query": "alpha"})
+    await client._request("GET", "paper/search", params={"query": "beta"})
+
+    assert len(created_clients) == 1
+    assert len(created_clients[0].calls) == 2
+
+    await client.aclose()
+
+    assert created_clients[0].closed is True
+
+
+@pytest.mark.asyncio
 async def test_search_papers_bulk_truncates_provider_oversized_batch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

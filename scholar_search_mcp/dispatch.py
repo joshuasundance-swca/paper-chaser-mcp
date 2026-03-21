@@ -564,41 +564,41 @@ async def dispatch_tool(
         return snapshot
 
     if name == "get_paper_metadata_crossref":
-        result = await resolved_enrichment_service.get_crossref_metadata(
-            **TOOL_INPUT_MODELS[name].model_validate(arguments).model_dump(
-                by_alias=False
-            )
+        crossref_result = await resolved_enrichment_service.get_crossref_metadata(
+            **TOOL_INPUT_MODELS[name]
+            .model_validate(arguments)
+            .model_dump(by_alias=False)
         )
         return _finalize_tool_result(
             name,
             arguments,
-            dump_jsonable(result),
+            dump_jsonable(crossref_result),
             workspace_registry=workspace_registry,
         )
 
     if name == "get_paper_open_access_unpaywall":
-        result = await resolved_enrichment_service.get_unpaywall_open_access(
-            **TOOL_INPUT_MODELS[name].model_validate(arguments).model_dump(
-                by_alias=False
-            )
+        unpaywall_result = await resolved_enrichment_service.get_unpaywall_open_access(
+            **TOOL_INPUT_MODELS[name]
+            .model_validate(arguments)
+            .model_dump(by_alias=False)
         )
         return _finalize_tool_result(
             name,
             arguments,
-            dump_jsonable(result),
+            dump_jsonable(unpaywall_result),
             workspace_registry=workspace_registry,
         )
 
     if name == "enrich_paper":
-        result = await resolved_enrichment_service.enrich_paper(
-            **TOOL_INPUT_MODELS[name].model_validate(arguments).model_dump(
-                by_alias=False
-            )
+        enrichment_result = await resolved_enrichment_service.enrich_paper(
+            **TOOL_INPUT_MODELS[name]
+            .model_validate(arguments)
+            .model_dump(by_alias=False)
         )
         return _finalize_tool_result(
             name,
             arguments,
-            dump_jsonable(result),
+            dump_jsonable(enrichment_result),
             workspace_registry=workspace_registry,
         )
 
@@ -607,7 +607,7 @@ async def dispatch_tool(
             SearchPapersArgs,
             TOOL_INPUT_MODELS[name].model_validate(arguments),
         )
-        result = await search_papers_with_fallback(
+        search_result = await search_papers_with_fallback(
             query=search_args.query,
             limit=search_args.limit,
             year=search_args.year,
@@ -629,11 +629,15 @@ async def dispatch_tool(
             arxiv_client=arxiv_client,
             serpapi_client=serpapi_client,
             provider_registry=provider_registry,
+            allow_default_hedging=(
+                search_args.preferred_provider is None
+                and search_args.provider_order is None
+            ),
         )
         elicited = await _maybe_elicit_and_retry(
             tool_name=name,
             arguments=arguments,
-            result=result,
+            result=search_result,
             client=client,
             core_client=core_client,
             openalex_client=openalex_client,
@@ -661,7 +665,7 @@ async def dispatch_tool(
         return _finalize_tool_result(
             name,
             arguments,
-            result,
+            search_result,
             workspace_registry=workspace_registry,
         )
 
@@ -1062,7 +1066,7 @@ async def dispatch_tool(
             BasicSearchPapersArgs,
             TOOL_INPUT_MODELS[name].model_validate(arguments),
         )
-        result = await search_papers_with_fallback(
+        provider_search_result = await search_papers_with_fallback(
             query=provider_arguments.query,
             limit=provider_arguments.limit,
             year=provider_arguments.year,
@@ -1085,11 +1089,12 @@ async def dispatch_tool(
             arxiv_client=arxiv_client,
             serpapi_client=serpapi_client,
             provider_registry=provider_registry,
+            allow_default_hedging=False,
         )
         return _finalize_tool_result(
             name,
             arguments,
-            result,
+            provider_search_result,
             workspace_registry=workspace_registry,
         )
 
@@ -1397,10 +1402,15 @@ def _finalize_tool_result(
     """Add compatibility metadata to raw tool responses."""
     if not isinstance(result, dict):
         return dump_jsonable(result)
-    if tool_name in SMART_TOOLS or tool_name in {
-        "get_provider_diagnostics",
-        "get_serpapi_account_status",
-    } or workspace_registry is None:
+    if (
+        tool_name in SMART_TOOLS
+        or tool_name
+        in {
+            "get_provider_diagnostics",
+            "get_serpapi_account_status",
+        }
+        or workspace_registry is None
+    ):
         return result
     return augment_tool_result(
         tool_name=tool_name,

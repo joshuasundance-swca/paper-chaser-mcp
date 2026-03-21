@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import subprocess
+import subprocess  # nosec B404
 import sys
 from pathlib import Path
 
@@ -28,10 +28,15 @@ def _repo_venv_python() -> Path:
 
 def main() -> int:
     if len(sys.argv) < 2:
-        raise SystemExit("Usage: python scripts/run_in_repo_venv.py <command> [args...]")
+        raise SystemExit(
+            "Usage: python scripts/run_in_repo_venv.py <command> [args...]"
+        )
 
     venv_python = _repo_venv_python()
-    completed = subprocess.run([str(venv_python), *sys.argv[1:]], check=False)
+    completed = subprocess.run(  # nosec B603
+        [str(venv_python), *sys.argv[1:]],
+        check=False,
+    )
     return completed.returncode
 
 

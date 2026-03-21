@@ -3,7 +3,7 @@
 import logging
 from typing import Any, Optional
 
-from ...transport import httpx
+from ...transport import httpx, maybe_close_async_resource
 from .errors import (
     SerpApiError,
     SerpApiKeyMissingError,
@@ -37,6 +37,12 @@ class SerpApiScholarClient:
     def __init__(self, api_key: Optional[str] = None, timeout: float = 30.0) -> None:
         self.api_key = api_key
         self.timeout = timeout
+        self._http_client: Any | None = None
+
+    def _get_http_client(self) -> Any:
+        if self._http_client is None:
+            self._http_client = httpx.AsyncClient(timeout=self.timeout)
+        return self._http_client
 
     def _check_key(self) -> None:
         """Raise ``SerpApiKeyMissingError`` if no API key is configured."""
@@ -66,8 +72,8 @@ class SerpApiScholarClient:
         request_params["api_key"] = self.api_key
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.get(url, params=request_params)
+            client = self._get_http_client()
+            response = await client.get(url, params=request_params)
         except Exception as exc:
             logger.warning("SerpApi request failed: %s", exc)
             raise SerpApiUpstreamError(
@@ -117,6 +123,11 @@ class SerpApiScholarClient:
             )
 
         return data
+
+    async def aclose(self) -> None:
+        """Close the shared HTTP client, if one has been created."""
+        client, self._http_client = self._http_client, None
+        await maybe_close_async_resource(client)
 
     async def _get(self, params: dict[str, Any]) -> dict[str, Any]:
         return await self._get_json(url=SERPAPI_BASE_URL, params=params)
@@ -277,10 +288,12 @@ class SerpApiScholarClient:
                     continue
                 if str(row.get("citations") or "").strip().lower() == "all":
                     try:
-                        total_citations = int(row.get("value"))
+                        citation_value = row.get("value")
+                        total_citations = int(str(citation_value))
                     except (TypeError, ValueError):
                         total_citations = None
                     break
+        affiliations = author.get("affiliations")
         interests = [
             interest.get("title")
             for interest in author.get("interests") or []
@@ -300,12 +313,9 @@ class SerpApiScholarClient:
             "provider": "serpapi_google_scholar",
             "authorId": author.get("author_id") or author_id.strip(),
             "name": author.get("name"),
-            "affiliations": (
-                [author.get("affiliations")]
-                if isinstance(author.get("affiliations"), str)
-                and author.get("affiliations").strip()
-                else []
-            ),
+            "affiliations": [affiliations]
+            if isinstance(affiliations, str) and affiliations.strip()
+            else [],
             "homepage": author.get("website"),
             "citationCount": total_citations,
             "interests": interests,

@@ -6,7 +6,7 @@ import time
 from typing import Any, Optional
 
 from ...models import Author, AuthorProfile, Paper, dump_jsonable
-from ...transport import asyncio, httpx
+from ...transport import asyncio, httpx, maybe_close_async_resource
 
 logger = logging.getLogger("scholar-search-mcp")
 
@@ -56,6 +56,7 @@ class OpenAlexClient:
         self.base_delay = base_delay
         self._rate_lock: Optional[asyncio.Lock] = None
         self._last_request_time: float = 0.0
+        self._http_client: Any | None = None
 
     @staticmethod
     def _normalize_mailto(value: str | None) -> str | None:
@@ -78,6 +79,11 @@ class OpenAlexClient:
         if self._rate_lock is None:
             self._rate_lock = asyncio.Lock()
         return self._rate_lock
+
+    def _get_http_client(self) -> Any:
+        if self._http_client is None:
+            self._http_client = httpx.AsyncClient(timeout=self.timeout)
+        return self._http_client
 
     async def _pace(self) -> None:
         lock = self._get_rate_lock()
@@ -109,35 +115,40 @@ class OpenAlexClient:
             else f"{OPENALEX_API_BASE}{endpoint}"
         )
         request_params = {**self._default_params(), **(params or {})}
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            for attempt in range(self.max_retries + 1):
-                await self._pace()
-                response = await client.get(
+        client = self._get_http_client()
+        for attempt in range(self.max_retries + 1):
+            await self._pace()
+            response = await client.get(
+                url,
+                params=request_params,
+                follow_redirects=True,
+            )
+            if (
+                response.status_code in {429, 500, 502, 503, 504}
+                and attempt < self.max_retries
+            ):
+                delay = self.base_delay * (2**attempt)
+                retry_after = response.headers.get("Retry-After")
+                if retry_after and retry_after.isdigit():
+                    delay = max(delay, float(retry_after))
+                logger.warning(
+                    "OpenAlex request to %s returned %s, retrying in %.1fs (%s/%s)",
                     url,
-                    params=request_params,
-                    follow_redirects=True,
+                    response.status_code,
+                    delay,
+                    attempt + 1,
+                    self.max_retries,
                 )
-                if (
-                    response.status_code in {429, 500, 502, 503, 504}
-                    and attempt < self.max_retries
-                ):
-                    delay = self.base_delay * (2**attempt)
-                    retry_after = response.headers.get("Retry-After")
-                    if retry_after and retry_after.isdigit():
-                        delay = max(delay, float(retry_after))
-                    logger.warning(
-                        "OpenAlex request to %s returned %s, retrying in %.1fs (%s/%s)",
-                        url,
-                        response.status_code,
-                        delay,
-                        attempt + 1,
-                        self.max_retries,
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-                response.raise_for_status()
-                return response.json()
+                await asyncio.sleep(delay)
+                continue
+            response.raise_for_status()
+            return response.json()
         raise RuntimeError("OpenAlex request retry loop exited unexpectedly")
+
+    async def aclose(self) -> None:
+        """Close the shared HTTP client, if one has been created."""
+        client, self._http_client = self._http_client, None
+        await maybe_close_async_resource(client)
 
     @staticmethod
     def _normalize_doi(value: Any) -> str | None:

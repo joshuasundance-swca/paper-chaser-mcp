@@ -8,7 +8,7 @@ from urllib.parse import quote
 
 from ...identifiers import normalize_doi
 from ...models import Author, CrossrefEnrichment, CrossrefWorkSummary, dump_jsonable
-from ...transport import asyncio, httpx
+from ...transport import asyncio, httpx, maybe_close_async_resource
 
 logger = logging.getLogger("scholar-search-mcp")
 
@@ -31,13 +31,12 @@ class CrossrefClient:
         base_delay: float = 0.5,
     ) -> None:
         self.mailto = (
-            mailto.strip()
-            if isinstance(mailto, str) and mailto.strip()
-            else None
+            mailto.strip() if isinstance(mailto, str) and mailto.strip() else None
         )
         self.timeout = timeout
         self.max_retries = max_retries
         self.base_delay = base_delay
+        self._http_client: Any | None = None
 
     def _headers(self) -> dict[str, str]:
         user_agent = "ScholarSearchMCP/1.0"
@@ -47,6 +46,11 @@ class CrossrefClient:
             "Accept": "application/json",
             "User-Agent": user_agent,
         }
+
+    def _get_http_client(self) -> Any:
+        if self._http_client is None:
+            self._http_client = httpx.AsyncClient(timeout=self.timeout)
+        return self._http_client
 
     async def _request(
         self,
@@ -59,41 +63,46 @@ class CrossrefClient:
         if self.mailto:
             request_params.setdefault("mailto", self.mailto)
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            for attempt in range(self.max_retries + 1):
-                response = await client.get(
+        client = self._get_http_client()
+        for attempt in range(self.max_retries + 1):
+            response = await client.get(
+                url,
+                params=request_params,
+                headers=self._headers(),
+                follow_redirects=True,
+            )
+            if response.status_code == 404:
+                return None
+            if (
+                response.status_code in {429, 500, 502, 503, 504}
+                and attempt < self.max_retries
+            ):
+                delay = self.base_delay * (2**attempt)
+                retry_after = response.headers.get("Retry-After")
+                if retry_after and retry_after.isdigit():
+                    delay = max(delay, float(retry_after))
+                logger.warning(
+                    "Crossref request to %s returned %s, retrying in %.1fs (%s/%s)",
                     url,
-                    params=request_params,
-                    headers=self._headers(),
-                    follow_redirects=True,
+                    response.status_code,
+                    delay,
+                    attempt + 1,
+                    self.max_retries,
                 )
-                if response.status_code == 404:
-                    return None
-                if (
-                    response.status_code in {429, 500, 502, 503, 504}
-                    and attempt < self.max_retries
-                ):
-                    delay = self.base_delay * (2**attempt)
-                    retry_after = response.headers.get("Retry-After")
-                    if retry_after and retry_after.isdigit():
-                        delay = max(delay, float(retry_after))
-                    logger.warning(
-                        "Crossref request to %s returned %s, retrying in %.1fs (%s/%s)",
-                        url,
-                        response.status_code,
-                        delay,
-                        attempt + 1,
-                        self.max_retries,
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-                response.raise_for_status()
-                payload = response.json()
-                if not isinstance(payload, dict):
-                    return None
-                message = payload.get("message")
-                return message if isinstance(message, dict) else None
+                await asyncio.sleep(delay)
+                continue
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                return None
+            message = payload.get("message")
+            return message if isinstance(message, dict) else None
         raise RuntimeError("Crossref request retry loop exited unexpectedly.")
+
+    async def aclose(self) -> None:
+        """Close the shared HTTP client, if one has been created."""
+        client, self._http_client = self._http_client, None
+        await maybe_close_async_resource(client)
 
     @staticmethod
     def _author_name(author: dict[str, Any]) -> str | None:

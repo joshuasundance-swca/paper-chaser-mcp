@@ -29,7 +29,7 @@ from ...models import (
     SnippetSearchResponse,
     dump_jsonable,
 )
-from ...transport import asyncio, httpx
+from ...transport import asyncio, httpx, maybe_close_async_resource
 
 logger = logging.getLogger("scholar-search-mcp")
 _AUTHOR_QUERY_QUOTES_PATTERN = re.compile(r'["“”‘’`]+')
@@ -78,11 +78,17 @@ class SemanticScholarClient:
         # Lazily initialized in async context (avoids event-loop binding issues).
         self._rate_lock: Optional[asyncio.Lock] = None
         self._last_request_time: float = 0.0
+        self._http_client: Any | None = None
 
     def _get_rate_lock(self) -> asyncio.Lock:
         if self._rate_lock is None:
             self._rate_lock = asyncio.Lock()
         return self._rate_lock
+
+    def _get_http_client(self) -> Any:
+        if self._http_client is None:
+            self._http_client = httpx.AsyncClient(timeout=30.0)
+        return self._http_client
 
     async def _pace(self) -> None:
         """Enforce the 1 request/second ceiling before every outbound request."""
@@ -114,41 +120,42 @@ class SemanticScholarClient:
         url = f"{resolved_base}/{endpoint}"
         total_attempts = max(max_retries, MAX_429_RETRIES) + 1
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            for attempt in range(total_attempts):
-                await self._pace()
-                response = await client.request(
-                    method=method,
-                    url=url,
-                    headers=self.headers,
-                    params=params,
-                    json=json_data,
-                )
+        client = self._get_http_client()
+        for attempt in range(total_attempts):
+            await self._pace()
+            response = await client.request(
+                method=method,
+                url=url,
+                headers=self.headers,
+                params=params,
+                json=json_data,
+            )
 
-                if response.status_code == 429:
-                    if attempt < MAX_429_RETRIES:
-                        delay = base_delay * (2**attempt)
-                        retry_after = response.headers.get("Retry-After")
-                        if retry_after and retry_after.isdigit():
-                            delay = max(delay, float(retry_after))
-                        logger.warning(
-                            "Rate limited (429), retrying in %.1fs (%s/%s)",
-                            delay,
-                            attempt + 1,
-                            MAX_429_RETRIES,
-                        )
-                        await asyncio.sleep(delay)
-                        continue
-
-                    response.raise_for_status()
+            if response.status_code == 429:
+                if attempt < MAX_429_RETRIES:
+                    delay = base_delay * (2**attempt)
+                    retry_after = response.headers.get("Retry-After")
+                    if retry_after and retry_after.isdigit():
+                        delay = max(delay, float(retry_after))
+                    logger.warning(
+                        "Rate limited (429), retrying in %.1fs (%s/%s)",
+                        delay,
+                        attempt + 1,
+                        MAX_429_RETRIES,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
 
                 response.raise_for_status()
-                return response.json()
+            response.raise_for_status()
+            return response.json()
 
         raise RuntimeError("Semantic Scholar request retry loop exited unexpectedly")
 
     async def aclose(self) -> None:
-        """No-op; kept for API symmetry with guide examples that call ``aclose``."""
+        """Close the shared HTTP client, if one has been created."""
+        client, self._http_client = self._http_client, None
+        await maybe_close_async_resource(client)
 
     # ------------------------------------------------------------------
     # Paper search

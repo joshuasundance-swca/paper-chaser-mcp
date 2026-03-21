@@ -1,3 +1,4 @@
+import asyncio
 import json
 from typing import Any
 
@@ -97,6 +98,58 @@ async def test_search_papers_falls_back_to_arxiv_when_other_sources_fail(
     assert payload["total"] == 1
     assert payload["data"][0]["paperId"] == "arxiv-1"
     assert payload["data"][0]["source"] == "arxiv"
+
+
+@pytest.mark.asyncio
+async def test_search_papers_fast_first_provider_keeps_default_behavior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SemanticClient:
+        async def search_papers(self, **kwargs) -> dict:
+            del kwargs
+            return {
+                "total": 1,
+                "offset": 0,
+                "data": [{"paperId": "semantic-1", "title": "Semantic first result"}],
+            }
+
+    class ArxivClient:
+        def __init__(self) -> None:
+            self.called = False
+
+        async def search(self, **kwargs) -> dict:
+            del kwargs
+            self.called = True
+            return {
+                "totalResults": 1,
+                "entries": [
+                    {
+                        "paperId": "arxiv-1",
+                        "title": "arXiv fallback",
+                        "url": "https://arxiv.org/abs/arxiv-1",
+                        "source": "arxiv",
+                    }
+                ],
+            }
+
+    arxiv_client = ArxivClient()
+    monkeypatch.setattr(server, "enable_core", True)
+    monkeypatch.setattr(server, "enable_semantic_scholar", True)
+    monkeypatch.setattr(server, "enable_arxiv", True)
+    monkeypatch.setattr(server, "client", SemanticClient())
+    monkeypatch.setattr(server, "arxiv_client", arxiv_client)
+
+    payload = _payload(await server.call_tool("search_papers", {"query": "fast"}))
+
+    assert payload["brokerMetadata"]["providerUsed"] == "semantic_scholar"
+    assert payload["brokerMetadata"]["attemptedProviders"][0] == {
+        "provider": "semantic_scholar",
+        "status": "returned_results",
+        "reason": None,
+    }
+    assert payload["brokerMetadata"]["attemptedProviders"][1]["provider"] == ("arxiv")
+    assert payload["brokerMetadata"]["attemptedProviders"][1]["status"] == "skipped"
+    assert arxiv_client.called is False
 
 
 @pytest.mark.asyncio
@@ -243,6 +296,60 @@ async def test_search_papers_provider_order_can_override_chain(
 
 
 @pytest.mark.asyncio
+async def test_search_papers_hedges_next_provider_when_first_is_slow_and_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    arxiv_started = asyncio.Event()
+
+    class SlowEmptySemanticClient:
+        async def search_papers(self, **kwargs) -> dict:
+            del kwargs
+            await asyncio.wait_for(arxiv_started.wait(), timeout=0.2)
+            return {"total": 0, "offset": 0, "data": []}
+
+    class ArxivClient:
+        async def search(self, **kwargs) -> dict:
+            del kwargs
+            arxiv_started.set()
+            return {
+                "totalResults": 1,
+                "entries": [
+                    {
+                        "paperId": "arxiv-hedged",
+                        "title": "Hedged result",
+                        "url": "https://arxiv.org/abs/arxiv-hedged",
+                        "source": "arxiv",
+                    }
+                ],
+            }
+
+    monkeypatch.setattr("scholar_search_mcp.search.BROKER_HEDGE_DELAY_SECONDS", 0.01)
+    monkeypatch.setattr(server, "enable_core", False)
+    monkeypatch.setattr(server, "enable_semantic_scholar", True)
+    monkeypatch.setattr(server, "enable_arxiv", True)
+    monkeypatch.setattr(server, "client", SlowEmptySemanticClient())
+    monkeypatch.setattr(server, "arxiv_client", ArxivClient())
+
+    payload = _payload(
+        await asyncio.wait_for(
+            server.call_tool("search_papers", {"query": "hedged fallback"}),
+            timeout=0.5,
+        )
+    )
+
+    assert payload["data"][0]["paperId"] == "arxiv-hedged"
+    assert payload["brokerMetadata"]["providerUsed"] == "arxiv"
+    assert payload["brokerMetadata"]["attemptedProviders"][:2] == [
+        {
+            "provider": "semantic_scholar",
+            "status": "returned_no_results",
+            "reason": None,
+        },
+        {"provider": "arxiv", "status": "returned_results", "reason": None},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_provider_specific_search_tool_does_not_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -277,6 +384,125 @@ async def test_provider_specific_search_tool_does_not_fallback(
         {"provider": "core", "status": "returned_no_results", "reason": None}
     ]
     assert semantic_client.called is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"query": "test", "preferredProvider": "semantic_scholar"},
+        {"query": "test", "providerOrder": ["semantic_scholar", "core"]},
+    ],
+)
+async def test_search_papers_explicit_routing_disables_hedging(
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: dict[str, object],
+) -> None:
+    class SlowSemanticClient:
+        async def search_papers(self, **kwargs) -> dict:
+            del kwargs
+            await asyncio.sleep(0.05)
+            return {
+                "total": 1,
+                "offset": 0,
+                "data": [{"paperId": "semantic-1", "title": "Semantic first"}],
+            }
+
+    class SpyCoreClient:
+        def __init__(self) -> None:
+            self.called = False
+
+        async def search(self, **kwargs) -> dict:
+            del kwargs
+            self.called = True
+            return {
+                "total": 1,
+                "entries": [
+                    {
+                        "paperId": "core-1",
+                        "title": "CORE speculative result",
+                        "url": "https://example.com/core-1",
+                    }
+                ],
+            }
+
+    class SpyArxivClient:
+        def __init__(self) -> None:
+            self.called = False
+
+        async def search(self, **kwargs) -> dict:
+            del kwargs
+            self.called = True
+            return {
+                "totalResults": 1,
+                "entries": [
+                    {
+                        "paperId": "arxiv-1",
+                        "title": "arXiv speculative result",
+                        "url": "https://arxiv.org/abs/arxiv-1",
+                        "source": "arxiv",
+                    }
+                ],
+            }
+
+    spy_core = SpyCoreClient()
+    spy_arxiv = SpyArxivClient()
+    monkeypatch.setattr("scholar_search_mcp.search.BROKER_HEDGE_DELAY_SECONDS", 0.01)
+    monkeypatch.setattr(server, "enable_core", True)
+    monkeypatch.setattr(server, "enable_semantic_scholar", True)
+    monkeypatch.setattr(server, "enable_arxiv", True)
+    monkeypatch.setattr(server, "core_client", spy_core)
+    monkeypatch.setattr(server, "arxiv_client", spy_arxiv)
+    monkeypatch.setattr(server, "client", SlowSemanticClient())
+
+    payload = _payload(await server.call_tool("search_papers", arguments))
+
+    assert payload["brokerMetadata"]["providerUsed"] == "semantic_scholar"
+    assert spy_core.called is False
+    assert spy_arxiv.called is False
+
+
+@pytest.mark.asyncio
+async def test_search_papers_never_starts_serpapi_speculatively(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SlowCoreClient:
+        async def search(self, **kwargs) -> dict:
+            del kwargs
+            await asyncio.sleep(0.05)
+            return {
+                "total": 1,
+                "entries": [
+                    {
+                        "paperId": "core-1",
+                        "title": "CORE result",
+                        "url": "https://example.com/core-1",
+                    }
+                ],
+            }
+
+    class SpySerpApiClient:
+        def __init__(self) -> None:
+            self.called = False
+
+        async def search(self, **kwargs) -> list[dict[str, str]]:
+            del kwargs
+            self.called = True
+            return [{"paperId": "serpapi-1", "title": "SerpApi result"}]
+
+    spy_serpapi = SpySerpApiClient()
+    monkeypatch.setattr("scholar_search_mcp.search.BROKER_HEDGE_DELAY_SECONDS", 0.01)
+    monkeypatch.setattr(server, "enable_semantic_scholar", False)
+    monkeypatch.setattr(server, "enable_core", True)
+    monkeypatch.setattr(server, "enable_arxiv", False)
+    monkeypatch.setattr(server, "enable_serpapi", True)
+    monkeypatch.setattr(server, "core_client", SlowCoreClient())
+    monkeypatch.setattr(server, "serpapi_client", spy_serpapi)
+
+    payload = _payload(await server.call_tool("search_papers", {"query": "hedge"}))
+
+    assert payload["brokerMetadata"]["providerUsed"] == "core"
+    assert spy_serpapi.called is False
 
 
 @pytest.mark.asyncio
