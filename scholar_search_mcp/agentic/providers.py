@@ -9,7 +9,7 @@ import re
 from collections import Counter
 from typing import Any, Literal
 
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel, Field, SecretStr
 
 from ..provider_runtime import (
     ProviderDiagnosticsRegistry,
@@ -34,6 +34,47 @@ COMMON_QUERY_WORDS = {
     "works",
 }
 MAX_EMBED_TEXT_LENGTH = 6_000
+
+
+class _PlannerConstraintsSchema(BaseModel):
+    """OpenAI Structured Outputs-compatible planner constraints."""
+
+    year: str | None = None
+    venue: str | None = None
+    focus: str | None = None
+
+
+class _PlannerResponseSchema(BaseModel):
+    """Structured planner response that avoids free-form object maps."""
+
+    intent: Literal[
+        "discovery",
+        "review",
+        "known_item",
+        "author",
+        "citation",
+    ] = "discovery"
+    constraints: _PlannerConstraintsSchema = Field(
+        default_factory=_PlannerConstraintsSchema
+    )
+    seedIdentifiers: list[str] = Field(default_factory=list)
+    candidateConcepts: list[str] = Field(default_factory=list)
+    providerPlan: list[str] = Field(default_factory=list)
+    followUpMode: Literal["qa", "claim_check", "comparison"] = "qa"
+
+    def to_planner_decision(self) -> PlannerDecision:
+        return PlannerDecision(
+            intent=self.intent,
+            constraints={
+                key: value
+                for key, value in self.constraints.model_dump(exclude_none=True).items()
+                if value
+            },
+            seedIdentifiers=self.seedIdentifiers,
+            candidateConcepts=self.candidateConcepts,
+            providerPlan=self.providerPlan,
+            followUpMode=self.followUpMode,
+        )
 
 
 def _tokenize(text: str) -> list[str]:
@@ -754,20 +795,10 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
     ) -> PlannerDecision:
         planner, _ = self._load_models()
         try:
-            from pydantic import BaseModel, Field
-
-            class PlannerSchema(BaseModel):
-                intent: str = Field(default="discovery")
-                constraints: dict[str, str] = Field(default_factory=dict)
-                seedIdentifiers: list[str] = Field(default_factory=list)
-                candidateConcepts: list[str] = Field(default_factory=list)
-                providerPlan: list[str] = Field(default_factory=list)
-                followUpMode: str = Field(default="qa")
-
             direct = self._responses_parse(
                 endpoint="responses.parse:planner",
                 model_name=self.planner_model_name,
-                response_model=PlannerSchema,
+                response_model=_PlannerResponseSchema,
                 system_prompt=(
                     "Plan a grounded literature-search workflow. Keep providerPlan "
                     "limited to semantic_scholar, openalex, core, and arxiv. "
@@ -782,7 +813,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 },
             )
             if direct is not None:
-                return PlannerDecision.model_validate(direct.model_dump())
+                return direct.to_planner_decision()
             if planner is None:
                 return super().plan_search(
                     query=query,
@@ -793,7 +824,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 )
 
             structured = planner.with_structured_output(
-                PlannerSchema,
+                _PlannerResponseSchema,
                 method="function_calling",
             )
             response = structured.invoke(
@@ -818,7 +849,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                     ),
                 ]
             )
-            return PlannerDecision.model_validate(response.model_dump())
+            return response.to_planner_decision()
         except Exception:
             logger.exception(
                 "OpenAI planner failed; falling back to deterministic planning."
