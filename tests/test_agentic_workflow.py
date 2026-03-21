@@ -34,6 +34,10 @@ def test_agentic_workflow_source_and_lockfile_are_checked_in() -> None:
 
     expected_allowed_tools = {
         "search_papers",
+        "search_papers_smart",
+        "ask_result_set",
+        "map_research_landscape",
+        "expand_research_graph",
         "search_papers_bulk",
         "search_papers_core",
         "search_papers_semantic_scholar",
@@ -41,6 +45,7 @@ def test_agentic_workflow_source_and_lockfile_are_checked_in() -> None:
         "search_papers_arxiv",
         "search_papers_openalex",
         "search_papers_openalex_bulk",
+        "resolve_citation",
         "search_papers_match",
         "get_paper_details",
         "get_paper_details_openalex",
@@ -69,6 +74,15 @@ def test_agentic_workflow_source_and_lockfile_are_checked_in() -> None:
         'search_papers(query="graph neural networks", limit=5)'
         in workflow_source_content
     )
+    assert (
+        'search_papers_smart(query="graph neural networks", limit=5)'
+        in workflow_source_content
+    )
+    assert (
+        'resolve_citation(citation="Rockstrom et al planetary boundaries '
+        '2009 Nature 461 472")' in workflow_source_content
+    )
+    assert "ask_result_set(searchSessionId=..." in workflow_source_content
     assert "search_papers_bulk" in workflow_source_content
     assert "search_papers_match" in workflow_source_content
     assert 'search_authors(query="Yoshua Bengio", limit=3)' in workflow_source_content

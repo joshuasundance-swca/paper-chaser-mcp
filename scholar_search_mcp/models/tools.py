@@ -336,6 +336,51 @@ class PaperMatchArgs(ToolArgsModel):
     fields: list[str] | None = Field(default=None, description="Fields to return")
 
 
+class ResolveCitationArgs(ToolArgsModel):
+    citation: str = Field(
+        description=(
+            "Partial, malformed, or almost-right citation text to repair. "
+            "Can include DOI/arXiv/URL fragments, author names, venue hints, "
+            "quote fragments, or approximate years."
+        )
+    )
+    max_candidates: int = Field(
+        default=5,
+        alias="maxCandidates",
+        description="Maximum ranked candidates to return (default 5, max 5).",
+    )
+    title_hint: str | None = Field(
+        default=None,
+        alias="titleHint",
+        description="Optional title fragment hint when the citation text is sparse.",
+    )
+    author_hint: str | None = Field(
+        default=None,
+        alias="authorHint",
+        description="Optional author surname or author-name hint.",
+    )
+    year_hint: str | None = Field(
+        default=None,
+        alias="yearHint",
+        description="Optional approximate year hint, e.g. '2009' or 'around 2001'.",
+    )
+    venue_hint: str | None = Field(
+        default=None,
+        alias="venueHint",
+        description="Optional venue or journal hint.",
+    )
+    doi_hint: str | None = Field(
+        default=None,
+        alias="doiHint",
+        description="Optional DOI or DOI fragment hint.",
+    )
+
+    @field_validator("max_candidates", mode="before")
+    @classmethod
+    def clamp_max_candidates(cls, value: int | None) -> int:
+        return _clamp_limit(value, 5, 5)
+
+
 class PaperAutocompleteArgs(ToolArgsModel):
     query: str = Field(description="Partial paper title for typeahead completion")
 
@@ -647,6 +692,148 @@ class GetCitationFormatsArgs(ToolArgsModel):
     )
 
 
+class SmartSearchPapersArgs(ToolArgsModel):
+    query: str = Field(
+        description=(
+            "Concept-level or known-item research query. Natural language is "
+            "allowed; exact identifiers like DOI, arXiv ID, or URL are also "
+            "accepted."
+        )
+    )
+    limit: int = Field(
+        default=10,
+        description="Max smart-ranked results to return (default 10, max 25)",
+    )
+    search_session_id: str | None = Field(
+        default=None,
+        alias="searchSessionId",
+        description=(
+            "Optional prior searchSessionId to continue refining an existing "
+            "research workspace."
+        ),
+    )
+    mode: Literal[
+        "auto",
+        "discovery",
+        "review",
+        "known_item",
+        "author",
+        "citation",
+    ] = Field(
+        default="auto",
+        description=(
+            "Task shape hint. Use auto unless the agent already knows whether "
+            "this is discovery, literature review, known-item lookup, author "
+            "pivot, or citation chasing."
+        ),
+    )
+    year: str | None = Field(
+        default=None,
+        description="Optional year or year-range hint, e.g. '2023' or '2020-2024'.",
+    )
+    venue: str | None = Field(
+        default=None,
+        description="Optional venue hint to keep the search focused.",
+    )
+    focus: str | None = Field(
+        default=None,
+        description="Optional subtopic, method, or application focus hint.",
+    )
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def clamp_limit(cls, value: int | None) -> int:
+        return _clamp_limit(value, 10, 25)
+
+
+class AskResultSetArgs(ToolArgsModel):
+    search_session_id: str = Field(
+        alias="searchSessionId",
+        description="searchSessionId from search_papers_smart or a reusable list tool.",
+    )
+    question: str = Field(
+        description=(
+            "Follow-up question to answer using only papers from the saved result set."
+        )
+    )
+    top_k: int = Field(
+        default=8,
+        alias="topK",
+        description=(
+            "Number of evidence papers to retrieve from the result set (max 12)."
+        ),
+    )
+    answer_mode: Literal["qa", "claim_check", "comparison"] = Field(
+        default="qa",
+        alias="answerMode",
+        description="Answer style: grounded QA, claim checking, or comparison.",
+    )
+
+    @field_validator("top_k", mode="before")
+    @classmethod
+    def clamp_top_k(cls, value: int | None) -> int:
+        return _clamp_limit(value, 8, 12)
+
+
+class MapResearchLandscapeArgs(ToolArgsModel):
+    search_session_id: str = Field(
+        alias="searchSessionId",
+        description="searchSessionId for the saved paper result set to cluster.",
+    )
+    max_themes: int = Field(
+        default=5,
+        alias="maxThemes",
+        description="Maximum number of themes to return (default 5, max 5).",
+    )
+
+    @field_validator("max_themes", mode="before")
+    @classmethod
+    def clamp_max_themes(cls, value: int | None) -> int:
+        return _clamp_limit(value, 5, 5)
+
+
+class ExpandResearchGraphArgs(ToolArgsModel):
+    seed_paper_ids: list[str] | None = Field(
+        default=None,
+        alias="seedPaperIds",
+        description=(
+            "Optional paper IDs to expand from. Use recommendedExpansionId when "
+            "available for Semantic Scholar-based expansion."
+        ),
+    )
+    seed_search_session_id: str | None = Field(
+        default=None,
+        alias="seedSearchSessionId",
+        description=(
+            "Optional searchSessionId whose paper results should be used as graph "
+            "seeds when explicit seedPaperIds are not provided."
+        ),
+    )
+    direction: Literal["citations", "references", "authors"] = Field(
+        default="citations",
+        description="Graph expansion direction.",
+    )
+    hops: int = Field(
+        default=1,
+        description="Expansion depth in hops (default 1, max 2).",
+    )
+    per_seed_limit: int = Field(
+        default=25,
+        alias="perSeedLimit",
+        description="Max frontier items to fetch per seed (default 25, max 50).",
+    )
+
+    @field_validator("hops", mode="before")
+    @classmethod
+    def clamp_hops(cls, value: int | None) -> int:
+        return _clamp_limit(value, 1, 2)
+
+    @field_validator("per_seed_limit", mode="before")
+    @classmethod
+    def clamp_per_seed_limit(cls, value: int | None) -> int:
+        return _clamp_limit(value, 25, 50)
+
+
 TOOL_INPUT_MODELS: dict[str, type[ToolArgsModel]] = {
     "search_papers": SearchPapersArgs,
     "search_papers_core": MinimalProviderSearchPapersArgs,
@@ -657,6 +844,7 @@ TOOL_INPUT_MODELS: dict[str, type[ToolArgsModel]] = {
     "search_papers_openalex_bulk": OpenAlexBulkSearchPapersArgs,
     "search_papers_bulk": BulkSearchPapersArgs,
     "search_papers_match": PaperMatchArgs,
+    "resolve_citation": ResolveCitationArgs,
     "paper_autocomplete": PaperAutocompleteArgs,
     "get_paper_details": PaperLookupArgs,
     "get_paper_details_openalex": OpenAlexPaperLookupArgs,
@@ -677,4 +865,8 @@ TOOL_INPUT_MODELS: dict[str, type[ToolArgsModel]] = {
     "get_paper_recommendations_post": PostRecommendationsArgs,
     "batch_get_papers": BatchGetPapersArgs,
     "get_paper_citation_formats": GetCitationFormatsArgs,
+    "search_papers_smart": SmartSearchPapersArgs,
+    "ask_result_set": AskResultSetArgs,
+    "map_research_landscape": MapResearchLandscapeArgs,
+    "expand_research_graph": ExpandResearchGraphArgs,
 }

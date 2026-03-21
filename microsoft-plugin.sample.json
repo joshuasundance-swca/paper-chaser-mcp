@@ -1,0 +1,22 @@
+{
+  "name": "Scholar Search MCP",
+  "description_for_model": "Use Scholar Search MCP for concept-level literature discovery, citation repair, known-item resolution, citation chasing, author pivots, and grounded follow-up research over saved searchSessionId result sets.",
+  "transport": {
+    "type": "streamable-http",
+    "path": "/mcp"
+  },
+  "tool_package": "mcp-tools.full.json",
+  "conversation_starters": [
+    "Find the main research themes in retrieval-augmented generation for coding agents.",
+    "Repair this incomplete citation and give me the canonical paper plus alternatives.",
+    "Resolve the paper behind arXiv:1706.03762 and show its most important citations.",
+    "Map recent work on biomedical literature-review agents and highlight gaps.",
+    "Show me recent papers by this author and the best follow-up graph expansion.",
+    "Answer a grounded question using only the saved result set from my last search."
+  ],
+  "notes": [
+    "Use mcp-tools.core.json instead when a smaller raw-tool subset is preferable.",
+    "Resources are surfaced from tool outputs via resourceUris and searchSessionId handles.",
+    "The server remains universal; these assets are packaging guidance, not a separate build."
+  ]
+}

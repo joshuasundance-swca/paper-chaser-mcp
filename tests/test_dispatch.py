@@ -8,11 +8,22 @@ from scholar_search_mcp.utils.cursor import decode_bulk_cursor, decode_cursor
 from tests.helpers import RecordingOpenAlexClient, RecordingSemanticClient, _payload
 
 
+def _assert_additive_metadata(
+    payload: dict,
+    *,
+    expect_search_session_id: bool = False,
+) -> None:
+    assert "agentHints" in payload
+    assert "resourceUris" in payload
+    if expect_search_session_id:
+        assert payload.get("searchSessionId")
+
+
 @pytest.mark.asyncio
 async def test_list_tools_returns_expected_public_contract() -> None:
     tools = await server.list_tools()
 
-    assert len(tools) == 29
+    assert len(tools) == 34
     tool_map = {tool.name: tool for tool in tools}
     assert set(tool_map) == {
         "search_papers",
@@ -24,6 +35,7 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "search_papers_openalex_bulk",
         "search_papers_bulk",
         "search_papers_match",
+        "resolve_citation",
         "paper_autocomplete",
         "get_paper_details",
         "get_paper_details_openalex",
@@ -44,6 +56,10 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "get_paper_recommendations_post",
         "batch_get_papers",
         "get_paper_citation_formats",
+        "search_papers_smart",
+        "ask_result_set",
+        "map_research_landscape",
+        "expand_research_graph",
     }
     assert tool_map["search_papers"].inputSchema["required"] == ["query"]
     assert set(tool_map["search_papers"].inputSchema["properties"]) == {
@@ -100,9 +116,19 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "year",
         "cursor",
     }
+    assert set(tool_map["resolve_citation"].inputSchema["properties"]) == {
+        "citation",
+        "maxCandidates",
+        "titleHint",
+        "authorHint",
+        "yearHint",
+        "venueHint",
+        "doiHint",
+    }
     search_tags = tool_map["search_papers"].meta or {}
     semantic_tags = tool_map["search_papers_semantic_scholar"].meta or {}
     openalex_tags = tool_map["search_papers_openalex"].meta or {}
+    citation_tags = tool_map["resolve_citation"].meta or {}
     assert set(search_tags["fastmcp"]["tags"]) == {
         "search",
         "brokered",
@@ -116,6 +142,26 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "search",
         "provider-specific",
         "provider:openalex",
+    }
+    assert set(citation_tags["fastmcp"]["tags"]) == {
+        "citation-repair",
+        "known-item",
+        "recovery",
+    }
+    assert set(tool_map["search_papers_smart"].inputSchema["properties"]) == {
+        "query",
+        "limit",
+        "searchSessionId",
+        "mode",
+        "year",
+        "venue",
+        "focus",
+    }
+    assert set(tool_map["ask_result_set"].inputSchema["properties"]) == {
+        "searchSessionId",
+        "question",
+        "topK",
+        "answerMode",
     }
     assert tool_map["batch_get_papers"].inputSchema["required"] == ["paper_ids"]
     assert tool_map["batch_get_authors"].inputSchema["required"] == ["author_ids"]
@@ -212,7 +258,16 @@ async def test_call_tool_routes_non_search_tools(
     payload = _payload(await server.call_tool(tool_name, arguments))
 
     assert fake_client.calls == [expected_call]
-    assert payload == expected_payload
+    if isinstance(expected_payload, list):
+        assert payload == expected_payload
+        return
+    for key, value in expected_payload.items():
+        assert payload[key] == value
+    _assert_additive_metadata(
+        payload,
+        expect_search_session_id=tool_name
+        in {"get_paper_citations", "get_paper_references", "get_author_papers"},
+    )
 
 
 @pytest.mark.asyncio
@@ -407,6 +462,12 @@ async def test_call_tool_raises_for_unknown_tool() -> None:
             lambda p: p["paperId"] == "match-1",
         ),
         (
+            "resolve_citation",
+            {"citation": "Attention Is All You Need"},
+            "search_papers_match",
+            lambda p: bool(p["bestMatch"]["paper"]["paperId"]),
+        ),
+        (
             "paper_autocomplete",
             {"query": "transformer"},
             "paper_autocomplete",
@@ -460,3 +521,25 @@ async def test_call_tool_routes_new_tools(
         f"Expected {expected_method!r} to have been called; got {fake_client.calls}"
     )
     assert check_payload(payload)
+    if isinstance(payload, dict):
+        _assert_additive_metadata(
+            payload,
+            expect_search_session_id=tool_name
+            in {
+                "search_papers_bulk",
+                "get_paper_authors",
+                "search_authors",
+                "resolve_citation",
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_smart_tools_return_structured_feature_errors_when_disabled() -> None:
+    payload = _payload(
+        await server.call_tool("search_papers_smart", {"query": "transformers"})
+    )
+
+    assert payload["error"] == "FEATURE_NOT_CONFIGURED"
+    assert "fallbackTools" in payload
+    assert payload["agentHints"]["nextToolCandidates"]

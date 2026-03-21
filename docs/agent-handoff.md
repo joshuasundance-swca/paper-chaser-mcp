@@ -35,6 +35,18 @@ This document is the current working handoff for the fork. It is intended to giv
   smoke-test target from `SMOKE_TEST_HEALTH_URL`, `containerAppHealthUrl`, or
   `containerAppFqdn`.
 - `scholar_search_mcp/server.py` is now a compatibility facade over smaller modules.
+- The repo now exposes a compatibility-first smart layer on top of the stable
+  raw MCP surface: `search_papers_smart`, `ask_result_set`,
+  `map_research_landscape`, and `expand_research_graph`.
+- Primary read tools now surface additive agent UX metadata:
+  `agentHints`, `clarification`, `resourceUris`, and reusable
+  `searchSessionId` handles where appropriate.
+- Published MCP tool schemas are now sanitized for flatter, more
+  Microsoft-friendly compatibility while internal Pydantic validation remains
+  strict.
+- The server now exposes additive read-only resources for papers, authors,
+  saved searches, and citation/reference trails, plus helper prompts for
+  smart-search planning and query refinement.
 - Agent-facing workflow guidance now prioritizes quick discovery, exhaustive retrieval,
   citation chasing, known-item lookup, and author pivots.
 - OpenAlex now has an explicit provider-specific MCP surface for OpenAlex-native
@@ -110,16 +122,26 @@ This document is the current working handoff for the fork. It is intended to giv
   produces a structured "UX friction summary" before issue creation. The
   model can be configured via the `GH_AW_MODEL_AGENT_COPILOT` Actions
   variable (e.g., set to `gpt-5.4` to use GPT-5.4).
+- Microsoft-oriented packaging assets are now checked in as
+  `mcp-tools.core.json`, `mcp-tools.full.json`, and
+  `microsoft-plugin.sample.json` so one universal server can still ship a
+  conservative or full Streamable HTTP packaging profile.
 
 ## Module Map
 
 - `scholar_search_mcp/__main__.py` is the `python -m` entrypoint.
 - `scholar_search_mcp/server.py` is the public MCP facade and compatibility layer used by tests and package entrypoints.
+- `scholar_search_mcp/compat.py` owns schema sanitization plus additive
+  `agentHints` / `clarification` / `resourceUris` / `searchSessionId`
+  enrichment for raw-tool responses.
 - `scholar_search_mcp/dispatch.py` routes MCP tool calls through a dispatch map.
 - `scholar_search_mcp/search.py` owns the `search_papers` fallback chain and merged response helpers.
 - `scholar_search_mcp/tools.py` defines MCP tool schemas.
 - `scholar_search_mcp/runtime.py` owns stdio startup.
 - `scholar_search_mcp/settings.py` contains environment parsing helpers.
+- `scholar_search_mcp/agentic/` contains the additive smart-tool runtime:
+  config, models, provider adapters, planner, retrieval, ranking, workspace,
+  and LangGraph scaffolding.
 - `scholar_search_mcp/deployment.py` wraps the HTTP app with `/healthz`,
   optional backend-token auth, and optional Origin allowlisting for hosted
   deployments.
@@ -187,6 +209,25 @@ gh aw compile test-scholar-search --dir .github/workflows
 - `Paper.scholarResultId` is now a first-class model field (not just an extra). This
   makes it visible in the JSON schema so agents can discover it without reading long
   tool descriptions. The field is always `None` for non-SerpApi results.
+- The additive smart-tool layer now exists under `scholar_search_mcp/agentic/`.
+  It keeps the raw MCP tools stable while adding concept-level discovery,
+  grounded follow-up QA, landscape mapping, and compact graph expansion
+  through reusable `searchSessionId` workspaces.
+- FastMCP `Context` is now injected into tool handlers without appearing in the
+  public MCP schema. That enables progress updates, optional sampling, and
+  optional bounded elicitation without changing tool arguments.
+- Raw-tool responses now carry additive `agentHints`, `clarification`,
+  `resourceUris`, and `searchSessionId` metadata so low-context agents can
+  continue the workflow more easily.
+- A first-class `resolve_citation` workflow now sits alongside
+  `search_papers_match`, `search_snippets`, and `get_paper_details` so agents
+  can repair incomplete references without guessing which raw tool to try next.
+- The server now exposes `paper://{paper_id}`, `author://{author_id}`,
+  `search://{searchSessionId}`, and
+  `trail://paper/{paper_id}?direction=citations|references` resources.
+- Checked-in Microsoft packaging assets now document a conservative raw-tool
+  subset and a fuller smart-tool package over Streamable HTTP without forking
+  the runtime.
 - `BrokerMetadata.nextStepHint` was added as a new field. The `_metadata()` helper
   in `search.py` now populates it with provider-specific guidance:
   - For `serpapi_google_scholar` results: hints that `paper.scholarResultId` can be
@@ -194,7 +235,8 @@ gh aw compile test-scholar-search --dir .github/workflows
   - For "none" results: hints to broaden the query or try `search_papers_bulk`.
   - For all other results: hints to use `search_papers_bulk` or citation expansion.
 - `SERVER_INSTRUCTIONS` was restructured as a numbered decision tree for faster
-  agent scanning: QUICK DISCOVERY → EXHAUSTIVE → KNOWN ITEM → CITATION → AUTHOR → SNIPPET.
+  agent scanning: QUICK DISCOVERY → EXHAUSTIVE → CITATION REPAIR → KNOWN ITEM
+  → CITATION → AUTHOR → SNIPPET.
 - `AGENT_WORKFLOW_GUIDE` was rewritten with a quick-decision-table format under
   `guide://scholar-search/agent-workflows`.
 - `plan_scholar_search` prompt was updated to reference `brokerMetadata.nextStepHint`.
@@ -230,6 +272,8 @@ gh aw compile test-scholar-search --dir .github/workflows
   passed in this environment after installing `.[dev]`.
 - The current pass keeps runtime behavior stable and focuses on schema discoverability,
   structured hints, and tighter agent guidance.
+- The current pass also adds the compatibility-first smart workflow surface,
+  workspace registry, schema sanitization, and resource-oriented follow-up UX.
 - The highest-impact UX issues from the last live agent pass were addressed with
   targeted runtime fixes and regression coverage.
 - The latest pass tightens expansion-ID guidance so brokered CORE `canonicalId`
@@ -238,6 +282,10 @@ gh aw compile test-scholar-search --dir .github/workflows
 - Current follow-up work is now mostly product-shaping work around provider
   preferences and whether retry-recovered provider behavior should be surfaced
   to agents.
+- Optional elicitation now supports one bounded clarification round on
+  `search_papers`, `search_papers_match`, and `search_authors` when the client
+  advertises MCP elicitation support. Declined or cancelled elicitation falls
+  back to the normal `clarification` response field.
 - The latest pass also hardens author lookup UX: unsupported author fields now
   fail locally with a clearer validation error, exact-name punctuation is
   normalized before `/author/search`, and paper-to-author expansion errors now
@@ -381,18 +429,20 @@ gh aw compile test-scholar-search --dir .github/workflows
 6. Revisit `.github/copilot-instructions.md` and `docs/golden-paths.md` whenever future agent-facing search behavior materially changes.
 7. Consider whether OpenAlex institution/source pivots should become first-class
    tools now that the base OpenAlex author/citation surface exists.
-8. Expand the agentic workflow once stable secrets are available for deeper provider-specific assertions, for example optional SerpApi or OpenAlex coverage.
-9. Act on the first UX friction report produced by the
+8. Tune the smart discovery thresholds and trace logs once real-world
+   `search_papers_smart` runs accumulate enough UX feedback.
+9. Expand the agentic workflow once stable secrets are available for deeper provider-specific assertions, for example optional SerpApi or OpenAI-backed smart-tool coverage.
+10. Act on the first UX friction report produced by the
    `GH_AW_MODEL_AGENT_COPILOT`-configured verifier. Focus on the
    highest-impact item from the structured "UX friction summary": likely a
    round-trip reduction or a clearly missing feature rather than cosmetic work.
-10. Review labels in the repository (`agentic`, `needs-copilot`, `needs-human`,
+11. Review labels in the repository (`agentic`, `needs-copilot`, `needs-human`,
     `blocked`, `no-agent`, `automation`, `testing`) to ensure they exist before
     the first verifier run creates an issue. Missing labels cause issue creation
     to fail silently on the label assignment step.
-11. Set the `GH_AW_MODEL_AGENT_COPILOT` Actions variable to `gpt-5.4` in the
+12. Set the `GH_AW_MODEL_AGENT_COPILOT` Actions variable to `gpt-5.4` in the
     repository settings if you want to override the compiled default at runtime.
-12. Run the `Deploy Azure` workflow against `dev` in `bootstrap` mode first,
+13. Run the `Deploy Azure` workflow against `dev` in `bootstrap` mode first,
     then seed Key Vault and run it again in `full` mode once GitHub
     environment secrets, the optional runner-label variable, and the federated
     credential are in place. Capture any environment-specific fixes back into

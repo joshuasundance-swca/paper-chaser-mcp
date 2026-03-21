@@ -6,6 +6,7 @@ import time
 from difflib import SequenceMatcher
 from typing import Any, Optional
 
+from ...citation_repair import build_match_metadata
 from ...constants import (
     API_BASE_URL,
     DEFAULT_AUTHOR_FIELDS,
@@ -335,6 +336,7 @@ class SemanticScholarClient:
         query: str,
         candidate_query: str,
         strategy: str,
+        candidate_count: int | None = None,
     ) -> dict[str, Any]:
         """Build a match payload for a fallback-found paper.
 
@@ -347,6 +349,14 @@ class SemanticScholarClient:
         payload["matchStrategy"] = strategy
         if candidate_query != query.strip():
             payload["normalizedQuery"] = candidate_query
+        payload.update(
+            build_match_metadata(
+                query=query,
+                paper=payload,
+                candidate_count=candidate_count,
+                resolution_strategy=strategy,
+            )
+        )
         return payload
 
     async def _search_papers_match_fallback(
@@ -380,7 +390,11 @@ class SemanticScholarClient:
             if matched is None:
                 continue
             return self._build_fallback_match_payload(
-                matched, query, candidate_query, "fuzzy_search"
+                matched,
+                query,
+                candidate_query,
+                "fuzzy_search",
+                candidate_count=len(fallback_response.get("data", [])),
             )
 
         # Final fallback: citation-sorted bulk search.  Relevance-ranked search
@@ -407,7 +421,11 @@ class SemanticScholarClient:
             if matched is None:
                 continue
             return self._build_fallback_match_payload(
-                matched, query, candidate_query, "citation_ranked"
+                matched,
+                query,
+                candidate_query,
+                "citation_ranked",
+                candidate_count=len(bulk_response.get("data", [])),
             )
 
         return {
@@ -416,6 +434,12 @@ class SemanticScholarClient:
             "query": query,
             "matchFound": False,
             "matchStrategy": "none",
+            "matchConfidence": "low",
+            "matchedFields": [],
+            "titleSimilarity": 0.0,
+            "yearDelta": None,
+            "authorOverlap": 0,
+            "candidateCount": 0,
             "normalizedQueriesTried": all_search_queries,
             "message": (
                 "No Semantic Scholar title match was found. If you have a DOI, "
@@ -593,6 +617,14 @@ class SemanticScholarClient:
             result["matchStrategy"] = "exact_title"
             if candidate_query != query:
                 result["normalizedQuery"] = candidate_query
+            result.update(
+                build_match_metadata(
+                    query=query,
+                    paper=result,
+                    candidate_count=1,
+                    resolution_strategy="exact_title",
+                )
+            )
             return result
         return await self._search_papers_match_fallback(query, fields=fields)
 

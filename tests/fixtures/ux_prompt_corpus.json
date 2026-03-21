@@ -1,0 +1,55 @@
+{
+  "environmental_science_and_ecology": [
+    "Find recent research on PFAS remediation in groundwater, especially adsorption, ion exchange, electrochemical treatment, and destruction methods.",
+    "Map the literature on methane leak detection and quantification for oil and gas infrastructure, including satellites, aircraft, drones, and continuous monitoring.",
+    "What are the main research themes in nature-based solutions for urban heat mitigation in U.S. cities?",
+    "Compare the evidence for biochar, cover cropping, and reduced tillage on soil carbon sequestration in temperate agriculture.",
+    "Find papers on wildfire smoke exposure assessment and health impacts, especially methods linking air quality, satellite data, and public health outcomes.",
+    "What does the literature say about microplastic transport and fate in freshwater systems?",
+    "Identify key papers on harmful algal bloom forecasting under climate change.",
+    "Compare ecological evidence on rewilding versus traditional restoration in grassland and savanna systems.",
+    "Map the literature on trophic cascades in marine protected areas.",
+    "Find research on invasive species spread under climate warming, especially forecasting and early detection methods.",
+    "Compare approaches to biodiversity monitoring using eDNA, acoustic monitoring, camera traps, and remote sensing.",
+    "What are the key papers on assisted migration and climate adaptation in forest ecology?",
+    "Map the literature on resilience in social-ecological systems, especially fisheries, forests, and water governance.",
+    "Compare evidence on kelp forest restoration success factors across regions.",
+    "Find the most decision-relevant literature on habitat connectivity planning under land-use change."
+  ],
+  "consulting_and_due_diligence": [
+    "I'm advising a utility on wildfire risk mitigation. Find the most decision-relevant literature on vegetation management, grid hardening, and predictive risk modeling.",
+    "I'm advising a water utility on PFAS compliance strategy. Compare treatment performance, residuals handling, and cost drivers.",
+    "Help me assess decarbonization pathways for a cement producer. Compare calcined clay, clinker substitution, carbon capture, and alternative fuels.",
+    "I need a research-backed view of methane abatement opportunities for an upstream oil and gas operator.",
+    "Find evidence relevant to siting and permitting risk for transmission lines in biodiversity-sensitive areas.",
+    "Compare the literature on low-carbon hydrogen for heavy industry, focusing on emissions accounting, infrastructure constraints, and end-use economics.",
+    "Help me build an evidence base for corporate water stewardship in semiconductor manufacturing.",
+    "Find papers relevant to climate adaptation planning for ports, especially sea-level rise, storm surge, and supply-chain resilience.",
+    "I'm supporting due diligence on a carbon removal startup. Find the strongest and weakest evidence around permanence, MRV, and scalability.",
+    "Compare research-backed strategies for reducing Scope 3 emissions in food and agriculture supply chains."
+  ],
+  "citation_repair": [
+    "Resolve this partial citation: Rockstrom et al planetary boundaries 2009 Nature 461 472.",
+    "I need the paper that is probably Attention Is All You Need, but the year or punctuation may be wrong. Find the canonical citation.",
+    "Recover this incomplete citation: Ostrom 2009 framework sustainability social ecological systems.",
+    "Find the correct paper from this messy reference: Folke resilience social ecological systems annual review 2006.",
+    "Resolve this likely ecology citation: Elmqvist urban resilience maybe 2019 Nature Sustainability.",
+    "I only have this fragment from a bibliography: Sala biodiversity scenarios global 2000 Science. Find the most likely canonical paper and alternatives.",
+    "Recover the paper from this quote-like fragment and return the best citation: ecosystem services are co-produced by people and nature.",
+    "I have author, venue, and approximate year but not the title: Carpenter, freshwater resilience, PNAS, around 2001.",
+    "Correct this almost-right title: Tool use for autonomous agent systems and give the most likely real paper.",
+    "I have a DOI fragment, an author surname, and a year that might be off by one. Resolve the best candidate and explain uncertainty."
+  ],
+  "cross_discipline_generalization": [
+    "Map the literature on solid-state battery degradation mechanisms and practical stability bottlenecks.",
+    "Compare methods for causal inference in education policy interventions.",
+    "Find recent work on wastewater epidemiology for infectious disease surveillance.",
+    "What are the main clusters of research on multimodal biomarkers in neurodegenerative disease?",
+    "Compare the evidence on perovskite solar-cell stability improvements under real-world conditions.",
+    "Map the literature on remote work productivity effects in labor economics.",
+    "Find research on explainable AI in radiology, focusing on trust, calibration, and clinical workflow fit.",
+    "Compare methods for carbon accounting in life-cycle assessment of alternative aviation fuels.",
+    "What are the major themes in computational social science research on misinformation diffusion?",
+    "Find the strongest review papers on climate risk in financial asset pricing."
+  ]
+}

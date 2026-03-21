@@ -1,0 +1,36 @@
+{
+  "name": "scholar-search-full",
+  "title": "Scholar Search MCP Full Tool Set",
+  "description": "Full Microsoft-facing tool package including raw retrieval, OpenAlex-specific workflows, and additive smart research tools.",
+  "transport": {
+    "type": "streamable-http",
+    "path": "/mcp"
+  },
+  "tools": [
+    "search_papers",
+    "search_papers_smart",
+    "ask_result_set",
+    "map_research_landscape",
+    "expand_research_graph",
+    "search_papers_bulk",
+    "resolve_citation",
+    "search_papers_match",
+    "get_paper_details",
+    "get_paper_citations",
+    "get_paper_references",
+    "get_paper_authors",
+    "search_authors",
+    "get_author_info",
+    "get_author_papers",
+    "search_papers_openalex",
+    "search_papers_openalex_bulk",
+    "get_paper_details_openalex",
+    "get_paper_citations_openalex",
+    "get_paper_references_openalex",
+    "search_authors_openalex",
+    "get_author_info_openalex",
+    "get_author_papers_openalex",
+    "search_snippets",
+    "get_paper_citation_formats"
+  ]
+}

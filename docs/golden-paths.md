@@ -3,13 +3,16 @@
 This document captures the primary planning assumptions for the MCP surface so
 agents can choose the next tool with low context and high reliability.
 
-These same discovery, pagination, lookup, citation, and author-pivot paths are
-exercised by the agentic smoke test in `.github/workflows/test-scholar-search.md`.
+These same discovery, pagination, lookup, citation, author-pivot, and smart
+result-set paths are exercised by the agentic smoke test in
+`.github/workflows/test-scholar-search.md`.
 
 ## Primary Personas
 
 - **Quick discovery user**: wants a strong first page fast to decide whether to
   dig deeper.
+- **Concept-level researcher**: starts from a topic or question rather than a
+  known paper and wants a reusable result set with grounded follow-up paths.
 - **Researcher doing exhaustive retrieval**: wants many papers across pages to
   build a reading list or dataset.
 - **Citation chaser**: starts from one paper and expands outward through cited-by
@@ -21,7 +24,35 @@ exercised by the agentic smoke test in `.github/workflows/test-scholar-search.md
 
 ## Golden Paths
 
-### 1. Quick literature discovery
+### 1. Smart concept discovery and grounded follow-up
+
+1. Start with `search_papers_smart` when the task is concept-level discovery,
+   literature review, or a grounded follow-up workflow.
+2. Inspect `strategyMetadata`, especially `acceptedExpansions`,
+   `rejectedExpansions`, `speculativeExpansions`, and `providersUsed`.
+3. Save the returned `searchSessionId`.
+4. Use `ask_result_set` for grounded QA, `map_research_landscape` for themes,
+   and `expand_research_graph` for compact citation/reference/author expansion.
+
+**Example request**: "Map the main research themes in retrieval-augmented generation for coding agents"
+
+**Tool sequence**:
+```text
+search_papers_smart(query="retrieval-augmented generation for coding agents", limit=10)
+→ inspect strategyMetadata, agentHints, resourceUris, searchSessionId
+→ ask_result_set(searchSessionId="...", question="What does this result set say about evaluation tradeoffs?")
+→ map_research_landscape(searchSessionId="...", maxThemes=4)
+→ expand_research_graph(seedSearchSessionId="...", direction="citations")
+```
+
+**Success signals**
+
+- The first smart result set is useful even when the starting query is concept-level.
+- `strategyMetadata` explains what the server tried instead of acting like a black box.
+- `searchSessionId` is enough to continue without rerunning the whole discovery step.
+- Grounded follow-up answers cite papers from the saved result set instead of guessing.
+
+### 2. Quick literature discovery
 
 1. Start with `search_papers`.
 2. Read `brokerMetadata.nextStepHint` for the recommended next move.
@@ -52,7 +83,7 @@ search_papers(query="large language model alignment", limit=10)
   results (treat with caution), `"lexical"` for CORE/arXiv keyword matches, or
   `"unknown"` for SerpApi / no-result paths.
 
-### 2. Exhaustive retrieval
+### 3. Exhaustive retrieval
 
 1. Start with `search_papers_bulk` when the request asks for all results, the
    first N results across pages, or a dataset-like collection.
@@ -83,7 +114,7 @@ search_papers_bulk(query="reinforcement learning from human feedback", year="202
 - The agent does not misuse bulk search for small targeted pages.
 - Pagination state is explained in user-facing language.
 
-### 3. Citation chasing
+### 4. Citation chasing
 
 1. Resolve or confirm the starting paper with `search_papers_match` or
    `get_paper_details` if needed.
@@ -113,13 +144,15 @@ search_papers_match(query="Attention Is All You Need")
 - Returned metadata is rich enough to rank or filter the expansion set.
 - The workflow naturally chains from a discovered or known paper.
 
-### 4. Known-item lookup
+### 5. Known-item lookup
 
-1. Use `search_papers_match` for messy or partial titles.
-2. Use `get_paper_details` for DOI, arXiv ID, URL, or canonical IDs.
-3. Fall back to `search_papers` only when the user is really asking a topical
+1. Use `resolve_citation` for broken bibliography lines, incomplete references,
+   quote fragments, and almost-right citations.
+2. Use `search_papers_match` for messy or partial titles.
+3. Use `get_paper_details` for DOI, arXiv ID, URL, or canonical IDs.
+4. Fall back to `search_papers` only when the user is really asking a topical
    question rather than an item lookup.
-4. Treat a structured no-match from `search_papers_match` as a signal that the
+5. Treat a structured no-match from `search_papers_match` as a signal that the
    item may be punctuation-variant metadata, a dissertation, software release,
    report, or other output outside the indexed paper surface. Verify externally
    when needed.
@@ -127,6 +160,8 @@ search_papers_match(query="Attention Is All You Need")
 **Example requests and tool choices**:
 - "Find the paper called something like 'Scaling Laws for Neural Language Models'"
   → `search_papers_match(query="Scaling Laws for Neural Language Models")`
+- "Resolve this partial citation: 'Rockstrom et al planetary boundaries 2009 Nature 461 472'"
+  → `resolve_citation(citation="Rockstrom et al planetary boundaries 2009 Nature 461 472")`
 - "Get details for arxiv:1706.03762"
   → `get_paper_details(paper_id="arXiv:1706.03762")`
 - "Look up DOI 10.48550/arXiv.2005.14165"
@@ -135,10 +170,11 @@ search_papers_match(query="Attention Is All You Need")
 **Success signals**
 
 - Disambiguation stays minimal.
+- Citation repair returns alternatives and uncertainty instead of forcing a bad match.
 - DOI, URL, and identifier-based lookups feel low friction.
 - Agents do not spend multiple topic-search turns on a known-item request.
 
-### 5. Author-centric research
+### 6. Author-centric research
 
 1. Start with `search_authors`.
 2. Use `get_author_info` to confirm identity and profile metadata.
@@ -174,7 +210,12 @@ search_authors(query="Yoshua Bengio", limit=5)
 ## Secondary Workflows
 
 - **Quote or snippet validation**: use `search_snippets` only when title or
-  keyword search is weak.
+  keyword search is weak, or when `resolve_citation` suggests a quote fragment
+  is the strongest remaining clue.
+- **Smart result-set refinement**: after `search_papers_smart`, prefer
+  `ask_result_set`, `map_research_landscape`, and `expand_research_graph`
+  before starting an entirely new search when the follow-up is still grounded
+  in the same corpus.
 - **Agent UX feedback loop**: the checked-in agentic workflow at
   `.github/workflows/test-scholar-search.md` now supports `smoke`,
   `comprehensive`, and `feature_probe` review modes. The workflow uses the

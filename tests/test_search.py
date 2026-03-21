@@ -540,7 +540,10 @@ async def test_search_papers_response_has_no_pagination_key(
     payload = json.loads(response[0].text)
 
     assert "pagination" not in payload
-    assert set(payload.keys()) == {"total", "offset", "data", "brokerMetadata"}
+    assert {"total", "offset", "data", "brokerMetadata"} <= set(payload.keys())
+    assert "agentHints" in payload
+    assert "resourceUris" in payload
+    assert "searchSessionId" in payload
     broker_meta = payload["brokerMetadata"]
     assert broker_meta["mode"] == "brokered_single_page"
     assert broker_meta["providerUsed"] == "core"

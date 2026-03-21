@@ -12,6 +12,9 @@ from .models.tools import (
     _normalize_provider_name,
 )
 
+AgenticProvider = Literal["openai", "deterministic"]
+AgenticIndexBackend = Literal["memory", "faiss"]
+
 
 def _env_bool(key: str, default: bool = True) -> bool:
     """Parse env as bool: 1/true/yes => True; 0/false/no => False."""
@@ -71,11 +74,26 @@ def _parse_csv_strings(env: Mapping[str, str], key: str) -> tuple[str, ...]:
     return tuple(segment.strip() for segment in value.split(",") if segment.strip())
 
 
+def _parse_positive_int(
+    env: Mapping[str, str],
+    key: str,
+    default: int,
+) -> int:
+    value = env.get(key)
+    if value is None or value == "":
+        return default
+    parsed = int(value)
+    if parsed <= 0:
+        raise ValueError(f"{key} must be a positive integer.")
+    return parsed
+
+
 class AppSettings(BaseModel):
     """Typed application settings loaded from environment variables."""
 
     model_config = ConfigDict(frozen=True)
 
+    openai_api_key: str | None = None
     semantic_scholar_api_key: str | None = None
     core_api_key: str | None = None
     openalex_api_key: str | None = None
@@ -94,11 +112,20 @@ class AppSettings(BaseModel):
     http_auth_token: str | None = None
     http_auth_header: str = "authorization"
     allowed_origins: tuple[str, ...] = ()
+    enable_agentic: bool = False
+    agentic_provider: AgenticProvider = "openai"
+    planner_model: str = "gpt-5.4-mini"
+    synthesis_model: str = "gpt-5.4"
+    embedding_model: str = "text-embedding-3-large"
+    agentic_index_backend: AgenticIndexBackend = "memory"
+    session_ttl_seconds: int = 1800
+    enable_agentic_trace_log: bool = False
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "AppSettings":
         env = environ if environ is not None else os.environ
         return cls(
+            openai_api_key=_parse_optional_string(env, "OPENAI_API_KEY"),
             semantic_scholar_api_key=_parse_optional_string(
                 env,
                 "SEMANTIC_SCHOLAR_API_KEY",
@@ -139,6 +166,33 @@ class AppSettings(BaseModel):
             .strip()
             .lower(),
             allowed_origins=_parse_csv_strings(env, "SCHOLAR_SEARCH_ALLOWED_ORIGINS"),
+            enable_agentic=_parse_env_bool(
+                env,
+                "SCHOLAR_SEARCH_ENABLE_AGENTIC",
+                False,
+            ),
+            agentic_provider=cast_agentic_provider(
+                env.get("SCHOLAR_SEARCH_AGENTIC_PROVIDER")
+            ),
+            planner_model=env.get("SCHOLAR_SEARCH_PLANNER_MODEL", "gpt-5.4-mini"),
+            synthesis_model=env.get("SCHOLAR_SEARCH_SYNTHESIS_MODEL", "gpt-5.4"),
+            embedding_model=env.get(
+                "SCHOLAR_SEARCH_EMBEDDING_MODEL",
+                "text-embedding-3-large",
+            ),
+            agentic_index_backend=cast_agentic_index_backend(
+                env.get("SCHOLAR_SEARCH_AGENTIC_INDEX_BACKEND")
+            ),
+            session_ttl_seconds=_parse_positive_int(
+                env,
+                "SCHOLAR_SEARCH_SESSION_TTL_SECONDS",
+                1800,
+            ),
+            enable_agentic_trace_log=_parse_env_bool(
+                env,
+                "SCHOLAR_SEARCH_ENABLE_AGENTIC_TRACE_LOG",
+                False,
+            ),
         )
 
 
@@ -153,4 +207,28 @@ def cast_transport(
         return cast(Literal["stdio", "http", "streamable-http", "sse"], normalized)
     raise ValueError(
         "SCHOLAR_SEARCH_TRANSPORT must be one of: stdio, http, streamable-http, sse"
+    )
+
+
+def cast_agentic_provider(value: str | None) -> AgenticProvider:
+    """Normalize the configured smart-workflow model provider."""
+    if value is None or value == "":
+        return "openai"
+    normalized = value.strip().lower()
+    if normalized in {"openai", "deterministic"}:
+        return cast(AgenticProvider, normalized)
+    raise ValueError(
+        "SCHOLAR_SEARCH_AGENTIC_PROVIDER must be one of: openai, deterministic"
+    )
+
+
+def cast_agentic_index_backend(value: str | None) -> AgenticIndexBackend:
+    """Normalize the configured smart-workflow index backend."""
+    if value is None or value == "":
+        return "memory"
+    normalized = value.strip().lower()
+    if normalized in {"memory", "faiss"}:
+        return cast(AgenticIndexBackend, normalized)
+    raise ValueError(
+        "SCHOLAR_SEARCH_AGENTIC_INDEX_BACKEND must be one of: memory, faiss"
     )

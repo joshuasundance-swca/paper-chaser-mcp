@@ -52,6 +52,7 @@ usage.
 4. Create GitHub environment secrets for deployment identifiers, plus the
    optional runner-label variable if you need to override the default labels.
 5. Populate Key Vault with these secret names before production deployment:
+   - `openai-api-key` if you enable the smart layer with `agenticProvider=openai`
    - `core-api-key`
    - `semantic-scholar-api-key`
    - `openalex-api-key`
@@ -81,6 +82,13 @@ names.
 - Runs on the private self-hosted runner.
 - Builds, scans, and pushes the container image.
 - Deploys the Container App and API Management.
+- Passes the checked-in smart-layer defaults through the Container App:
+  `SCHOLAR_SEARCH_ENABLE_AGENTIC`, `SCHOLAR_SEARCH_AGENTIC_PROVIDER`,
+  `SCHOLAR_SEARCH_PLANNER_MODEL`, `SCHOLAR_SEARCH_SYNTHESIS_MODEL`,
+  `SCHOLAR_SEARCH_EMBEDDING_MODEL`,
+  `SCHOLAR_SEARCH_AGENTIC_INDEX_BACKEND`,
+  `SCHOLAR_SEARCH_SESSION_TTL_SECONDS`, and
+  `SCHOLAR_SEARCH_ENABLE_AGENTIC_TRACE_LOG`.
 - Resolves the health-check URL from `SMOKE_TEST_HEALTH_URL` when provided, or
   falls back to Azure deployment outputs (`containerAppHealthUrl` first, then
   `containerAppFqdn`) for the first rollout.
@@ -98,7 +106,7 @@ Use this table as the deployment readiness checklist. The last two columns are t
 | Private self-hosted GitHub Actions runner | The build, Trivy scan, ACR push, deployment, and smoke test all run from a network that can reach private Azure endpoints | `.github/workflows/deploy-azure.yml` | GitHub runner administration plus network/DNS access to the private environment | No. The repo can target a runner, but it cannot provision or register one. | Yes if you cannot register runners or cannot place one on the trusted network. |
 | GitHub Actions variables: optional `AZURE_PRIVATE_RUNNER_LABELS_JSON` | Supplies the private-runner label override without committing values to git | `.github/workflows/deploy-azure.yml` | GitHub repository or environment variable management rights | No. The repo can document the name only. | Usually not, but choose generic labels if you do not want the label set itself to reveal network or platform details. |
 | GitHub Actions secrets: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP`, `ACR_NAME`, optional `IMAGE_REPOSITORY`, `SMOKE_TEST_HEALTH_URL` | Supplies deployment identifiers and the private health endpoint without treating them as public workflow metadata | `.github/workflows/deploy-azure.yml` and post-deploy smoke checks | GitHub repository or environment secret management rights | No. The repo cannot create or populate real secrets. | Yes if you cannot edit repository or environment secrets. |
-| Key Vault secret values: `core-api-key`, `semantic-scholar-api-key`, `openalex-api-key`, `openalex-mailto`, optional `serpapi-api-key`, `mcp-backend-auth-token` | Supplies upstream provider credentials and the APIM-to-backend shared token | `infra/main.bicep`, runtime secret references, APIM named value resolution | Azure Key Vault secret-set permissions plus access to the real credential values | No. The repo can reference the secret names, not provide their contents. | Yes if you do not own the provider accounts, do not have the actual secrets, or cannot write them into Key Vault. |
+| Key Vault secret values: optional `openai-api-key`, `core-api-key`, `semantic-scholar-api-key`, `openalex-api-key`, `openalex-mailto`, optional `serpapi-api-key`, `mcp-backend-auth-token` | Supplies upstream provider credentials and the APIM-to-backend shared token | `infra/main.bicep`, runtime secret references, APIM named value resolution | Azure Key Vault secret-set permissions plus access to the real credential values | No. The repo can reference the secret names, not provide their contents. | Yes if you do not own the provider accounts, do not have the actual secrets, or cannot write them into Key Vault. |
 | ACR push path and image scanning prerequisites | The workflow expects Docker, Trivy, and ACR login to succeed before deployment | `.github/workflows/deploy-azure.yml`, `scripts/validate_deployment.py`, `Dockerfile` | Runner access, ACR access, and the ability to fix image vulnerabilities when found | Partially. The repo provides the image and validation logic. | Sometimes. You may be blocked if you cannot push to ACR or cannot remediate policy-failing image findings. |
 | APIM client-access configuration | Private access is in place, but consumer authentication still needs operational setup such as subscription keys and optional JWT policy | `infra/modules/apim.bicep`, `docs/azure-security-model.md` | APIM administration rights | Partially. The repo defines the gateway and backend token path. | Yes if you need to manage client credentials but do not have APIM admin rights. |
 | A formal ACR quarantine and promotion process | This is the remaining hardening step beyond the current Trivy gate | Documented as a future step in this guide | Registry policy control plus a release workflow owner | Not yet. The repo does not currently implement end-to-end quarantine promotion. | Yes if your security bar requires quarantine-based promotion before release. |
@@ -167,6 +175,21 @@ If a setting is secret and the running application needs it, prefer Key Vault.
 If it is just metadata or a safe default, prefer a Bicep parameter or GitHub
 variable. The safest default is to keep git-tracked configuration about shape
 and behavior, and keep secrets in systems built for secrets.
+
+## Smart workflow deployment notes
+
+The Azure scaffold keeps the smart layer off by default. Turn it on only when
+you intend to pay for server-side planning, embeddings, and grounded synthesis.
+
+- Set `enableAgentic=true` to expose the additive smart tools.
+- Leave `agenticProvider=deterministic` if you want the smart-tool surface
+  without paid model calls.
+- Use `agenticProvider=openai` and seed the `openai-api-key` Key Vault secret
+  when you want the LangChain-backed OpenAI path.
+- Keep `agenticIndexBackend=memory` unless your runtime image includes the
+  optional FAISS extra and you have validated that path in your environment.
+  The current smart workflows cap saved result sets at relatively small sizes,
+  so FAISS is a scale-up option rather than the recommended default.
 
 ## Deployment flow
 

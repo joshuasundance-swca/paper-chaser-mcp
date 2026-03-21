@@ -1,0 +1,21 @@
+{
+  "name": "scholar-search-core",
+  "title": "Scholar Search MCP Core Tool Set",
+  "description": "Conservative Microsoft-friendly tool subset for raw retrieval and low-round-trip scholar search workflows.",
+  "transport": {
+    "type": "streamable-http",
+    "path": "/mcp"
+  },
+  "tools": [
+    "search_papers",
+    "resolve_citation",
+    "search_papers_match",
+    "get_paper_details",
+    "search_papers_bulk",
+    "get_paper_citations",
+    "get_paper_references",
+    "search_authors",
+    "get_author_info",
+    "get_author_papers"
+  ]
+}

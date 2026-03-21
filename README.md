@@ -23,11 +23,26 @@ The package now uses FastMCP for tool/resource/prompt registration, Pydantic for
 - **Shared rate limiter** – One 1 req/s pacing lock shared across all Semantic Scholar endpoints
 - **Structured FastMCP outputs** – Tools return structured content instead of JSON blobs embedded in text
 - **Agent onboarding aids** – Ships a workflow guide resource and a planning prompt alongside the tools
+- **Additive smart research layer** – `search_papers_smart`, `ask_result_set`, `map_research_landscape`, and `expand_research_graph` add concept-level discovery, grounded follow-up QA, theme mapping, and compact graph expansion without changing the existing raw-tool contract
+- **Compatibility-first agent UX** – Primary read tools now surface `agentHints`, `clarification`, `resourceUris`, and reusable `searchSessionId` handles so agents can keep moving without reading the full docs
+- **Microsoft-facing packaging assets** – Ships `mcp-tools.core.json`, `mcp-tools.full.json`, and `microsoft-plugin.sample.json` for Streamable HTTP deployments and declarative-agent packaging
 
 ## Installation
 
 ```bash
 pip install scholar-search-mcp
+```
+
+Optional extras for the additive AI layer:
+
+```bash
+pip install scholar-search-mcp[ai]
+```
+
+Optional FAISS backend extras:
+
+```bash
+pip install scholar-search-mcp[ai,ai-faiss]
 ```
 
 ### Local Quick Start
@@ -257,6 +272,30 @@ OpenAlex tool year inputs currently accept `YYYY`, `YYYY:YYYY`, `YYYY-YYYY`,
 and retry defaults (`min_interval=0.05s`, `max_retries=2`) rather than extra
 environment variables.
 
+### AI augmentation configuration
+
+The raw retrieval tools remain the contract of record. The smart layer is
+additive and opt-in.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `OPENAI_API_KEY` | unset | Optional API key for the OpenAI-backed smart layer. If the smart layer is enabled without a key, the runtime falls back to deterministic planning/synthesis helpers. |
+| `SCHOLAR_SEARCH_ENABLE_AGENTIC` | `false` | Enable additive smart tools such as `search_papers_smart`. |
+| `SCHOLAR_SEARCH_AGENTIC_PROVIDER` | `openai` | Provider bundle for the smart layer. Current supported values are `openai` and `deterministic`. |
+| `SCHOLAR_SEARCH_PLANNER_MODEL` | `gpt-5.4-mini` | Planning / routing model for smart discovery. Lower-latency GPT-5.4 tier for query analysis and routing. |
+| `SCHOLAR_SEARCH_SYNTHESIS_MODEL` | `gpt-5.4` | Synthesis model for grounded answers and theme labeling. |
+| `SCHOLAR_SEARCH_EMBEDDING_MODEL` | `text-embedding-3-large` | Embedding model name for smart ranking/indexing metadata. |
+| `SCHOLAR_SEARCH_AGENTIC_INDEX_BACKEND` | `memory` | Workspace index backend. `memory` is the recommended default for the current small saved result sets; `faiss` is an optional upgrade when the `ai-faiss` extra is installed and the deployment image includes it. |
+| `SCHOLAR_SEARCH_SESSION_TTL_SECONDS` | `1800` | TTL for cached reusable `searchSessionId` result sets. |
+| `SCHOLAR_SEARCH_ENABLE_AGENTIC_TRACE_LOG` | `false` | Emit local JSONL-style trace events for smart workflows. |
+
+When the smart layer is enabled, the new tools are:
+
+- `search_papers_smart` for concept-level discovery, query expansion, and multi-provider fusion
+- `ask_result_set` for grounded QA, claim checks, and comparisons over a saved `searchSessionId`
+- `map_research_landscape` for theme clustering, gaps, and disagreements
+- `expand_research_graph` for compact citation/reference/author graph expansion
+
 ### Transport configuration
 
 The server defaults to local **stdio** transport, which is the recommended mode for desktop MCP clients. FastMCP also supports HTTP-compatible transports for local development, integration testing, and controlled deployments:
@@ -441,19 +480,27 @@ IMAGE=ghcr.io/joshuasundance-swca/scholar-search-mcp:latest docker compose -f co
 
 Primary defaults for agents:
 
+- Start with `search_papers_smart` when the task is concept-level discovery, a literature review, or a grounded follow-up workflow that should reuse a `searchSessionId`.
 - Start with `search_papers` for quick literature discovery.
 - Switch to `search_papers_bulk` for exhaustive retrieval or multi-page collection.
 - For small targeted pages, prefer `search_papers` or `search_papers_semantic_scholar` instead of `search_papers_bulk`.
+- Use `resolve_citation` for incomplete references, broken bibliography lines, and almost-right citations.
 - Use `search_papers_match` or `get_paper_details` for known-item lookup.
 - Expand with `get_paper_citations`, `get_paper_references`, and `search_authors`
   once you have a paper or author anchor.
 - Use the `*_openalex` tools when you explicitly want OpenAlex-native DOI/ID
   lookup, OpenAlex cursor pagination, or OpenAlex author/citation semantics.
 - Reach for `search_snippets` only when quote or phrase recovery is needed.
+- On primary read tools, inspect `agentHints`, `clarification`, `resourceUris`,
+  and `searchSessionId` before making the next tool call.
 
 
 | Tool                             | Description                                                                                              |
 | -------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `search_papers_smart`            | Additive smart discovery entry point for concept-level research, literature reviews, known-item routing, and saved-result-set workflows. Returns smart-ranked hits plus `strategyMetadata`, `resourceUris`, `agentHints`, and a reusable `searchSessionId`. |
+| `ask_result_set`                 | Grounded follow-up over a saved `searchSessionId`. Supports `qa`, `claim_check`, and `comparison` modes and returns paper-level evidence plus suggested next questions. |
+| `map_research_landscape`         | Cluster a saved `searchSessionId` into 3-5 themes, representative papers, gaps, disagreements, and suggested next searches. |
+| `expand_research_graph`          | Expand one or more paper anchors or a saved `searchSessionId` into a compact citation/reference/author graph with frontier ranking and reusable resource handles. |
 | `search_papers`                  | Primary entry point for quick literature discovery. Single-page best-effort brokered search. Default order: CORE → Semantic Scholar → SerpApi Google Scholar → arXiv. Use `brokerMetadata` to see where results came from and decide whether to broaden, narrow, paginate, or pivot. Optional filters: `limit`, `fields`, `year`, `venue`, `preferredProvider`, `providerOrder`, `publicationDateOrYear`, `fieldsOfStudy`, `publicationTypes`, `openAccessPdf`, `minCitationCount`. No pagination — for paginated retrieval use `search_papers_bulk`. |
 | `search_papers_core`             | Single-page CORE-only search with the same normalized response shape as `search_papers`. Exposes only the inputs CORE actually honors: `query`, `limit`, and `year`. |
 | `search_papers_semantic_scholar` | Single-page Semantic Scholar-only search with the same normalized response shape as `search_papers`. Exposes the Semantic Scholar-compatible inputs: `query`, `limit`, `fields`, `year`, `venue`, `publicationDateOrYear`, `fieldsOfStudy`, `publicationTypes`, `openAccessPdf`, and `minCitationCount`. |
@@ -462,6 +509,7 @@ Primary defaults for agents:
 | `search_papers_openalex`         | Single-page OpenAlex-only search with the same normalized top-level response shape as `search_papers`. Exposes only the inputs OpenAlex explicitly honors here: `query`, `limit`, and `year`. |
 | `search_papers_openalex_bulk`    | Cursor-paginated OpenAlex search for explicit OpenAlex retrieval flows. Treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and keep it scoped to the same tool/query flow; supports `query`, `limit`, and `year`. |
 | `search_papers_bulk`             | Primary exhaustive retrieval tool. Paginated bulk paper search (Semantic Scholar) with advanced boolean query syntax (up to 1,000 returned papers/call). The upstream bulk endpoint may ignore small `limit` values internally, so this server truncates returned data to the requested limit; prefer `search_papers` or `search_papers_semantic_scholar` for small targeted pages. Treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and do not derive/edit/fabricate it; `pagination.hasMore` signals more results. |
+| `resolve_citation`               | First-class citation-repair workflow for incomplete, malformed, or almost-right references. Stages identifier extraction, title recovery, quote/snippet recovery, and sparse metadata search; returns the best canonical paper candidate, alternatives, confidence, conflicts, and reusable `searchSessionId` metadata. |
 | `search_papers_match`            | Known-item lookup for messy or partial titles; finds the single paper whose title best matches the query string, falls back to fuzzy Semantic Scholar title search on exact-match 400/404 misses, and returns a structured no-match payload when the item still cannot be recovered |
 | `paper_autocomplete`             | Return paper title completions for a partial query (typeahead)                                           |
 | `get_paper_details`              | Known-item lookup by identifier: get one paper by DOI, ArXiv ID, S2 ID, or URL                         |
@@ -488,7 +536,34 @@ Primary defaults for agents:
 ## Resources and prompts
 
 - Resource: `guide://scholar-search/agent-workflows` - compact onboarding guide for choosing tools and following pagination safely
-- Prompt: `plan_scholar_search` - reusable planning prompt for literature-search workflows
+- Resource: `paper://{paper_id}` - compact markdown + structured payload for a resolved paper
+- Resource: `author://{author_id}` - compact markdown + structured payload for a resolved author
+- Resource: `search://{searchSessionId}` - saved result set surfaced from tool outputs
+- Resource: `trail://paper/{paper_id}?direction=citations|references` - compact citation/reference trail resource
+- Prompt: `plan_scholar_search` - reusable planning prompt for raw-vs-smart literature-search workflows
+- Prompt: `plan_smart_scholar_search` - smart-tool-first planning prompt for concept discovery
+- Prompt: `triage_literature` - compact triage workflow for theme mapping and next-step selection
+- Prompt: `plan_citation_chase` - citation-expansion planning prompt
+- Prompt: `refine_query` - bounded query-refinement prompt for broad or noisy searches
+
+Primary read-tool responses now also surface:
+
+- `agentHints` - recommended next tools, retry guidance, and warnings
+- `clarification` - bounded clarification fallback when the server cannot safely disambiguate on its own
+- `resourceUris` - follow-on resources that compatible clients can open directly
+- `searchSessionId` - reusable result-set handle for smart follow-up workflows and cached expansion/search trails
+
+## Microsoft Packaging Assets
+
+This repository keeps one universal MCP server surface and ships additive
+packaging assets for Microsoft-oriented clients:
+
+- `mcp-tools.core.json` - conservative raw-tool subset
+- `mcp-tools.full.json` - full Microsoft-facing package including smart tools
+- `microsoft-plugin.sample.json` - sample declarative-agent / plugin-oriented metadata
+
+These assets target Streamable HTTP and compact tool outputs. They are
+packaging guidance, not a separate runtime build.
 
 
 ## Testing with MCP Inspector

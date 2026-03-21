@@ -37,6 +37,39 @@ param maxReplicas int = 3
 @description('Whether to enable the optional SerpApi provider path.')
 param enableSerpApi bool = false
 
+@description('Whether to enable additive smart workflows in the deployed server.')
+param enableAgentic bool = false
+
+@description('Provider bundle for the smart workflow layer.')
+@allowed([
+  'openai'
+  'deterministic'
+])
+param agenticProvider string = 'openai'
+
+@description('Planner model used for smart-search routing and query refinement.')
+param plannerModel string = 'gpt-5.4-mini'
+
+@description('Synthesis model used for grounded answers and theme labelling.')
+param synthesisModel string = 'gpt-5.4'
+
+@description('Embedding model used for smart ranking and saved-result-set retrieval.')
+param embeddingModel string = 'text-embedding-3-large'
+
+@description('Workspace index backend for saved smart-search result sets.')
+@allowed([
+  'memory'
+  'faiss'
+])
+param agenticIndexBackend string = 'memory'
+
+@description('TTL in seconds for cached searchSessionId workspaces.')
+@minValue(60)
+param sessionTtlSeconds int = 1800
+
+@description('Emit local trace events for smart workflows.')
+param enableAgenticTraceLog bool = false
+
 @description('Azure API Management v2 SKU used for private ingress plus outbound virtual network integration.')
 @allowed([
   'StandardV2'
@@ -165,16 +198,22 @@ module containerApp './modules/containerApp.bicep' = if (deployFull) {
   ]
   params: {
     appInsightsConnectionString: appInsights.outputs.connectionString
+    agenticIndexBackend: agenticIndexBackend
+    agenticProvider: agenticProvider
     allowedOrigins: apiManagementGatewayOrigin
     backendAuthSecretName: backendAuthSecretName
     backendAuthSecretUri: '${keyVault.outputs.vaultUri}secrets/${backendAuthSecretName}'
     containerAppName: containerAppName
     containerCpu: containerCpu
     containerMemory: containerMemory
+    embeddingModel: embeddingModel
+    enableAgentic: enableAgentic
+    enableAgenticTraceLog: enableAgenticTraceLog
     environmentName: environmentName
     environmentResourceId: environment.outputs.resourceId
     image: '${acr.outputs.loginServer}/${imageRepository}:${imageTag}'
     keyVaultCoreApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/core-api-key'
+    keyVaultOpenAiApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/openai-api-key'
     keyVaultOpenAlexApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/openalex-api-key'
     keyVaultOpenAlexMailtoSecretUri: '${keyVault.outputs.vaultUri}secrets/openalex-mailto'
     keyVaultSemanticScholarApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/semantic-scholar-api-key'
@@ -183,7 +222,10 @@ module containerApp './modules/containerApp.bicep' = if (deployFull) {
     managedIdentityResourceId: identity.outputs.resourceId
     maxReplicas: maxReplicas
     minReplicas: minReplicas
+    plannerModel: plannerModel
     registryServer: acr.outputs.loginServer
+    sessionTtlSeconds: sessionTtlSeconds
+    synthesisModel: synthesisModel
     tags: tags
     enableSerpApi: enableSerpApi
   }

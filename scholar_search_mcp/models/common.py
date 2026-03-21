@@ -457,6 +457,88 @@ class CitationFormatsResponse(ApiModel):
     provider: str = "serpapi_google_scholar"
 
 
+class CitationResolutionCandidate(ApiModel):
+    """One ranked candidate returned by citation repair."""
+
+    paper: Paper
+    score: float = 0.0
+    resolution_strategy: str = Field(
+        default="",
+        alias="resolutionStrategy",
+    )
+    matched_fields: list[str] = Field(
+        default_factory=list,
+        alias="matchedFields",
+    )
+    conflicting_fields: list[str] = Field(
+        default_factory=list,
+        alias="conflictingFields",
+    )
+    title_similarity: float = Field(
+        default=0.0,
+        alias="titleSimilarity",
+    )
+    year_delta: int | None = Field(
+        default=None,
+        alias="yearDelta",
+    )
+    author_overlap: int = Field(
+        default=0,
+        alias="authorOverlap",
+    )
+    candidate_count: int | None = Field(
+        default=None,
+        alias="candidateCount",
+    )
+    why_selected: str = Field(
+        default="",
+        alias="whySelected",
+    )
+
+
+class CitationResolutionResponse(ApiModel):
+    """Structured response from the citation-repair workflow."""
+
+    best_match: CitationResolutionCandidate | None = Field(
+        default=None,
+        alias="bestMatch",
+    )
+    alternatives: list[CitationResolutionCandidate] = Field(default_factory=list)
+    resolution_confidence: Literal["high", "medium", "low"] = Field(
+        default="low",
+        alias="resolutionConfidence",
+    )
+    resolution_strategy: str = Field(
+        default="none",
+        alias="resolutionStrategy",
+    )
+    matched_fields: list[str] = Field(
+        default_factory=list,
+        alias="matchedFields",
+    )
+    conflicting_fields: list[str] = Field(
+        default_factory=list,
+        alias="conflictingFields",
+    )
+    normalized_citation: str = Field(
+        default="",
+        alias="normalizedCitation",
+    )
+    extracted_fields: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="extractedFields",
+    )
+    inferred_fields: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="inferredFields",
+    )
+    candidate_count: int = Field(
+        default=0,
+        alias="candidateCount",
+    )
+    message: str = ""
+
+
 class BatchPaperResponse(RootModel[list[Paper]]):
     """Semantic Scholar batch lookup response."""
 

@@ -51,6 +51,8 @@ def test_app_settings_serpapi_disabled_by_default() -> None:
 
     settings = AppSettings.from_env({})  # empty env
     assert settings.enable_serpapi is False
+    assert settings.enable_agentic is False
+    assert settings.openai_api_key is None
     assert settings.serpapi_api_key is None
     assert settings.enable_openalex is True
     assert settings.openalex_api_key is None
@@ -92,11 +94,13 @@ def test_app_settings_normalizes_blank_optional_values_to_none() -> None:
             "OPENALEX_API_KEY": "   ",
             "OPENALEX_MAILTO": "",
             "SERPAPI_API_KEY": "   ",
+            "OPENAI_API_KEY": "  ",
             "SCHOLAR_SEARCH_HTTP_AUTH_TOKEN": "",
         }
     )
 
     assert settings.core_api_key is None
+    assert settings.openai_api_key is None
     assert settings.semantic_scholar_api_key is None
     assert settings.openalex_api_key is None
     assert settings.openalex_mailto is None
@@ -127,6 +131,32 @@ def test_app_settings_parses_http_transport_configuration() -> None:
     assert settings.http_host == "0.0.0.0"
     assert settings.http_port == 9000
     assert settings.http_path == "/api/mcp"
+
+
+def test_app_settings_parses_agentic_configuration() -> None:
+    settings = AppSettings.from_env(
+        {
+            "OPENAI_API_KEY": "sk-test",
+            "SCHOLAR_SEARCH_ENABLE_AGENTIC": "true",
+            "SCHOLAR_SEARCH_AGENTIC_PROVIDER": "openai",
+            "SCHOLAR_SEARCH_PLANNER_MODEL": "gpt-5.4-mini",
+            "SCHOLAR_SEARCH_SYNTHESIS_MODEL": "gpt-5.4",
+            "SCHOLAR_SEARCH_EMBEDDING_MODEL": "text-embedding-3-large",
+            "SCHOLAR_SEARCH_AGENTIC_INDEX_BACKEND": "memory",
+            "SCHOLAR_SEARCH_SESSION_TTL_SECONDS": "900",
+            "SCHOLAR_SEARCH_ENABLE_AGENTIC_TRACE_LOG": "true",
+        }
+    )
+
+    assert settings.openai_api_key == "sk-test"
+    assert settings.enable_agentic is True
+    assert settings.agentic_provider == "openai"
+    assert settings.planner_model == "gpt-5.4-mini"
+    assert settings.synthesis_model == "gpt-5.4"
+    assert settings.embedding_model == "text-embedding-3-large"
+    assert settings.agentic_index_backend == "memory"
+    assert settings.session_ttl_seconds == 900
+    assert settings.enable_agentic_trace_log is True
 
 
 def test_app_settings_ignores_unrelated_azure_workflow_metadata() -> None:

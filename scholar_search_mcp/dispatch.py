@@ -2,14 +2,21 @@
 
 from typing import Any, Callable, cast
 
+from .citation_repair import looks_like_paper_identifier, resolve_citation
 from .clients.serpapi import SerpApiKeyMissingError
+from .compat import augment_tool_result, build_clarification
 from .models import TOOL_INPUT_MODELS, CitationFormatsResponse, dump_jsonable
 from .models.common import CitationFormat, ExportLink
 from .models.tools import (
+    AskResultSetArgs,
     BasicSearchPapersArgs,
+    ExpandResearchGraphArgs,
     GetCitationFormatsArgs,
+    MapResearchLandscapeArgs,
+    ResolveCitationArgs,
     SearchPapersArgs,
     SearchProvider,
+    SmartSearchPapersArgs,
 )
 from .search import search_papers_with_fallback
 from .utils.cursor import (
@@ -366,6 +373,13 @@ PROVIDER_SEARCH_TOOLS: dict[str, SearchProvider] = {
     "search_papers_arxiv": "arxiv",
 }
 
+SMART_TOOLS = {
+    "search_papers_smart",
+    "ask_result_set",
+    "map_research_landscape",
+    "expand_research_graph",
+}
+
 
 async def dispatch_tool(
     name: str,
@@ -382,34 +396,198 @@ async def dispatch_tool(
     serpapi_client: Any = None,
     enable_serpapi: bool = False,
     provider_order: list[SearchProvider] | None = None,
+    workspace_registry: Any = None,
+    agentic_runtime: Any = None,
+    ctx: Any = None,
+    allow_elicitation: bool = True,
 ) -> dict[str, Any]:
     """Dispatch one MCP tool call to the correct backend implementation."""
+    if name == "search_papers_smart":
+        smart_args = cast(
+            SmartSearchPapersArgs,
+            TOOL_INPUT_MODELS[name].model_validate(arguments),
+        )
+        if agentic_runtime is None:
+            return {
+                "error": "FEATURE_NOT_CONFIGURED",
+                "message": (
+                    "search_papers_smart is not available because the agentic runtime "
+                    "was not initialized."
+                ),
+                "fallbackTools": [
+                    "search_papers",
+                    "search_papers_bulk",
+                    "search_papers_match",
+                ],
+            }
+        return await agentic_runtime.search_papers_smart(
+            query=smart_args.query,
+            limit=smart_args.limit,
+            search_session_id=smart_args.search_session_id,
+            mode=smart_args.mode,
+            year=smart_args.year,
+            venue=smart_args.venue,
+            focus=smart_args.focus,
+            ctx=ctx,
+        )
+
+    if name == "ask_result_set":
+        ask_args = cast(
+            AskResultSetArgs,
+            TOOL_INPUT_MODELS[name].model_validate(arguments),
+        )
+        if agentic_runtime is None:
+            return {
+                "error": "FEATURE_NOT_CONFIGURED",
+                "message": "ask_result_set requires the agentic runtime to be enabled.",
+                "fallbackTools": [
+                    "search_papers",
+                    "get_paper_details",
+                    "get_paper_citations",
+                ],
+            }
+        return await agentic_runtime.ask_result_set(
+            search_session_id=ask_args.search_session_id,
+            question=ask_args.question,
+            top_k=ask_args.top_k,
+            answer_mode=ask_args.answer_mode,
+            ctx=ctx,
+        )
+
+    if name == "map_research_landscape":
+        landscape_args = cast(
+            MapResearchLandscapeArgs,
+            TOOL_INPUT_MODELS[name].model_validate(arguments),
+        )
+        if agentic_runtime is None:
+            return {
+                "error": "FEATURE_NOT_CONFIGURED",
+                "message": (
+                    "map_research_landscape requires the agentic runtime to be enabled."
+                ),
+                "fallbackTools": [
+                    "search_papers",
+                    "search_papers_bulk",
+                    "get_paper_citations",
+                ],
+            }
+        return await agentic_runtime.map_research_landscape(
+            search_session_id=landscape_args.search_session_id,
+            max_themes=landscape_args.max_themes,
+            ctx=ctx,
+        )
+
+    if name == "expand_research_graph":
+        graph_args = cast(
+            ExpandResearchGraphArgs,
+            TOOL_INPUT_MODELS[name].model_validate(arguments),
+        )
+        if agentic_runtime is None:
+            return {
+                "error": "FEATURE_NOT_CONFIGURED",
+                "message": (
+                    "expand_research_graph requires the agentic runtime to be enabled."
+                ),
+                "fallbackTools": [
+                    "get_paper_citations",
+                    "get_paper_references",
+                    "get_paper_authors",
+                ],
+            }
+        return await agentic_runtime.expand_research_graph(
+            seed_paper_ids=graph_args.seed_paper_ids,
+            seed_search_session_id=graph_args.seed_search_session_id,
+            direction=graph_args.direction,
+            hops=graph_args.hops,
+            per_seed_limit=graph_args.per_seed_limit,
+            ctx=ctx,
+        )
+
     if name == "search_papers":
-        validated_arguments = cast(
+        search_args = cast(
             SearchPapersArgs,
             TOOL_INPUT_MODELS[name].model_validate(arguments),
         )
-        return await search_papers_with_fallback(
-            query=validated_arguments.query,
-            limit=validated_arguments.limit,
-            year=validated_arguments.year,
-            fields=validated_arguments.fields,
-            venue=validated_arguments.venue,
-            publication_date_or_year=validated_arguments.publication_date_or_year,
-            fields_of_study=validated_arguments.fields_of_study,
-            publication_types=validated_arguments.publication_types,
-            open_access_pdf=validated_arguments.open_access_pdf,
-            min_citation_count=validated_arguments.min_citation_count,
+        result = await search_papers_with_fallback(
+            query=search_args.query,
+            limit=search_args.limit,
+            year=search_args.year,
+            fields=search_args.fields,
+            venue=search_args.venue,
+            publication_date_or_year=search_args.publication_date_or_year,
+            fields_of_study=search_args.fields_of_study,
+            publication_types=search_args.publication_types,
+            open_access_pdf=search_args.open_access_pdf,
+            min_citation_count=search_args.min_citation_count,
             enable_core=enable_core,
             enable_semantic_scholar=enable_semantic_scholar,
             enable_arxiv=enable_arxiv,
             enable_serpapi=enable_serpapi,
-            preferred_provider=validated_arguments.preferred_provider,
-            provider_order=validated_arguments.provider_order or provider_order,
+            preferred_provider=search_args.preferred_provider,
+            provider_order=search_args.provider_order or provider_order,
             core_client=core_client,
             semantic_client=client,
             arxiv_client=arxiv_client,
             serpapi_client=serpapi_client,
+        )
+        elicited = await _maybe_elicit_and_retry(
+            tool_name=name,
+            arguments=arguments,
+            result=result,
+            client=client,
+            core_client=core_client,
+            openalex_client=openalex_client,
+            arxiv_client=arxiv_client,
+            serpapi_client=serpapi_client,
+            enable_core=enable_core,
+            enable_semantic_scholar=enable_semantic_scholar,
+            enable_openalex=enable_openalex,
+            enable_arxiv=enable_arxiv,
+            enable_serpapi=enable_serpapi,
+            provider_order=provider_order,
+            workspace_registry=workspace_registry,
+            agentic_runtime=agentic_runtime,
+            ctx=ctx,
+            allow_elicitation=allow_elicitation,
+        )
+        if elicited is not None:
+            return elicited
+        return _finalize_tool_result(
+            name,
+            arguments,
+            result,
+            workspace_registry=workspace_registry,
+        )
+
+    if name == "resolve_citation":
+        citation_args = cast(
+            ResolveCitationArgs,
+            TOOL_INPUT_MODELS[name].model_validate(arguments),
+        )
+        result = await resolve_citation(
+            citation=citation_args.citation,
+            max_candidates=citation_args.max_candidates,
+            client=client,
+            enable_core=enable_core,
+            enable_semantic_scholar=enable_semantic_scholar,
+            enable_openalex=enable_openalex,
+            enable_arxiv=enable_arxiv,
+            enable_serpapi=enable_serpapi,
+            core_client=core_client,
+            openalex_client=openalex_client,
+            arxiv_client=arxiv_client,
+            serpapi_client=serpapi_client,
+            title_hint=citation_args.title_hint,
+            author_hint=citation_args.author_hint,
+            year_hint=citation_args.year_hint,
+            venue_hint=citation_args.venue_hint,
+            doi_hint=citation_args.doi_hint,
+        )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            result,
+            workspace_registry=workspace_registry,
         )
 
     if name == "search_papers_openalex":
@@ -420,10 +598,16 @@ async def dispatch_tool(
             )
         validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
         args_dict = validated_payload.model_dump(by_alias=False)
-        return await openalex_client.search(
+        result = await openalex_client.search(
             query=args_dict["query"],
             limit=args_dict.get("limit", 10),
             year=args_dict.get("year"),
+        )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            result,
+            workspace_registry=workspace_registry,
         )
 
     if name == "search_papers_openalex_bulk":
@@ -447,11 +631,17 @@ async def dispatch_tool(
             year=args_dict.get("year"),
         )
         serialized = dump_jsonable(result)
-        return _encode_next_bulk_cursor(
+        serialized = _encode_next_bulk_cursor(
             serialized,
             name,
             context_hash=ctx_hash,
             provider="openalex",
+        )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            serialized,
+            workspace_registry=workspace_registry,
         )
 
     if name in PROVIDER_SEARCH_TOOLS:
@@ -459,7 +649,7 @@ async def dispatch_tool(
             BasicSearchPapersArgs,
             TOOL_INPUT_MODELS[name].model_validate(arguments),
         )
-        return await search_papers_with_fallback(
+        result = await search_papers_with_fallback(
             query=provider_arguments.query,
             limit=provider_arguments.limit,
             year=provider_arguments.year,
@@ -481,6 +671,12 @@ async def dispatch_tool(
             semantic_client=client,
             arxiv_client=arxiv_client,
             serpapi_client=serpapi_client,
+        )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            result,
+            workspace_registry=workspace_registry,
         )
 
     if name == "get_paper_citation_formats":
@@ -527,7 +723,12 @@ async def dispatch_tool(
                 if isinstance(lnk, dict)
             ],
         )
-        return dump_jsonable(response)
+        return _finalize_tool_result(
+            name,
+            arguments,
+            dump_jsonable(response),
+            workspace_registry=workspace_registry,
+        )
 
     if name == "search_papers_bulk":
         validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
@@ -574,7 +775,12 @@ async def dispatch_tool(
                 "pagination.nextCursor to continue this bulk stream."
             )
         serialized.setdefault("retrievalNote", retrieval_note)
-        return serialized
+        return _finalize_tool_result(
+            name,
+            arguments,
+            serialized,
+            workspace_registry=workspace_registry,
+        )
 
     if not enable_openalex and name.endswith("_openalex"):
         raise ValueError(
@@ -585,7 +791,13 @@ async def dispatch_tool(
     if name == "get_paper_details_openalex":
         validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
         args_dict = validated_payload.model_dump(by_alias=False)
-        return await openalex_client.get_paper_details(paper_id=args_dict["paper_id"])
+        result = await openalex_client.get_paper_details(paper_id=args_dict["paper_id"])
+        return _finalize_tool_result(
+            name,
+            arguments,
+            result,
+            workspace_registry=workspace_registry,
+        )
 
     if name == "get_paper_citations_openalex":
         validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
@@ -602,11 +814,17 @@ async def dispatch_tool(
             ),
         )
         serialized = dump_jsonable(result)
-        return _encode_next_bulk_cursor(
+        serialized = _encode_next_bulk_cursor(
             serialized,
             name,
             context_hash=ctx_hash,
             provider="openalex",
+        )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            serialized,
+            workspace_registry=workspace_registry,
         )
 
     if name == "get_paper_references_openalex":
@@ -625,11 +843,17 @@ async def dispatch_tool(
             or 0,
         )
         serialized = dump_jsonable(result)
-        return _encode_next_cursor(
+        serialized = _encode_next_cursor(
             serialized,
             name,
             context_hash=ctx_hash,
             provider="openalex",
+        )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            serialized,
+            workspace_registry=workspace_registry,
         )
 
     if name == "search_authors_openalex":
@@ -647,17 +871,29 @@ async def dispatch_tool(
             ),
         )
         serialized = dump_jsonable(result)
-        return _encode_next_bulk_cursor(
+        serialized = _encode_next_bulk_cursor(
             serialized,
             name,
             context_hash=ctx_hash,
             provider="openalex",
         )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            serialized,
+            workspace_registry=workspace_registry,
+        )
 
     if name == "get_author_info_openalex":
         validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
         args_dict = validated_payload.model_dump(by_alias=False)
-        return await openalex_client.get_author_info(author_id=args_dict["author_id"])
+        result = await openalex_client.get_author_info(author_id=args_dict["author_id"])
+        return _finalize_tool_result(
+            name,
+            arguments,
+            result,
+            workspace_registry=workspace_registry,
+        )
 
     if name == "get_author_papers_openalex":
         validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
@@ -675,11 +911,17 @@ async def dispatch_tool(
             year=args_dict.get("year"),
         )
         serialized = dump_jsonable(result)
-        return _encode_next_bulk_cursor(
+        serialized = _encode_next_bulk_cursor(
             serialized,
             name,
             context_hash=ctx_hash,
             provider="openalex",
+        )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            serialized,
+            workspace_registry=workspace_registry,
         )
 
     try:
@@ -695,4 +937,182 @@ async def dispatch_tool(
     serialized = dump_jsonable(result)
     if name in OFFSET_TOOLS:
         serialized = _encode_next_cursor(serialized, name, context_hash=ctx_hash)
-    return serialized
+    elicited = await _maybe_elicit_and_retry(
+        tool_name=name,
+        arguments=arguments,
+        result=serialized,
+        client=client,
+        core_client=core_client,
+        openalex_client=openalex_client,
+        arxiv_client=arxiv_client,
+        serpapi_client=serpapi_client,
+        enable_core=enable_core,
+        enable_semantic_scholar=enable_semantic_scholar,
+        enable_openalex=enable_openalex,
+        enable_arxiv=enable_arxiv,
+        enable_serpapi=enable_serpapi,
+        provider_order=provider_order,
+        workspace_registry=workspace_registry,
+        agentic_runtime=agentic_runtime,
+        ctx=ctx,
+        allow_elicitation=allow_elicitation,
+    )
+    if elicited is not None:
+        return elicited
+    return _finalize_tool_result(
+        name,
+        arguments,
+        serialized,
+        workspace_registry=workspace_registry,
+    )
+
+
+def _finalize_tool_result(
+    tool_name: str,
+    arguments: dict[str, Any],
+    result: Any,
+    *,
+    workspace_registry: Any,
+) -> dict[str, Any]:
+    """Add compatibility metadata to raw tool responses."""
+    if not isinstance(result, dict):
+        return dump_jsonable(result)
+    if tool_name in SMART_TOOLS or workspace_registry is None:
+        return result
+    return augment_tool_result(
+        tool_name=tool_name,
+        arguments=arguments,
+        result=result,
+        workspace_registry=workspace_registry,
+    )
+
+
+async def _maybe_elicit_and_retry(
+    *,
+    tool_name: str,
+    arguments: dict[str, Any],
+    result: dict[str, Any],
+    client: Any,
+    core_client: Any,
+    openalex_client: Any,
+    arxiv_client: Any,
+    serpapi_client: Any,
+    enable_core: bool,
+    enable_semantic_scholar: bool,
+    enable_openalex: bool,
+    enable_arxiv: bool,
+    enable_serpapi: bool,
+    provider_order: list[SearchProvider] | None,
+    workspace_registry: Any,
+    agentic_runtime: Any,
+    ctx: Any,
+    allow_elicitation: bool,
+) -> dict[str, Any] | None:
+    """Use a single bounded elicitation to refine ambiguous raw-tool requests."""
+    if not allow_elicitation:
+        return None
+    if tool_name not in {"search_papers", "search_papers_match", "search_authors"}:
+        return None
+    if ctx is None or not _client_supports_extension(ctx, "elicitation"):
+        return None
+
+    clarification = build_clarification(tool_name, arguments, result)
+    if clarification is None:
+        return None
+
+    try:
+        elicitation = await ctx.elicit(
+            _elicitation_message(tool_name, clarification),
+            str,
+        )
+    except Exception:
+        return None
+
+    if getattr(elicitation, "action", None) != "accept":
+        return None
+
+    refinement = str(getattr(elicitation, "data", "") or "").strip()
+    if not refinement:
+        return None
+
+    if tool_name == "search_papers_match" and looks_like_paper_identifier(refinement):
+        resolved = await client.get_paper_details(
+            paper_id=refinement,
+            fields=arguments.get("fields"),
+        )
+        resolved_result = dict(dump_jsonable(resolved))
+        resolved_result["matchFound"] = True
+        resolved_result["matchStrategy"] = "elicited_identifier"
+        resolved_result["normalizedQuery"] = refinement
+        return _finalize_tool_result(
+            "search_papers_match",
+            {"query": refinement, "fields": arguments.get("fields")},
+            resolved_result,
+            workspace_registry=workspace_registry,
+        )
+
+    retry_arguments = dict(arguments)
+    retry_arguments["query"] = _refined_query(
+        original_query=str(arguments.get("query") or ""),
+        refinement=refinement,
+    )
+    return await dispatch_tool(
+        tool_name,
+        retry_arguments,
+        client=client,
+        core_client=core_client,
+        openalex_client=openalex_client,
+        arxiv_client=arxiv_client,
+        enable_core=enable_core,
+        enable_semantic_scholar=enable_semantic_scholar,
+        enable_openalex=enable_openalex,
+        enable_arxiv=enable_arxiv,
+        serpapi_client=serpapi_client,
+        enable_serpapi=enable_serpapi,
+        provider_order=provider_order,
+        workspace_registry=workspace_registry,
+        agentic_runtime=agentic_runtime,
+        ctx=ctx,
+        allow_elicitation=False,
+    )
+
+
+def _client_supports_extension(ctx: Any, extension_id: str) -> bool:
+    try:
+        return bool(ctx.client_supports_extension(extension_id))
+    except Exception:
+        return False
+
+
+def _elicitation_message(tool_name: str, clarification: Any) -> str:
+    options = getattr(clarification, "options", None) or []
+    option_text = f" Options: {', '.join(options)}." if options else ""
+    if tool_name == "search_papers":
+        return (
+            "This concept query is broad. Reply with one short focus to refine it "
+            "(for example: method focus, application focus, recent work only)."
+            f"{option_text}"
+        )
+    if tool_name == "search_authors":
+        return (
+            "Several authors may match this name. Reply with one short affiliation, "
+            "coauthor, venue, or topic clue to narrow the author search."
+            f"{option_text}"
+        )
+    return (
+        "This title-only lookup needs one tighter clue. Reply with a refined title "
+        "fragment or paste a DOI, arXiv ID, or URL."
+        f"{option_text}"
+    )
+
+
+def _refined_query(*, original_query: str, refinement: str) -> str:
+    normalized_original = original_query.strip()
+    normalized_refinement = refinement.strip()
+    if not normalized_original:
+        return normalized_refinement
+    if not normalized_refinement:
+        return normalized_original
+    if normalized_refinement.lower() in normalized_original.lower():
+        return normalized_original
+    return f"{normalized_original} {normalized_refinement}".strip()

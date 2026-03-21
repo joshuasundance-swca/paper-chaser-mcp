@@ -1,15 +1,21 @@
 param appInsightsConnectionString string
+param agenticIndexBackend string
+param agenticProvider string
 param allowedOrigins string
 param backendAuthSecretName string
 param backendAuthSecretUri string
 param containerAppName string
 param containerCpu int
 param containerMemory string
+param embeddingModel string
+param enableAgentic bool
+param enableAgenticTraceLog bool
 param enableSerpApi bool
 param environmentName string
 param environmentResourceId string
 param image string
 param keyVaultCoreApiKeySecretUri string
+param keyVaultOpenAiApiKeySecretUri string
 param keyVaultOpenAlexApiKeySecretUri string
 param keyVaultOpenAlexMailtoSecretUri string
 param keyVaultSemanticScholarApiKeySecretUri string
@@ -18,7 +24,10 @@ param location string
 param managedIdentityResourceId string
 param maxReplicas int
 param minReplicas int
+param plannerModel string
 param registryServer string
+param sessionTtlSeconds int
+param synthesisModel string
 param tags object = {}
 
 var secretDefinitions = concat([
@@ -52,6 +61,12 @@ var secretDefinitions = concat([
     identity: managedIdentityResourceId
     keyVaultUrl: keyVaultSerpApiKeySecretUri
     name: 'serpapi-api-key'
+  }
+] : [], enableAgentic && agenticProvider == 'openai' ? [
+  {
+    identity: managedIdentityResourceId
+    keyVaultUrl: keyVaultOpenAiApiKeySecretUri
+    name: 'openai-api-key'
   }
 ] : [])
 
@@ -101,6 +116,38 @@ var containerEnv = concat([
     value: string(enableSerpApi)
   }
   {
+    name: 'SCHOLAR_SEARCH_ENABLE_AGENTIC'
+    value: string(enableAgentic)
+  }
+  {
+    name: 'SCHOLAR_SEARCH_AGENTIC_PROVIDER'
+    value: agenticProvider
+  }
+  {
+    name: 'SCHOLAR_SEARCH_PLANNER_MODEL'
+    value: plannerModel
+  }
+  {
+    name: 'SCHOLAR_SEARCH_SYNTHESIS_MODEL'
+    value: synthesisModel
+  }
+  {
+    name: 'SCHOLAR_SEARCH_EMBEDDING_MODEL'
+    value: embeddingModel
+  }
+  {
+    name: 'SCHOLAR_SEARCH_AGENTIC_INDEX_BACKEND'
+    value: agenticIndexBackend
+  }
+  {
+    name: 'SCHOLAR_SEARCH_SESSION_TTL_SECONDS'
+    value: string(sessionTtlSeconds)
+  }
+  {
+    name: 'SCHOLAR_SEARCH_ENABLE_AGENTIC_TRACE_LOG'
+    value: string(enableAgenticTraceLog)
+  }
+  {
     name: 'SCHOLAR_SEARCH_HTTP_AUTH_HEADER'
     value: 'x-backend-auth'
   }
@@ -132,6 +179,11 @@ var containerEnv = concat([
   {
     name: 'SERPAPI_API_KEY'
     secretRef: 'serpapi-api-key'
+  }
+] : [], enableAgentic && agenticProvider == 'openai' ? [
+  {
+    name: 'OPENAI_API_KEY'
+    secretRef: 'openai-api-key'
   }
 ] : [])
 

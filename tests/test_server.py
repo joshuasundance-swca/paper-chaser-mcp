@@ -108,10 +108,11 @@ def test_streamable_http_app_handles_initialize_and_tool_call(
     assert "opaque" in instructions
     assert "do not derive, edit, or fabricate" in instructions
     assert call_response.status_code == 200
-    assert call_payload["result"]["structuredContent"] == {
-        "paperId": "match-1",
-        "title": "Best match",
-    }
+    structured = call_payload["result"]["structuredContent"]
+    assert structured["paperId"] == "match-1"
+    assert structured["title"] == "Best match"
+    assert "agentHints" in structured
+    assert "resourceUris" in structured
     assert call_payload["result"]["isError"] is False
 
 
@@ -132,7 +133,10 @@ async def test_fastmcp_client_returns_structured_tool_output(
             {"query": "transformers"},
         )
 
-    assert result.data == {"paperId": "match-1", "title": "Best match"}
+    assert result.data["paperId"] == "match-1"
+    assert result.data["title"] == "Best match"
+    assert "agentHints" in result.data
+    assert "resourceUris" in result.data
     assert tool_map["search_papers"].annotations.readOnlyHint is True
     assert tool_map["search_papers"].annotations.idempotentHint is True
     assert tool_map["search_papers"].annotations.openWorldHint is True
@@ -173,6 +177,7 @@ async def test_fastmcp_resource_and_prompt_support_agent_onboarding() -> None:
 
     async with Client(server.app) as client:
         resources = await client.list_resources()
+        resource_templates = await client.list_resource_templates()
         prompts = await client.list_prompts()
         guide = await client.read_resource("guide://scholar-search/agent-workflows")
         plan = await client.get_prompt(
@@ -192,9 +197,32 @@ async def test_fastmcp_resource_and_prompt_support_agent_onboarding() -> None:
         str(resource.uri) == "guide://scholar-search/agent-workflows"
         for resource in resources
     )
+    assert any(
+        str(template.uriTemplate) == "paper://{paper_id}"
+        for template in resource_templates
+    )
+    assert any(
+        str(template.uriTemplate) == "author://{author_id}"
+        for template in resource_templates
+    )
+    assert any(
+        str(template.uriTemplate) == "search://{search_session_id}"
+        for template in resource_templates
+    )
+    assert any(
+        str(template.uriTemplate) == "trail://paper/{paper_id}?direction={direction}"
+        for template in resource_templates
+    )
     assert any(prompt.name == "plan_scholar_search" for prompt in prompts)
+    assert any(prompt.name == "plan_smart_scholar_search" for prompt in prompts)
+    assert any(prompt.name == "triage_literature" for prompt in prompts)
+    assert any(prompt.name == "plan_citation_chase" for prompt in prompts)
+    assert any(prompt.name == "refine_query" for prompt in prompts)
     assert "search_papers_bulk" in guide[0].text
     assert "Quick literature discovery" in guide[0].text
+    assert "search_papers_smart" in guide[0].text
+    assert "resolve_citation" in guide[0].text
+    assert "searchSessionId" in guide[0].text
     assert "cited-by expansion" in guide[0].text
     assert "Known-item lookup" in guide[0].text
     assert "search_snippets" in guide[0].text
@@ -204,6 +232,9 @@ async def test_fastmcp_resource_and_prompt_support_agent_onboarding() -> None:
     assert "outside the indexed paper surface" in guide[0].text
     assert "pagination.nextCursor" in plan.messages[0].content.text
     assert "known-item lookup" in plan.messages[0].content.text
+    assert "search_papers_smart" in plan.messages[0].content.text
+    assert "resolve_citation" in plan.messages[0].content.text
+    assert "ask_result_set" in plan.messages[0].content.text
     assert "get_paper_citations for cited-by expansion" in plan.messages[0].content.text
     assert "paper.expansionIdStatus is not_portable" in plan.messages[0].content.text
     assert "search_snippets only as a special-purpose recovery tool" in (
@@ -233,6 +264,8 @@ def test_tool_descriptions_include_workflow_guidance() -> None:
         "fuzzy Semantic Scholar title search"
         in TOOL_DESCRIPTIONS["search_papers_match"]
     )
+    assert "citation repair" in TOOL_DESCRIPTIONS["resolve_citation"].lower()
+    assert "alternatives" in TOOL_DESCRIPTIONS["resolve_citation"]
     assert "Known-item lookup" in TOOL_DESCRIPTIONS["get_paper_details"]
     assert "cite this paper (cited by)" in TOOL_DESCRIPTIONS["get_paper_citations"]
     assert "references this paper cites" in TOOL_DESCRIPTIONS["get_paper_references"]
@@ -394,7 +427,13 @@ def test_github_copilot_instructions_align_with_repo_workflow_docs() -> None:
 
 def test_server_instructions_surface_continuation_and_schema_cues() -> None:
     instructions = server.SERVER_INSTRUCTIONS
+    normalized_instructions = " ".join(instructions.split())
 
+    assert "CONCEPT-LEVEL DISCOVERY / REVIEW" in instructions
+    assert "search_papers_smart" in instructions
+    assert "resolve_citation" in instructions
+    assert "ask_result_set" in instructions
+    assert "searchSessionId" in instructions
     assert "search_papers_core, search_papers_serpapi, and" in instructions
     assert "only accept query/limit/year" in instructions
     assert "Semantic Scholar pivot rather than another page" in instructions
@@ -404,7 +443,7 @@ def test_server_instructions_surface_continuation_and_schema_cues() -> None:
     assert "prefer search_papers or search_papers_semantic_scholar" in instructions
     assert "paper.recommendedExpansionId" in instructions
     assert "paper.expansionIdStatus is not_portable" in instructions
-    assert "outside the indexed paper surface" in instructions
+    assert "outside the indexed paper surface" in normalized_instructions
     assert "affiliation, coauthor, venue, or topic clues" in instructions
     assert "*_openalex tools" in instructions
     assert "agentic UX review loops" in instructions
@@ -419,6 +458,10 @@ async def test_agent_workflow_resource_mentions_pivots_and_provider_contracts() 
         guide = await client.read_resource("guide://scholar-search/agent-workflows")
 
     guide_text = guide[0].text
+    assert "search_papers_smart" in guide_text
+    assert "resolve_citation" in guide_text
+    assert "ask_result_set" in guide_text
+    assert "resourceUris" in guide_text
     assert "Provider-specific tool contracts" in guide_text
     assert "expose only `query`, `limit`, and `year`" in guide_text
     assert "Semantic Scholar pivot, not another page" in guide_text
@@ -446,6 +489,9 @@ async def test_plan_prompt_mentions_continuation_vs_pivot_and_schema_limits() ->
         )
 
     prompt_text = plan.messages[0].content.text
+    assert "search_papers_smart" in prompt_text
+    assert "resolve_citation" in prompt_text
+    assert "searchSessionId" in prompt_text
     assert "closest continuation path only when the workflow is already aligned" in (
         prompt_text
     )

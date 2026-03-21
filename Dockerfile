@@ -19,7 +19,7 @@ COPY scholar_search_mcp ./scholar_search_mcp
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip \
-    && pip install .
+    && pip install ".[ai,ai-faiss]"
 
 FROM python:${PYTHON_VERSION}-slim AS runtime
 

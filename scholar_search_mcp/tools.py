@@ -2,6 +2,7 @@
 
 from mcp.types import Tool
 
+from .compat import sanitize_published_schema
 from .models import TOOL_INPUT_MODELS
 
 OPAQUE_CURSOR_CONTRACT = (
@@ -104,6 +105,14 @@ TOOL_DESCRIPTIONS = {
         "fuzzy Semantic Scholar title search instead of surfacing a raw 404. "
         "A no-match payload can still mean the item is a dissertation, software "
         "release, report, or other output outside the indexed paper surface."
+    ),
+    "resolve_citation": (
+        "First-class citation repair workflow for incomplete, malformed, or "
+        "almost-right references. Starts with DOI/arXiv/URL extraction, then "
+        "tries title-style recovery, quote/snippet recovery, and sparse "
+        "metadata search to return the most likely canonical paper plus "
+        "alternatives, confidence, disagreements, and the fastest next step "
+        "for disambiguation."
     ),
     "paper_autocomplete": (
         "Return paper title completions for a partial query string."
@@ -227,6 +236,29 @@ TOOL_DESCRIPTIONS = {
         "EndNote, RefMan, RefWorks). "
         "Not paginated — single response per paper."
     ),
+    "search_papers_smart": (
+        "Agent-oriented concept and literature-review search. Starts from a broad "
+        "concept, known item, author clue, or citation seed; runs grounded query "
+        "expansion, multi-provider retrieval, deduplication, reranking, and stores "
+        "the result set under searchSessionId for follow-up QA, landscape mapping, "
+        "and graph expansion. Returns compact smart hits, strategyMetadata, "
+        "agentHints, resourceUris, and a concrete next-step recommendation."
+    ),
+    "ask_result_set": (
+        "Grounded follow-up over a saved searchSessionId. Answer a question using "
+        "only the papers in that result set, returning evidence for every claim. "
+        "answerMode supports qa, claim_check, and comparison."
+    ),
+    "map_research_landscape": (
+        "Cluster a saved searchSessionId into 3-5 themes, representative papers, "
+        "gaps, disagreements, and suggested next searches. Use this when an "
+        "agent needs a literature-review map rather than another flat result page."
+    ),
+    "expand_research_graph": (
+        "Expand a saved search session or explicit paper seeds into a compact "
+        "citation, reference, or author graph. Returns nodes, edges, a ranked "
+        "frontier, agentHints, and resourceUris for continued exploration."
+    ),
 }
 
 
@@ -236,7 +268,7 @@ def get_tool_definitions() -> list[Tool]:
         Tool(
             name=name,
             description=TOOL_DESCRIPTIONS[name],
-            inputSchema=model.model_json_schema(),
+            inputSchema=sanitize_published_schema(model.model_json_schema()),
         )
         for name, model in TOOL_INPUT_MODELS.items()
     ]
