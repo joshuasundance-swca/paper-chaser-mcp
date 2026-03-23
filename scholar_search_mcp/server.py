@@ -28,7 +28,6 @@ from .clients import (
     UnpaywallClient,
 )
 from .clients.serpapi import SerpApiScholarClient
-from .compat import sanitize_published_schema
 from .constants import (
     API_BASE_URL,
     ARXIV_API_BASE,
@@ -44,13 +43,18 @@ from .constants import (
 )
 from .dispatch import dispatch_tool
 from .enrichment import PaperEnrichmentService
-from .models import TOOL_INPUT_MODELS, dump_jsonable
+from .models import dump_jsonable
 from .parsing import _arxiv_id_from_url, _text
 from .provider_runtime import ProviderDiagnosticsRegistry
+from .renderers.resources import (
+    render_author_resource_payload,
+    render_paper_resource_payload,
+)
 from .runtime import run_server
 from .search import _core_response_to_merged, _merge_search_results
 from .settings import AppSettings, _env_bool
-from .tools import TOOL_DESCRIPTIONS
+from .tool_schema import sanitize_published_schema
+from .tool_specs import get_tool_spec, iter_tool_specs
 from .transport import asyncio, httpx, maybe_close_async_resource
 
 logging.basicConfig(level=logging.INFO)
@@ -342,120 +346,7 @@ def _format_tool_display_name(name: str) -> str:
 
 
 def _tool_tags(name: str) -> set[str]:
-    provider_tags = {
-        "search_papers": {"search", "brokered"},
-        "search_papers_smart": {"search", "smart", "agentic"},
-        "resolve_citation": {"known-item", "citation-repair", "recovery"},
-        "search_papers_core": {"search", "provider-specific", "provider:core"},
-        "search_papers_semantic_scholar": {
-            "search",
-            "provider-specific",
-            "provider:semantic_scholar",
-        },
-        "search_papers_serpapi": {
-            "search",
-            "provider-specific",
-            "provider:serpapi_google_scholar",
-        },
-        "search_papers_arxiv": {"search", "provider-specific", "provider:arxiv"},
-        "search_papers_openalex": {
-            "search",
-            "provider-specific",
-            "provider:openalex",
-        },
-        "paper_autocomplete_openalex": {
-            "search",
-            "provider-specific",
-            "provider:openalex",
-        },
-        "search_papers_openalex_bulk": {
-            "search",
-            "provider-specific",
-            "provider:openalex",
-        },
-        "search_entities_openalex": {
-            "search",
-            "provider-specific",
-            "provider:openalex",
-        },
-        "search_papers_openalex_by_entity": {
-            "search",
-            "provider-specific",
-            "provider:openalex",
-        },
-        "search_papers_serpapi_cited_by": {
-            "search",
-            "provider-specific",
-            "provider:serpapi_google_scholar",
-        },
-        "search_papers_serpapi_versions": {
-            "search",
-            "provider-specific",
-            "provider:serpapi_google_scholar",
-        },
-        "get_author_profile_serpapi": {
-            "author",
-            "provider-specific",
-            "provider:serpapi_google_scholar",
-        },
-        "get_author_articles_serpapi": {
-            "author",
-            "provider-specific",
-            "provider:serpapi_google_scholar",
-        },
-        "get_serpapi_account_status": {
-            "provider-specific",
-            "provider:serpapi_google_scholar",
-        },
-        "get_paper_metadata_crossref": {
-            "paper",
-            "provider-specific",
-            "provider:crossref",
-        },
-        "get_paper_open_access_unpaywall": {
-            "paper",
-            "provider-specific",
-            "provider:unpaywall",
-        },
-        "search_species_ecos": {
-            "search",
-            "species",
-            "provider-specific",
-            "provider:ecos",
-        },
-        "get_species_profile_ecos": {
-            "species",
-            "provider-specific",
-            "provider:ecos",
-        },
-        "list_species_documents_ecos": {
-            "species",
-            "documents",
-            "provider-specific",
-            "provider:ecos",
-        },
-        "get_document_text_ecos": {
-            "documents",
-            "provider-specific",
-            "provider:ecos",
-        },
-        "enrich_paper": {"paper", "enrichment"},
-        "get_provider_diagnostics": {"diagnostics", "provider-health"},
-        "ask_result_set": {"smart", "grounded-answer"},
-        "map_research_landscape": {"smart", "landscape"},
-        "expand_research_graph": {"smart", "graph"},
-    }
-    if name in provider_tags:
-        return provider_tags[name]
-    if name.startswith("search_"):
-        return {"search"}
-    if name.startswith("get_paper_"):
-        return {"paper"}
-    if name.startswith("get_author_") or name == "search_authors":
-        return {"author"}
-    if name.startswith("batch_"):
-        return {"batch"}
-    return {"scholar-search"}
+    return set(get_tool_spec(name).tags)
 
 
 def _parameter_name(field_name: str, alias: str | None) -> str:
@@ -498,22 +389,23 @@ def _build_signature(model: Any) -> tuple[Signature, dict[str, Any]]:
 
 
 def _register_tool(tool_name: str) -> None:
-    signature, annotations = _build_signature(TOOL_INPUT_MODELS[tool_name])
+    tool_spec = get_tool_spec(tool_name)
+    signature, annotations = _build_signature(tool_spec.input_model)
 
     async def _tool_impl(**kwargs: Any) -> dict[str, Any]:
         ctx = kwargs.pop("ctx", None)
         return await _execute_tool(tool_name, kwargs, ctx=ctx)
 
     _tool_impl.__name__ = tool_name
-    _tool_impl.__doc__ = TOOL_DESCRIPTIONS[tool_name]
+    _tool_impl.__doc__ = tool_spec.description
     setattr(_tool_impl, "__signature__", signature)
     _tool_impl.__annotations__ = annotations
 
     app.tool(
         name=tool_name,
         title=_format_tool_display_name(tool_name),
-        description=TOOL_DESCRIPTIONS[tool_name],
-        tags=_tool_tags(tool_name),
+        description=tool_spec.description,
+        tags=set(tool_spec.tags),
         annotations=ToolAnnotations(
             title=_format_tool_display_name(tool_name),
             readOnlyHint=True,
@@ -681,8 +573,8 @@ app = FastMCP(
 )
 app.add_middleware(TimingMiddleware(logger=logger))
 
-for _tool_name in TOOL_INPUT_MODELS:
-    _register_tool(_tool_name)
+for _tool_spec in iter_tool_specs():
+    _register_tool(_tool_spec.name)
 
 
 def _resource_text(payload: dict[str, Any]) -> str:
@@ -690,38 +582,11 @@ def _resource_text(payload: dict[str, Any]) -> str:
 
 
 def _paper_resource_payload(paper: dict[str, Any]) -> dict[str, Any]:
-    authors = ", ".join(
-        author.get("name", "")
-        for author in (paper.get("authors") or [])
-        if isinstance(author, dict) and author.get("name")
-    )
-    paper_identifier = paper.get("paperId") or paper.get("canonicalId") or "unknown"
-    markdown_lines = [
-        f"# {paper.get('title') or paper.get('paperId') or 'Paper'}",
-        "",
-        f"- Paper ID: `{paper_identifier}`",
-    ]
-    if paper.get("year"):
-        markdown_lines.append(f"- Year: {paper['year']}")
-    if paper.get("venue"):
-        markdown_lines.append(f"- Venue: {paper['venue']}")
-    if authors:
-        markdown_lines.append(f"- Authors: {authors}")
-    if paper.get("abstract"):
-        markdown_lines.extend(["", "## Abstract", "", str(paper["abstract"])])
-    return {"markdown": "\n".join(markdown_lines), "data": paper}
+    return render_paper_resource_payload(paper)
 
 
 def _author_resource_payload(author: dict[str, Any]) -> dict[str, Any]:
-    markdown_lines = [
-        f"# {author.get('name') or author.get('authorId') or 'Author'}",
-        "",
-        f"- Author ID: `{author.get('authorId') or 'unknown'}`",
-    ]
-    affiliations = author.get("affiliations") or []
-    if affiliations:
-        markdown_lines.append(f"- Affiliations: {', '.join(affiliations)}")
-    return {"markdown": "\n".join(markdown_lines), "data": author}
+    return render_author_resource_payload(author)
 
 
 @app.resource(

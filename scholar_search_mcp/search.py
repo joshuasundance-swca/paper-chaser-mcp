@@ -6,7 +6,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Optional
 
-from .clients.serpapi import SerpApiKeyMissingError
 from .models import (
     ArxivSearchResponse,
     BrokerAttempt,
@@ -24,13 +23,23 @@ from .models.tools import (
 from .provider_runtime import (
     ProviderDiagnosticsRegistry,
     ProviderStatusBucket,
-    execute_provider_call,
-    provider_attempt_reason,
-    provider_status_to_attempt_status,
 )
-from .transport import asyncio
+from .search_executor import (
+    ProviderSearchRequest,
+    SearchClientBundle,
+    SearchExecutor,
+    arxiv_result,
+    core_result,
+    earlier_result_attempt,
+    enrich_semantic_scholar_paper,
+    provider_attempt_from_outcome,
+    semantic_result,
+    serpapi_result,
+)
 
 logger = logging.getLogger("scholar-search-mcp")
+
+_SEARCH_EXECUTOR = SearchExecutor()
 
 BROKER_HEDGE_DELAY_SECONDS = 0.35
 HEDGE_ELIGIBLE_PROVIDERS: frozenset[SearchProvider] = frozenset(
@@ -155,27 +164,9 @@ def _has_unmatched_distinctive_tokens(query: str, papers: list[Paper]) -> bool:
 
 
 def _enrich_ss_paper(paper: Paper) -> Paper:
-    """Return a copy of a Semantic Scholar paper enriched with provenance fields.
+    """Return a copy of a Semantic Scholar paper enriched with provenance fields."""
 
-    ``sourceId`` is the Semantic Scholar-native ``paperId`` hash.
-    ``canonicalId`` follows the documented priority order:
-    DOI > paperId > arXiv ID > sourceId.
-    """
-    external_ids: dict[str, Any] = (paper.model_extra or {}).get("externalIds") or {}
-    doi: str | None = external_ids.get("DOI") or None
-    arxiv_id: str | None = external_ids.get("ArXiv") or None
-    paper_id: str | None = paper.paper_id
-    source_id = paper_id
-    canonical_id: str | None = doi or paper_id or arxiv_id or source_id
-    return paper.model_copy(
-        update={
-            "source": paper.source or "semantic_scholar",
-            "source_id": source_id,
-            "canonical_id": canonical_id,
-            "recommended_expansion_id": canonical_id,
-            "expansion_id_status": "portable",
-        }
-    )
+    return enrich_semantic_scholar_paper(paper)
 
 
 def _dump_search_response(response: SearchResponse) -> dict[str, Any]:
@@ -402,12 +393,11 @@ def _effective_provider_order(
     preferred_provider: SearchProvider | None,
     provider_order: Sequence[SearchProvider] | None,
 ) -> list[SearchProvider]:
-    order = list(provider_order or DEFAULT_SEARCH_PROVIDER_ORDER)
-    if preferred_provider is None:
-        return order
-    return [preferred_provider] + [
-        provider for provider in order if provider != preferred_provider
-    ]
+    return _SEARCH_EXECUTOR.effective_provider_order(
+        preferred_provider=preferred_provider,
+        provider_order=provider_order,
+        default_order=DEFAULT_SEARCH_PROVIDER_ORDER,
+    )
 
 
 def _provider_enabled(
@@ -419,15 +409,22 @@ def _provider_enabled(
     enable_serpapi: bool,
     serpapi_client: Any,
 ) -> bool:
-    if provider == "core":
-        return enable_core
-    if provider == "semantic_scholar":
-        return enable_semantic_scholar
-    if provider == "arxiv":
-        return enable_arxiv
-    if provider == "serpapi_google_scholar":
-        return enable_serpapi and serpapi_client is not None
-    return False
+    return _SEARCH_EXECUTOR.provider_enabled(
+        provider,
+        enabled={
+            "core": enable_core,
+            "semantic_scholar": enable_semantic_scholar,
+            "arxiv": enable_arxiv,
+            "serpapi_google_scholar": enable_serpapi,
+            "openalex": False,
+        },
+        clients=SearchClientBundle(
+            core_client=True,
+            semantic_client=True,
+            arxiv_client=True,
+            serpapi_client=serpapi_client,
+        ),
+    )
 
 
 def _hedge_target_index(
@@ -441,38 +438,31 @@ def _hedge_target_index(
     enable_serpapi: bool,
     serpapi_client: Any,
 ) -> int | None:
-    next_index = current_index + 1
-    if next_index >= len(effective_order):
-        return None
-    provider = effective_order[next_index]
-    if provider not in HEDGE_ELIGIBLE_PROVIDERS:
-        return None
-    if _skip_for_ss_only_filters(provider, ss_only_filters) is not None:
-        return None
-    if not _provider_enabled(
-        provider,
-        enable_core=enable_core,
-        enable_semantic_scholar=enable_semantic_scholar,
-        enable_arxiv=enable_arxiv,
-        enable_serpapi=enable_serpapi,
-        serpapi_client=serpapi_client,
-    ):
-        return None
-    return next_index
+    return _SEARCH_EXECUTOR.hedge_target_index(
+        effective_order=effective_order,
+        current_index=current_index,
+        ss_only_filters=ss_only_filters,
+        enabled={
+            "core": enable_core,
+            "semantic_scholar": enable_semantic_scholar,
+            "arxiv": enable_arxiv,
+            "serpapi_google_scholar": enable_serpapi,
+            "openalex": False,
+        },
+        clients=SearchClientBundle(
+            core_client=True,
+            semantic_client=True,
+            arxiv_client=True,
+            serpapi_client=serpapi_client,
+        ),
+    )
 
 
 def _skip_for_ss_only_filters(
     provider: SearchProvider, ss_only_filters: list[str]
 ) -> BrokerAttempt | None:
-    if provider not in {"core", "serpapi_google_scholar"} or not ss_only_filters:
-        return None
-    return BrokerAttempt(
-        provider=provider,
-        status="skipped",
-        reason=(
-            "Skipped because Semantic Scholar-only filters were requested: "
-            + ", ".join(ss_only_filters)
-        ),
+    return _SEARCH_EXECUTOR.skip_for_semantic_scholar_only_filters(
+        provider, ss_only_filters
     )
 
 
@@ -491,11 +481,7 @@ def _disabled_provider_attempt(provider: SearchProvider) -> BrokerAttempt:
 
 
 def _earlier_result_attempt(provider: SearchProvider) -> BrokerAttempt:
-    return BrokerAttempt(
-        provider=provider,
-        status="skipped",
-        reason="Skipped because an earlier provider already returned results.",
-    )
+    return earlier_result_attempt(provider)
 
 
 def _attempt_from_outcome(
@@ -504,47 +490,27 @@ def _attempt_from_outcome(
     status_bucket: ProviderStatusBucket,
     reason: str | None,
 ) -> BrokerAttempt:
-    return BrokerAttempt(
-        provider=provider,
-        status=provider_status_to_attempt_status(status_bucket),
+    return provider_attempt_from_outcome(
+        provider,
+        status_bucket=status_bucket,
         reason=reason,
     )
 
 
 def _core_result(core_response: dict[str, Any], limit: int) -> SearchResponse:
-    core_search = CoreSearchResponse.model_validate(core_response)
-    return SearchResponse(
-        total=core_search.total or len(core_search.entries),
-        offset=0,
-        data=core_search.entries[:limit],
-    )
+    return core_result(core_response, limit)
 
 
 def _semantic_result(s2_response: dict[str, Any], limit: int) -> SearchResponse:
-    semantic_search = SemanticSearchResponse.model_validate(s2_response)
-    return SearchResponse(
-        total=semantic_search.total or len(semantic_search.data),
-        offset=semantic_search.offset,
-        data=[_enrich_ss_paper(paper) for paper in semantic_search.data[:limit]],
-    )
+    return semantic_result(s2_response, limit)
 
 
 def _serpapi_result(serpapi_papers: list[dict[str, Any]], limit: int) -> SearchResponse:
-    validated: list[Paper] = [Paper.model_validate(p) for p in serpapi_papers]
-    return SearchResponse(
-        total=len(validated),
-        offset=0,
-        data=validated[:limit],
-    )
+    return serpapi_result(serpapi_papers, limit)
 
 
 def _arxiv_result(arxiv_response: dict[str, Any], limit: int) -> SearchResponse:
-    arxiv_search = ArxivSearchResponse.model_validate(arxiv_response)
-    return SearchResponse(
-        total=arxiv_search.total_results,
-        offset=0,
-        data=arxiv_search.entries[:limit],
-    )
+    return arxiv_result(arxiv_response, limit)
 
 
 def _merge_search_results(
@@ -596,6 +562,33 @@ def _core_response_to_merged(
     )
 
 
+def _build_provider_search_request(
+    *,
+    query: str,
+    limit: int,
+    year: str | None,
+    fields: list[str] | None,
+    venue: list[str] | None,
+    publication_date_or_year: str | None,
+    fields_of_study: str | None,
+    publication_types: str | None,
+    open_access_pdf: bool | None,
+    min_citation_count: int | None,
+) -> ProviderSearchRequest:
+    return ProviderSearchRequest(
+        query=query,
+        limit=limit,
+        year=year,
+        fields=fields,
+        venue=venue,
+        publication_date_or_year=publication_date_or_year,
+        fields_of_study=fields_of_study,
+        publication_types=publication_types,
+        open_access_pdf=open_access_pdf,
+        min_citation_count=min_citation_count,
+    )
+
+
 async def _run_provider_search(
     *,
     provider: SearchProvider,
@@ -615,159 +608,32 @@ async def _run_provider_search(
     min_citation_count: Optional[int] = None,
     provider_registry: ProviderDiagnosticsRegistry | None = None,
 ) -> _BrokerProviderResult:
-    if provider == "core":
-        core_call = await execute_provider_call(
-            provider=provider,
-            endpoint="search",
-            operation=lambda: core_client.search(
-                query=query,
-                limit=limit,
-                start=0,
-                year=year,
-            ),
-            registry=provider_registry,
-            is_empty=lambda payload: not _core_result(payload, limit).data,
-        )
-        response = (
-            _core_result(core_call.payload, limit)
-            if core_call.payload is not None
-            else None
-        )
-        if response is not None and response.data:
-            logger.info("search_papers: using CORE API results")
-        elif core_call.payload is None:
-            core_error = core_call.outcome.error or core_call.outcome.fallback_reason
-            logger.info(
-                "search_papers: CORE unavailable (%s), falling back to next channel",
-                core_error,
-            )
-        return _BrokerProviderResult(
-            provider=provider,
-            attempt=_attempt_from_outcome(
-                provider,
-                status_bucket=core_call.outcome.status_bucket,
-                reason=provider_attempt_reason(core_call.outcome),
-            ),
-            response=response,
-        )
-
-    if provider == "semantic_scholar":
-        semantic_call = await execute_provider_call(
-            provider=provider,
-            endpoint="search_papers",
-            operation=lambda: semantic_client.search_papers(
-                query=query,
-                limit=limit,
-                fields=fields,
-                year=year,
-                venue=venue,
-                publication_date_or_year=publication_date_or_year,
-                fields_of_study=fields_of_study,
-                publication_types=publication_types,
-                open_access_pdf=open_access_pdf,
-                min_citation_count=min_citation_count,
-            ),
-            registry=provider_registry,
-            is_empty=lambda payload: not _semantic_result(payload, limit).data,
-        )
-        response = (
-            _semantic_result(semantic_call.payload, limit)
-            if semantic_call.payload is not None
-            else None
-        )
-        if response is not None and response.data:
-            logger.info("search_papers: using Semantic Scholar results")
-        elif semantic_call.payload is None:
-            semantic_error = (
-                semantic_call.outcome.error or semantic_call.outcome.fallback_reason
-            )
-            logger.info(
-                "search_papers: Semantic Scholar unavailable (%s), "
-                "falling back to next channel",
-                semantic_error,
-            )
-        return _BrokerProviderResult(
-            provider=provider,
-            attempt=_attempt_from_outcome(
-                provider,
-                status_bucket=semantic_call.outcome.status_bucket,
-                reason=provider_attempt_reason(semantic_call.outcome),
-            ),
-            response=response,
-        )
-
-    if provider == "serpapi_google_scholar":
-        if serpapi_client is None:
-            return _BrokerProviderResult(
-                provider=provider,
-                attempt=BrokerAttempt(
-                    provider=provider,
-                    status="skipped",
-                    reason="Enabled but no SerpApi client is configured.",
-                ),
-            )
-        serpapi_call = await execute_provider_call(
-            provider=provider,
-            endpoint="search",
-            operation=lambda: serpapi_client.search(
-                query=query,
-                limit=limit,
-                year=year,
-            ),
-            registry=provider_registry,
-            propagate_exceptions=(SerpApiKeyMissingError,),
-        )
-        response = (
-            _serpapi_result(serpapi_call.payload, limit)
-            if serpapi_call.payload is not None
-            else None
-        )
-        if response is not None and response.data:
-            logger.info("search_papers: using SerpApi Google Scholar results")
-        elif serpapi_call.payload is None:
-            serpapi_error = (
-                serpapi_call.outcome.error or serpapi_call.outcome.fallback_reason
-            )
-            logger.info(
-                "search_papers: SerpApi unavailable (%s), falling back to next channel",
-                serpapi_error,
-            )
-        return _BrokerProviderResult(
-            provider=provider,
-            attempt=_attempt_from_outcome(
-                provider,
-                status_bucket=serpapi_call.outcome.status_bucket,
-                reason=provider_attempt_reason(serpapi_call.outcome),
-            ),
-            response=response,
-        )
-
-    arxiv_call = await execute_provider_call(
+    result = await _SEARCH_EXECUTOR.execute_provider(
         provider=provider,
-        endpoint="search",
-        operation=lambda: arxiv_client.search(
+        request=_build_provider_search_request(
             query=query,
             limit=limit,
             year=year,
+            fields=fields,
+            venue=venue,
+            publication_date_or_year=publication_date_or_year,
+            fields_of_study=fields_of_study,
+            publication_types=publication_types,
+            open_access_pdf=open_access_pdf,
+            min_citation_count=min_citation_count,
         ),
-        registry=provider_registry,
-        is_empty=lambda payload: not _arxiv_result(payload, limit).data,
+        clients=SearchClientBundle(
+            core_client=core_client,
+            semantic_client=semantic_client,
+            arxiv_client=arxiv_client,
+            serpapi_client=serpapi_client,
+        ),
+        provider_registry=provider_registry,
     )
-    response = (
-        _arxiv_result(arxiv_call.payload, limit)
-        if arxiv_call.payload is not None
-        else None
-    )
-    if response is not None and response.data:
-        logger.info("search_papers: using arXiv results")
     return _BrokerProviderResult(
         provider=provider,
-        attempt=_attempt_from_outcome(
-            provider,
-            status_bucket=arxiv_call.outcome.status_bucket,
-            reason=provider_attempt_reason(arxiv_call.outcome),
-        ),
-        response=response,
+        attempt=result.attempt,
+        response=result.response,
     )
 
 
@@ -825,169 +691,43 @@ async def search_papers_with_fallback(
         )
         if value is not None
     ]
-    effective_order = _effective_provider_order(
+    trace = await _SEARCH_EXECUTOR.search_with_fallback(
+        query=query,
+        limit=limit,
+        year=year,
+        fields=fields,
+        venue=venue,
         preferred_provider=preferred_provider,
         provider_order=provider_order,
+        default_provider_order=DEFAULT_SEARCH_PROVIDER_ORDER,
+        ss_only_filters=ss_only_filters,
+        enabled={
+            "core": enable_core,
+            "semantic_scholar": enable_semantic_scholar,
+            "arxiv": enable_arxiv,
+            "serpapi_google_scholar": enable_serpapi,
+            "openalex": False,
+        },
+        clients=SearchClientBundle(
+            core_client=core_client,
+            semantic_client=semantic_client,
+            arxiv_client=arxiv_client,
+            serpapi_client=serpapi_client,
+        ),
+        provider_registry=provider_registry,
+        allow_default_hedging=allow_default_hedging,
+        hedge_delay_seconds=BROKER_HEDGE_DELAY_SECONDS,
+        publication_date_or_year=publication_date_or_year,
+        fields_of_study=fields_of_study,
+        publication_types=publication_types,
+        open_access_pdf=open_access_pdf,
+        min_citation_count=min_citation_count,
     )
-
-    result: SearchResponse | None = None
-    provider_used = "none"
-    attempts: list[BrokerAttempt] = []
-    processed_providers = 0
-    index = 0
-    while index < len(effective_order):
-        provider = effective_order[index]
-        processed_providers = index + 1
-        skip_for_filters = _skip_for_ss_only_filters(provider, ss_only_filters)
-        if skip_for_filters is not None:
-            attempts.append(skip_for_filters)
-            index += 1
-            continue
-
-        if provider == "core":
-            if not enable_core:
-                attempts.append(_disabled_provider_attempt(provider))
-                index += 1
-                continue
-        elif provider == "semantic_scholar":
-            if not enable_semantic_scholar:
-                attempts.append(_disabled_provider_attempt(provider))
-                index += 1
-                continue
-        elif provider == "serpapi_google_scholar":
-            if not enable_serpapi:
-                attempts.append(_disabled_provider_attempt(provider))
-                index += 1
-                continue
-            if serpapi_client is None:
-                attempts.append(
-                    BrokerAttempt(
-                        provider=provider,
-                        status="skipped",
-                        reason="Enabled but no SerpApi client is configured.",
-                    )
-                )
-                index += 1
-                continue
-        elif not enable_arxiv:
-            attempts.append(_disabled_provider_attempt(provider))
-            index += 1
-            continue
-
-        hedge_index = (
-            _hedge_target_index(
-                effective_order=effective_order,
-                current_index=index,
-                ss_only_filters=ss_only_filters,
-                enable_core=enable_core,
-                enable_semantic_scholar=enable_semantic_scholar,
-                enable_arxiv=enable_arxiv,
-                enable_serpapi=enable_serpapi,
-                serpapi_client=serpapi_client,
-            )
-            if allow_default_hedging
-            else None
-        )
-        hedge_started = asyncio.Event()
-        current_task = asyncio.create_task(
-            _run_provider_search(
-                provider=provider,
-                query=query,
-                limit=limit,
-                year=year,
-                fields=fields,
-                venue=venue,
-                core_client=core_client,
-                semantic_client=semantic_client,
-                arxiv_client=arxiv_client,
-                serpapi_client=serpapi_client,
-                publication_date_or_year=publication_date_or_year,
-                fields_of_study=fields_of_study,
-                publication_types=publication_types,
-                open_access_pdf=open_access_pdf,
-                min_citation_count=min_citation_count,
-                provider_registry=provider_registry,
-            )
-        )
-        hedge_task: asyncio.Task[_BrokerProviderResult] | None = None
-        if hedge_index is not None:
-            hedge_provider = effective_order[hedge_index]
-
-            async def _run_hedged_provider() -> _BrokerProviderResult:
-                await asyncio.sleep(BROKER_HEDGE_DELAY_SECONDS)
-                if current_task.done():
-                    raise asyncio.CancelledError
-                hedge_started.set()
-                return await _run_provider_search(
-                    provider=hedge_provider,
-                    query=query,
-                    limit=limit,
-                    year=year,
-                    fields=fields,
-                    venue=venue,
-                    core_client=core_client,
-                    semantic_client=semantic_client,
-                    arxiv_client=arxiv_client,
-                    serpapi_client=serpapi_client,
-                    publication_date_or_year=publication_date_or_year,
-                    fields_of_study=fields_of_study,
-                    publication_types=publication_types,
-                    open_access_pdf=open_access_pdf,
-                    min_citation_count=min_citation_count,
-                    provider_registry=provider_registry,
-                )
-
-            hedge_task = asyncio.create_task(_run_hedged_provider())
-
-        current_result = await current_task
-        attempts.append(current_result.attempt)
-        if current_result.has_results:
-            result = current_result.response
-            provider_used = provider
-            if hedge_task is not None:
-                if not hedge_task.done():
-                    hedge_task.cancel()
-                await asyncio.gather(hedge_task, return_exceptions=True)
-            break
-
-        result = None
-        if hedge_index is None:
-            index += 1
-            continue
-
-        hedge_result: _BrokerProviderResult
-        if hedge_task is not None and hedge_started.is_set():
-            hedge_result = await hedge_task
-        else:
-            if hedge_task is not None:
-                if not hedge_task.done():
-                    hedge_task.cancel()
-                await asyncio.gather(hedge_task, return_exceptions=True)
-            hedge_result = await _run_provider_search(
-                provider=effective_order[hedge_index],
-                query=query,
-                limit=limit,
-                year=year,
-                fields=fields,
-                venue=venue,
-                core_client=core_client,
-                semantic_client=semantic_client,
-                arxiv_client=arxiv_client,
-                serpapi_client=serpapi_client,
-                publication_date_or_year=publication_date_or_year,
-                fields_of_study=fields_of_study,
-                publication_types=publication_types,
-                open_access_pdf=open_access_pdf,
-                min_citation_count=min_citation_count,
-                provider_registry=provider_registry,
-            )
-        attempts.append(hedge_result.attempt)
-        processed_providers = hedge_index + 1
-        if hedge_result.has_results:
-            result = hedge_result.response
-            provider_used = hedge_result.provider
-            break
-        index = hedge_index + 1
+    result = trace.result
+    provider_used = trace.provider_used
+    attempts = list(trace.attempts)
+    effective_order = trace.effective_order
+    processed_providers = trace.processed_providers
 
     if provider_used != "none":
         attempts.extend(
@@ -1015,7 +755,7 @@ async def search_papers_with_fallback(
                 broker_metadata=_metadata(
                     provider_used="none",
                     attempts=attempts,
-                    ss_only_filters=ss_only_filters,
+                    ss_only_filters=trace.ss_only_filters,
                     venue=venue,
                     preferred_provider=preferred_provider,
                     provider_order=provider_order,

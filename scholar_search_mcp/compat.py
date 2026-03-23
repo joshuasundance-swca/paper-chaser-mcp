@@ -1,34 +1,18 @@
-"""Compatibility helpers for published schemas and agent-facing tool metadata."""
+"""Compatibility helpers for agent-facing tool metadata."""
 
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Any
 
 from .agentic.models import AgentHints, Clarification
 from .agentic.workspace import WorkspaceRegistry
 from .citation_repair import looks_like_citation_query, parse_citation
+from .tool_specs import get_tool_spec, iter_tool_specs
 
 SEARCH_SESSION_TOOLS = {
-    "search_papers",
-    "search_papers_core",
-    "search_papers_semantic_scholar",
-    "search_papers_serpapi",
-    "search_papers_arxiv",
-    "search_papers_openalex",
-    "search_papers_openalex_bulk",
-    "search_papers_bulk",
-    "get_paper_citations",
-    "get_paper_citations_openalex",
-    "get_paper_references",
-    "get_paper_references_openalex",
-    "get_paper_authors",
-    "search_authors",
-    "search_authors_openalex",
-    "get_author_papers",
-    "get_author_papers_openalex",
-    "resolve_citation",
-    "search_papers_smart",
+    spec.name
+    for spec in iter_tool_specs()
+    if spec.result_policy.search_session.persist_result_set
 }
 
 LOW_SPECIFICITY_TOKENS = {
@@ -43,53 +27,6 @@ LOW_SPECIFICITY_TOKENS = {
     "model",
     "models",
 }
-
-
-def sanitize_published_schema(schema: dict[str, Any]) -> dict[str, Any]:
-    """Remove client-hostile noise from advertised MCP tool schemas."""
-    sanitized = _sanitize_schema_node(deepcopy(schema))
-    if isinstance(sanitized, dict) and "$defs" in sanitized:
-        if not _schema_uses_refs(sanitized):
-            sanitized.pop("$defs", None)
-    return sanitized
-
-
-def _sanitize_schema_node(node: Any) -> Any:
-    if isinstance(node, list):
-        return [_sanitize_schema_node(item) for item in node]
-    if not isinstance(node, dict):
-        return node
-
-    if "anyOf" in node:
-        non_null = [
-            option
-            for option in node["anyOf"]
-            if not (isinstance(option, dict) and option.get("type") == "null")
-        ]
-        if len(non_null) == 1:
-            merged = _sanitize_schema_node(non_null[0])
-            if isinstance(merged, dict):
-                for key in ("description", "examples", "enum"):
-                    if key not in merged and key in node:
-                        merged[key] = node[key]
-            return merged
-
-    sanitized: dict[str, Any] = {}
-    for key, value in node.items():
-        if key in {"default", "examples"}:
-            continue
-        sanitized[key] = _sanitize_schema_node(value)
-    return sanitized
-
-
-def _schema_uses_refs(node: Any) -> bool:
-    if isinstance(node, dict):
-        if "$ref" in node:
-            return True
-        return any(_schema_uses_refs(value) for value in node.values())
-    if isinstance(node, list):
-        return any(_schema_uses_refs(item) for item in node)
-    return False
 
 
 def build_agent_hints(
@@ -115,16 +52,9 @@ def build_agent_hints(
     if result.get("retrievalNote"):
         warnings.append(str(result["retrievalNote"]))
 
-    if tool_name in {
-        "search_papers",
-        "search_papers_core",
-        "search_papers_semantic_scholar",
-        "search_papers_serpapi",
-        "search_papers_arxiv",
-        "search_papers_openalex",
-        "search_papers_openalex_bulk",
-        "search_papers_bulk",
-    }:
+    hint_profile = get_tool_spec(tool_name).result_policy.hint_profile
+
+    if hint_profile == "paper_search":
         return AgentHints(
             nextToolCandidates=[
                 "search_papers_smart",
@@ -143,7 +73,7 @@ def build_agent_hints(
             ),
             warnings=warnings,
         )
-    if tool_name == "resolve_citation":
+    if hint_profile == "resolve_citation":
         best_match = result.get("bestMatch")
         confidence = str(result.get("resolutionConfidence") or "low")
         alternatives = result.get("alternatives") or []
@@ -199,7 +129,7 @@ def build_agent_hints(
                 ]
             ),
         )
-    if tool_name in {"search_papers_match", "get_paper_details"}:
+    if hint_profile == "paper_anchor":
         next_tools = [
             "get_paper_citations",
             "get_paper_references",
@@ -224,11 +154,7 @@ def build_agent_hints(
             ),
             warnings=warnings,
         )
-    if tool_name in {
-        "get_paper_metadata_crossref",
-        "get_paper_open_access_unpaywall",
-        "enrich_paper",
-    }:
+    if hint_profile == "paper_enrichment":
         return AgentHints(
             nextToolCandidates=[
                 "get_paper_details",
@@ -246,13 +172,7 @@ def build_agent_hints(
             ),
             warnings=warnings,
         )
-    if tool_name in {
-        "get_paper_citations",
-        "get_paper_citations_openalex",
-        "get_paper_references",
-        "get_paper_references_openalex",
-        "expand_research_graph",
-    }:
+    if hint_profile == "paper_expansion":
         return AgentHints(
             nextToolCandidates=[
                 "ask_result_set",
@@ -270,7 +190,7 @@ def build_agent_hints(
             ),
             warnings=warnings,
         )
-    if tool_name in {"search_authors", "search_authors_openalex"}:
+    if hint_profile == "author_search":
         return AgentHints(
             nextToolCandidates=["get_author_info", "get_author_papers"],
             whyThisNextStep=(
@@ -282,7 +202,23 @@ def build_agent_hints(
             ),
             warnings=warnings,
         )
-    if tool_name in {"get_author_papers", "get_author_papers_openalex"}:
+    if hint_profile == "author_search_openalex":
+        return AgentHints(
+            nextToolCandidates=[
+                "get_author_info_openalex",
+                "get_author_papers_openalex",
+            ],
+            whyThisNextStep=(
+                "Confirm the right OpenAlex author first, then pivot into that "
+                "author's OpenAlex paper set."
+            ),
+            safeRetry=(
+                "Add affiliation, coauthor, venue, or topic clues if the "
+                "name is ambiguous."
+            ),
+            warnings=warnings,
+        )
+    if hint_profile == "author_papers":
         return AgentHints(
             nextToolCandidates=[
                 "get_paper_details",
@@ -299,7 +235,23 @@ def build_agent_hints(
             ),
             warnings=warnings,
         )
-    if tool_name == "ask_result_set":
+    if hint_profile == "author_papers_openalex":
+        return AgentHints(
+            nextToolCandidates=[
+                "get_paper_details_openalex",
+                "search_papers_smart",
+                "map_research_landscape",
+            ],
+            whyThisNextStep=(
+                "OpenAlex author paper lists work best as a launch point for "
+                "paper-level inspection or theme mapping."
+            ),
+            safeRetry=(
+                "Narrow with year if the author's OpenAlex output is too broad."
+            ),
+            warnings=warnings,
+        )
+    if hint_profile == "ask_result_set":
         return AgentHints(
             nextToolCandidates=["map_research_landscape", "expand_research_graph"],
             whyThisNextStep=(
@@ -312,7 +264,7 @@ def build_agent_hints(
             ),
             warnings=warnings,
         )
-    if tool_name == "map_research_landscape":
+    if hint_profile == "map_research_landscape":
         return AgentHints(
             nextToolCandidates=["ask_result_set", "expand_research_graph"],
             whyThisNextStep=(
@@ -325,7 +277,7 @@ def build_agent_hints(
             ),
             warnings=warnings,
         )
-    if tool_name == "search_snippets":
+    if hint_profile == "search_snippets":
         next_candidates = [
             "resolve_citation",
             "search_papers_match",
@@ -351,7 +303,7 @@ def build_agent_hints(
             ),
             warnings=warnings,
         )
-    if tool_name == "search_species_ecos":
+    if hint_profile == "search_species_ecos":
         return AgentHints(
             nextToolCandidates=[
                 "get_species_profile_ecos",
@@ -368,7 +320,7 @@ def build_agent_hints(
             ),
             warnings=warnings,
         )
-    if tool_name == "get_species_profile_ecos":
+    if hint_profile == "get_species_profile_ecos":
         return AgentHints(
             nextToolCandidates=[
                 "list_species_documents_ecos",
@@ -386,7 +338,7 @@ def build_agent_hints(
             ),
             warnings=warnings,
         )
-    if tool_name == "list_species_documents_ecos":
+    if hint_profile == "list_species_documents_ecos":
         return AgentHints(
             nextToolCandidates=[
                 "get_document_text_ecos",
@@ -403,7 +355,7 @@ def build_agent_hints(
             ),
             warnings=warnings,
         )
-    if tool_name == "get_document_text_ecos":
+    if hint_profile == "get_document_text_ecos":
         return AgentHints(
             nextToolCandidates=[
                 "list_species_documents_ecos",
@@ -440,7 +392,9 @@ def build_clarification(
     result: dict[str, Any],
 ) -> Clarification | None:
     """Return a bounded clarification cue when the request is ambiguous."""
-    if tool_name == "search_papers":
+    clarification_profile = get_tool_spec(tool_name).result_policy.clarification_profile
+
+    if clarification_profile == "search_papers":
         query = str(arguments.get("query") or "").strip()
         tokens = [token.lower() for token in query.split() if token.strip()]
         if len(tokens) <= 2 and all(
@@ -455,7 +409,10 @@ def build_clarification(
                 options=["method focus", "application focus", "recent work only"],
                 canProceedWithoutAnswer=True,
             )
-    if tool_name == "search_papers_match" and result.get("matchFound") is False:
+    if (
+        clarification_profile == "search_papers_match"
+        and result.get("matchFound") is False
+    ):
         parsed = parse_citation(str(arguments.get("query") or ""))
         if parsed.identifier:
             return Clarification(
@@ -533,7 +490,7 @@ def build_clarification(
             options=["use DOI", "use arXiv ID", "broaden to search_papers"],
             canProceedWithoutAnswer=True,
         )
-    if tool_name == "resolve_citation":
+    if clarification_profile == "resolve_citation":
         parsed = parse_citation(
             str(arguments.get("citation") or ""),
             title_hint=arguments.get("titleHint"),
@@ -593,7 +550,7 @@ def build_clarification(
             options=["year", "author", "venue"],
             canProceedWithoutAnswer=True,
         )
-    if tool_name == "search_authors":
+    if clarification_profile == "search_authors":
         data = result.get("data") or []
         query = str(arguments.get("query") or "").strip()
         if len(data) > 1 and len(query.split()) <= 3:
@@ -669,7 +626,8 @@ def augment_tool_result(
     response = dict(result)
     search_session_id = response.get("searchSessionId")
 
-    if tool_name in SEARCH_SESSION_TOOLS and not search_session_id:
+    result_policy = get_tool_spec(tool_name).result_policy
+    if result_policy.search_session.persist_result_set and not search_session_id:
         session_metadata = _result_set_metadata(tool_name, arguments, response)
         record = workspace_registry.save_result_set(
             source_tool=tool_name,
@@ -701,11 +659,14 @@ def augment_tool_result(
 
 
 def _query_hint(tool_name: str, arguments: dict[str, Any]) -> str | None:
-    if tool_name == "resolve_citation":
-        return arguments.get("citation")
-    if tool_name.startswith("search_"):
-        return arguments.get("query")
-    return None
+    query_hint_arg = get_tool_spec(
+        tool_name
+    ).result_policy.search_session.query_hint_arg
+    return (
+        str(arguments.get(query_hint_arg))
+        if query_hint_arg is not None and arguments.get(query_hint_arg) is not None
+        else None
+    )
 
 
 def _result_set_metadata(

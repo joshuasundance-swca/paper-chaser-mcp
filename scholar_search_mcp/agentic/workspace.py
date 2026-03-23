@@ -14,6 +14,12 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..renderers.resources import (
+    render_author_resource_payload,
+    render_paper_resource_payload,
+    render_search_resource_payload,
+)
+
 logger = logging.getLogger("scholar-search-mcp")
 
 TOKEN_RE = re.compile(r"[a-z0-9]{2,}")
@@ -391,66 +397,21 @@ class WorkspaceRegistry:
     def render_search_resource(self, search_session_id: str) -> dict[str, Any]:
         """Render one saved search session as a resource payload."""
         record = self.get(search_session_id)
-        markdown_lines = [
-            f"# Search Session {record.search_session_id}",
-            "",
-            f"- Source tool: `{record.source_tool}`",
-            f"- Query: {record.query or 'n/a'}",
-            f"- Papers: {len(record.papers)}",
-            f"- Authors: {len(record.authors)}",
-        ]
-        if record.papers:
-            markdown_lines.extend(["", "## Top papers"])
-            for paper in record.papers[:5]:
-                markdown_lines.append(
-                    f"- {paper.get('title') or paper.get('paperId') or 'Untitled'}"
-                )
-        return {
-            "markdown": "\n".join(markdown_lines),
-            "data": record.payload,
-            "metadata": record.metadata,
-        }
+        return render_search_resource_payload(record)
 
     def render_paper_resource(self, paper_id: str) -> dict[str, Any] | None:
         """Render one cached paper if it exists in the active sessions."""
         paper = self.find_paper(paper_id)
         if paper is None:
             return None
-        markdown_lines = [
-            f"# {paper.get('title') or paper.get('paperId') or paper_id}",
-            "",
-            f"- Paper ID: `{paper.get('paperId') or paper_id}`",
-        ]
-        if paper.get("year"):
-            markdown_lines.append(f"- Year: {paper['year']}")
-        if paper.get("venue"):
-            markdown_lines.append(f"- Venue: {paper['venue']}")
-        if paper.get("authors"):
-            author_names = ", ".join(
-                author.get("name", "")
-                for author in paper["authors"]
-                if isinstance(author, dict) and author.get("name")
-            )
-            if author_names:
-                markdown_lines.append(f"- Authors: {author_names}")
-        if paper.get("abstract"):
-            markdown_lines.extend(["", "## Abstract", "", str(paper["abstract"])])
-        return {"markdown": "\n".join(markdown_lines), "data": paper}
+        return render_paper_resource_payload(paper, fallback_paper_id=paper_id)
 
     def render_author_resource(self, author_id: str) -> dict[str, Any] | None:
         """Render one cached author if it exists in the active sessions."""
         author = self.find_author(author_id)
         if author is None:
             return None
-        markdown_lines = [
-            f"# {author.get('name') or author_id}",
-            "",
-            f"- Author ID: `{author.get('authorId') or author_id}`",
-        ]
-        if author.get("affiliations"):
-            affiliations = ", ".join(author.get("affiliations") or [])
-            markdown_lines.append(f"- Affiliations: {affiliations}")
-        return {"markdown": "\n".join(markdown_lines), "data": author}
+        return render_author_resource_payload(author, fallback_author_id=author_id)
 
     def _new_search_session_id(self) -> str:
         return f"ssn_{uuid.uuid4().hex[:12]}"

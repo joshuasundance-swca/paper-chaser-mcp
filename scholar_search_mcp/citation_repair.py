@@ -15,6 +15,7 @@ from .models import (
     Paper,
     dump_jsonable,
 )
+from .models.tools import DEFAULT_SEARCH_PROVIDER_ORDER
 
 DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:A-Za-z0-9]+", re.IGNORECASE)
 ARXIV_RE = re.compile(
@@ -670,35 +671,45 @@ async def _resolve_sparse_metadata_candidates(
     enable_openalex: bool,
     openalex_client: Any,
 ) -> list[RankedCitationCandidate]:
-    from .search import search_papers_with_fallback
+    from .search_executor import SearchClientBundle, SearchExecutor
 
     search_queries = _sparse_search_queries(parsed)
     ranked: list[RankedCitationCandidate] = []
+    search_executor = SearchExecutor()
     for query in search_queries[:3]:
         try:
-            search_payload = await search_papers_with_fallback(
+            search_trace = await search_executor.search_with_fallback(
                 query=query,
                 limit=max(max_candidates * 4, 12),
                 year=str(parsed.year) if parsed.year is not None else None,
-                venue=parsed.venue_hints[:1] or None,
                 fields=None,
+                venue=parsed.venue_hints[:1] or None,
+                preferred_provider=(
+                    "semantic_scholar" if enable_semantic_scholar else None
+                ),
+                provider_order=None,
+                default_provider_order=DEFAULT_SEARCH_PROVIDER_ORDER,
+                ss_only_filters=[],
+                enabled={
+                    "core": enable_core,
+                    "semantic_scholar": enable_semantic_scholar,
+                    "arxiv": enable_arxiv,
+                    "serpapi_google_scholar": enable_serpapi,
+                    "openalex": False,
+                },
+                clients=SearchClientBundle(
+                    core_client=core_client,
+                    semantic_client=client,
+                    arxiv_client=arxiv_client,
+                    serpapi_client=serpapi_client,
+                ),
+                provider_registry=None,
+                allow_default_hedging=False,
                 publication_date_or_year=None,
                 fields_of_study=None,
                 publication_types=None,
                 open_access_pdf=None,
                 min_citation_count=None,
-                enable_core=enable_core,
-                enable_semantic_scholar=enable_semantic_scholar,
-                enable_arxiv=enable_arxiv,
-                enable_serpapi=enable_serpapi,
-                preferred_provider=(
-                    "semantic_scholar" if enable_semantic_scholar else None
-                ),
-                provider_order=None,
-                core_client=core_client,
-                semantic_client=client,
-                arxiv_client=arxiv_client,
-                serpapi_client=serpapi_client,
             )
         except Exception as exc:
             logger.debug(
@@ -707,7 +718,11 @@ async def _resolve_sparse_metadata_candidates(
                 exc,
             )
         else:
-            data = list(search_payload.get("data") or [])
+            data = (
+                search_trace.result.model_dump(by_alias=True)["data"]
+                if search_trace.result is not None
+                else []
+            )
             for paper in data[: max_candidates * 2]:
                 if not isinstance(paper, dict):
                     continue

@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from typing import Any
 
-from ..provider_runtime import (
-    ProviderBudgetState,
-    ProviderDiagnosticsRegistry,
-    execute_provider_call,
+from ..provider_runtime import ProviderBudgetState, ProviderDiagnosticsRegistry
+from ..search_executor import (
+    ProviderExecutorName,
+    ProviderSearchRequest,
+    SearchClientBundle,
+    SearchExecutor,
 )
-from ..search import _arxiv_result, _core_result, _semantic_result, _serpapi_result
 from .config import LatencyProfile
 
 SMART_RETRIEVAL_FIELDS = [
@@ -27,6 +27,8 @@ SMART_RETRIEVAL_FIELDS = [
     "url",
     "externalIds",
 ]
+
+_SEARCH_EXECUTOR = SearchExecutor()
 
 
 @dataclass
@@ -161,13 +163,12 @@ async def retrieve_variant(
         is_expansion=is_expansion,
         latency_profile=latency_profile,
     )
-    provider_calls: list[tuple[str, str, Any]] = []
+    provider_calls: list[tuple[ProviderExecutorName, ProviderSearchRequest]] = []
     if enable_semantic_scholar:
         provider_calls.append(
             (
                 "semantic_scholar",
-                "search_papers",
-                lambda: semantic_client.search_papers(
+                ProviderSearchRequest(
                     query=variant,
                     limit=limits["semantic_scholar"],
                     fields=SMART_RETRIEVAL_FIELDS,
@@ -180,8 +181,7 @@ async def retrieve_variant(
         provider_calls.append(
             (
                 "openalex",
-                "search",
-                lambda: openalex_client.search(
+                ProviderSearchRequest(
                     query=variant,
                     limit=limits["openalex"],
                     year=year,
@@ -192,11 +192,9 @@ async def retrieve_variant(
         provider_calls.append(
             (
                 "core",
-                "search",
-                lambda: core_client.search(
+                ProviderSearchRequest(
                     query=variant,
                     limit=limits["core"],
-                    start=0,
                     year=year,
                 ),
             )
@@ -205,11 +203,9 @@ async def retrieve_variant(
         provider_calls.append(
             (
                 "arxiv",
-                "search",
-                lambda: arxiv_client.search(
+                ProviderSearchRequest(
                     query=variant,
                     limit=limits["arxiv"],
-                    start=0,
                     year=year,
                 ),
             )
@@ -223,8 +219,7 @@ async def retrieve_variant(
         provider_calls.append(
             (
                 "serpapi_google_scholar",
-                "search",
-                lambda: serpapi_client.search(
+                ProviderSearchRequest(
                     query=variant,
                     limit=limits["serpapi_google_scholar"],
                     year=year,
@@ -232,27 +227,19 @@ async def retrieve_variant(
             )
         )
 
-    async def _run_provider_call(
-        provider: str,
-        endpoint: str,
-        operation: Any,
-    ) -> Any:
-        return await execute_provider_call(
-            provider=provider,
-            endpoint=endpoint,
-            operation=operation,
-            registry=provider_registry,
-            budget=provider_budget,
-            request_outcomes=request_outcomes,
-            request_id=request_id,
-        )
-
-    raw_results = await asyncio.gather(
-        *[
-            _run_provider_call(provider, endpoint, operation)
-            for provider, endpoint, operation in provider_calls
-        ],
-        return_exceptions=False,
+    raw_results = await _SEARCH_EXECUTOR.execute_parallel_requests(
+        provider_requests=provider_calls,
+        clients=SearchClientBundle(
+            core_client=core_client,
+            semantic_client=semantic_client,
+            openalex_client=openalex_client,
+            arxiv_client=arxiv_client,
+            serpapi_client=serpapi_client,
+        ),
+        provider_registry=provider_registry,
+        budget=provider_budget,
+        request_outcomes=request_outcomes,
+        request_id=request_id,
     )
 
     candidates: list[RetrievedCandidate] = []
@@ -268,13 +255,9 @@ async def retrieve_variant(
         provider_timings_ms[provider] = outcome.latency_ms
         if outcome.error:
             provider_errors[provider] = outcome.error
-        if call_result.payload is None:
+        if call_result.response is None:
             continue
-        provider_papers = _provider_papers(
-            provider,
-            call_result.payload,
-            limits[provider],
-        )
+        provider_papers = call_result.response.model_dump(by_alias=True)["data"]
         if provider_papers:
             providers_used.append(provider)
         for rank, paper in enumerate(provider_papers, start=1):
@@ -297,17 +280,3 @@ async def retrieve_variant(
         provider_errors=provider_errors,
         provider_outcomes=provider_outcomes,
     )
-
-
-def _provider_papers(provider: str, payload: Any, limit: int) -> list[dict[str, Any]]:
-    if provider == "semantic_scholar":
-        return _semantic_result(payload, limit).model_dump(by_alias=True)["data"]
-    if provider == "openalex":
-        return list((payload or {}).get("data") or [])[:limit]
-    if provider == "core":
-        return _core_result(payload, limit).model_dump(by_alias=True)["data"]
-    if provider == "arxiv":
-        return _arxiv_result(payload, limit).model_dump(by_alias=True)["data"]
-    if provider == "serpapi_google_scholar":
-        return _serpapi_result(payload, limit).model_dump(by_alias=True)["data"]
-    return []
