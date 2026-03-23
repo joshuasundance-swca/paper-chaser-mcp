@@ -311,7 +311,10 @@ Reports plus the species-profile JSON that powers the public ECOS species page.
 | `ECOS_BASE_URL` | `https://ecos.fws.gov` | Base URL for ECOS species, Pull Reports, and document links |
 | `ECOS_TIMEOUT_SECONDS` | `30` | Timeout for ECOS species/Pull Reports requests |
 | `ECOS_DOCUMENT_TIMEOUT_SECONDS` | `60` | Timeout for ECOS document fetches before Markdown conversion |
+| `ECOS_DOCUMENT_CONVERSION_TIMEOUT_SECONDS` | `60` | Timeout for ECOS Markdown conversion after the document bytes have been fetched |
 | `ECOS_MAX_DOCUMENT_SIZE_MB` | `25` | Maximum fetched document size before returning `extractionStatus=too_large` |
+| `ECOS_VERIFY_TLS` | `true` | Verify TLS certificates for ECOS species, Pull Reports, and document requests |
+| `ECOS_CA_BUNDLE` | unset | Optional CA bundle path to use when ECOS TLS verification needs a custom trust store |
 
 The core package now includes `markitdown[pdf]` so `get_document_text_ecos` can
 convert PDF, HTML, and text-like ECOS documents to Markdown with plugins kept

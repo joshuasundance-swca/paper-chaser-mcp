@@ -258,12 +258,12 @@ as part of the intended agent contract.
   search, and exhausted match attempts return a structured no-match payload
   instead of surfacing a raw provider 404.
 
-### 2. Default CORE first hop follows redirects
+### 2. CORE fallback follows redirects cleanly
 
-- The default broker path now follows predictable CORE redirects instead of
-  recording an avoidable first-provider failure.
-- Treat new redirect-driven fallback in `brokerMetadata.attemptedProviders` as a
-  regression if it reappears.
+- When the broker reaches CORE, predictable redirects are followed instead of
+  recording an avoidable failed provider attempt.
+- Treat new redirect-driven CORE failures in `brokerMetadata.attemptedProviders`
+  as a regression if they reappear.
 
 ### 3. `nextStepHint` now distinguishes continuation from pivots
 

@@ -5,9 +5,9 @@ This document is the current working handoff for the fork. It is intended to giv
 ## Current Status
 
 - Local development baseline is configured through `pyproject.toml` and `.pre-commit-config.yaml`.
-- The default free broker path is `CORE -> Semantic Scholar -> arXiv` for
-  `search_papers`; SerpApi can be inserted between Semantic Scholar and arXiv
-  when enabled, but it is disabled by default.
+- The default free broker path is `Semantic Scholar -> arXiv -> CORE` for
+  `search_papers`; SerpApi remains an optional paid recovery hop at the end of
+  the broker order when enabled, but it is disabled by default.
 - XML parsing uses `defusedxml`.
 - README configuration examples are valid JSON.
 - GitHub Actions now validates pushes and pull requests.
@@ -150,7 +150,8 @@ This document is the current working handoff for the fork. It is intended to giv
   Compose and Azure-hosted deployments.
 - `scholar_search_mcp/deployment_utils.py` resolves smoke-test endpoints from
   Azure deployment outputs or an explicit environment override.
-- `scholar_search_mcp/clients/` contains provider clients for CORE, Semantic Scholar, OpenAlex, and arXiv.
+- `scholar_search_mcp/clients/` contains provider clients for Semantic Scholar,
+  arXiv, CORE, OpenAlex, SerpApi, Crossref, Unpaywall, and ECOS.
 - `scholar_search_mcp/models/common.py` contains shared Pydantic models including `Paper` (with `scholarResultId`).
 - `scholar_search_mcp/parsing.py`, `scholar_search_mcp/constants.py`, and `scholar_search_mcp/transport.py` hold shared helper code and compatibility imports.
 - `scripts/validate_deployment.py` validates the Azure/Docker deployment path.
@@ -244,8 +245,8 @@ gh aw compile test-scholar-search --dir .github/workflows
   for each golden path.
 - `search_papers_match` now normalizes wrapped Semantic Scholar match responses
   to one clean paper-shaped payload.
-- CORE search now follows redirects so the default broker path does not record
-  an avoidable failed first provider attempt for predictable 301s.
+- CORE search now follows redirects so brokered fallbacks into CORE do not
+  record avoidable failed provider attempts for predictable 301s.
 - `brokerMetadata.nextStepHint` now distinguishes between the closest
   continuation path and a Semantic Scholar/provider pivot.
 - Provider-specific search tool schemas now expose only the parameters their
@@ -254,7 +255,7 @@ gh aw compile test-scholar-search --dir .github/workflows
   onboarding resources, prompt text, and `.github/copilot-instructions.md`.
 - CORE search now retries short-lived 5xx responses, which was required after
   live broker smoke testing exposed transient backend shard failures on the
-  first hop.
+  CORE fallback hop.
 - A hosted deployment path now exists for Azure: `scholar_search_mcp.deployment`
   adds `/healthz`, optional backend-token auth, and optional Origin allowlists
   in front of the FastMCP HTTP app.
