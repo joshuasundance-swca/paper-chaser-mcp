@@ -580,10 +580,14 @@ workspace_registry = WorkspaceRegistry(
     index_backend=settings.agentic_index_backend,
     similarity_fn=provider_bundle.similarity,
     async_batched_similarity_fn=provider_bundle.abatched_similarity,
-    async_embed_query_fn=provider_bundle.aembed_query,
-    async_embed_texts_fn=provider_bundle.aembed_texts,
-    embed_query_fn=provider_bundle.embed_query,
-    embed_texts_fn=provider_bundle.embed_texts,
+    async_embed_query_fn=(
+        None if settings.disable_embeddings else provider_bundle.aembed_query
+    ),
+    async_embed_texts_fn=(
+        None if settings.disable_embeddings else provider_bundle.aembed_texts
+    ),
+    embed_query_fn=(None if settings.disable_embeddings else provider_bundle.embed_query),
+    embed_texts_fn=(None if settings.disable_embeddings else provider_bundle.embed_texts),
 )
 agentic_runtime = AgenticRuntime(
     config=agentic_config,

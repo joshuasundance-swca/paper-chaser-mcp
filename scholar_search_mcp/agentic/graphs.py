@@ -40,6 +40,7 @@ from .models import (
 from .planner import (
     classify_query,
     combine_variants,
+    dedupe_variants,
     grounded_expansion_candidates,
     speculative_expansion_candidates,
 )
@@ -157,7 +158,7 @@ class AgenticRuntime:
         log_message = detail or message
         if log_message:
             logger.info("smart-search[%s] %s", request_id, log_message)
-        if ctx is None:
+        if ctx is None or self._skip_context_notifications(ctx):
             return
         if progress is not None and message is not None:
             self._schedule_context_call(
@@ -179,7 +180,7 @@ class AgenticRuntime:
         total: float,
         message: str,
     ) -> None:
-        if ctx is None:
+        if ctx is None or self._skip_context_notifications(ctx):
             return
         self._schedule_context_call(
             ctx.report_progress(
@@ -195,6 +196,13 @@ class AgenticRuntime:
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
         task.add_done_callback(self._consume_background_task)
+
+    @staticmethod
+    def _skip_context_notifications(ctx: Context) -> bool:
+        transport = getattr(ctx, "transport", None)
+        if not isinstance(transport, str):
+            return False
+        return transport.lower() == "stdio"
 
     @staticmethod
     def _consume_background_task(task: asyncio.Task[Any]) -> None:
@@ -331,6 +339,7 @@ class AgenticRuntime:
             arxiv_client=self._arxiv_client,
             serpapi_client=self._serpapi_client,
             widened=planner.intent == "review",
+            is_expansion=False,
             allow_serpapi=(
                 self._enable_serpapi and profile_settings.allow_serpapi_on_input
             ),
@@ -386,50 +395,6 @@ class AgenticRuntime:
         ]
         grounded_tasks: list[asyncio.Task[RetrievalBatch]] = []
         grounded_retrieval_started: float | None = None
-        if grounded_variants:
-            grounded_retrieval_started = time.perf_counter()
-            grounded_tasks = [
-                asyncio.create_task(
-                    retrieve_variant(
-                        variant=candidate.variant,
-                        variant_source=candidate.source,
-                        intent=planner.intent,
-                        year=year,
-                        venue=venue,
-                        enable_core=self._enable_core,
-                        enable_semantic_scholar=self._enable_semantic_scholar,
-                        enable_openalex=self._enable_openalex,
-                        enable_arxiv=self._enable_arxiv,
-                        enable_serpapi=self._enable_serpapi,
-                        core_client=self._core_client,
-                        semantic_client=self._client,
-                        openalex_client=self._openalex_client,
-                        arxiv_client=self._arxiv_client,
-                        serpapi_client=self._serpapi_client,
-                        widened=planner.intent == "review",
-                        allow_serpapi=(
-                            self._enable_serpapi
-                            and profile_settings.allow_serpapi_on_expansions
-                        ),
-                        latency_profile=latency_profile,
-                        provider_registry=self._provider_registry,
-                        provider_budget=budget_state,
-                        request_outcomes=provider_outcomes,
-                        request_id=request_id,
-                    )
-                )
-                for candidate in grounded_variants
-            ]
-            await self._emit_smart_search_status(
-                ctx=ctx,
-                request_id=request_id,
-                progress=45,
-                message="Running grounded expansions",
-                detail=(
-                    f"Running {len(grounded_variants)} grounded expansion variant(s) "
-                    "while speculative planning continues in parallel."
-                ),
-            )
 
         speculative_generation_started = time.perf_counter()
         speculative = (
@@ -466,6 +431,15 @@ class AgenticRuntime:
         )
 
         expansion_variants = variants[1:]
+        grounded_variants = [
+            candidate
+            for candidate in dedupe_variants(
+                grounded_variants,
+                config=profile_settings.search_config,
+            )
+            if candidate.variant.strip().lower()
+            in {variant.variant.strip().lower() for variant in expansion_variants}
+        ]
         grounded_count = len(
             [
                 candidate
@@ -490,6 +464,51 @@ class AgenticRuntime:
                     f"Preview: {expansion_preview}."
                 ),
             )
+            if grounded_variants:
+                grounded_retrieval_started = time.perf_counter()
+                grounded_tasks = [
+                    asyncio.create_task(
+                        retrieve_variant(
+                            variant=candidate.variant,
+                            variant_source=candidate.source,
+                            intent=planner.intent,
+                            year=year,
+                            venue=venue,
+                            enable_core=self._enable_core,
+                            enable_semantic_scholar=self._enable_semantic_scholar,
+                            enable_openalex=self._enable_openalex,
+                            enable_arxiv=self._enable_arxiv,
+                            enable_serpapi=self._enable_serpapi,
+                            core_client=self._core_client,
+                            semantic_client=self._client,
+                            openalex_client=self._openalex_client,
+                            arxiv_client=self._arxiv_client,
+                            serpapi_client=self._serpapi_client,
+                            widened=planner.intent == "review",
+                            is_expansion=True,
+                            allow_serpapi=(
+                                self._enable_serpapi
+                                and profile_settings.allow_serpapi_on_expansions
+                            ),
+                            latency_profile=latency_profile,
+                            provider_registry=self._provider_registry,
+                            provider_budget=budget_state,
+                            request_outcomes=provider_outcomes,
+                            request_id=request_id,
+                        )
+                    )
+                    for candidate in grounded_variants
+                ]
+                await self._emit_smart_search_status(
+                    ctx=ctx,
+                    request_id=request_id,
+                    progress=45,
+                    message="Running grounded expansions",
+                    detail=(
+                        f"Running {len(grounded_variants)} grounded expansion variant(s) "
+                        "while speculative planning continues in parallel."
+                    ),
+                )
         else:
             await self._emit_smart_search_status(
                 ctx=ctx,
@@ -525,6 +544,7 @@ class AgenticRuntime:
                         arxiv_client=self._arxiv_client,
                         serpapi_client=self._serpapi_client,
                         widened=planner.intent == "review",
+                        is_expansion=True,
                         allow_serpapi=(
                             self._enable_serpapi
                             and profile_settings.allow_serpapi_on_expansions
@@ -601,10 +621,15 @@ class AgenticRuntime:
 
         merged = merge_candidates(all_candidates)
         rerank_started = time.perf_counter()
+        rerank_bundle = (
+            provider_bundle
+            if profile_settings.use_embedding_rerank
+            else self._deterministic_bundle
+        )
         reranked = await rerank_candidates(
             query=normalized_query,
             merged_candidates=merged,
-            provider_bundle=provider_bundle,
+            provider_bundle=rerank_bundle,
             candidate_concepts=planner.candidate_concepts,
             candidate_pool_size=profile_settings.search_config.candidate_pool_size,
             request_outcomes=provider_outcomes,
@@ -817,7 +842,13 @@ class AgenticRuntime:
         except SearchSessionNotFoundError:
             return self._missing_result_set_error(search_session_id)
 
+        profile_settings = self._config.latency_profile_settings(latency_profile)
         provider_bundle = self._provider_bundle_for_profile(latency_profile)
+        similarity_bundle = (
+            provider_bundle
+            if profile_settings.use_embedding_rerank
+            else self._deterministic_bundle
+        )
 
         await self._emit_tool_progress(
             ctx=ctx,
@@ -840,7 +871,7 @@ class AgenticRuntime:
                 evidence_papers=evidence_papers,
                 answer_mode=answer_mode,
             ),
-            provider_bundle.abatched_similarity(
+            similarity_bundle.abatched_similarity(
                 question,
                 evidence_texts,
             ),
@@ -930,7 +961,13 @@ class AgenticRuntime:
         except SearchSessionNotFoundError:
             return self._missing_result_set_error(search_session_id)
 
+        profile_settings = self._config.latency_profile_settings(latency_profile)
         provider_bundle = self._provider_bundle_for_profile(latency_profile)
+        clustering_bundle = (
+            provider_bundle
+            if profile_settings.use_embedding_rerank
+            else self._deterministic_bundle
+        )
 
         await self._emit_tool_progress(
             ctx=ctx,
@@ -940,7 +977,7 @@ class AgenticRuntime:
         )
         clusters = await _cluster_papers(
             papers=record.papers,
-            provider_bundle=provider_bundle,
+            provider_bundle=clustering_bundle,
             max_themes=max_themes,
         )
         themes: list[LandscapeTheme] = []
@@ -1070,7 +1107,12 @@ class AgenticRuntime:
             total=3,
             message="Expanding research graph",
         )
-        provider_bundle = self._provider_bundle_for_profile(latency_profile)
+        profile_settings = self._config.latency_profile_settings(latency_profile)
+        frontier_scoring_bundle = (
+            self._provider_bundle_for_profile(latency_profile)
+            if profile_settings.use_embedding_rerank
+            else self._deterministic_bundle
+        )
 
         frontier_papers: list[dict[str, Any]] = []
         nodes: dict[str, GraphNode] = {}
@@ -1136,7 +1178,7 @@ class AgenticRuntime:
                 scores = await _graph_frontier_scores(
                     seed=seed,
                     related_papers=related_papers,
-                    provider_bundle=provider_bundle,
+                    provider_bundle=frontier_scoring_bundle,
                 )
                 return {
                     "seed_id": seed_id,

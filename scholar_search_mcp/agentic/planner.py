@@ -75,6 +75,12 @@ TITLE_STOPWORDS = {
     "with",
 }
 
+VARIANT_DEDUPE_STOPWORDS = TITLE_STOPWORDS | GENERIC_EVIDENCE_WORDS | {
+    "florida",
+    "review",
+    "scrub",
+}
+
 
 def normalize_query(query: str) -> str:
     """Collapse whitespace and keep the original wording intact."""
@@ -264,11 +270,17 @@ def grounded_expansion_candidates(
 
     deduped: list[ExpansionCandidate] = []
     seen: set[str] = set()
+    seen_signatures: list[frozenset[str]] = []
     for candidate in variants:
         lowered = candidate.variant.lower()
-        if lowered not in seen:
-            seen.add(lowered)
-            deduped.append(candidate)
+        if lowered in seen:
+            continue
+        signature = _variant_signature(candidate.variant)
+        if any(_signatures_are_near_duplicates(signature, prior) for prior in seen_signatures):
+            continue
+        seen.add(lowered)
+        seen_signatures.append(signature)
+        deduped.append(candidate)
     return deduped[: config.max_grounded_variants]
 
 
@@ -324,15 +336,72 @@ def combine_variants(
 
     deduped: list[ExpansionCandidate] = []
     seen: set[str] = set()
+    seen_signatures: list[frozenset[str]] = []
     for candidate in variants:
         lowered = candidate.variant.lower()
         if lowered in seen:
             continue
+        signature = _variant_signature(candidate.variant)
+        if any(_signatures_are_near_duplicates(signature, prior) for prior in seen_signatures):
+            continue
         seen.add(lowered)
+        seen_signatures.append(signature)
         deduped.append(candidate)
         if len(deduped) >= config.max_total_variants:
             break
     return deduped
+
+
+def dedupe_variants(
+    candidates: list[ExpansionCandidate],
+    *,
+    config: AgenticConfig,
+) -> list[ExpansionCandidate]:
+    """Apply the same near-duplicate suppression used by final variant planning."""
+
+    deduped: list[ExpansionCandidate] = []
+    seen: set[str] = set()
+    seen_signatures: list[frozenset[str]] = []
+    for candidate in candidates:
+        lowered = candidate.variant.lower()
+        if lowered in seen:
+            continue
+        signature = _variant_signature(candidate.variant)
+        if any(_signatures_are_near_duplicates(signature, prior) for prior in seen_signatures):
+            continue
+        seen.add(lowered)
+        seen_signatures.append(signature)
+        deduped.append(candidate)
+        if len(deduped) >= config.max_total_variants:
+            break
+    return deduped
+
+
+def _variant_signature(text: str) -> frozenset[str]:
+    tokens = {
+        token
+        for token in re.findall(r"[A-Za-z0-9]{3,}", normalize_query(text).lower())
+        if token not in VARIANT_DEDUPE_STOPWORDS
+    }
+    return frozenset(tokens)
+
+
+def _signatures_are_near_duplicates(
+    left: frozenset[str],
+    right: frozenset[str],
+) -> bool:
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    overlap = len(left & right)
+    shorter = min(len(left), len(right))
+    longer = max(len(left), len(right))
+    if shorter == 0:
+        return False
+    coverage = overlap / shorter
+    jaccard = overlap / len(left | right)
+    return coverage >= 0.8 or (coverage >= 0.67 and jaccard >= 0.5 and longer <= 8)
 
 
 def _top_evidence_phrases(

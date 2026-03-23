@@ -135,6 +135,8 @@ class AppSettings(BaseModel):
     planner_model: str = "gpt-5.4-mini"
     synthesis_model: str = "gpt-5.4"
     embedding_model: str = "text-embedding-3-large"
+    disable_embeddings: bool = False
+    agentic_openai_timeout_seconds: float = 30.0
     agentic_index_backend: AgenticIndexBackend = "memory"
     session_ttl_seconds: int = 1800
     enable_agentic_trace_log: bool = False
@@ -211,6 +213,16 @@ class AppSettings(BaseModel):
             embedding_model=env.get(
                 "SCHOLAR_SEARCH_EMBEDDING_MODEL",
                 "text-embedding-3-large",
+            ),
+            disable_embeddings=_parse_env_bool(
+                env,
+                "SCHOLAR_SEARCH_DISABLE_EMBEDDINGS",
+                False,
+            ),
+            agentic_openai_timeout_seconds=_parse_positive_float(
+                env,
+                "SCHOLAR_SEARCH_AGENTIC_OPENAI_TIMEOUT_SECONDS",
+                30.0,
             ),
             agentic_index_backend=cast_agentic_index_backend(
                 env.get("SCHOLAR_SEARCH_AGENTIC_INDEX_BACKEND")

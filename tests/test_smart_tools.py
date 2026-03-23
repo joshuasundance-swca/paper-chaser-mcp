@@ -11,12 +11,19 @@ from scholar_search_mcp.agentic import (
     WorkspaceRegistry,
     resolve_provider_bundle,
 )
+from scholar_search_mcp.agentic.providers import OpenAIProviderBundle
+from scholar_search_mcp.provider_runtime import (
+    ProviderDiagnosticsRegistry,
+    ProviderPolicy,
+    execute_provider_call,
+)
 from scholar_search_mcp.agentic.models import PlannerDecision
 from scholar_search_mcp.agentic.planner import (
     classify_query,
     grounded_expansion_candidates,
     looks_like_exact_title,
 )
+from scholar_search_mcp.agentic.retrieval import provider_limits
 from scholar_search_mcp.agentic.ranking import merge_candidates, rerank_candidates
 from scholar_search_mcp.agentic.retrieval import RetrievedCandidate, retrieve_variant
 from scholar_search_mcp.enrichment import PaperEnrichmentService
@@ -30,9 +37,10 @@ from tests.helpers import (
 
 
 class RecordingContext:
-    def __init__(self) -> None:
+    def __init__(self, *, transport: str | None = None) -> None:
         self.progress_updates: list[dict[str, object]] = []
         self.info_messages: list[dict[str, object]] = []
+        self.transport = transport
 
     async def report_progress(
         self,
@@ -251,22 +259,40 @@ async def test_search_papers_smart_emits_progress_logs_and_provider_events(
     ]
     assert "Planning smart search" in progress_messages
     assert "Running initial retrieval" in progress_messages
-    assert "Expansion plan ready" in progress_messages
-    assert any(
-        str(message).startswith("Expansion 1/1 complete")
-        for message in progress_messages
-    )
+    assert "No grounded expansions to run" in progress_messages
     assert "Smart search complete" in progress_messages
 
     info_messages = [entry["message"] for entry in ctx.info_messages]
     assert any(
-        "Prepared 1 expansion variant(s)" in str(message) for message in info_messages
+        "Initial retrieval stayed close to the query" in str(message)
+        for message in info_messages
     )
     assert any("searchSessionId=" in str(message) for message in info_messages)
 
     log_messages = [record.getMessage() for record in caplog.records]
     assert any("smart-search[" in message for message in log_messages)
     assert any("provider-call[" in message for message in log_messages)
+
+
+@pytest.mark.asyncio
+async def test_search_papers_smart_skips_context_notifications_on_stdio_transport() -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    _, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
+    ctx = RecordingContext(transport="stdio")
+
+    payload = await runtime.search_papers_smart(
+        query="transformers",
+        focus="literature review",
+        limit=5,
+        latency_profile="fast",
+        ctx=cast(Any, ctx),
+    )
+    await asyncio.sleep(0)
+
+    assert payload["results"]
+    assert ctx.progress_updates == []
+    assert ctx.info_messages == []
 
 
 @pytest.mark.asyncio
@@ -363,6 +389,7 @@ async def test_ask_result_set_runs_synthesis_and_scoring_concurrently(
             question="What does this result set say about retrieval?",
             top_k=1,
             answer_mode="synthesis",
+            latency_profile="deep",
         )
     )
 
@@ -422,6 +449,604 @@ async def test_ask_result_set_normalizes_non_literal_confidence_values(
     )
 
     assert ask["confidence"] == "medium"
+
+
+@pytest.mark.asyncio
+async def test_ask_result_set_balanced_mode_skips_embedding_scoring() -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    config = AgenticConfig(
+        enabled=True,
+        provider="openai",
+        planner_model="gpt-5.4-mini",
+        synthesis_model="gpt-5.4",
+        embedding_model="text-embedding-3-large",
+        index_backend="memory",
+        session_ttl_seconds=1800,
+        enable_trace_log=False,
+    )
+    provider_registry = ProviderDiagnosticsRegistry()
+    bundle = OpenAIProviderBundle(
+        config,
+        api_key="sk-test",
+        provider_registry=provider_registry,
+    )
+
+    async def _unexpected_aembed_texts(
+        texts: list[str],
+        **kwargs: object,
+    ) -> list[tuple[float, ...] | None]:
+        raise AssertionError(
+            f"balanced ask_result_set should not call embeddings: {texts!r}, {kwargs!r}"
+        )
+
+    bundle.aembed_texts = _unexpected_aembed_texts  # type: ignore[method-assign]
+
+    registry = WorkspaceRegistry(ttl_seconds=1800, enable_trace_log=False)
+    record = registry.save_result_set(
+        source_tool="search_papers_smart",
+        payload={
+            "data": [
+                {
+                    "paperId": "paper-1",
+                    "title": "Retrieval-Augmented Agents",
+                    "abstract": "Vector retrieval grounds agent answers.",
+                }
+            ]
+        },
+    )
+    runtime = AgenticRuntime(
+        config=config,
+        provider_bundle=bundle,
+        workspace_registry=registry,
+        client=semantic,
+        core_client=object(),
+        openalex_client=openalex,
+        arxiv_client=object(),
+        serpapi_client=None,
+        enable_core=False,
+        enable_semantic_scholar=True,
+        enable_openalex=True,
+        enable_arxiv=False,
+        enable_serpapi=False,
+        provider_registry=provider_registry,
+    )
+
+    ask = await runtime.ask_result_set(
+        search_session_id=record.search_session_id,
+        question="What does this result set say about retrieval?",
+        top_k=1,
+        answer_mode="synthesis",
+        latency_profile="balanced",
+    )
+
+    assert ask["answer"]
+
+
+@pytest.mark.asyncio
+async def test_map_research_landscape_balanced_mode_skips_embedding_clustering() -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    config = AgenticConfig(
+        enabled=True,
+        provider="openai",
+        planner_model="gpt-5.4-mini",
+        synthesis_model="gpt-5.4",
+        embedding_model="text-embedding-3-large",
+        index_backend="memory",
+        session_ttl_seconds=1800,
+        enable_trace_log=False,
+    )
+    provider_registry = ProviderDiagnosticsRegistry()
+    bundle = OpenAIProviderBundle(
+        config,
+        api_key="sk-test",
+        provider_registry=provider_registry,
+    )
+
+    async def _unexpected_aembed_texts(
+        texts: list[str],
+        **kwargs: object,
+    ) -> list[tuple[float, ...] | None]:
+        raise AssertionError(
+            f"balanced landscape mapping should not call embeddings: {texts!r}, {kwargs!r}"
+        )
+
+    bundle.aembed_texts = _unexpected_aembed_texts  # type: ignore[method-assign]
+
+    registry = WorkspaceRegistry(ttl_seconds=1800, enable_trace_log=False)
+    record = registry.save_result_set(
+        source_tool="search_papers_smart",
+        payload={
+            "data": [
+                {
+                    "paperId": "paper-1",
+                    "title": "Retrieval-Augmented Agents",
+                    "abstract": "Vector retrieval grounds agent answers.",
+                    "year": 2024,
+                },
+                {
+                    "paperId": "paper-2",
+                    "title": "Grounded Planning Agents",
+                    "abstract": "Grounded planning improves answer quality.",
+                    "year": 2023,
+                },
+            ]
+        },
+    )
+    runtime = AgenticRuntime(
+        config=config,
+        provider_bundle=bundle,
+        workspace_registry=registry,
+        client=semantic,
+        core_client=object(),
+        openalex_client=openalex,
+        arxiv_client=object(),
+        serpapi_client=None,
+        enable_core=False,
+        enable_semantic_scholar=True,
+        enable_openalex=True,
+        enable_arxiv=False,
+        enable_serpapi=False,
+        provider_registry=provider_registry,
+    )
+
+    landscape = await runtime.map_research_landscape(
+        search_session_id=record.search_session_id,
+        max_themes=2,
+        latency_profile="balanced",
+    )
+
+    assert landscape["themes"]
+
+
+@pytest.mark.asyncio
+async def test_async_embeddings_degrade_without_sync_retry_when_openai_fails() -> None:
+    config = AgenticConfig(
+        enabled=True,
+        provider="openai",
+        planner_model="gpt-5.4-mini",
+        synthesis_model="gpt-5.4",
+        embedding_model="text-embedding-3-large",
+        index_backend="memory",
+        session_ttl_seconds=1800,
+        enable_trace_log=False,
+    )
+    bundle = OpenAIProviderBundle(config, api_key="sk-test")
+
+    class _EmbeddingsClient:
+        async def create(self, **kwargs: object) -> object:
+            del kwargs
+            raise TimeoutError("simulated embedding timeout")
+
+    class _AsyncClient:
+        embeddings = _EmbeddingsClient()
+
+    bundle._async_openai_client = _AsyncClient()
+    bundle._openai_client = None
+    bundle._embeddings = None
+
+    def _unexpected_sync_retry(texts: list[str]) -> list[tuple[float, ...] | None]:
+        raise AssertionError(f"sync retry should not run: {texts!r}")
+
+    bundle.embed_texts = _unexpected_sync_retry  # type: ignore[method-assign]
+
+    embeddings = await bundle.aembed_texts(
+        ["alpha paper abstract", "beta paper abstract"],
+        request_id="smart-timeout",
+    )
+
+    assert embeddings == [None, None]
+
+
+@pytest.mark.asyncio
+async def test_async_similarity_falls_back_to_lexical_scores_when_embeddings_fail() -> None:
+    config = AgenticConfig(
+        enabled=True,
+        provider="openai",
+        planner_model="gpt-5.4-mini",
+        synthesis_model="gpt-5.4",
+        embedding_model="text-embedding-3-large",
+        index_backend="memory",
+        session_ttl_seconds=1800,
+        enable_trace_log=False,
+    )
+    bundle = OpenAIProviderBundle(config, api_key="sk-test")
+
+    class _EmbeddingsClient:
+        async def create(self, **kwargs: object) -> object:
+            del kwargs
+            raise TimeoutError("simulated embedding timeout")
+
+    class _AsyncClient:
+        embeddings = _EmbeddingsClient()
+
+    bundle._async_openai_client = _AsyncClient()
+    bundle._openai_client = None
+    bundle._embeddings = None
+
+    scores = await bundle.abatched_similarity(
+        "transformer retrieval",
+        ["transformer retrieval for grounded answers", "avian habitat management"],
+        request_id="smart-timeout",
+    )
+
+    assert len(scores) == 2
+    assert scores[0] > scores[1]
+
+
+@pytest.mark.asyncio
+async def test_search_papers_smart_records_embedding_timeout_provider_outcome(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    config = AgenticConfig(
+        enabled=True,
+        provider="openai",
+        planner_model="gpt-5.4-mini",
+        synthesis_model="gpt-5.4",
+        embedding_model="text-embedding-3-large",
+        index_backend="memory",
+        session_ttl_seconds=1800,
+        enable_trace_log=False,
+        openai_timeout_seconds=3.0,
+    )
+    provider_registry = ProviderDiagnosticsRegistry()
+    bundle = OpenAIProviderBundle(
+        config,
+        api_key="sk-test",
+        provider_registry=provider_registry,
+    )
+
+    class _EmbeddingsClient:
+        async def create(self, **kwargs: object) -> object:
+            del kwargs
+            raise TimeoutError("simulated stalled embeddings call")
+
+    class _AsyncClient:
+        embeddings = _EmbeddingsClient()
+
+    bundle._async_openai_client = _AsyncClient()
+    bundle._openai_client = None
+    bundle._embeddings = None
+
+    registry = WorkspaceRegistry(ttl_seconds=1800, enable_trace_log=False)
+    runtime = AgenticRuntime(
+        config=config,
+        provider_bundle=bundle,
+        workspace_registry=registry,
+        client=semantic,
+        core_client=object(),
+        openalex_client=openalex,
+        arxiv_client=object(),
+        serpapi_client=None,
+        enable_core=False,
+        enable_semantic_scholar=True,
+        enable_openalex=True,
+        enable_arxiv=False,
+        enable_serpapi=False,
+        provider_registry=provider_registry,
+    )
+
+    caplog.set_level(logging.INFO, logger="scholar-search-mcp")
+
+    payload = await runtime.search_papers_smart(
+        query="transformers",
+        limit=5,
+        latency_profile="deep",
+    )
+
+    assert payload["results"]
+    openai_outcomes = [
+        outcome
+        for outcome in payload["strategyMetadata"]["providerOutcomes"]
+        if outcome["provider"] == "openai" and outcome["endpoint"] == "embeddings.create"
+    ]
+    assert openai_outcomes
+    assert openai_outcomes[-1]["statusBucket"] == "provider_error"
+    assert "TimeoutError" in (openai_outcomes[-1]["error"] or "")
+
+    log_messages = [record.getMessage() for record in caplog.records]
+    assert any("embedding-batch[smart-" in message for message in log_messages)
+    assert any(
+        "OpenAI embeddings.create exceeded total timeout" in message
+        for message in log_messages
+    )
+
+
+@pytest.mark.asyncio
+async def test_search_papers_smart_balanced_mode_skips_embedding_rerank() -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    config = AgenticConfig(
+        enabled=True,
+        provider="openai",
+        planner_model="gpt-5.4-mini",
+        synthesis_model="gpt-5.4",
+        embedding_model="text-embedding-3-large",
+        index_backend="memory",
+        session_ttl_seconds=1800,
+        enable_trace_log=False,
+    )
+    provider_registry = ProviderDiagnosticsRegistry()
+    bundle = OpenAIProviderBundle(
+        config,
+        api_key="sk-test",
+        provider_registry=provider_registry,
+    )
+
+    class _EmbeddingsClient:
+        async def create(self, **kwargs: object) -> object:
+            raise AssertionError(f"balanced rerank should not call embeddings: {kwargs!r}")
+
+    class _ResponsesClient:
+        async def parse(self, **kwargs: object) -> object:
+            del kwargs
+            return {
+                "intent": "discovery",
+                "constraints": {},
+                "seedIdentifiers": [],
+                "candidateConcepts": ["transformers"],
+                "providerPlan": ["semantic_scholar", "openalex"],
+                "followUpMode": "qa",
+            }
+
+    class _AsyncClient:
+        embeddings = _EmbeddingsClient()
+        responses = _ResponsesClient()
+
+    bundle._async_openai_client = _AsyncClient()
+    bundle._openai_client = None
+    bundle._embeddings = None
+
+    registry = WorkspaceRegistry(ttl_seconds=1800, enable_trace_log=False)
+    runtime = AgenticRuntime(
+        config=config,
+        provider_bundle=bundle,
+        workspace_registry=registry,
+        client=semantic,
+        core_client=object(),
+        openalex_client=openalex,
+        arxiv_client=object(),
+        serpapi_client=None,
+        enable_core=False,
+        enable_semantic_scholar=True,
+        enable_openalex=True,
+        enable_arxiv=False,
+        enable_serpapi=False,
+        provider_registry=provider_registry,
+    )
+
+    payload = await runtime.search_papers_smart(
+        query="transformers",
+        limit=5,
+        latency_profile="balanced",
+    )
+
+    assert payload["results"]
+    assert not [
+        outcome
+        for outcome in payload["strategyMetadata"]["providerOutcomes"]
+        if outcome["provider"] == "openai" and outcome["endpoint"] == "embeddings.create"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_search_papers_smart_deep_mode_skips_embeddings_when_globally_disabled() -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    config = AgenticConfig(
+        enabled=True,
+        provider="openai",
+        planner_model="gpt-5.4-mini",
+        synthesis_model="gpt-5.4",
+        embedding_model="text-embedding-3-large",
+        disable_embeddings=True,
+        index_backend="memory",
+        session_ttl_seconds=1800,
+        enable_trace_log=False,
+    )
+    provider_registry = ProviderDiagnosticsRegistry()
+    bundle = OpenAIProviderBundle(
+        config,
+        api_key="sk-test",
+        provider_registry=provider_registry,
+    )
+
+    class _EmbeddingsClient:
+        async def create(self, **kwargs: object) -> object:
+            raise AssertionError(
+                f"global embedding disable should prevent embedding calls: {kwargs!r}"
+            )
+
+    class _ResponsesClient:
+        async def parse(self, **kwargs: object) -> object:
+            del kwargs
+            return {
+                "intent": "discovery",
+                "constraints": {},
+                "seedIdentifiers": [],
+                "candidateConcepts": ["transformers"],
+                "providerPlan": ["semantic_scholar", "openalex"],
+                "followUpMode": "qa",
+            }
+
+    class _AsyncClient:
+        embeddings = _EmbeddingsClient()
+        responses = _ResponsesClient()
+
+    bundle._async_openai_client = _AsyncClient()
+    bundle._openai_client = None
+    bundle._embeddings = None
+
+    registry = WorkspaceRegistry(
+        ttl_seconds=1800,
+        enable_trace_log=False,
+        index_backend="faiss",
+        similarity_fn=bundle.similarity,
+        async_batched_similarity_fn=bundle.abatched_similarity,
+        async_embed_query_fn=None,
+        async_embed_texts_fn=None,
+        embed_query_fn=None,
+        embed_texts_fn=None,
+    )
+    runtime = AgenticRuntime(
+        config=config,
+        provider_bundle=bundle,
+        workspace_registry=registry,
+        client=semantic,
+        core_client=object(),
+        openalex_client=openalex,
+        arxiv_client=object(),
+        serpapi_client=None,
+        enable_core=False,
+        enable_semantic_scholar=True,
+        enable_openalex=True,
+        enable_arxiv=False,
+        enable_serpapi=False,
+        provider_registry=provider_registry,
+    )
+
+    payload = await runtime.search_papers_smart(
+        query="transformers",
+        limit=5,
+        latency_profile="deep",
+    )
+
+    assert payload["results"]
+    assert not [
+        outcome
+        for outcome in payload["strategyMetadata"]["providerOutcomes"]
+        if outcome["provider"] == "openai" and outcome["endpoint"] == "embeddings.create"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_planner_uses_total_timeout_and_falls_back() -> None:
+    config = AgenticConfig(
+        enabled=True,
+        provider="openai",
+        planner_model="gpt-5.4-mini",
+        synthesis_model="gpt-5.4",
+        embedding_model="text-embedding-3-large",
+        index_backend="memory",
+        session_ttl_seconds=1800,
+        enable_trace_log=False,
+        openai_timeout_seconds=0.01,
+    )
+    bundle = OpenAIProviderBundle(config, api_key="sk-test")
+
+    class _ResponsesClient:
+        async def parse(self, **kwargs: object) -> object:
+            del kwargs
+            await asyncio.sleep(60)
+            return object()
+
+    class _AsyncClient:
+        responses = _ResponsesClient()
+
+    bundle._async_openai_client = _AsyncClient()
+
+    decision = await asyncio.wait_for(
+        bundle.aplan_search(
+            query="transformers",
+            mode="auto",
+        ),
+        timeout=0.5,
+    )
+
+    assert isinstance(decision, PlannerDecision)
+    assert decision.intent in {
+        "discovery",
+        "review",
+        "known_item",
+        "author",
+        "citation",
+    }
+
+
+@pytest.mark.asyncio
+async def test_async_embeddings_use_total_timeout_guard() -> None:
+    config = AgenticConfig(
+        enabled=True,
+        provider="openai",
+        planner_model="gpt-5.4-mini",
+        synthesis_model="gpt-5.4",
+        embedding_model="text-embedding-3-large",
+        index_backend="memory",
+        session_ttl_seconds=1800,
+        enable_trace_log=False,
+        openai_timeout_seconds=0.01,
+    )
+    bundle = OpenAIProviderBundle(config, api_key="sk-test")
+
+    class _EmbeddingsClient:
+        async def create(self, **kwargs: object) -> object:
+            del kwargs
+            await asyncio.sleep(60)
+            return {"data": [{"embedding": [0.1, 0.2]}]}
+
+    class _AsyncClient:
+        embeddings = _EmbeddingsClient()
+
+    bundle._async_openai_client = _AsyncClient()
+
+    embeddings = await asyncio.wait_for(
+        bundle.aembed_texts(["alpha paper abstract"], request_id="total-timeout"),
+        timeout=0.5,
+    )
+
+    assert embeddings == [None]
+
+
+@pytest.mark.asyncio
+async def test_openai_embeddings_stall_does_not_block_planner_endpoint() -> None:
+    registry = ProviderDiagnosticsRegistry()
+    embeddings_started = asyncio.Event()
+    planner_finished = asyncio.Event()
+    release_embeddings = asyncio.Event()
+
+    async def _slow_embeddings() -> dict[str, object]:
+        embeddings_started.set()
+        await release_embeddings.wait()
+        return {"data": [{"embedding": [0.1, 0.2]}]}
+
+    async def _fast_planner() -> dict[str, object]:
+        planner_finished.set()
+        return {"output": []}
+
+    embeddings_task = asyncio.create_task(
+        execute_provider_call(
+            provider="openai",
+            endpoint="embeddings.create",
+            operation=_slow_embeddings,
+            registry=registry,
+            policy=ProviderPolicy(concurrency_limit=1, max_attempts=1),
+            request_id="embeddings-request",
+        )
+    )
+
+    await asyncio.wait_for(embeddings_started.wait(), timeout=1.0)
+
+    planner_task = asyncio.create_task(
+        execute_provider_call(
+            provider="openai",
+            endpoint="responses.parse:planner",
+            operation=_fast_planner,
+            registry=registry,
+            policy=ProviderPolicy(concurrency_limit=1, max_attempts=1),
+            request_id="planner-request",
+        )
+    )
+
+    await asyncio.wait_for(planner_finished.wait(), timeout=1.0)
+    planner_result = await planner_task
+
+    release_embeddings.set()
+    await embeddings_task
+
+    assert planner_result.outcome.status_bucket == "success"
 
 
 @pytest.mark.asyncio
@@ -648,6 +1273,102 @@ async def test_expand_research_graph_uses_scored_frontier_for_next_hop(
     )
 
 
+@pytest.mark.asyncio
+async def test_expand_research_graph_balanced_mode_skips_embedding_scoring() -> None:
+    class GraphSemanticClient(RecordingSemanticClient):
+        async def get_paper_citations(self, **kwargs) -> dict:
+            self.calls.append(("get_paper_citations", kwargs))
+            paper_id = kwargs["paper_id"]
+            if paper_id == "seed-1":
+                return {
+                    "data": [
+                        {
+                            "paperId": "child-1",
+                            "title": "Child paper",
+                            "year": 2024,
+                            "citationCount": 5,
+                        }
+                    ]
+                }
+            return {"data": []}
+
+    semantic = GraphSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    config = AgenticConfig(
+        enabled=True,
+        provider="openai",
+        planner_model="gpt-5.4-mini",
+        synthesis_model="gpt-5.4",
+        embedding_model="text-embedding-3-large",
+        index_backend="memory",
+        session_ttl_seconds=1800,
+        enable_trace_log=False,
+    )
+    provider_registry = ProviderDiagnosticsRegistry()
+    bundle = OpenAIProviderBundle(
+        config,
+        api_key="sk-test",
+        provider_registry=provider_registry,
+    )
+
+    class _EmbeddingsClient:
+        async def create(self, **kwargs: object) -> object:
+            raise AssertionError(
+                f"balanced graph expansion should not call embeddings: {kwargs!r}"
+            )
+
+    class _AsyncClient:
+        embeddings = _EmbeddingsClient()
+
+    bundle._async_openai_client = _AsyncClient()
+    bundle._openai_client = None
+    bundle._embeddings = None
+
+    registry = WorkspaceRegistry(ttl_seconds=1800, enable_trace_log=False)
+    runtime = AgenticRuntime(
+        config=config,
+        provider_bundle=bundle,
+        workspace_registry=registry,
+        client=semantic,
+        core_client=object(),
+        openalex_client=openalex,
+        arxiv_client=object(),
+        serpapi_client=None,
+        enable_core=False,
+        enable_semantic_scholar=True,
+        enable_openalex=True,
+        enable_arxiv=False,
+        enable_serpapi=False,
+        provider_registry=provider_registry,
+    )
+    record = registry.save_result_set(
+        source_tool="search_papers_smart",
+        payload={
+            "data": [
+                {
+                    "paperId": "seed-1",
+                    "title": "Seed paper",
+                    "canonicalId": "seed-1",
+                    "recommendedExpansionId": "seed-1",
+                    "expansionIdStatus": "portable",
+                    "source": "semantic_scholar",
+                }
+            ]
+        },
+    )
+
+    graph = await runtime.expand_research_graph(
+        seed_paper_ids=None,
+        seed_search_session_id=record.search_session_id,
+        direction="citations",
+        hops=1,
+        per_seed_limit=5,
+        latency_profile="balanced",
+    )
+
+    assert graph["frontier"]
+
+
 def test_grounded_expansions_filter_stopwords_and_single_paper_noise() -> None:
     config = _deterministic_config()
 
@@ -677,6 +1398,61 @@ def test_grounded_expansions_filter_stopwords_and_single_paper_noise() -> None:
     assert all(not variant.endswith(" with") for variant in expanded)
     assert all(" were" not in variant for variant in expanded)
     assert all(" inhibitors" not in variant for variant in expanded)
+
+
+def test_grounded_expansions_dedupe_near_duplicate_variants() -> None:
+    config = _deterministic_config().for_latency_profile("balanced")
+
+    variants = grounded_expansion_candidates(
+        original_query="Florida Scrub-Jay Aphelocoma coerulescens demography habitat survival reproduction conservation Brevard",
+        papers=[
+            {
+                "title": "Florida Scrub-Jay demography Brevard County",
+                "abstract": "Demography and survival in Brevard County scrub-jay populations.",
+            },
+            {
+                "title": "Florida Scrub-Jay demography habitat survival",
+                "abstract": "Habitat, survival, and reproduction of Florida Scrub-Jays.",
+            },
+            {
+                "title": "Florida Scrub-Jay metapopulation viability habitat connectivity",
+                "abstract": "Metapopulation viability and habitat connectivity.",
+            },
+        ],
+        config=config,
+    )
+
+    expanded = [candidate.variant.lower() for candidate in variants]
+
+    assert len(expanded) <= 2
+    assert not (
+        any("demography brevard county" in variant for variant in expanded)
+        and any("demography habitat survival" in variant for variant in expanded)
+    )
+
+
+def test_balanced_profile_reduces_expansion_breadth() -> None:
+    config = _deterministic_config().for_latency_profile("balanced")
+
+    assert config.max_grounded_variants == 2
+    assert config.max_total_variants == 4
+    assert config.candidate_pool_size == 50
+
+
+def test_provider_limits_reduce_expansion_fetch_sizes_for_balanced_review() -> None:
+    initial = provider_limits(intent="review", widened=True, latency_profile="balanced")
+    expansion = provider_limits(
+        intent="review",
+        widened=True,
+        is_expansion=True,
+        latency_profile="balanced",
+    )
+
+    assert initial["semantic_scholar"] > expansion["semantic_scholar"]
+    assert initial["openalex"] > expansion["openalex"]
+    assert expansion["semantic_scholar"] == 6
+    assert expansion["openalex"] == 6
+    assert expansion["serpapi_google_scholar"] == 2
 
 
 @pytest.mark.asyncio

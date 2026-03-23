@@ -186,6 +186,12 @@ you intend to pay for server-side planning, embeddings, and grounded synthesis.
   without paid model calls.
 - Use `agenticProvider=openai` and seed the `openai-api-key` Key Vault secret
   when you want the LangChain-backed OpenAI path.
+- Use `disableEmbeddings=true` when you want to keep OpenAI planning/synthesis
+  enabled but force all ranking, frontier scoring, and workspace indexing paths
+  to fall back to lexical similarity.
+- Use `agenticOpenAiTimeoutSeconds` to cap OpenAI-backed planner, synthesis,
+  and embedding requests so smart calls degrade instead of hanging on the
+  request critical path.
 - Keep `agenticIndexBackend=memory` unless your runtime image includes the
   optional FAISS extra and you have validated that path in your environment.
   The current smart workflows cap saved result sets at relatively small sizes,

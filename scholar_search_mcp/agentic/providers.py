@@ -560,6 +560,8 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         self.planner_model_name = config.planner_model
         self.synthesis_model_name = config.synthesis_model
         self.embedding_model_name = config.embedding_model
+        self._disable_embeddings = config.disable_embeddings
+        self._timeout_seconds = config.openai_timeout_seconds
         self._api_key = api_key
         self._provider_registry = provider_registry
         self._openai_client: Any | None = None
@@ -582,7 +584,11 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 "deterministic smart-provider adapters."
             )
             return None
-        self._openai_client = OpenAI(api_key=self._api_key)
+        self._openai_client = OpenAI(
+            api_key=self._api_key,
+            timeout=self._timeout_seconds,
+            max_retries=0,
+        )
         return self._openai_client
 
     def _load_async_openai_client(self) -> Any | None:
@@ -598,7 +604,11 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 "smart-provider adapters."
             )
             return None
-        self._async_openai_client = AsyncOpenAI(api_key=self._api_key)
+        self._async_openai_client = AsyncOpenAI(
+            api_key=self._api_key,
+            timeout=self._timeout_seconds,
+            max_retries=0,
+        )
         return self._async_openai_client
 
     def _load_models(self) -> tuple[Any | None, Any | None]:
@@ -632,6 +642,8 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
     def _load_embeddings(self) -> Any | None:
         if self._embeddings is not None:
             return self._embeddings
+        if self._disable_embeddings:
+            return None
         if not self._api_key:
             return None
         try:
@@ -646,6 +658,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         self._embeddings = OpenAIEmbeddings(
             model=self.embedding_model_name,
             api_key=SecretStr(self._api_key),
+            max_retries=0,
         )
         return self._embeddings
 
@@ -661,6 +674,20 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         sync_client, self._openai_client = self._openai_client, None
         await maybe_close_async_resource(async_client)
         await maybe_close_async_resource(sync_client)
+
+    async def _await_with_total_timeout(
+        self,
+        awaitable: Any,
+        *,
+        operation_name: str,
+    ) -> Any:
+        try:
+            return await asyncio.wait_for(awaitable, timeout=self._timeout_seconds)
+        except TimeoutError as exc:
+            raise TimeoutError(
+                f"OpenAI {operation_name} exceeded total timeout of "
+                f"{self._timeout_seconds:.1f}s"
+            ) from exc
 
     @staticmethod
     def _responses_input(
@@ -816,7 +843,10 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             }
             if previous_response_id:
                 kwargs["previous_response_id"] = previous_response_id
-            return await client.responses.parse(**kwargs)
+            return await self._await_with_total_timeout(
+                client.responses.parse(**kwargs),
+                operation_name=endpoint,
+            )
 
         response = await execute_provider_call(
             provider="openai",
@@ -864,7 +894,10 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 kwargs["max_output_tokens"] = max_output_tokens
             if previous_response_id:
                 kwargs["previous_response_id"] = previous_response_id
-            return await client.responses.create(**kwargs)
+            return await self._await_with_total_timeout(
+                client.responses.create(**kwargs),
+                operation_name=endpoint,
+            )
 
         response = await execute_provider_call(
             provider="openai",
@@ -893,7 +926,49 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 vectors.append([float(value) for value in embedding])
         return vectors
 
+    def _log_embedding_batch_start(
+        self,
+        *,
+        request_id: str | None,
+        total_texts: int,
+        uncached_texts: int,
+    ) -> None:
+        if request_id is None:
+            return
+        logger.info(
+            "embedding-batch[%s] model=%s total_texts=%s uncached_texts=%s timeout_s=%s",
+            request_id,
+            self.embedding_model_name,
+            total_texts,
+            uncached_texts,
+            self._timeout_seconds,
+        )
+
+    def _log_embedding_batch_failure(
+        self,
+        *,
+        request_id: str | None,
+        total_texts: int,
+        uncached_texts: int,
+        status_bucket: str,
+        reason: str | None,
+    ) -> None:
+        if request_id is None:
+            return
+        logger.warning(
+            "embedding-batch[%s] model=%s total_texts=%s uncached_texts=%s timeout_s=%s status=%s reason=%s",
+            request_id,
+            self.embedding_model_name,
+            total_texts,
+            uncached_texts,
+            self._timeout_seconds,
+            status_bucket,
+            reason or "unknown",
+        )
+
     def embed_query(self, text: str) -> tuple[float, ...] | None:
+        if self._disable_embeddings:
+            return None
         normalized = _normalized_embedding_text(text)
         if not normalized:
             return None
@@ -933,6 +1008,8 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         return self._cache_embedding(normalized, vector)
 
     def embed_texts(self, texts: list[str]) -> list[tuple[float, ...] | None]:
+        if self._disable_embeddings:
+            return [None for _ in texts]
         normalized_texts = [_normalized_embedding_text(text) for text in texts]
         client = self._load_openai_client()
         pending = [
@@ -1030,6 +1107,8 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         request_outcomes: list[dict[str, Any]] | None = None,
         request_id: str | None = None,
     ) -> list[tuple[float, ...] | None]:
+        if self._disable_embeddings:
+            return [None for _ in texts]
         normalized_texts = [_normalized_embedding_text(text) for text in texts]
         pending = [
             text
@@ -1038,12 +1117,20 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         ]
         client = self._load_async_openai_client()
         if client is not None and hasattr(client, "embeddings") and pending:
+            self._log_embedding_batch_start(
+                request_id=request_id,
+                total_texts=len(normalized_texts),
+                uncached_texts=len(pending),
+            )
             response = await execute_provider_call(
                 provider="openai",
                 endpoint="embeddings.create",
-                operation=lambda: client.embeddings.create(
-                    model=self.embedding_model_name,
-                    input=pending,
+                operation=lambda: self._await_with_total_timeout(
+                    client.embeddings.create(
+                        model=self.embedding_model_name,
+                        input=pending,
+                    ),
+                    operation_name="embeddings.create",
                 ),
                 registry=self._provider_registry,
                 request_outcomes=request_outcomes,
@@ -1054,24 +1141,17 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 for text, vector in zip(pending, vectors):
                     self._cache_embedding(text, vector)
             else:
+                self._log_embedding_batch_failure(
+                    request_id=request_id,
+                    total_texts=len(normalized_texts),
+                    uncached_texts=len(pending),
+                    status_bucket=response.outcome.status_bucket,
+                    reason=response.outcome.error or response.outcome.fallback_reason,
+                )
                 logger.warning(
                     "Async OpenAI embeddings failed for %s: %s",
                     request_id or "request",
                     response.outcome.error or response.outcome.fallback_reason,
-                )
-        pending = [
-            text
-            for text in normalized_texts
-            if text and text not in self._embedding_cache
-        ]
-        if pending:
-            try:
-                await asyncio.to_thread(self.embed_texts, pending)
-            except Exception:
-                logger.exception(
-                    "Sync embedding fallback failed for %s after async embedding "
-                    "degradation.",
-                    request_id or "request",
                 )
         return [
             self._embedding_cache.get(text) if text else None

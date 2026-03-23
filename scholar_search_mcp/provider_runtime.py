@@ -112,8 +112,8 @@ DEFAULT_PROVIDER_POLICIES: dict[str, ProviderPolicy] = {
         suppression_seconds=60.0,
     ),
     "openai": ProviderPolicy(
-        concurrency_limit=2,
-        max_attempts=2,
+        concurrency_limit=8,
+        max_attempts=1,
         base_delay_seconds=0.5,
         failure_threshold=2,
         suppression_seconds=60.0,
@@ -388,6 +388,12 @@ def _default_fallback_reason(status_bucket: ProviderStatusBucket) -> str | None:
     return reasons.get(status_bucket)
 
 
+def _provider_semaphore_key(provider: str, endpoint: str) -> str:
+    if provider == "openai":
+        return f"{provider}:{endpoint}"
+    return provider
+
+
 def _classify_exception(exc: Exception) -> ProviderStatusBucket:
     if isinstance(exc, SerpApiKeyMissingError):
         return "auth_error"
@@ -476,6 +482,13 @@ def _shorten_runtime_log_text(text: str | None, *, limit: int = 120) -> str | No
     if len(normalized) <= limit:
         return normalized
     return f"{normalized[: max(limit - 3, 1)].rstrip()}..."
+
+
+def _format_exception(exc: Exception) -> str:
+    text = str(exc).strip()
+    if text:
+        return f"{type(exc).__name__}: {text}"
+    return type(exc).__name__
 
 
 def _log_request_scoped_provider_event(
@@ -573,12 +586,21 @@ async def execute_provider_call(
             )
             return ProviderCallResult(payload=None, outcome=outcome)
 
+    semaphore_key = _provider_semaphore_key(provider, endpoint)
     semaphore = (
-        registry.semaphore(provider, resolved_policy.concurrency_limit)
+        registry.semaphore(semaphore_key, resolved_policy.concurrency_limit)
         if registry
         else None
     )
     if semaphore is not None:
+        if semaphore.locked():
+            _log_request_scoped_provider_event(
+                request_id=request_id,
+                provider=provider,
+                endpoint=endpoint,
+                status="waiting_for_slot",
+                reason=f"semaphore_key={semaphore_key}",
+            )
         await semaphore.acquire()
     _log_request_scoped_provider_event(
         request_id=request_id,
@@ -619,7 +641,7 @@ async def execute_provider_call(
                     latency_ms=latency_ms,
                     retries=retries,
                     fallback_reason=_default_fallback_reason(status_bucket),
-                    error=str(exc),
+                    error=_format_exception(exc),
                     request_id=request_id,
                 )
                 if registry is not None:
@@ -716,7 +738,7 @@ def execute_provider_call_sync(
                 latency_ms=latency_ms,
                 retries=attempt,
                 fallback_reason=_default_fallback_reason(status_bucket),
-                error=str(exc),
+                error=_format_exception(exc),
                 request_id=request_id,
             )
             if registry is not None:

@@ -21,6 +21,7 @@ class LatencyProfileSettings:
     allow_serpapi_on_expansions: bool
     enable_speculative_expansions: bool
     enable_deep_recommendations: bool
+    use_embedding_rerank: bool
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,8 @@ class AgenticConfig:
     index_backend: str
     session_ttl_seconds: int
     enable_trace_log: bool
+    disable_embeddings: bool = False
+    openai_timeout_seconds: float = 30.0
     max_grounded_variants: int = 3
     max_speculative_variants: int = 3
     max_total_variants: int = 6
@@ -69,7 +72,14 @@ class AgenticConfig:
                     80,
                 ),
             )
-        return self
+        return replace(
+            self,
+            max_grounded_variants=min(self.max_grounded_variants, 2),
+            max_speculative_variants=min(self.max_speculative_variants, 2),
+            max_total_variants=min(self.max_total_variants, 4),
+            candidate_pool_size=min(self.candidate_pool_size, 50),
+            speculative_top_pool_cutoff=min(self.speculative_top_pool_cutoff, 30),
+        )
 
     def latency_profile_settings(
         self,
@@ -87,6 +97,7 @@ class AgenticConfig:
                 allow_serpapi_on_expansions=False,
                 enable_speculative_expansions=False,
                 enable_deep_recommendations=False,
+                use_embedding_rerank=False,
             )
         if profile == "deep":
             return LatencyProfileSettings(
@@ -97,6 +108,7 @@ class AgenticConfig:
                 allow_serpapi_on_expansions=True,
                 enable_speculative_expansions=True,
                 enable_deep_recommendations=True,
+                use_embedding_rerank=not self.disable_embeddings,
             )
         return LatencyProfileSettings(
             name=profile,
@@ -106,6 +118,7 @@ class AgenticConfig:
             allow_serpapi_on_expansions=False,
             enable_speculative_expansions=True,
             enable_deep_recommendations=False,
+            use_embedding_rerank=False,
         )
 
     @classmethod
@@ -116,6 +129,8 @@ class AgenticConfig:
             planner_model=settings.planner_model,
             synthesis_model=settings.synthesis_model,
             embedding_model=settings.embedding_model,
+            disable_embeddings=settings.disable_embeddings,
+            openai_timeout_seconds=settings.agentic_openai_timeout_seconds,
             index_backend=settings.agentic_index_backend,
             session_ttl_seconds=settings.session_ttl_seconds,
             enable_trace_log=settings.enable_agentic_trace_log,

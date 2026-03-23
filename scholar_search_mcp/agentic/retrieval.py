@@ -57,6 +57,7 @@ def provider_limits(
     *,
     intent: str,
     widened: bool = False,
+    is_expansion: bool = False,
     latency_profile: LatencyProfile = "balanced",
 ) -> dict[str, int]:
     """Return conservative first-pass fetch sizes for each provider."""
@@ -91,8 +92,36 @@ def provider_limits(
             increment, cap = 4, 16
         else:
             increment, cap = 6, 20
-        return {
+        base_limits = {
             provider: min(limit + increment, cap)
+            for provider, limit in base_limits.items()
+        }
+    if is_expansion:
+        expansion_caps = {
+            "fast": {
+                "semantic_scholar": 4,
+                "openalex": 4,
+                "core": 3,
+                "arxiv": 3,
+                "serpapi_google_scholar": 0,
+            },
+            "balanced": {
+                "semantic_scholar": 6,
+                "openalex": 6,
+                "core": 4,
+                "arxiv": 4,
+                "serpapi_google_scholar": 2,
+            },
+            "deep": {
+                "semantic_scholar": 8,
+                "openalex": 8,
+                "core": 6,
+                "arxiv": 6,
+                "serpapi_google_scholar": 4,
+            },
+        }[latency_profile]
+        return {
+            provider: min(limit, expansion_caps[provider])
             for provider, limit in base_limits.items()
         }
     return base_limits
@@ -116,6 +145,7 @@ async def retrieve_variant(
     arxiv_client: Any,
     serpapi_client: Any,
     widened: bool = False,
+    is_expansion: bool = False,
     allow_serpapi: bool = True,
     latency_profile: LatencyProfile = "balanced",
     provider_registry: ProviderDiagnosticsRegistry | None = None,
@@ -128,6 +158,7 @@ async def retrieve_variant(
     limits = provider_limits(
         intent=intent,
         widened=widened,
+        is_expansion=is_expansion,
         latency_profile=latency_profile,
     )
     provider_calls: list[tuple[str, str, Any]] = []

@@ -1,5 +1,6 @@
 param appInsightsConnectionString string
 param agenticIndexBackend string
+param agenticOpenAiTimeoutSeconds int
 param agenticProvider string
 param allowedOrigins string
 param backendAuthSecretName string
@@ -7,6 +8,7 @@ param backendAuthSecretUri string
 param containerAppName string
 param containerCpu int
 param containerMemory string
+param disableEmbeddings bool
 param embeddingModel string
 param enableAgentic bool
 param enableAgenticTraceLog bool
@@ -134,6 +136,14 @@ var containerEnv = concat([
   {
     name: 'SCHOLAR_SEARCH_EMBEDDING_MODEL'
     value: embeddingModel
+  }
+  {
+    name: 'SCHOLAR_SEARCH_DISABLE_EMBEDDINGS'
+    value: string(disableEmbeddings)
+  }
+  {
+    name: 'SCHOLAR_SEARCH_AGENTIC_OPENAI_TIMEOUT_SECONDS'
+    value: string(agenticOpenAiTimeoutSeconds)
   }
   {
     name: 'SCHOLAR_SEARCH_AGENTIC_INDEX_BACKEND'

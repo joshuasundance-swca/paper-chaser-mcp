@@ -1,6 +1,7 @@
 import pytest
 
 from scholar_search_mcp import server
+from scholar_search_mcp.runtime import run_server
 from scholar_search_mcp.settings import AppSettings
 
 
@@ -61,6 +62,8 @@ def test_app_settings_serpapi_disabled_by_default() -> None:
     assert settings.enable_unpaywall is True
     assert settings.crossref_mailto is None
     assert settings.unpaywall_email is None
+    assert settings.disable_embeddings is False
+    assert settings.agentic_openai_timeout_seconds == 30.0
     assert settings.crossref_timeout_seconds == 30.0
     assert settings.unpaywall_timeout_seconds == 30.0
 
@@ -172,6 +175,8 @@ def test_app_settings_parses_agentic_configuration() -> None:
             "SCHOLAR_SEARCH_PLANNER_MODEL": "gpt-5.4-mini",
             "SCHOLAR_SEARCH_SYNTHESIS_MODEL": "gpt-5.4",
             "SCHOLAR_SEARCH_EMBEDDING_MODEL": "text-embedding-3-large",
+            "SCHOLAR_SEARCH_DISABLE_EMBEDDINGS": "true",
+            "SCHOLAR_SEARCH_AGENTIC_OPENAI_TIMEOUT_SECONDS": "18",
             "SCHOLAR_SEARCH_AGENTIC_INDEX_BACKEND": "memory",
             "SCHOLAR_SEARCH_SESSION_TTL_SECONDS": "900",
             "SCHOLAR_SEARCH_ENABLE_AGENTIC_TRACE_LOG": "true",
@@ -184,9 +189,31 @@ def test_app_settings_parses_agentic_configuration() -> None:
     assert settings.planner_model == "gpt-5.4-mini"
     assert settings.synthesis_model == "gpt-5.4"
     assert settings.embedding_model == "text-embedding-3-large"
+    assert settings.disable_embeddings is True
+    assert settings.agentic_openai_timeout_seconds == 18.0
     assert settings.agentic_index_backend == "memory"
     assert settings.session_ttl_seconds == 900
     assert settings.enable_agentic_trace_log is True
+
+
+def test_run_server_logs_embedding_flag(caplog: pytest.LogCaptureFixture) -> None:
+    settings = AppSettings.from_env(
+        {
+            "SCHOLAR_SEARCH_ENABLE_AGENTIC": "true",
+            "SCHOLAR_SEARCH_DISABLE_EMBEDDINGS": "true",
+        }
+    )
+
+    class _App:
+        def run(self, **kwargs: object) -> None:
+            del kwargs
+
+    caplog.set_level("INFO", logger="scholar-search-mcp")
+
+    run_server(app=_App(), logger=server.logger, settings=settings)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("embeddings=disabled" in message for message in messages)
 
 
 def test_app_settings_ignores_unrelated_azure_workflow_metadata() -> None:

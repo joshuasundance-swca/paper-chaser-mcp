@@ -56,6 +56,13 @@ param synthesisModel string = 'gpt-5.4'
 @description('Embedding model used for smart ranking and saved-result-set retrieval.')
 param embeddingModel string = 'text-embedding-3-large'
 
+@description('Disable all embedding generation and embedding-based similarity paths.')
+param disableEmbeddings bool = false
+
+@description('Timeout in seconds for OpenAI-backed smart-layer requests.')
+@minValue(1)
+param agenticOpenAiTimeoutSeconds int = 30
+
 @description('Workspace index backend for saved smart-search result sets.')
 @allowed([
   'memory'
@@ -207,8 +214,10 @@ module containerApp './modules/containerApp.bicep' = if (deployFull) {
     containerCpu: containerCpu
     containerMemory: containerMemory
     embeddingModel: embeddingModel
+    disableEmbeddings: disableEmbeddings
     enableAgentic: enableAgentic
     enableAgenticTraceLog: enableAgenticTraceLog
+    agenticOpenAiTimeoutSeconds: agenticOpenAiTimeoutSeconds
     environmentName: environmentName
     environmentResourceId: environment.outputs.resourceId
     image: '${acr.outputs.loginServer}/${imageRepository}:${imageTag}'
