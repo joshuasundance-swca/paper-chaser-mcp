@@ -51,7 +51,7 @@ async def test_crossref_get_work_normalizes_response_and_sets_contact_headers(
     assert result["authors"][0]["name"] == "Ada Lovelace"
     assert result["citationCount"] == 12
     assert captured[0]["params"]["mailto"] == "ops@example.com"
-    assert captured[0]["params"]["select"]
+    assert "select" not in captured[0]["params"]
     assert "mailto:ops@example.com" in captured[0]["headers"]["User-Agent"]
     assert captured[0]["follow_redirects"] is True
 
@@ -109,6 +109,43 @@ async def test_crossref_get_work_retries_transient_server_error(
     assert sleep_calls == [0.5]
     assert result is not None
     assert result["doi"] == "10.1234/recovered"
+
+
+@pytest.mark.asyncio
+async def test_crossref_search_work_keeps_select_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[dict] = []
+
+    class CapturingAsyncClient:
+        async def get(self, url: str, **kwargs):
+            captured.append({"url": url, **kwargs})
+            return DummyResponse(
+                status_code=200,
+                payload={
+                    "message": {
+                        "items": [
+                            {
+                                "DOI": "10.1234/query-result",
+                                "title": ["Query result"],
+                            }
+                        ]
+                    }
+                },
+            )
+
+    monkeypatch.setattr(
+        "scholar_search_mcp.clients.crossref.client.httpx.AsyncClient",
+        lambda timeout: CapturingAsyncClient(),
+    )
+
+    result = await CrossrefClient().search_work("Query result")
+
+    assert result is not None
+    assert result["doi"] == "10.1234/query-result"
+    assert captured[0]["url"] == "https://api.crossref.org/works"
+    assert captured[0]["params"]["select"]
+    assert captured[0]["params"]["rows"] == 1
 
 
 @pytest.mark.asyncio

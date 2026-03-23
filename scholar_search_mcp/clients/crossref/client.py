@@ -206,10 +206,7 @@ class CrossrefClient:
         normalized_doi = normalize_doi(doi)
         if not normalized_doi:
             raise ValueError("Crossref lookups require a valid DOI or DOI URL.")
-        payload = await self._request(
-            f"/works/{quote(normalized_doi, safe='')}",
-            params={"select": CROSSREF_SELECT},
-        )
+        payload = await self._request(f"/works/{quote(normalized_doi, safe='')}")
         if payload is None:
             return None
         work = self._normalize_work(payload)
