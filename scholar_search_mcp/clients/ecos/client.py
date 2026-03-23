@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
+import time
 from datetime import datetime
 from typing import Any, Awaitable, Callable, TypeVar, cast
 
@@ -12,7 +15,6 @@ from ...ecos_markdown import (
     EcosUnsupportedDocumentTypeError,
     guess_document_title,
 )
-from ...models.ecos import EcosDocumentKind
 from ...models import (
     EcosDocument,
     EcosDocumentGroups,
@@ -25,6 +27,7 @@ from ...models import (
     EcosSpeciesProfile,
     dump_jsonable,
 )
+from ...models.ecos import EcosDocumentKind
 from ...provider_runtime import ProviderDiagnosticsRegistry, execute_provider_call
 from ...transport import (
     build_httpx_verify_config,
@@ -38,6 +41,7 @@ SPECIES_REPORT_SORT = "/species@cn asc;/species@sn asc"
 SPECIES_PROFILE_RE = re.compile(r"/ecp/species/(?P<species_id>\d+)")
 DATE_FORMATS = ("%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%d")
 _PayloadT = TypeVar("_PayloadT")
+logger = logging.getLogger("scholar-search-mcp")
 
 
 def _filename_from_headers(headers: Any) -> str | None:
@@ -65,6 +69,7 @@ class EcosClient:
         base_url: str = "https://ecos.fws.gov",
         timeout: float = 30.0,
         document_timeout: float = 60.0,
+        document_conversion_timeout: float = 60.0,
         max_document_size_mb: int = 25,
         verify_tls: bool = True,
         ca_bundle: str | None = None,
@@ -74,6 +79,9 @@ class EcosClient:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.document_timeout = document_timeout
+        self.document_conversion_timeout = max(
+            float(document_conversion_timeout), 0.001
+        )
         self.max_document_bytes = max(int(max_document_size_mb), 1) * 1024 * 1024
         self.verify_tls = verify_tls
         self.ca_bundle = str(ca_bundle or "").strip() or None
@@ -84,7 +92,9 @@ class EcosClient:
         self._api_uses_system_store = False
         self._document_uses_system_store = False
 
-    def _build_client(self, *, timeout: float, prefer_system_store: bool = False) -> Any:
+    def _build_client(
+        self, *, timeout: float, prefer_system_store: bool = False
+    ) -> Any:
         return httpx.AsyncClient(
             timeout=timeout,
             follow_redirects=True,
@@ -138,7 +148,9 @@ class EcosClient:
         document_client: bool,
         operation: Callable[[Any], Awaitable[_PayloadT]],
     ) -> _PayloadT:
-        client = self._get_document_client() if document_client else self._get_api_client()
+        client = (
+            self._get_document_client() if document_client else self._get_api_client()
+        )
         try:
             return await operation(client)
         except httpx.ConnectError as exc:
@@ -199,7 +211,9 @@ class EcosClient:
         normalized = str(value).strip()
         if not normalized:
             return []
-        values = [segment.strip() for segment in normalized.split(",") if segment.strip()]
+        values = [
+            segment.strip() for segment in normalized.split(",") if segment.strip()
+        ]
         return sorted(dict.fromkeys(values))
 
     @staticmethod
@@ -503,7 +517,8 @@ class EcosClient:
                     documentKind=document_kind,
                     title=title,
                     url=url,
-                    documentDate=str(item.get("publication_date") or "").strip() or None,
+                    documentDate=str(item.get("publication_date") or "").strip()
+                    or None,
                     sourceId=item.get("id"),
                     publicationId=item.get("pub_id"),
                     publicationPage=str(item.get("publication_page") or "").strip()
@@ -528,7 +543,9 @@ class EcosClient:
             for item in entity.get("biological_opinion") or []:
                 if not isinstance(item, dict):
                     continue
-                title, url = self._normalize_document_title_and_url(item.get("file_name"))
+                title, url = self._normalize_document_title_and_url(
+                    item.get("file_name")
+                )
                 normalized.append(
                     EcosDocument(
                         documentKind="biological_opinion",
@@ -565,7 +582,9 @@ class EcosClient:
             for item in values:
                 if not isinstance(item, dict):
                     continue
-                title, url = self._normalize_document_title_and_url(item.get("plan_title"))
+                title, url = self._normalize_document_title_and_url(
+                    item.get("plan_title")
+                )
                 normalized.append(
                     EcosDocument(
                         documentKind="conservation_plan_link",
@@ -577,7 +596,10 @@ class EcosClient:
                 )
         return sorted(
             normalized,
-            key=lambda document: ((document.title or "").lower(), document.plan_id or 0),
+            key=lambda document: (
+                (document.title or "").lower(),
+                document.plan_id or 0,
+            ),
         )
 
     def _normalize_document_groups(self, payload: dict[str, Any]) -> EcosDocumentGroups:
@@ -614,7 +636,9 @@ class EcosClient:
 
         escaped = self._escape_filter_literal(normalized_query)
         exact_filter = f"/species@cn = '{escaped}' or /species@sn = '{escaped}'"
-        prefix_filter = f"/species@cn like '{escaped}%' or /species@sn like '{escaped}%'"
+        prefix_filter = (
+            f"/species@cn like '{escaped}%' or /species@sn like '{escaped}%'"
+        )
 
         raw_hits: dict[str, tuple[int, EcosSpeciesHit]] = {}
 
@@ -657,10 +681,12 @@ class EcosClient:
         for hit in ordered_hits:
             try:
                 payload = await self._fetch_species_payload(hit.species_id)
-            except Exception:
+            except ValueError:
                 continue
             entities = payload.get("species_entities") or []
-            first_entity = entities[0] if entities and isinstance(entities[0], dict) else {}
+            first_entity = (
+                entities[0] if entities and isinstance(entities[0], dict) else {}
+            )
             hit.group = str(payload.get("group") or "").strip() or None
             hit.status_category = (
                 str(first_entity.get("status_category") or "").strip() or None
@@ -706,7 +732,9 @@ class EcosClient:
                     flattened.extend(item for item in values if isinstance(item, dict))
         conservation_links = profile.get("conservationPlanLinks") or []
         if isinstance(conservation_links, list):
-            flattened.extend(item for item in conservation_links if isinstance(item, dict))
+            flattened.extend(
+                item for item in conservation_links if isinstance(item, dict)
+            )
         return flattened
 
     async def list_species_documents(
@@ -780,6 +808,8 @@ class EcosClient:
 
     async def get_document_text(self, *, url: str) -> dict[str, Any]:
         absolute_url = self.resolve_url(url)
+        fetch_started = time.perf_counter()
+        logger.info("ECOS document fetch started: %s", absolute_url)
         lookup = await execute_provider_call(
             provider="ecos",
             endpoint="document.fetch",
@@ -787,7 +817,13 @@ class EcosClient:
             registry=self._provider_registry,
             is_empty=lambda payload: payload is None,
         )
+        fetch_elapsed_ms = int((time.perf_counter() - fetch_started) * 1000)
         if lookup.payload is None:
+            logger.warning(
+                "ECOS document fetch failed after %d ms: %s",
+                fetch_elapsed_ms,
+                absolute_url,
+            )
             response = EcosDocumentTextResponse(
                 document=EcosDocument(
                     title=guess_document_title(absolute_url),
@@ -812,19 +848,47 @@ class EcosClient:
             url=final_url,
         )
 
+        logger.info(
+            (
+                "ECOS document fetch completed after %d ms: url=%s "
+                "final_url=%s status=%s content_type=%s bytes=%s"
+            ),
+            fetch_elapsed_ms,
+            absolute_url,
+            final_url,
+            payload.get("status"),
+            content_type,
+            len(payload.get("content") or b""),
+        )
+
         if payload.get("status") == "too_large":
+            logger.warning(
+                (
+                    "ECOS document conversion skipped because the document "
+                    "exceeded the size limit: %s"
+                ),
+                final_url,
+            )
             response = EcosDocumentTextResponse(
                 document=document,
                 contentType=content_type,
                 extractionStatus="too_large",
                 warnings=[
-                    "ECOS document exceeded the configured size limit before conversion."
+                    (
+                        "ECOS document exceeded the configured size limit "
+                        "before conversion."
+                    )
                 ],
             )
             return dump_jsonable(response)
 
         content = payload.get("content")
         if not isinstance(content, (bytes, bytearray)):
+            logger.warning(
+                "ECOS document fetch returned no body after %d ms: %s",
+                fetch_elapsed_ms,
+                final_url,
+            )
             response = EcosDocumentTextResponse(
                 document=document,
                 contentType=content_type,
@@ -833,14 +897,48 @@ class EcosClient:
             )
             return dump_jsonable(response)
 
+        conversion_started = time.perf_counter()
+        logger.info(
+            "ECOS document conversion started: url=%s content_type=%s bytes=%d",
+            final_url,
+            content_type,
+            len(content),
+        )
         try:
-            markdown = self._markdown_converter.convert(
-                content=bytes(content),
-                source_url=final_url,
-                content_type=content_type,
-                filename=filename,
+            markdown = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self._markdown_converter.convert,
+                    content=bytes(content),
+                    source_url=final_url,
+                    content_type=content_type,
+                    filename=filename,
+                ),
+                timeout=self.document_conversion_timeout,
             )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "ECOS document conversion timed out after %d ms: %s",
+                int((time.perf_counter() - conversion_started) * 1000),
+                final_url,
+            )
+            response = EcosDocumentTextResponse(
+                document=document,
+                contentType=content_type,
+                extractionStatus="conversion_timed_out",
+                warnings=[
+                    (
+                        "ECOS document conversion exceeded the configured "
+                        "timeout before Markdown extraction finished."
+                    )
+                ],
+            )
+            return dump_jsonable(response)
         except EcosUnsupportedDocumentTypeError as exc:
+            logger.warning(
+                "ECOS document conversion rejected unsupported type after %d ms: %s",
+                int((time.perf_counter() - conversion_started) * 1000),
+                final_url,
+            )
             response = EcosDocumentTextResponse(
                 document=document,
                 contentType=content_type,
@@ -849,6 +947,11 @@ class EcosClient:
             )
             return dump_jsonable(response)
         except EcosDocumentConversionError as exc:
+            logger.warning(
+                "ECOS document conversion failed after %d ms: %s",
+                int((time.perf_counter() - conversion_started) * 1000),
+                final_url,
+            )
             response = EcosDocumentTextResponse(
                 document=document,
                 contentType=content_type,
@@ -857,14 +960,33 @@ class EcosClient:
             )
             return dump_jsonable(response)
 
+        conversion_elapsed_ms = int((time.perf_counter() - conversion_started) * 1000)
+        logger.info(
+            "ECOS document conversion completed after %d ms: url=%s markdown_chars=%d",
+            conversion_elapsed_ms,
+            final_url,
+            len(markdown),
+        )
+
         if len(markdown.strip()) < 50:
+            logger.warning(
+                (
+                    "ECOS document conversion produced nearly empty markdown "
+                    "after %d ms: %s"
+                ),
+                conversion_elapsed_ms,
+                final_url,
+            )
             response = EcosDocumentTextResponse(
                 document=document,
                 markdown=markdown,
                 contentType=content_type,
                 extractionStatus="empty_or_image_only",
                 warnings=[
-                    "Converted Markdown was nearly empty. The source may be image-only or poorly extractable."
+                    (
+                        "Converted Markdown was nearly empty. The source may "
+                        "be image-only or poorly extractable."
+                    )
                 ],
             )
             return dump_jsonable(response)

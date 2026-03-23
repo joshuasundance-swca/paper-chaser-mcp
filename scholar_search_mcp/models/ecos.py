@@ -21,6 +21,7 @@ EcosExtractionStatus = Literal[
     "too_large",
     "unsupported_type",
     "empty_or_image_only",
+    "conversion_timed_out",
     "fetch_failed",
 ]
 

@@ -146,6 +146,7 @@ class AppSettings(BaseModel):
     unpaywall_timeout_seconds: float = 30.0
     ecos_timeout_seconds: float = 30.0
     ecos_document_timeout_seconds: float = 60.0
+    ecos_document_conversion_timeout_seconds: float = 60.0
     ecos_max_document_size_mb: int = 25
     ecos_verify_tls: bool = True
     ecos_ca_bundle: str | None = None
@@ -269,6 +270,11 @@ class AppSettings(BaseModel):
             ecos_document_timeout_seconds=_parse_positive_float(
                 env,
                 "ECOS_DOCUMENT_TIMEOUT_SECONDS",
+                60.0,
+            ),
+            ecos_document_conversion_timeout_seconds=_parse_positive_float(
+                env,
+                "ECOS_DOCUMENT_CONVERSION_TIMEOUT_SECONDS",
                 60.0,
             ),
             ecos_max_document_size_mb=_parse_positive_int(

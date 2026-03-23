@@ -339,7 +339,8 @@ TOOL_DESCRIPTIONS = {
         "Fetch one ECOS or ECOS-linked document URL, follow redirects, detect "
         "content type, and convert PDF/HTML/text content to Markdown for "
         "downstream analysis. Returns extractionStatus plus warnings when a "
-        "document is too large, unsupported, nearly empty, or failed to fetch."
+        "document is too large, unsupported, nearly empty, conversion-timed "
+        "out, or failed to fetch."
     ),
     "search_papers_smart": (
         "Agent-oriented concept and literature-review search. Starts from a broad "

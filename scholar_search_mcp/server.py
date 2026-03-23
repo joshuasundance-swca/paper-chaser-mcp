@@ -594,6 +594,7 @@ ecos_client = EcosClient(
     base_url=ecos_base_url,
     timeout=settings.ecos_timeout_seconds,
     document_timeout=settings.ecos_document_timeout_seconds,
+    document_conversion_timeout=settings.ecos_document_conversion_timeout_seconds,
     max_document_size_mb=settings.ecos_max_document_size_mb,
     verify_tls=settings.ecos_verify_tls,
     ca_bundle=settings.ecos_ca_bundle,

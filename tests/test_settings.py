@@ -70,6 +70,7 @@ def test_app_settings_serpapi_disabled_by_default() -> None:
     assert settings.unpaywall_timeout_seconds == 30.0
     assert settings.ecos_timeout_seconds == 30.0
     assert settings.ecos_document_timeout_seconds == 60.0
+    assert settings.ecos_document_conversion_timeout_seconds == 60.0
     assert settings.ecos_max_document_size_mb == 25
     assert settings.ecos_verify_tls is True
     assert settings.ecos_ca_bundle is None
@@ -129,6 +130,7 @@ def test_app_settings_parses_ecos_configuration() -> None:
             "ECOS_BASE_URL": "https://ecos.fws.gov",
             "ECOS_TIMEOUT_SECONDS": "12",
             "ECOS_DOCUMENT_TIMEOUT_SECONDS": "75",
+            "ECOS_DOCUMENT_CONVERSION_TIMEOUT_SECONDS": "22",
             "ECOS_MAX_DOCUMENT_SIZE_MB": "40",
             "ECOS_VERIFY_TLS": "false",
             "ECOS_CA_BUNDLE": "C:/certs/ecos-ca.pem",
@@ -139,6 +141,7 @@ def test_app_settings_parses_ecos_configuration() -> None:
     assert settings.ecos_base_url == "https://ecos.fws.gov"
     assert settings.ecos_timeout_seconds == 12.0
     assert settings.ecos_document_timeout_seconds == 75.0
+    assert settings.ecos_document_conversion_timeout_seconds == 22.0
     assert settings.ecos_max_document_size_mb == 40
     assert settings.ecos_verify_tls is False
     assert settings.ecos_ca_bundle == "C:/certs/ecos-ca.pem"

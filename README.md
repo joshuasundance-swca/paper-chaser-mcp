@@ -20,7 +20,7 @@ The package now uses FastMCP for tool/resource/prompt registration, Pydantic for
 - **Recommendations** – Similar papers via single-seed GET or multi-seed POST
 - **Citation formats** – Get MLA, APA, BibTeX, and other citation export formats for a Google Scholar paper (requires SerpApi)
 - **OpenAlex-native workflows** – Explicit OpenAlex search, cursor-paginated retrieval, work lookup by DOI/OpenAlex ID, autocomplete, source/institution/topic pivots, cited-by/reference traversal, and author pivots without forcing OpenAlex into the brokered Semantic-Scholar-shaped flow
-- **ECOS species dossiers** – Explicit U.S. Fish and Wildlife Service ECOS tools for species discovery, per-entity species dossiers, recovery plans, five-year reviews, biological opinions, federal-register items, conservation-plan links, and on-demand document-to-Markdown extraction
+- **ECOS species dossiers** – Explicit U.S. Fish and Wildlife Service ECOS tools for species discovery, per-entity species dossiers, recovery plans, five-year reviews, biological opinions, federal-register items, conservation-plan links, and on-demand document-to-Markdown extraction with bounded conversion timeouts and structured extraction statuses
 - **Provider execution policy** – Shared retries with jitter, bounded concurrency, suppression/circuit-breaker state, normalized provider outcomes, and a diagnostics tool for live provider health
 - **Shared rate limiter** – One 1 req/s pacing lock shared across all Semantic Scholar endpoints
 - **Structured FastMCP outputs** – Tools return structured content instead of JSON blobs embedded in text

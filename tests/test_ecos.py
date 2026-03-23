@@ -1,6 +1,7 @@
-import sys
-import types
 import ssl
+import sys
+import time
+import types
 from typing import Any, cast
 
 import httpx
@@ -46,7 +47,9 @@ CALIFORNIA_LEAST_TERN_PROFILE = {
                 {
                     "final_date": "06/12/2012",
                     "lead_offices_csv": "Sacramento Fish and Wildlife Office",
-                    "activity_titles_csv": "Cargill Salt Ponds Operation and Maintenance",
+                    "activity_titles_csv": (
+                        "Cargill Salt Ponds Operation and Maintenance"
+                    ),
                     "activity_codes_csv": "81420-2010-F-0519",
                     "work_types_csv": "DREDGE / EXCAVATION",
                     "locations_csv": "Alameda (CA), San Mateo (CA)",
@@ -54,7 +57,9 @@ CALIFORNIA_LEAST_TERN_PROFILE = {
                     "category": "Biological Opinion Rendered (Final)",
                     "event_code": "08ESMF00-2012-E-02227",
                     "file_name": {
-                        "value": "Biological Opinion Rendered (Final) 08ESMF00-2012-E-02227",
+                        "value": (
+                            "Biological Opinion Rendered (Final) 08ESMF00-2012-E-02227"
+                        ),
                         "url": "/tails/pub/document/527831",
                     },
                 }
@@ -108,7 +113,10 @@ CALIFORNIA_LEAST_TERN_PROFILE = {
             "publication_date": "10/16/2024",
             "publication_page": "89 FR 83510 83514",
             "publication_title": {
-                "value": "Initiation of 5-Year Status Reviews for 59 Pacific Southwest Species",
+                "value": (
+                    "Initiation of 5-Year Status Reviews for 59 Pacific "
+                    "Southwest Species"
+                ),
                 "url": "https://www.govinfo.gov/link/fr/89/83510",
             },
             "associated_document": [],
@@ -121,7 +129,10 @@ CALIFORNIA_LEAST_TERN_PROFILE = {
             "publication_date": "06/18/2018",
             "publication_page": "83 FR 28251 28254",
             "publication_title": {
-                "value": "Initiation of 5-Year Status Reviews of 50 Species in California, Nevada, and the Klamath Basin of Oregon",
+                "value": (
+                    "Initiation of 5-Year Status Reviews of 50 Species in "
+                    "California, Nevada, and the Klamath Basin of Oregon"
+                ),
                 "url": "https://www.govinfo.gov/link/fr/83/28251?link-type=pdf",
             },
             "doc_types": ["Five Year Review Notice, Information Solicitation"],
@@ -145,7 +156,9 @@ CALIFORNIA_LEAST_TERN_PROFILE = {
 
 
 @pytest.mark.asyncio
-async def test_ecos_search_species_auto_prefers_exact_match(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_ecos_search_species_auto_prefers_exact_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     client = EcosClient()
 
     async def fake_pullreports_export(filter_expression: str) -> dict:
@@ -293,13 +306,17 @@ def test_ecos_markdown_converter_uses_markitdown_stream_api(
 
 
 @pytest.mark.asyncio
-async def test_ecos_get_document_text_follows_redirect_and_records_diagnostics() -> None:
+async def test_ecos_get_document_text_follows_redirect_and_records_diagnostics() -> (
+    None
+):
     registry = ProviderDiagnosticsRegistry()
     client = EcosClient(provider_registry=registry)
     client._markdown_converter = cast(
         Any,
         types.SimpleNamespace(
-            convert=lambda **kwargs: "# Five-Year Review\n\n## Recommendation\n\nRetain endangered status."
+            convert=lambda **kwargs: (
+                "# Five-Year Review\n\n## Recommendation\n\nRetain endangered status."
+            )
         ),
     )
 
@@ -316,7 +333,9 @@ async def test_ecos_get_document_text_follows_redirect_and_records_diagnostics()
                 content=b"%PDF-1.4 test",
                 headers={
                     "content-type": "application/pdf; charset=ISO-8859-1",
-                    "content-disposition": 'attachment; filename="california_least_tern_2025.pdf"',
+                    "content-disposition": (
+                        'attachment; filename="california_least_tern_2025.pdf"'
+                    ),
                 },
                 request=request,
             )
@@ -335,6 +354,47 @@ async def test_ecos_get_document_text_follows_redirect_and_records_diagnostics()
     assert payload["contentType"].startswith("application/pdf")
     assert snapshot["providers"][0]["lastEndpoint"] == "document.fetch"
     assert snapshot["providers"][0]["recentOutcomes"]
+
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_ecos_get_document_text_logs_fetch_and_conversion_steps(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = EcosClient()
+    client._markdown_converter = cast(
+        Any,
+        types.SimpleNamespace(
+            convert=lambda **kwargs: (
+                "# Review\n\nRetain listed status with updated monitoring."
+            )
+        ),
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=b"%PDF-1.4 test",
+            headers={"content-type": "application/pdf"},
+            request=request,
+        )
+
+    client._document_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        follow_redirects=True,
+    )
+
+    with caplog.at_level("INFO", logger="scholar-search-mcp"):
+        payload = await client.get_document_text(
+            url="https://ecos.fws.gov/docs/example.pdf"
+        )
+
+    assert payload["extractionStatus"] == "ok"
+    assert "ECOS document fetch started" in caplog.text
+    assert "ECOS document fetch completed" in caplog.text
+    assert "ECOS document conversion started" in caplog.text
+    assert "ECOS document conversion completed" in caplog.text
 
     await client.aclose()
 
@@ -389,6 +449,38 @@ async def test_ecos_get_document_text_reports_structured_failures(
 
 
 @pytest.mark.asyncio
+async def test_ecos_get_document_text_times_out_conversion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = EcosClient(document_conversion_timeout=0.01)
+
+    async def fake_download(url: str) -> dict:
+        return {
+            "finalUrl": url,
+            "contentType": "application/pdf",
+            "filename": "slow.pdf",
+            "content": b"%PDF-1.4 slow",
+            "status": "ok",
+        }
+
+    def slow_convert(**kwargs: Any) -> str:
+        time.sleep(0.1)
+        return "# Converted"
+
+    monkeypatch.setattr(client, "_download_document", fake_download)
+    client._markdown_converter = cast(
+        Any,
+        types.SimpleNamespace(convert=slow_convert),
+    )
+
+    payload = await client.get_document_text(url="https://example.com/slow.pdf")
+
+    assert payload["extractionStatus"] == "conversion_timed_out"
+    assert payload["markdown"] is None
+    assert payload["warnings"]
+
+
+@pytest.mark.asyncio
 async def test_ecos_api_retries_with_system_trust_store_on_tls_verify_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -411,11 +503,17 @@ async def test_ecos_api_retries_with_system_trust_store_on_tls_verify_failure(
             )
             self.verify = verify
 
-        async def get(self, url: str, params: dict[str, Any] | None = None) -> httpx.Response:
+        async def get(
+            self, url: str, params: dict[str, Any] | None = None
+        ) -> httpx.Response:
             request = httpx.Request("GET", url, params=params)
             if self.verify is True:
                 raise httpx.ConnectError(
-                    "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1032)",
+                    (
+                        "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify "
+                        "failed: unable to get local issuer certificate "
+                        "(_ssl.c:1032)"
+                    ),
                     request=request,
                 )
             return httpx.Response(200, json={"data": []}, request=request)
@@ -436,7 +534,9 @@ async def test_ecos_api_retries_with_system_trust_store_on_tls_verify_failure(
     assert isinstance(constructed_clients[1]["verify"], ssl.SSLContext)
 
 
-def test_ecos_client_uses_explicit_tls_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ecos_client_uses_explicit_tls_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     constructed_clients: list[dict[str, Any]] = []
 
     class FakeAsyncClient:

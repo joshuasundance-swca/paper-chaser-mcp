@@ -33,7 +33,10 @@ def is_tls_verification_error(error: Exception) -> bool:
     """Return True when an exception looks like a certificate verification failure."""
 
     message = str(error)
-    return "certificate verify failed" in message.lower() or "CERTIFICATE_VERIFY_FAILED" in message
+    return (
+        "certificate verify failed" in message.lower()
+        or "CERTIFICATE_VERIFY_FAILED" in message
+    )
 
 
 async def maybe_close_async_resource(resource: Any) -> None:
