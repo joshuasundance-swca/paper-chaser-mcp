@@ -936,7 +936,8 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         if request_id is None:
             return
         logger.info(
-            "embedding-batch[%s] model=%s total_texts=%s uncached_texts=%s timeout_s=%s",
+            "embedding-batch[%s] model=%s total_texts=%s "
+            "uncached_texts=%s timeout_s=%s",
             request_id,
             self.embedding_model_name,
             total_texts,
@@ -956,7 +957,8 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         if request_id is None:
             return
         logger.warning(
-            "embedding-batch[%s] model=%s total_texts=%s uncached_texts=%s timeout_s=%s status=%s reason=%s",
+            "embedding-batch[%s] model=%s total_texts=%s uncached_texts=%s "
+            "timeout_s=%s status=%s reason=%s",
             request_id,
             self.embedding_model_name,
             total_texts,

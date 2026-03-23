@@ -37,6 +37,18 @@ from .common import (
     UnpaywallEnrichmentResult,
     dump_jsonable,
 )
+from .ecos import (
+    EcosDocument,
+    EcosDocumentGroups,
+    EcosDocumentTextResponse,
+    EcosExtractionStatus,
+    EcosRangeSummary,
+    EcosSpecies,
+    EcosSpeciesDocumentListResponse,
+    EcosSpeciesEntity,
+    EcosSpeciesHit,
+    EcosSpeciesProfile,
+)
 from .tools import TOOL_INPUT_MODELS
 
 __all__ = [
@@ -59,6 +71,16 @@ __all__ = [
     "CrossrefEnrichmentResult",
     "CrossrefWorkSummary",
     "DoiResolution",
+    "EcosDocument",
+    "EcosDocumentGroups",
+    "EcosDocumentTextResponse",
+    "EcosExtractionStatus",
+    "EcosRangeSummary",
+    "EcosSpecies",
+    "EcosSpeciesDocumentListResponse",
+    "EcosSpeciesEntity",
+    "EcosSpeciesHit",
+    "EcosSpeciesProfile",
     "ExportLink",
     "Pagination",
     "Paper",

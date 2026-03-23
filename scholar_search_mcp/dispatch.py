@@ -11,14 +11,18 @@ from .models.common import CitationFormat, ExportLink
 from .models.tools import (
     AskResultSetArgs,
     BasicSearchPapersArgs,
+    EcosSpeciesLookupArgs,
     ExpandResearchGraphArgs,
     GetCitationFormatsArgs,
+    GetDocumentTextEcosArgs,
+    ListSpeciesDocumentsEcosArgs,
     MapResearchLandscapeArgs,
     PaperLookupArgs,
     PaperMatchArgs,
     ResolveCitationArgs,
     SearchPapersArgs,
     SearchProvider,
+    SearchSpeciesEcosArgs,
     SmartSearchPapersArgs,
 )
 from .search import search_papers_with_fallback
@@ -400,8 +404,10 @@ async def dispatch_tool(
     enable_serpapi: bool = False,
     crossref_client: Any = None,
     unpaywall_client: Any = None,
+    ecos_client: Any = None,
     enable_crossref: bool = True,
     enable_unpaywall: bool = True,
+    enable_ecos: bool = True,
     enrichment_service: PaperEnrichmentService | None = None,
     provider_order: list[SearchProvider] | None = None,
     provider_registry: Any = None,
@@ -548,6 +554,7 @@ async def dispatch_tool(
                 "crossref": enable_crossref,
                 "unpaywall": enable_unpaywall,
                 "openai": agentic_runtime is not None,
+                "ecos": enable_ecos,
             },
             provider_order=[
                 *(provider_order or []),
@@ -555,6 +562,7 @@ async def dispatch_tool(
                 "crossref",
                 "unpaywall",
                 "openai",
+                "ecos",
             ],
         )
         if not args_dict.get("include_recent_outcomes", True):
@@ -562,6 +570,87 @@ async def dispatch_tool(
                 if isinstance(provider, dict):
                     provider["recentOutcomes"] = []
         return snapshot
+
+    if name == "search_species_ecos":
+        if not enable_ecos or ecos_client is None:
+            raise ValueError(
+                "search_species_ecos requires ECOS, which is disabled. "
+                "Set SCHOLAR_SEARCH_ENABLE_ECOS=true to use this tool."
+            )
+        ecos_args = cast(
+            SearchSpeciesEcosArgs,
+            TOOL_INPUT_MODELS[name].model_validate(arguments),
+        )
+        result = await ecos_client.search_species(
+            query=ecos_args.query,
+            limit=ecos_args.limit,
+            match_mode=ecos_args.match_mode,
+        )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            result,
+            workspace_registry=workspace_registry,
+        )
+
+    if name == "get_species_profile_ecos":
+        if not enable_ecos or ecos_client is None:
+            raise ValueError(
+                "get_species_profile_ecos requires ECOS, which is disabled. "
+                "Set SCHOLAR_SEARCH_ENABLE_ECOS=true to use this tool."
+            )
+        species_lookup_args = cast(
+            EcosSpeciesLookupArgs,
+            TOOL_INPUT_MODELS[name].model_validate(arguments),
+        )
+        result = await ecos_client.get_species_profile(
+            species_id=species_lookup_args.species_id,
+        )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            result,
+            workspace_registry=workspace_registry,
+        )
+
+    if name == "list_species_documents_ecos":
+        if not enable_ecos or ecos_client is None:
+            raise ValueError(
+                "list_species_documents_ecos requires ECOS, which is disabled. "
+                "Set SCHOLAR_SEARCH_ENABLE_ECOS=true to use this tool."
+            )
+        document_list_args = cast(
+            ListSpeciesDocumentsEcosArgs,
+            TOOL_INPUT_MODELS[name].model_validate(arguments),
+        )
+        result = await ecos_client.list_species_documents(
+            species_id=document_list_args.species_id,
+            document_kinds=document_list_args.document_kinds,
+        )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            result,
+            workspace_registry=workspace_registry,
+        )
+
+    if name == "get_document_text_ecos":
+        if not enable_ecos or ecos_client is None:
+            raise ValueError(
+                "get_document_text_ecos requires ECOS, which is disabled. "
+                "Set SCHOLAR_SEARCH_ENABLE_ECOS=true to use this tool."
+            )
+        document_text_args = cast(
+            GetDocumentTextEcosArgs,
+            TOOL_INPUT_MODELS[name].model_validate(arguments),
+        )
+        result = await ecos_client.get_document_text(url=document_text_args.url)
+        return _finalize_tool_result(
+            name,
+            arguments,
+            result,
+            workspace_registry=workspace_registry,
+        )
 
     if name == "get_paper_metadata_crossref":
         crossref_result = await resolved_enrichment_service.get_crossref_metadata(

@@ -20,6 +20,7 @@ The package now uses FastMCP for tool/resource/prompt registration, Pydantic for
 - **Recommendations** – Similar papers via single-seed GET or multi-seed POST
 - **Citation formats** – Get MLA, APA, BibTeX, and other citation export formats for a Google Scholar paper (requires SerpApi)
 - **OpenAlex-native workflows** – Explicit OpenAlex search, cursor-paginated retrieval, work lookup by DOI/OpenAlex ID, autocomplete, source/institution/topic pivots, cited-by/reference traversal, and author pivots without forcing OpenAlex into the brokered Semantic-Scholar-shaped flow
+- **ECOS species dossiers** – Explicit U.S. Fish and Wildlife Service ECOS tools for species discovery, per-entity species dossiers, recovery plans, five-year reviews, biological opinions, federal-register items, conservation-plan links, and on-demand document-to-Markdown extraction
 - **Provider execution policy** – Shared retries with jitter, bounded concurrency, suppression/circuit-breaker state, normalized provider outcomes, and a diagnostics tool for live provider health
 - **Shared rate limiter** – One 1 req/s pacing lock shared across all Semantic Scholar endpoints
 - **Structured FastMCP outputs** – Tools return structured content instead of JSON blobs embedded in text
@@ -298,6 +299,24 @@ Known-item tools (`search_papers_match`, `get_paper_details`,
 final resolved paper or final smart hits. This enrichment is post-resolution and
 does not change provider ordering, retrieval, or ranking.
 
+### ECOS configuration
+
+ECOS is exposed as a separate species/document tool family rather than a
+`search_papers` provider. It is enabled by default and uses structured Pull
+Reports plus the species-profile JSON that powers the public ECOS species page.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `SCHOLAR_SEARCH_ENABLE_ECOS` | `true` | Enable or disable the ECOS species/document tool family |
+| `ECOS_BASE_URL` | `https://ecos.fws.gov` | Base URL for ECOS species, Pull Reports, and document links |
+| `ECOS_TIMEOUT_SECONDS` | `30` | Timeout for ECOS species/Pull Reports requests |
+| `ECOS_DOCUMENT_TIMEOUT_SECONDS` | `60` | Timeout for ECOS document fetches before Markdown conversion |
+| `ECOS_MAX_DOCUMENT_SIZE_MB` | `25` | Maximum fetched document size before returning `extractionStatus=too_large` |
+
+The core package now includes `markitdown[pdf]` so `get_document_text_ecos` can
+convert PDF, HTML, and text-like ECOS documents to Markdown with plugins kept
+off by default.
+
 ### AI augmentation configuration
 
 The raw retrieval tools remain the contract of record. The smart layer is
@@ -573,8 +592,21 @@ Primary defaults for agents:
 | `get_author_articles_serpapi`    | Paginated Google Scholar author article retrieval through SerpApi. |
 | `get_paper_citation_formats`     | Citation export step for MLA, APA, BibTeX, etc. from a Google Scholar paper. **Requires SerpApi** (`SCHOLAR_SEARCH_ENABLE_SERPAPI=true` + `SERPAPI_API_KEY`). Pass `result_id=paper.scholarResultId` (not `paper.sourceId`) from a `serpapi_google_scholar` result. Single non-paginated response. |
 | `get_serpapi_account_status`     | Read-only SerpApi quota and throughput snapshot for budget-aware routing and troubleshooting. |
+| `search_species_ecos`            | Structured ECOS species discovery by common or scientific name. `matchMode=auto` tries exact matches first, then prefix matches. |
+| `get_species_profile_ecos`       | Full ECOS species dossier by species id or species URL. Returns species metadata, per-entity listings, life history, range summary, grouped documents, and conservation-plan links. |
+| `list_species_documents_ecos`    | Flatten one ECOS species dossier into a sorted document inventory. Supports recovery plans, five-year reviews, biological opinions, federal-register documents, other recovery docs, and conservation-plan links. |
+| `get_document_text_ecos`         | Fetch one ECOS or ECOS-linked document, follow redirects, detect content type, and convert PDF/HTML/text content to Markdown. Returns `extractionStatus` plus warnings for oversize, unsupported, empty/image-only, or fetch-failed cases. |
 | `get_provider_diagnostics`       | Live provider diagnostics showing recent status buckets, throttling/suppression state, retries, and fallback reasons across providers. |
 
+
+### ECOS walkthrough
+
+California least tern is a representative end-to-end ECOS flow:
+
+1. Call `search_species_ecos` with `query="California least tern"` to get the ECOS species id `8104`.
+2. Call `get_species_profile_ecos` with `species_id="8104"` to inspect the species dossier, grouped recovery documents, biological opinions, and conservation-plan links.
+3. Call `list_species_documents_ecos` with `species_id="8104"` and, for example, `documentKinds=["recovery_plan","five_year_review","biological_opinion"]` to flatten the document inventory.
+4. Call `get_document_text_ecos` on the 2025 five-year-review PDF or the revised recovery plan PDF to turn the source document into Markdown for downstream analysis.
 
 ## Resources and prompts
 

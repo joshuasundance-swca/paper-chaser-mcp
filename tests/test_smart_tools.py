@@ -11,22 +11,25 @@ from scholar_search_mcp.agentic import (
     WorkspaceRegistry,
     resolve_provider_bundle,
 )
-from scholar_search_mcp.agentic.providers import OpenAIProviderBundle
-from scholar_search_mcp.provider_runtime import (
-    ProviderDiagnosticsRegistry,
-    ProviderPolicy,
-    execute_provider_call,
-)
 from scholar_search_mcp.agentic.models import PlannerDecision
 from scholar_search_mcp.agentic.planner import (
     classify_query,
     grounded_expansion_candidates,
     looks_like_exact_title,
 )
-from scholar_search_mcp.agentic.retrieval import provider_limits
+from scholar_search_mcp.agentic.providers import OpenAIProviderBundle
 from scholar_search_mcp.agentic.ranking import merge_candidates, rerank_candidates
-from scholar_search_mcp.agentic.retrieval import RetrievedCandidate, retrieve_variant
+from scholar_search_mcp.agentic.retrieval import (
+    RetrievedCandidate,
+    provider_limits,
+    retrieve_variant,
+)
 from scholar_search_mcp.enrichment import PaperEnrichmentService
+from scholar_search_mcp.provider_runtime import (
+    ProviderDiagnosticsRegistry,
+    ProviderPolicy,
+    execute_provider_call,
+)
 from tests.helpers import (
     RecordingCrossrefClient,
     RecordingOpenAlexClient,
@@ -275,7 +278,9 @@ async def test_search_papers_smart_emits_progress_logs_and_provider_events(
 
 
 @pytest.mark.asyncio
-async def test_search_papers_smart_skips_context_notifications_on_stdio_transport() -> None:
+async def test_search_papers_smart_skips_context_notifications_on_stdio_transport() -> (
+    None
+):
     semantic = RecordingSemanticClient()
     openalex = RecordingOpenAlexClient()
     _, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
@@ -524,7 +529,9 @@ async def test_ask_result_set_balanced_mode_skips_embedding_scoring() -> None:
 
 
 @pytest.mark.asyncio
-async def test_map_research_landscape_balanced_mode_skips_embedding_clustering() -> None:
+async def test_map_research_landscape_balanced_mode_skips_embedding_clustering() -> (
+    None
+):
     semantic = RecordingSemanticClient()
     openalex = RecordingOpenAlexClient()
     config = AgenticConfig(
@@ -549,7 +556,8 @@ async def test_map_research_landscape_balanced_mode_skips_embedding_clustering()
         **kwargs: object,
     ) -> list[tuple[float, ...] | None]:
         raise AssertionError(
-            f"balanced landscape mapping should not call embeddings: {texts!r}, {kwargs!r}"
+            "balanced landscape mapping should not call embeddings: "
+            f"{texts!r}, {kwargs!r}"
         )
 
     bundle.aembed_texts = _unexpected_aembed_texts  # type: ignore[method-assign]
@@ -640,7 +648,9 @@ async def test_async_embeddings_degrade_without_sync_retry_when_openai_fails() -
 
 
 @pytest.mark.asyncio
-async def test_async_similarity_falls_back_to_lexical_scores_when_embeddings_fail() -> None:
+async def test_async_similarity_falls_back_to_lexical_scores_when_embeddings_fail() -> (
+    None
+):
     config = AgenticConfig(
         enabled=True,
         provider="openai",
@@ -741,7 +751,8 @@ async def test_search_papers_smart_records_embedding_timeout_provider_outcome(
     openai_outcomes = [
         outcome
         for outcome in payload["strategyMetadata"]["providerOutcomes"]
-        if outcome["provider"] == "openai" and outcome["endpoint"] == "embeddings.create"
+        if outcome["provider"] == "openai"
+        and outcome["endpoint"] == "embeddings.create"
     ]
     assert openai_outcomes
     assert openai_outcomes[-1]["statusBucket"] == "provider_error"
@@ -778,7 +789,9 @@ async def test_search_papers_smart_balanced_mode_skips_embedding_rerank() -> Non
 
     class _EmbeddingsClient:
         async def create(self, **kwargs: object) -> object:
-            raise AssertionError(f"balanced rerank should not call embeddings: {kwargs!r}")
+            raise AssertionError(
+                f"balanced rerank should not call embeddings: {kwargs!r}"
+            )
 
     class _ResponsesClient:
         async def parse(self, **kwargs: object) -> object:
@@ -828,12 +841,13 @@ async def test_search_papers_smart_balanced_mode_skips_embedding_rerank() -> Non
     assert not [
         outcome
         for outcome in payload["strategyMetadata"]["providerOutcomes"]
-        if outcome["provider"] == "openai" and outcome["endpoint"] == "embeddings.create"
+        if outcome["provider"] == "openai"
+        and outcome["endpoint"] == "embeddings.create"
     ]
 
 
 @pytest.mark.asyncio
-async def test_search_papers_smart_deep_mode_skips_embeddings_when_globally_disabled() -> None:
+async def test_search_papers_smart_deep_mode_skips_embeddings_when_disabled() -> None:
     semantic = RecordingSemanticClient()
     openalex = RecordingOpenAlexClient()
     config = AgenticConfig(
@@ -918,7 +932,8 @@ async def test_search_papers_smart_deep_mode_skips_embeddings_when_globally_disa
     assert not [
         outcome
         for outcome in payload["strategyMetadata"]["providerOutcomes"]
-        if outcome["provider"] == "openai" and outcome["endpoint"] == "embeddings.create"
+        if outcome["provider"] == "openai"
+        and outcome["endpoint"] == "embeddings.create"
     ]
 
 
@@ -1404,18 +1419,27 @@ def test_grounded_expansions_dedupe_near_duplicate_variants() -> None:
     config = _deterministic_config().for_latency_profile("balanced")
 
     variants = grounded_expansion_candidates(
-        original_query="Florida Scrub-Jay Aphelocoma coerulescens demography habitat survival reproduction conservation Brevard",
+        original_query=(
+            "Florida Scrub-Jay Aphelocoma coerulescens demography habitat "
+            "survival reproduction conservation Brevard"
+        ),
         papers=[
             {
                 "title": "Florida Scrub-Jay demography Brevard County",
-                "abstract": "Demography and survival in Brevard County scrub-jay populations.",
+                "abstract": (
+                    "Demography and survival in Brevard County scrub-jay populations."
+                ),
             },
             {
                 "title": "Florida Scrub-Jay demography habitat survival",
-                "abstract": "Habitat, survival, and reproduction of Florida Scrub-Jays.",
+                "abstract": (
+                    "Habitat, survival, and reproduction of Florida Scrub-Jays."
+                ),
             },
             {
-                "title": "Florida Scrub-Jay metapopulation viability habitat connectivity",
+                "title": (
+                    "Florida Scrub-Jay metapopulation viability habitat connectivity"
+                ),
                 "abstract": "Metapopulation viability and habitat connectivity.",
             },
         ],

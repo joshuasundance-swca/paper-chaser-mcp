@@ -3,6 +3,7 @@
 from .arxiv import ArxivClient
 from .core import CoreApiClient
 from .crossref import CrossrefClient
+from .ecos import EcosClient
 from .openalex import OpenAlexClient
 from .semantic_scholar import SemanticScholarClient
 from .serpapi import SerpApiScholarClient
@@ -12,6 +13,7 @@ __all__ = [
     "ArxivClient",
     "CoreApiClient",
     "CrossrefClient",
+    "EcosClient",
     "OpenAlexClient",
     "SemanticScholarClient",
     "SerpApiScholarClient",

@@ -22,6 +22,7 @@ from .clients import (
     ArxivClient,
     CoreApiClient,
     CrossrefClient,
+    EcosClient,
     OpenAlexClient,
     SemanticScholarClient,
     UnpaywallClient,
@@ -85,7 +86,11 @@ Decision tree for tool selection:
    search_papers_serpapi_versions, get_author_profile_serpapi,
    get_author_articles_serpapi, or get_serpapi_account_status only when
    SCHOLAR_SEARCH_ENABLE_SERPAPI=true and the workflow justifies paid recall recovery
-14. PROVIDER HEALTH / DEBUGGING → get_provider_diagnostics
+14. ECOS SPECIES DOSSIERS → search_species_ecos → get_species_profile_ecos →
+   list_species_documents_ecos → get_document_text_ecos for species pages,
+   regulatory documents, and recovery PDFs from the U.S. Fish and Wildlife
+   Service ECOS system
+15. PROVIDER HEALTH / DEBUGGING → get_provider_diagnostics
 
 After search_papers: read brokerMetadata.nextStepHint for the recommended next move.
 After search_papers_smart: reuse searchSessionId for ask_result_set,
@@ -201,6 +206,8 @@ AGENT_WORKFLOW_GUIDE = """
   `get_serpapi_account_status` only when Google Scholar recall recovery or quota
   inspection is explicitly needed.
 - **Provider/runtime debugging**: `get_provider_diagnostics`
+- **ECOS species dossiers**: `search_species_ecos` -> `get_species_profile_ecos`
+  -> `list_species_documents_ecos` -> `get_document_text_ecos`
 - **Grounded follow-up over a saved result set**: `ask_result_set` for QA,
   claim checks, or comparisons; `map_research_landscape` for themes, gaps, and
   disagreements; `expand_research_graph` for a compact citation or author graph.
@@ -310,9 +317,11 @@ __all__ = [
     "enable_serpapi",
     "enable_crossref",
     "enable_unpaywall",
+    "enable_ecos",
     "client",
     "core_client",
     "crossref_client",
+    "ecos_client",
     "openalex_client",
     "arxiv_client",
     "serpapi_client",
@@ -407,6 +416,28 @@ def _tool_tags(name: str) -> set[str]:
             "paper",
             "provider-specific",
             "provider:unpaywall",
+        },
+        "search_species_ecos": {
+            "search",
+            "species",
+            "provider-specific",
+            "provider:ecos",
+        },
+        "get_species_profile_ecos": {
+            "species",
+            "provider-specific",
+            "provider:ecos",
+        },
+        "list_species_documents_ecos": {
+            "species",
+            "documents",
+            "provider-specific",
+            "provider:ecos",
+        },
+        "get_document_text_ecos": {
+            "documents",
+            "provider-specific",
+            "provider:ecos",
         },
         "enrich_paper": {"paper", "enrichment"},
         "get_provider_diagnostics": {"diagnostics", "provider-health"},
@@ -519,8 +550,10 @@ async def _execute_tool(
         enable_serpapi=enable_serpapi,
         crossref_client=crossref_client,
         unpaywall_client=unpaywall_client,
+        ecos_client=ecos_client,
         enable_crossref=enable_crossref,
         enable_unpaywall=enable_unpaywall,
+        enable_ecos=enable_ecos,
         enrichment_service=enrichment_service,
         provider_order=provider_order,
         provider_registry=provider_registry,
@@ -540,6 +573,7 @@ openalex_mailto = settings.openalex_mailto
 serpapi_api_key = settings.serpapi_api_key
 crossref_mailto = settings.crossref_mailto
 unpaywall_email = settings.unpaywall_email
+ecos_base_url = settings.ecos_base_url
 enable_core = settings.enable_core
 enable_semantic_scholar = settings.enable_semantic_scholar
 enable_openalex = settings.enable_openalex
@@ -547,12 +581,21 @@ enable_arxiv = settings.enable_arxiv
 enable_serpapi = settings.enable_serpapi
 enable_crossref = settings.enable_crossref
 enable_unpaywall = settings.enable_unpaywall
+enable_ecos = settings.enable_ecos
 provider_order = list(settings.provider_order)
+provider_registry = ProviderDiagnosticsRegistry()
 client = SemanticScholarClient(api_key=api_key)
 core_client = CoreApiClient(api_key=core_api_key)
 crossref_client = CrossrefClient(
     mailto=crossref_mailto,
     timeout=settings.crossref_timeout_seconds,
+)
+ecos_client = EcosClient(
+    base_url=ecos_base_url,
+    timeout=settings.ecos_timeout_seconds,
+    document_timeout=settings.ecos_document_timeout_seconds,
+    max_document_size_mb=settings.ecos_max_document_size_mb,
+    provider_registry=provider_registry,
 )
 openalex_client = OpenAlexClient(api_key=openalex_api_key, mailto=openalex_mailto)
 arxiv_client = ArxivClient()
@@ -561,7 +604,6 @@ unpaywall_client = UnpaywallClient(
     email=unpaywall_email,
     timeout=settings.unpaywall_timeout_seconds,
 )
-provider_registry = ProviderDiagnosticsRegistry()
 enrichment_service = PaperEnrichmentService(
     crossref_client=crossref_client,
     unpaywall_client=unpaywall_client,
@@ -586,8 +628,12 @@ workspace_registry = WorkspaceRegistry(
     async_embed_texts_fn=(
         None if settings.disable_embeddings else provider_bundle.aembed_texts
     ),
-    embed_query_fn=(None if settings.disable_embeddings else provider_bundle.embed_query),
-    embed_texts_fn=(None if settings.disable_embeddings else provider_bundle.embed_texts),
+    embed_query_fn=(
+        None if settings.disable_embeddings else provider_bundle.embed_query
+    ),
+    embed_texts_fn=(
+        None if settings.disable_embeddings else provider_bundle.embed_texts
+    ),
 )
 agentic_runtime = AgenticRuntime(
     config=agentic_config,
@@ -621,6 +667,7 @@ async def _server_lifespan(_: FastMCP):
         await maybe_close_async_resource(serpapi_client)
         await maybe_close_async_resource(crossref_client)
         await maybe_close_async_resource(unpaywall_client)
+        await maybe_close_async_resource(ecos_client)
 
 
 app = FastMCP(

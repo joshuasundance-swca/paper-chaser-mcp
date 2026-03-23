@@ -8,6 +8,7 @@ from scholar_search_mcp.enrichment import PaperEnrichmentService
 from scholar_search_mcp.utils.cursor import decode_bulk_cursor, decode_cursor
 from tests.helpers import (
     RecordingCrossrefClient,
+    RecordingEcosClient,
     RecordingOpenAlexClient,
     RecordingSemanticClient,
     RecordingUnpaywallClient,
@@ -50,7 +51,7 @@ def _install_recording_enrichment(
 async def test_list_tools_returns_expected_public_contract() -> None:
     tools = await server.list_tools()
 
-    assert len(tools) == 46
+    assert len(tools) == 50
     tool_map = {tool.name: tool for tool in tools}
     assert set(tool_map) == {
         "search_papers",
@@ -95,6 +96,10 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "get_author_articles_serpapi",
         "get_serpapi_account_status",
         "get_provider_diagnostics",
+        "search_species_ecos",
+        "get_species_profile_ecos",
+        "list_species_documents_ecos",
+        "get_document_text_ecos",
         "search_papers_smart",
         "ask_result_set",
         "map_research_landscape",
@@ -205,10 +210,26 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "doi",
         "query",
     }
+    assert set(tool_map["search_species_ecos"].inputSchema["properties"]) == {
+        "query",
+        "limit",
+        "matchMode",
+    }
+    assert set(tool_map["get_species_profile_ecos"].inputSchema["properties"]) == {
+        "species_id",
+    }
+    assert set(tool_map["list_species_documents_ecos"].inputSchema["properties"]) == {
+        "species_id",
+        "documentKinds",
+    }
+    assert set(tool_map["get_document_text_ecos"].inputSchema["properties"]) == {
+        "url",
+    }
     search_tags = tool_map["search_papers"].meta or {}
     semantic_tags = tool_map["search_papers_semantic_scholar"].meta or {}
     openalex_tags = tool_map["search_papers_openalex"].meta or {}
     citation_tags = tool_map["resolve_citation"].meta or {}
+    ecos_tags = tool_map["search_species_ecos"].meta or {}
     assert set(search_tags["fastmcp"]["tags"]) == {
         "search",
         "brokered",
@@ -227,6 +248,12 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "citation-repair",
         "known-item",
         "recovery",
+    }
+    assert set(ecos_tags["fastmcp"]["tags"]) == {
+        "search",
+        "species",
+        "provider-specific",
+        "provider:ecos",
     }
     assert set(tool_map["search_papers_smart"].inputSchema["properties"]) == {
         "query",
@@ -416,6 +443,91 @@ async def test_explicit_enrichment_tools_route_through_recording_clients(
     assert merged_payload["enrichments"]["crossref"]["doi"] == "10.1234/crossref-query"
     assert merged_payload["enrichments"]["unpaywall"]["isOa"] is True
     _assert_additive_metadata(merged_payload)
+
+
+@pytest.mark.asyncio
+async def test_ecos_tools_route_through_recording_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ecos = RecordingEcosClient()
+    monkeypatch.setattr(server, "ecos_client", ecos)
+    monkeypatch.setattr(server, "enable_ecos", True)
+
+    search_payload = _payload(
+        await server.call_tool(
+            "search_species_ecos",
+            {"query": "California least tern"},
+        )
+    )
+    profile_payload = _payload(
+        await server.call_tool(
+            "get_species_profile_ecos",
+            {"species_id": "8104"},
+        )
+    )
+    list_payload = _payload(
+        await server.call_tool(
+            "list_species_documents_ecos",
+            {
+                "species_id": "8104",
+                "documentKinds": ["recovery_plan", "five_year_review"],
+            },
+        )
+    )
+    text_payload = _payload(
+        await server.call_tool(
+            "get_document_text_ecos",
+            {
+                "url": "https://ecosphere-documents-production-public.s3.amazonaws.com/sams/public_docs/species_nonpublish/30669.pdf"
+            },
+        )
+    )
+
+    assert ecos.calls == [
+        (
+            "search_species",
+            {
+                "query": "California least tern",
+                "limit": 10,
+                "match_mode": "auto",
+            },
+        ),
+        ("get_species_profile", {"species_id": "8104"}),
+        (
+            "list_species_documents",
+            {
+                "species_id": "8104",
+                "document_kinds": ["recovery_plan", "five_year_review"],
+            },
+        ),
+        (
+            "get_document_text",
+            {
+                "url": "https://ecosphere-documents-production-public.s3.amazonaws.com/sams/public_docs/species_nonpublish/30669.pdf"
+            },
+        ),
+    ]
+    assert search_payload["data"][0]["speciesId"] == "8104"
+    assert profile_payload["species"]["speciesId"] == "8104"
+    assert list_payload["data"][0]["documentKind"] == "five_year_review"
+    assert text_payload["extractionStatus"] == "ok"
+    _assert_additive_metadata(search_payload)
+    _assert_additive_metadata(profile_payload)
+    _assert_additive_metadata(list_payload)
+    _assert_additive_metadata(text_payload)
+
+
+@pytest.mark.asyncio
+async def test_ecos_tools_raise_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(server, "enable_ecos", False)
+
+    with pytest.raises(ValueError, match="requires ECOS"):
+        await server.call_tool(
+            "search_species_ecos",
+            {"query": "California least tern"},
+        )
 
 
 @pytest.mark.asyncio

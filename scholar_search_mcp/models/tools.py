@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..constants import SUPPORTED_AUTHOR_FIELDS, SUPPORTED_PAPER_FIELDS
+from .ecos import EcosDocumentKind
 
 
 class ToolArgsModel(BaseModel):
@@ -1133,6 +1134,51 @@ class ExpandResearchGraphArgs(ToolArgsModel):
         return _clamp_limit(value, 25, 50)
 
 
+class SearchSpeciesEcosArgs(ToolArgsModel):
+    query: str = Field(
+        description="Common-name or scientific-name species query for ECOS."
+    )
+    limit: int = Field(
+        default=10,
+        description="Max species hits to return (default 10, max 25).",
+    )
+    match_mode: Literal["auto", "exact", "prefix"] = Field(
+        default="auto",
+        alias="matchMode",
+        description=(
+            "auto tries exact common/scientific-name matching first, then "
+            "prefix matching. exact and prefix restrict the search strategy."
+        ),
+    )
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def clamp_limit(cls, value: int | None) -> int:
+        return _clamp_limit(value, 10, 25)
+
+
+class EcosSpeciesLookupArgs(ToolArgsModel):
+    species_id: str = Field(description="ECOS species id or ECOS species URL.")
+
+
+class ListSpeciesDocumentsEcosArgs(EcosSpeciesLookupArgs):
+    document_kinds: list[EcosDocumentKind] | None = Field(
+        default=None,
+        alias="documentKinds",
+        description=(
+            "Optional document-kind filter. Supported values: recovery_plan, "
+            "five_year_review, biological_opinion, federal_register, "
+            "other_recovery_doc, conservation_plan_link."
+        ),
+    )
+
+
+class GetDocumentTextEcosArgs(ToolArgsModel):
+    url: str = Field(
+        description="Absolute or ECOS-relative document URL to fetch and convert."
+    )
+
+
 TOOL_INPUT_MODELS: dict[str, type[ToolArgsModel]] = {
     "search_papers": SearchPapersArgs,
     "search_papers_core": MinimalProviderSearchPapersArgs,
@@ -1176,6 +1222,10 @@ TOOL_INPUT_MODELS: dict[str, type[ToolArgsModel]] = {
     "get_author_articles_serpapi": SerpApiAuthorArticlesArgs,
     "get_serpapi_account_status": SerpApiAccountStatusArgs,
     "get_provider_diagnostics": ProviderDiagnosticsArgs,
+    "search_species_ecos": SearchSpeciesEcosArgs,
+    "get_species_profile_ecos": EcosSpeciesLookupArgs,
+    "list_species_documents_ecos": ListSpeciesDocumentsEcosArgs,
+    "get_document_text_ecos": GetDocumentTextEcosArgs,
     "search_papers_smart": SmartSearchPapersArgs,
     "ask_result_set": AskResultSetArgs,
     "map_research_landscape": MapResearchLandscapeArgs,

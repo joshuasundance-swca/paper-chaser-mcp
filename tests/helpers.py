@@ -267,6 +267,117 @@ class RecordingUnpaywallClient:
         }
 
 
+class RecordingEcosClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    async def search_species(self, **kwargs) -> dict:
+        self.calls.append(("search_species", kwargs))
+        return {
+            "query": kwargs["query"],
+            "matchMode": kwargs.get("match_mode", "auto"),
+            "total": 1,
+            "data": [
+                {
+                    "speciesId": "8104",
+                    "commonName": "California least tern",
+                    "scientificName": "Sternula antillarum browni",
+                    "statusCategory": "Animal",
+                    "listingStatus": "Endangered",
+                    "group": "Birds",
+                    "leadAgency": "FWS",
+                    "profileUrl": "https://ecos.fws.gov/ecp/species/8104",
+                }
+            ],
+        }
+
+    async def get_species_profile(self, **kwargs) -> dict:
+        self.calls.append(("get_species_profile", kwargs))
+        return {
+            "species": {
+                "speciesId": "8104",
+                "commonName": "California least tern",
+                "scientificName": "Sternula antillarum browni",
+                "group": "Birds",
+                "profileUrl": "https://ecos.fws.gov/ecp/species/8104",
+            },
+            "speciesEntities": [
+                {
+                    "entityId": 96,
+                    "agency": "FWS",
+                    "status": "Endangered",
+                    "statusCategory": "Animal",
+                }
+            ],
+            "lifeHistory": "Ground-nesting seabird.",
+            "range": {"historicalRangeStates": ["CA"]},
+            "documents": {
+                "recoveryPlans": [
+                    {
+                        "documentKind": "recovery_plan",
+                        "title": "Revised California Least Tern Recovery Plan",
+                        "url": (
+                            "https://ecos.fws.gov/docs/recovery_plan/"
+                            "850927_w signature.pdf"
+                        ),
+                        "documentDate": "09/27/1985",
+                    }
+                ],
+                "fiveYearReviews": [
+                    {
+                        "documentKind": "five_year_review",
+                        "title": "California Least Tern 5YR 2025",
+                        "url": "https://ecosphere-documents-production-public.s3.amazonaws.com/sams/public_docs/species_nonpublish/30669.pdf",
+                        "documentDate": "08/28/2025",
+                    }
+                ],
+                "biologicalOpinions": [],
+                "federalRegisterDocuments": [],
+                "otherRecoveryDocs": [],
+            },
+            "conservationPlanLinks": [],
+        }
+
+    async def list_species_documents(self, **kwargs) -> dict:
+        self.calls.append(("list_species_documents", kwargs))
+        return {
+            "speciesId": "8104",
+            "total": 2,
+            "documentKindsApplied": kwargs.get("document_kinds") or [],
+            "data": [
+                {
+                    "documentKind": "five_year_review",
+                    "title": "California Least Tern 5YR 2025",
+                    "url": "https://ecosphere-documents-production-public.s3.amazonaws.com/sams/public_docs/species_nonpublish/30669.pdf",
+                    "documentDate": "08/28/2025",
+                },
+                {
+                    "documentKind": "recovery_plan",
+                    "title": "Revised California Least Tern Recovery Plan",
+                    "url": (
+                        "https://ecos.fws.gov/docs/recovery_plan/850927_w signature.pdf"
+                    ),
+                    "documentDate": "09/27/1985",
+                },
+            ],
+        }
+
+    async def get_document_text(self, **kwargs) -> dict:
+        self.calls.append(("get_document_text", kwargs))
+        return {
+            "document": {
+                "title": "California Least Tern 5YR 2025",
+                "url": kwargs["url"],
+            },
+            "markdown": (
+                "# Five-Year Review\n\n## Recommendation\n\nRetain endangered status."
+            ),
+            "contentType": "application/pdf",
+            "extractionStatus": "ok",
+            "warnings": [],
+        }
+
+
 def _payload(response: list) -> Any:
     assert len(response) == 1
     return json.loads(response[0].text)

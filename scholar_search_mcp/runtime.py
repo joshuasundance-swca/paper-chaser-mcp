@@ -19,7 +19,8 @@ def run_server(*, app: Any, logger: Any, settings: AppSettings) -> None:
         settings.enable_arxiv,
     )
     logger.info(
-        "Smart workflows: enabled=%s provider=%s index=%s ttl=%ss trace=%s embeddings=%s",
+        "Smart workflows: enabled=%s provider=%s index=%s ttl=%ss "
+        "trace=%s embeddings=%s",
         settings.enable_agentic,
         settings.agentic_provider,
         settings.agentic_index_backend,

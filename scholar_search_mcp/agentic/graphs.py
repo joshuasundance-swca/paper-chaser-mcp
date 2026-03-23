@@ -505,7 +505,8 @@ class AgenticRuntime:
                     progress=45,
                     message="Running grounded expansions",
                     detail=(
-                        f"Running {len(grounded_variants)} grounded expansion variant(s) "
+                        f"Running {len(grounded_variants)} "
+                        "grounded expansion variant(s) "
                         "while speculative planning continues in parallel."
                     ),
                 )

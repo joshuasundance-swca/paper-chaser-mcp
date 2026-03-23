@@ -311,10 +311,35 @@ TOOL_DESCRIPTIONS = {
     ),
     "get_provider_diagnostics": (
         "Return shared provider-health diagnostics for Semantic Scholar, OpenAlex, "
-        "CORE, arXiv, SerpApi, Crossref, Unpaywall, and OpenAI. Includes "
+        "CORE, arXiv, SerpApi, Crossref, Unpaywall, OpenAI, and ECOS. Includes "
         "suppression state, recent rate limits and failures, and normalized "
         "outcome envelopes so transport and provider issues are visible without "
         "reading raw logs."
+    ),
+    "search_species_ecos": (
+        "Search the U.S. Fish and Wildlife Service ECOS species catalog using "
+        "structured Pull Reports filters instead of page scraping. "
+        "matchMode=auto tries exact common/scientific-name matches first, then "
+        "falls back to prefix matching. Returns compact species hits with ECOS "
+        "species ids and profile URLs."
+    ),
+    "get_species_profile_ecos": (
+        "Fetch one ECOS species dossier by species id or species URL using the "
+        "structured JSON that powers the public species page. Returns the core "
+        "species record, per-entity listings, life history, range summary, "
+        "grouped documents, and conservation-plan links."
+    ),
+    "list_species_documents_ecos": (
+        "Flatten one ECOS species dossier into a sorted document inventory. "
+        "Supports recovery plans, five-year reviews, biological opinions, "
+        "federal-register documents, other recovery documents, and "
+        "conservation-plan links."
+    ),
+    "get_document_text_ecos": (
+        "Fetch one ECOS or ECOS-linked document URL, follow redirects, detect "
+        "content type, and convert PDF/HTML/text content to Markdown for "
+        "downstream analysis. Returns extractionStatus plus warnings when a "
+        "document is too large, unsupported, nearly empty, or failed to fetch."
     ),
     "search_papers_smart": (
         "Agent-oriented concept and literature-review search. Starts from a broad "

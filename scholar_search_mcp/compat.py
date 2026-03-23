@@ -351,6 +351,76 @@ def build_agent_hints(
             ),
             warnings=warnings,
         )
+    if tool_name == "search_species_ecos":
+        return AgentHints(
+            nextToolCandidates=[
+                "get_species_profile_ecos",
+                "list_species_documents_ecos",
+                "get_document_text_ecos",
+            ],
+            whyThisNextStep=(
+                "Species hits are best used as anchors into the full ECOS dossier "
+                "or a targeted species-document inventory."
+            ),
+            safeRetry=(
+                "Retry with an exact common name, a scientific name prefix, or a "
+                "shorter species phrase if the first pass is noisy."
+            ),
+            warnings=warnings,
+        )
+    if tool_name == "get_species_profile_ecos":
+        return AgentHints(
+            nextToolCandidates=[
+                "list_species_documents_ecos",
+                "get_document_text_ecos",
+                "search_species_ecos",
+            ],
+            whyThisNextStep=(
+                "The dossier surfaces grouped source documents, so the highest-value "
+                "next move is usually flattening the inventory or extracting one "
+                "document to Markdown."
+            ),
+            safeRetry=(
+                "Retry with the numeric species id if a pasted ECOS species URL "
+                "fails validation."
+            ),
+            warnings=warnings,
+        )
+    if tool_name == "list_species_documents_ecos":
+        return AgentHints(
+            nextToolCandidates=[
+                "get_document_text_ecos",
+                "get_species_profile_ecos",
+                "search_species_ecos",
+            ],
+            whyThisNextStep=(
+                "A flattened document list is most useful when followed by one "
+                "specific PDF or HTML extraction."
+            ),
+            safeRetry=(
+                "Retry with a tighter documentKinds filter when the inventory is "
+                "too broad."
+            ),
+            warnings=warnings,
+        )
+    if tool_name == "get_document_text_ecos":
+        return AgentHints(
+            nextToolCandidates=[
+                "list_species_documents_ecos",
+                "get_species_profile_ecos",
+                "search_species_ecos",
+            ],
+            whyThisNextStep=(
+                "After document extraction, the best next move is usually to "
+                "inspect adjacent documents for the same species or revisit the "
+                "species dossier for context."
+            ),
+            safeRetry=(
+                "Retry with the direct PDF or ECOS document URL if a linked landing "
+                "page produced thin Markdown."
+            ),
+            warnings=warnings,
+        )
     return AgentHints(
         nextToolCandidates=[],
         whyThisNextStep=(

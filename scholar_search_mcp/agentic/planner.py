@@ -75,11 +75,15 @@ TITLE_STOPWORDS = {
     "with",
 }
 
-VARIANT_DEDUPE_STOPWORDS = TITLE_STOPWORDS | GENERIC_EVIDENCE_WORDS | {
-    "florida",
-    "review",
-    "scrub",
-}
+VARIANT_DEDUPE_STOPWORDS = (
+    TITLE_STOPWORDS
+    | GENERIC_EVIDENCE_WORDS
+    | {
+        "florida",
+        "review",
+        "scrub",
+    }
+)
 
 
 def normalize_query(query: str) -> str:
@@ -276,7 +280,10 @@ def grounded_expansion_candidates(
         if lowered in seen:
             continue
         signature = _variant_signature(candidate.variant)
-        if any(_signatures_are_near_duplicates(signature, prior) for prior in seen_signatures):
+        if any(
+            _signatures_are_near_duplicates(signature, prior)
+            for prior in seen_signatures
+        ):
             continue
         seen.add(lowered)
         seen_signatures.append(signature)
@@ -342,7 +349,10 @@ def combine_variants(
         if lowered in seen:
             continue
         signature = _variant_signature(candidate.variant)
-        if any(_signatures_are_near_duplicates(signature, prior) for prior in seen_signatures):
+        if any(
+            _signatures_are_near_duplicates(signature, prior)
+            for prior in seen_signatures
+        ):
             continue
         seen.add(lowered)
         seen_signatures.append(signature)
@@ -367,7 +377,10 @@ def dedupe_variants(
         if lowered in seen:
             continue
         signature = _variant_signature(candidate.variant)
-        if any(_signatures_are_near_duplicates(signature, prior) for prior in seen_signatures):
+        if any(
+            _signatures_are_near_duplicates(signature, prior)
+            for prior in seen_signatures
+        ):
             continue
         seen.add(lowered)
         seen_signatures.append(signature)

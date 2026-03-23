@@ -115,6 +115,7 @@ class AppSettings(BaseModel):
     serpapi_api_key: str | None = None
     crossref_mailto: str | None = None
     unpaywall_email: str | None = None
+    ecos_base_url: str = "https://ecos.fws.gov"
     enable_core: bool = False
     enable_semantic_scholar: bool = True
     enable_openalex: bool = True
@@ -122,6 +123,7 @@ class AppSettings(BaseModel):
     enable_serpapi: bool = False
     enable_crossref: bool = True
     enable_unpaywall: bool = True
+    enable_ecos: bool = True
     provider_order: tuple[SearchProvider, ...] = DEFAULT_SEARCH_PROVIDER_ORDER
     transport: Literal["stdio", "http", "streamable-http", "sse"] = "stdio"
     http_host: str = "127.0.0.1"
@@ -142,6 +144,9 @@ class AppSettings(BaseModel):
     enable_agentic_trace_log: bool = False
     crossref_timeout_seconds: float = 30.0
     unpaywall_timeout_seconds: float = 30.0
+    ecos_timeout_seconds: float = 30.0
+    ecos_document_timeout_seconds: float = 60.0
+    ecos_max_document_size_mb: int = 25
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "AppSettings":
@@ -158,6 +163,8 @@ class AppSettings(BaseModel):
             serpapi_api_key=_parse_optional_string(env, "SERPAPI_API_KEY"),
             crossref_mailto=_parse_optional_string(env, "CROSSREF_MAILTO"),
             unpaywall_email=_parse_optional_string(env, "UNPAYWALL_EMAIL"),
+            ecos_base_url=env.get("ECOS_BASE_URL", "https://ecos.fws.gov").strip()
+            or "https://ecos.fws.gov",
             enable_core=_parse_env_bool(env, "SCHOLAR_SEARCH_ENABLE_CORE", False),
             enable_semantic_scholar=_parse_env_bool(
                 env,
@@ -183,6 +190,11 @@ class AppSettings(BaseModel):
             enable_unpaywall=_parse_env_bool(
                 env,
                 "SCHOLAR_SEARCH_ENABLE_UNPAYWALL",
+                True,
+            ),
+            enable_ecos=_parse_env_bool(
+                env,
+                "SCHOLAR_SEARCH_ENABLE_ECOS",
                 True,
             ),
             provider_order=_parse_provider_order(env, "SCHOLAR_SEARCH_PROVIDER_ORDER"),
@@ -246,6 +258,21 @@ class AppSettings(BaseModel):
                 env,
                 "UNPAYWALL_TIMEOUT_SECONDS",
                 30.0,
+            ),
+            ecos_timeout_seconds=_parse_positive_float(
+                env,
+                "ECOS_TIMEOUT_SECONDS",
+                30.0,
+            ),
+            ecos_document_timeout_seconds=_parse_positive_float(
+                env,
+                "ECOS_DOCUMENT_TIMEOUT_SECONDS",
+                60.0,
+            ),
+            ecos_max_document_size_mb=_parse_positive_int(
+                env,
+                "ECOS_MAX_DOCUMENT_SIZE_MB",
+                25,
             ),
         )
 
