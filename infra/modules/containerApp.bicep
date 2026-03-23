@@ -32,16 +32,24 @@ param sessionTtlSeconds int
 param synthesisModel string
 param tags object = {}
 
+// --- New provider-configuration params ---
+param enableSemanticScholar bool = true
+param enableArxiv bool = true
+param enableCore bool = false
+param enableOpenAlex bool = true
+param enableCrossref bool = true
+param enableUnpaywall bool = true
+param enableEcos bool = true
+param crossrefMailto string = ''
+param unpayWallEmail string = ''
+param ecosBaseUrl string = ''
+param ecosVerifyTls bool = true
+
 var secretDefinitions = concat([
   {
     identity: managedIdentityResourceId
     keyVaultUrl: backendAuthSecretUri
     name: backendAuthSecretName
-  }
-  {
-    identity: managedIdentityResourceId
-    keyVaultUrl: keyVaultCoreApiKeySecretUri
-    name: 'core-api-key'
   }
   {
     identity: managedIdentityResourceId
@@ -58,7 +66,13 @@ var secretDefinitions = concat([
     keyVaultUrl: keyVaultOpenAlexMailtoSecretUri
     name: 'openalex-mailto'
   }
-], enableSerpApi ? [
+], enableCore ? [
+  {
+    identity: managedIdentityResourceId
+    keyVaultUrl: keyVaultCoreApiKeySecretUri
+    name: 'core-api-key'
+  }
+] : [], enableSerpApi ? [
   {
     identity: managedIdentityResourceId
     keyVaultUrl: keyVaultSerpApiKeySecretUri
@@ -78,10 +92,6 @@ var containerEnv = concat([
     value: appInsightsConnectionString
   }
   {
-    name: 'CORE_API_KEY'
-    secretRef: 'core-api-key'
-  }
-  {
     name: 'OPENALEX_API_KEY'
     secretRef: 'openalex-api-key'
   }
@@ -99,19 +109,35 @@ var containerEnv = concat([
   }
   {
     name: 'SCHOLAR_SEARCH_ENABLE_ARXIV'
-    value: 'true'
+    value: string(enableArxiv)
   }
   {
     name: 'SCHOLAR_SEARCH_ENABLE_CORE'
-    value: 'true'
+    value: string(enableCore)
+  }
+  {
+    name: 'SCHOLAR_SEARCH_ENABLE_CROSSREF'
+    value: string(enableCrossref)
+  }
+  {
+    name: 'SCHOLAR_SEARCH_ENABLE_ECOS'
+    value: string(enableEcos)
   }
   {
     name: 'SCHOLAR_SEARCH_ENABLE_OPENALEX'
-    value: 'true'
+    value: string(enableOpenAlex)
   }
   {
     name: 'SCHOLAR_SEARCH_ENABLE_SEMANTIC_SCHOLAR'
-    value: 'true'
+    value: string(enableSemanticScholar)
+  }
+  {
+    name: 'SCHOLAR_SEARCH_ENABLE_UNPAYWALL'
+    value: string(enableUnpaywall)
+  }
+  {
+    name: 'ECOS_VERIFY_TLS'
+    value: string(ecosVerifyTls)
   }
   {
     name: 'SCHOLAR_SEARCH_ENABLE_SERPAPI'
@@ -185,7 +211,12 @@ var containerEnv = concat([
     name: 'SEMANTIC_SCHOLAR_API_KEY'
     secretRef: 'semantic-scholar-api-key'
   }
-], enableSerpApi ? [
+], enableCore ? [
+  {
+    name: 'CORE_API_KEY'
+    secretRef: 'core-api-key'
+  }
+] : [], enableSerpApi ? [
   {
     name: 'SERPAPI_API_KEY'
     secretRef: 'serpapi-api-key'
@@ -194,6 +225,21 @@ var containerEnv = concat([
   {
     name: 'OPENAI_API_KEY'
     secretRef: 'openai-api-key'
+  }
+] : [], !empty(crossrefMailto) ? [
+  {
+    name: 'CROSSREF_MAILTO'
+    value: crossrefMailto
+  }
+] : [], !empty(unpayWallEmail) ? [
+  {
+    name: 'UNPAYWALL_EMAIL'
+    value: unpayWallEmail
+  }
+] : [], !empty(ecosBaseUrl) ? [
+  {
+    name: 'ECOS_BASE_URL'
+    value: ecosBaseUrl
   }
 ] : [])
 

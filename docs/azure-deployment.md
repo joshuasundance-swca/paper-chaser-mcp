@@ -53,12 +53,111 @@ usage.
    optional runner-label variable if you need to override the default labels.
 5. Populate Key Vault with these secret names before production deployment:
    - `openai-api-key` if you enable the smart layer with `agenticProvider=openai`
-   - `core-api-key`
+   - `core-api-key` **only** if you set `enableCore=true`; CORE is disabled by
+     default in this scaffold (matching the application default). Leave this
+     secret out until you deliberately opt in.
    - `semantic-scholar-api-key`
    - `openalex-api-key`
    - `openalex-mailto`
-   - `serpapi-api-key` if enabled
+   - `serpapi-api-key` if `enableSerpApi=true`
    - `mcp-backend-auth-token`
+
+   Crossref, Unpaywall, and ECOS are enabled by default but **do not require
+   Key Vault secrets**. Their polite-pool contact values (`crossrefMailto`,
+   `unpayWallEmail`) are plain Bicep string params and can be left empty to use
+   the application defaults.
+
+## Provider enablement matrix
+
+The table below shows the default state of every search provider in this Azure
+scaffold, the Bicep parameter that controls it, and whether it needs a Key Vault
+secret.
+
+| Provider | Default | Bicep param | Requires Key Vault secret? |
+| --- | --- | --- | --- |
+| Semantic Scholar | **on** | `enableSemanticScholar` | Yes (`semantic-scholar-api-key`) |
+| arXiv | **on** | `enableArxiv` | No |
+| CORE | **off** | `enableCore` | Yes (`core-api-key`) — only needed when enabled |
+| OpenAlex | **on** | `enableOpenAlex` | Yes (`openalex-api-key`, `openalex-mailto`) |
+| SerpApi | off | `enableSerpApi` | Yes (`serpapi-api-key`) — only needed when enabled |
+| Crossref | **on** | `enableCrossref` | No (optional `crossrefMailto` plain param) |
+| Unpaywall | **on** | `enableUnpaywall` | No (optional `unpayWallEmail` plain param) |
+| ECOS | **on** | `enableEcos` | No |
+
+The smart layer (`enableAgentic=true` with `agenticProvider=openai`) adds a
+separate `openai-api-key` requirement.
+
+## Bicep parameters reference
+
+All Bicep parameters below can be set in the environment `.bicepparam` file or
+passed as overrides at deployment time. Sensitive runtime values always belong
+in Key Vault, never in `.bicepparam`.
+
+### Infrastructure shape
+
+| Parameter | Default | Purpose |
+| --- | --- | --- |
+| `location` | resource group location | Azure region for all resources |
+| `environmentName` | *(required)* | Environment label used in resource names (e.g. `dev`, `staging`, `prod`) |
+| `appName` | `scholar-search` | Short application name prefix for resource names |
+| `imageRepository` | `scholar-search-mcp` | Container image name inside ACR |
+| `imageTag` | `latest` | Container image tag to deploy |
+| `deployMode` | `full` | `bootstrap` (first run) or `full` (image + workload) |
+| `containerCpu` | `1` | CPU cores for the Container App container |
+| `containerMemory` | `2Gi` | Memory for the Container App container |
+| `minReplicas` | `1` | Minimum scale-to-zero boundary (0 for dev, ≥1 for prod) |
+| `maxReplicas` | `3` | Maximum horizontal replica count |
+| `tags` | application/environment/managedBy | Safe resource tags; do not add secrets or private identifiers |
+
+### API Management
+
+| Parameter | Default | Purpose |
+| --- | --- | --- |
+| `apiManagementSku` | `StandardV2` | APIM SKU (`StandardV2` or `PremiumV2`) |
+| `apiManagementApiPath` | `scholar-search` | Relative API path in APIM |
+| `apiManagementPublisherName` | `Scholar Search MCP` | Publisher display name in APIM |
+| `apiManagementPublisherEmail` | `owner@example.invalid` | Publisher email in APIM; use a non-secret operational inbox |
+
+### Provider enable flags
+
+| Parameter | Default | Controls env var |
+| --- | --- | --- |
+| `enableSemanticScholar` | `true` | `SCHOLAR_SEARCH_ENABLE_SEMANTIC_SCHOLAR` |
+| `enableArxiv` | `true` | `SCHOLAR_SEARCH_ENABLE_ARXIV` |
+| `enableCore` | **`false`** | `SCHOLAR_SEARCH_ENABLE_CORE` |
+| `enableOpenAlex` | `true` | `SCHOLAR_SEARCH_ENABLE_OPENALEX` |
+| `enableSerpApi` | `false` | `SCHOLAR_SEARCH_ENABLE_SERPAPI` |
+| `enableCrossref` | `true` | `SCHOLAR_SEARCH_ENABLE_CROSSREF` |
+| `enableUnpaywall` | `true` | `SCHOLAR_SEARCH_ENABLE_UNPAYWALL` |
+| `enableEcos` | `true` | `SCHOLAR_SEARCH_ENABLE_ECOS` |
+
+Note: setting `enableCore=true` also causes the scaffold to mount the
+`core-api-key` Key Vault secret into the container. That secret must exist in
+Key Vault before you run a `full` deployment with CORE enabled.
+
+### Provider contact / URL overrides
+
+| Parameter | Default | Controls env var |
+| --- | --- | --- |
+| `crossrefMailto` | `''` (use app default) | `CROSSREF_MAILTO` — only injected when non-empty |
+| `unpayWallEmail` | `''` (use app default) | `UNPAYWALL_EMAIL` — only injected when non-empty |
+| `ecosBaseUrl` | `''` (use app default) | `ECOS_BASE_URL` — only injected when non-empty |
+| `ecosVerifyTls` | `true` | `ECOS_VERIFY_TLS` |
+
+### Smart / agentic layer
+
+| Parameter | Default | Controls env var |
+| --- | --- | --- |
+| `enableAgentic` | `false` | `SCHOLAR_SEARCH_ENABLE_AGENTIC` |
+| `agenticProvider` | `openai` | `SCHOLAR_SEARCH_AGENTIC_PROVIDER` |
+| `plannerModel` | `gpt-5.4-mini` | `SCHOLAR_SEARCH_PLANNER_MODEL` |
+| `synthesisModel` | `gpt-5.4` | `SCHOLAR_SEARCH_SYNTHESIS_MODEL` |
+| `embeddingModel` | `text-embedding-3-large` | `SCHOLAR_SEARCH_EMBEDDING_MODEL` |
+| `disableEmbeddings` | `false` | `SCHOLAR_SEARCH_DISABLE_EMBEDDINGS` |
+| `agenticOpenAiTimeoutSeconds` | `30` | `SCHOLAR_SEARCH_AGENTIC_OPENAI_TIMEOUT_SECONDS` |
+| `agenticIndexBackend` | `memory` | `SCHOLAR_SEARCH_AGENTIC_INDEX_BACKEND` |
+| `sessionTtlSeconds` | `1800` | `SCHOLAR_SEARCH_SESSION_TTL_SECONDS` |
+| `enableAgenticTraceLog` | `false` | `SCHOLAR_SEARCH_ENABLE_AGENTIC_TRACE_LOG` |
 
 ## Deployment modes
 

@@ -77,6 +77,39 @@ param sessionTtlSeconds int = 1800
 @description('Emit local trace events for smart workflows.')
 param enableAgenticTraceLog bool = false
 
+@description('Whether to enable the Semantic Scholar search provider.')
+param enableSemanticScholar bool = true
+
+@description('Whether to enable the arXiv search provider.')
+param enableArxiv bool = true
+
+@description('Whether to enable the CORE search provider. Off by default; requires a core-api-key Key Vault secret when enabled.')
+param enableCore bool = false
+
+@description('Whether to enable the OpenAlex search provider.')
+param enableOpenAlex bool = true
+
+@description('Whether to enable the Crossref provider for paper metadata and DOI lookup.')
+param enableCrossref bool = true
+
+@description('Whether to enable the Unpaywall provider for open-access full-text lookup.')
+param enableUnpaywall bool = true
+
+@description('Whether to enable the ECOS provider for species and environmental document retrieval.')
+param enableEcos bool = true
+
+@description('Polite pool email sent as User-Agent to Crossref APIs. Optional; leave empty to use the application default.')
+param crossrefMailto string = ''
+
+@description('Email address sent as User-Agent to Unpaywall APIs. Optional; leave empty to use the application default.')
+param unpayWallEmail string = ''
+
+@description('Override the ECOS base URL. Leave empty to use the application default (https://ecos.fws.gov).')
+param ecosBaseUrl string = ''
+
+@description('Whether to verify TLS certificates when calling ECOS. Set to false only in air-gapped or private environments with custom PKI.')
+param ecosVerifyTls bool = true
+
 @description('Azure API Management v2 SKU used for private ingress plus outbound virtual network integration.')
 @allowed([
   'StandardV2'
@@ -237,6 +270,17 @@ module containerApp './modules/containerApp.bicep' = if (deployFull) {
     synthesisModel: synthesisModel
     tags: tags
     enableSerpApi: enableSerpApi
+    enableSemanticScholar: enableSemanticScholar
+    enableArxiv: enableArxiv
+    enableCore: enableCore
+    enableOpenAlex: enableOpenAlex
+    enableCrossref: enableCrossref
+    enableUnpaywall: enableUnpaywall
+    enableEcos: enableEcos
+    crossrefMailto: crossrefMailto
+    unpayWallEmail: unpayWallEmail
+    ecosBaseUrl: ecosBaseUrl
+    ecosVerifyTls: ecosVerifyTls
   }
 }
 

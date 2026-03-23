@@ -298,6 +298,22 @@ gh aw compile test-scholar-search --dir .github/workflows
 - A live broker smoke test was completed against the configured providers in
   this workspace. It confirmed the new hint wording live and exposed a
   transient CORE 500, which is now mitigated by short retries in the client.
+- Provider enablement is now fully parameterized in the Azure Bicep scaffold.
+  All eight providers (`enableSemanticScholar`, `enableArxiv`, `enableCore`,
+  `enableOpenAlex`, `enableSerpApi`, `enableCrossref`, `enableUnpaywall`,
+  `enableEcos`) are controlled by named Bicep parameters in `infra/main.bicep`
+  and threaded through to the Container App. The previously-hardcoded
+  `SCHOLAR_SEARCH_ENABLE_CORE=true` mismatch is fixed: CORE now defaults to
+  `false` in Bicep, `.bicepparam` files, and both Compose files, matching the
+  application default in `settings.py`. The `core-api-key` Key Vault secret is
+  also now conditional — it is only mounted when `enableCore=true`, so
+  environments without a CORE API key no longer require an orphaned Key Vault
+  entry. Email/URL overrides for Crossref, Unpaywall, and ECOS (`crossrefMailto`,
+  `unpayWallEmail`, `ecosBaseUrl`, `ecosVerifyTls`) are exposed as plain Bicep
+  params and injected as env vars only when non-empty (Crossref/Unpaywall/ECOS
+  do not require Key Vault secrets). A new provider enablement matrix table and a
+  complete Bicep parameters reference table are now in
+  `docs/azure-deployment.md`.
 
 - The repo now carries a checked-in agentic workflow source/lock pair for
   high-level MCP smoke testing, covering quick discovery, known-item lookup,
