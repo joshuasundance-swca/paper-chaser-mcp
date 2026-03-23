@@ -71,6 +71,8 @@ def test_app_settings_serpapi_disabled_by_default() -> None:
     assert settings.ecos_timeout_seconds == 30.0
     assert settings.ecos_document_timeout_seconds == 60.0
     assert settings.ecos_max_document_size_mb == 25
+    assert settings.ecos_verify_tls is True
+    assert settings.ecos_ca_bundle is None
 
 
 def test_app_settings_serpapi_enabled_via_env() -> None:
@@ -128,6 +130,8 @@ def test_app_settings_parses_ecos_configuration() -> None:
             "ECOS_TIMEOUT_SECONDS": "12",
             "ECOS_DOCUMENT_TIMEOUT_SECONDS": "75",
             "ECOS_MAX_DOCUMENT_SIZE_MB": "40",
+            "ECOS_VERIFY_TLS": "false",
+            "ECOS_CA_BUNDLE": "C:/certs/ecos-ca.pem",
         }
     )
 
@@ -136,6 +140,8 @@ def test_app_settings_parses_ecos_configuration() -> None:
     assert settings.ecos_timeout_seconds == 12.0
     assert settings.ecos_document_timeout_seconds == 75.0
     assert settings.ecos_max_document_size_mb == 40
+    assert settings.ecos_verify_tls is False
+    assert settings.ecos_ca_bundle == "C:/certs/ecos-ca.pem"
 
 
 def test_app_settings_normalizes_blank_optional_values_to_none() -> None:

@@ -147,6 +147,8 @@ class AppSettings(BaseModel):
     ecos_timeout_seconds: float = 30.0
     ecos_document_timeout_seconds: float = 60.0
     ecos_max_document_size_mb: int = 25
+    ecos_verify_tls: bool = True
+    ecos_ca_bundle: str | None = None
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "AppSettings":
@@ -274,6 +276,12 @@ class AppSettings(BaseModel):
                 "ECOS_MAX_DOCUMENT_SIZE_MB",
                 25,
             ),
+            ecos_verify_tls=_parse_env_bool(
+                env,
+                "ECOS_VERIFY_TLS",
+                True,
+            ),
+            ecos_ca_bundle=_parse_optional_string(env, "ECOS_CA_BUNDLE"),
         )
 
 
