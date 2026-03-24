@@ -3,10 +3,14 @@ import pytest
 import scholar_search_mcp
 import scholar_search_mcp.__main__ as server_main
 import scholar_search_mcp.cli as cli
+import scholar_search_mcp.clients.serpapi.client as serpapi_client_module
 from scholar_search_mcp import server
+from scholar_search_mcp.clients.serpapi import SerpApiScholarClient
 from scholar_search_mcp.enrichment import PaperEnrichmentService
 from scholar_search_mcp.utils.cursor import decode_bulk_cursor, decode_cursor
 from tests.helpers import (
+    DummyResponse,
+    DummySerpApiAsyncClient,
     RecordingCrossrefClient,
     RecordingEcosClient,
     RecordingOpenAlexClient,
@@ -51,7 +55,7 @@ def _install_recording_enrichment(
 async def test_list_tools_returns_expected_public_contract() -> None:
     tools = await server.list_tools()
 
-    assert len(tools) == 50
+    assert len(tools) == 53
     tool_map = {tool.name: tool for tool in tools}
     assert set(tool_map) == {
         "search_papers",
@@ -100,6 +104,9 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "get_species_profile_ecos",
         "list_species_documents_ecos",
         "get_document_text_ecos",
+        "search_federal_register",
+        "get_federal_register_document",
+        "get_cfr_text",
         "search_papers_smart",
         "ask_result_set",
         "map_research_landscape",
@@ -590,26 +597,31 @@ async def test_search_papers_match_include_enrichment_is_opt_in(
     assert unpaywall.calls == [("get_open_access", {"doi": "10.1234/crossref-query"})]
     assert enriched["enrichments"]["crossref"]["doi"] == "10.1234/crossref-query"
     assert enriched["enrichments"]["unpaywall"]["bestOaUrl"].endswith("10.1234/crossref-query")
-    assert fake_client.calls == [
-        ("search_papers_match", {"query": "Best match", "fields": None}),
-        ("search_papers_match", {"query": "Best match", "fields": None}),
-        (
-            "get_paper_details",
-            {
-                "paper_id": "match-1",
-                "fields": [
-                    "paperId",
-                    "title",
-                    "year",
-                    "authors",
-                    "venue",
-                    "publicationDate",
-                    "url",
-                    "externalIds",
-                ],
-            },
-        ),
+    assert [call[0] for call in fake_client.calls] == [
+        "search_papers_match",
+        "search_papers_match",
+        "get_paper_details",
     ]
+    assert fake_client.calls[0][1]["query"] == "Best match"
+    assert fake_client.calls[0][1]["fields"] is None
+    assert fake_client.calls[1][1]["query"] == "Best match"
+    assert fake_client.calls[1][1]["fields"] is None
+    assert fake_client.calls[2] == (
+        "get_paper_details",
+        {
+            "paper_id": "match-1",
+            "fields": [
+                "paperId",
+                "title",
+                "year",
+                "authors",
+                "venue",
+                "publicationDate",
+                "url",
+                "externalIds",
+            ],
+        },
+    )
 
 
 @pytest.mark.asyncio
@@ -1058,6 +1070,44 @@ async def test_new_serpapi_tools_and_provider_diagnostics_route(
 
 
 @pytest.mark.asyncio
+async def test_get_serpapi_account_status_sanitizes_upstream_response_in_public_tool_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    serpapi_payload = {
+        "account_id": "acct-123",
+        "api_key": "SECRET_API_KEY",
+        "account_email": "demo@serpapi.com",
+        "plan_id": "bigdata",
+        "plan_name": "Big Data Plan",
+        "plan_monthly_price": 250.0,
+        "searches_per_month": 30000,
+        "plan_searches_left": 5958,
+        "extra_credits": 5,
+        "total_searches_left": 5963,
+        "this_month_usage": 24042,
+        "last_hour_searches": 42,
+        "account_rate_limit_per_hour": 6000,
+        "secret_token": "should-not-leak",
+    }
+    dummy = DummySerpApiAsyncClient(DummyResponse(status_code=200, payload=serpapi_payload))
+    monkeypatch.setattr(serpapi_client_module.httpx, "AsyncClient", lambda timeout: dummy)
+    monkeypatch.setattr(server, "enable_serpapi", True)
+    monkeypatch.setattr(server, "serpapi_client", SerpApiScholarClient(api_key="test-key"))
+
+    account = _payload(await server.call_tool("get_serpapi_account_status", {}))
+
+    assert account["provider"] == "serpapi_google_scholar"
+    assert account["planId"] == "bigdata"
+    assert account["planSearchesLeft"] == 5958
+    assert account["totalSearchesLeft"] == 5963
+    assert account["accountRateLimitPerHour"] == 6000
+    assert "api_key" not in account
+    assert "account_email" not in account
+    assert "account_id" not in account
+    assert "secret_token" not in account
+
+
+@pytest.mark.asyncio
 async def test_provider_diagnostics_surface_crossref_and_unpaywall(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1135,9 +1185,9 @@ async def test_call_tool_raises_for_unknown_tool() -> None:
         ),
         (
             "resolve_citation",
-            {"citation": "Attention Is All You Need"},
+            {"citation": "Vaswani A, Shazeer N, Parmar N, et al. 2017. Attention Is All You Need. NeurIPS."},
             "search_papers_match",
-            lambda p: bool(p["bestMatch"]["paper"]["paperId"]),
+            lambda p: "resolutionConfidence" in p and "candidateCount" in p,
         ),
         (
             "paper_autocomplete",

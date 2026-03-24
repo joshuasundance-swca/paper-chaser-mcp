@@ -257,6 +257,51 @@ async def test_serpapi_client_search_returns_normalized_papers(
 
 
 @pytest.mark.asyncio
+async def test_serpapi_client_get_account_status_sanitizes_secret_like_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Account status must expose only the public allowlisted quota fields."""
+    from scholar_search_mcp.clients.serpapi import SerpApiScholarClient
+    from scholar_search_mcp.clients.serpapi import client as serpapi_client_module
+
+    serpapi_payload = {
+        "account_id": "acct-123",
+        "api_key": "SECRET_API_KEY",
+        "account_email": "demo@serpapi.com",
+        "plan_id": "bigdata",
+        "plan_name": "Big Data Plan",
+        "plan_monthly_price": 250.0,
+        "searches_per_month": 30000,
+        "plan_searches_left": 5958,
+        "extra_credits": 5,
+        "total_searches_left": 5963,
+        "this_month_usage": 24042,
+        "last_hour_searches": 42,
+        "account_rate_limit_per_hour": 6000,
+        "unexpected_secret": "should-not-leak",
+    }
+    dummy = DummySerpApiAsyncClient(DummyResponse(status_code=200, payload=serpapi_payload))
+    monkeypatch.setattr(serpapi_client_module.httpx, "AsyncClient", lambda timeout: dummy)
+
+    client = SerpApiScholarClient(api_key="test-key")
+    status = await client.get_account_status()
+
+    assert status == {
+        "provider": "serpapi_google_scholar",
+        "planId": "bigdata",
+        "planName": "Big Data Plan",
+        "planMonthlyPrice": 250.0,
+        "searchesPerMonth": 30000,
+        "planSearchesLeft": 5958,
+        "extraCredits": 5,
+        "totalSearchesLeft": 5963,
+        "thisMonthUsage": 24042,
+        "lastHourSearches": 42,
+        "accountRateLimitPerHour": 6000,
+    }
+
+
+@pytest.mark.asyncio
 async def test_serpapi_client_search_with_year_range(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

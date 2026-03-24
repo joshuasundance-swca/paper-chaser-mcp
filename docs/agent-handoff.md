@@ -83,6 +83,19 @@ This document is the current working handoff for the fork. It is intended to giv
   on `search_papers_match` fall back to fuzzy title search (unquoted, then
   quoted-phrase variants) and then to a structured no-match payload.  The
   fallback search window was increased to 100 results (the API maximum).
+- Known-item recovery is now stricter and safer: `resolve_citation` abstains on
+  weak report-style or non-paper-like references instead of forcing a bad paper
+  match, and `search_papers_match` can now recover exact-title misses through
+  strict OpenAlex or Crossref confirmation before falling back to no-match.
+- Brokered `search_papers` now suppresses obviously low-relevance Semantic
+  Scholar hits for title-like known-item queries instead of returning garbage
+  false positives.
+- Smart follow-up quality is tighter: `ask_result_set` comparison mode uses a
+  grounded structured fallback, `map_research_landscape` sanitizes weak theme
+  labels, and `expand_research_graph` keeps saved-session intent in frontier
+  scoring while filtering off-topic next-hop candidates.
+- `get_serpapi_account_status` now returns only a sanitized public quota summary
+  rather than the raw SerpApi account payload.
 - `search_snippets` now degrades provider 4xx/5xx failures to an empty payload
   with retry guidance instead of surfacing the raw provider error.
 - `.github/workflows/test-scholar-search.md` now defines a GitHub Agentic
@@ -255,6 +268,18 @@ gh aw compile test-scholar-search --dir .github/workflows
   for each golden path.
 - `search_papers_match` now normalizes wrapped Semantic Scholar match responses
   to one clean paper-shaped payload.
+- `search_papers_match` can now recover exact-title misses via strict OpenAlex
+  and Crossref confirmation before falling back to structured no-match.
+- `resolve_citation` now prefers abstention plus alternatives for weak
+  report-style or non-paper-looking references instead of forcing a canonical
+  paper match.
+- `search_papers` now suppresses low-relevance title-like false positives and
+  routes agents toward the dedicated known-item tools instead.
+- `get_serpapi_account_status` now returns a strict sanitized quota summary with
+  no raw upstream credential or account-identifier passthrough.
+- `ask_result_set(answerMode="comparison")` now uses a grounded structured
+  fallback, `map_research_landscape` sanitizes weak labels before emission, and
+  `expand_research_graph` keeps saved-session intent in graph-frontier scoring.
 - CORE search now follows redirects so brokered fallbacks into CORE do not
   record avoidable failed provider attempts for predictable 301s.
 - `brokerMetadata.nextStepHint` now distinguishes between the closest

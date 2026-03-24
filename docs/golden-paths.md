@@ -156,6 +156,9 @@ search_papers_match(query="Attention Is All You Need")
    item may be punctuation-variant metadata, a dissertation, software release,
    report, or other output outside the indexed paper surface. Verify externally
    when needed.
+6. When `resolve_citation` sees a report-style or non-paper-looking reference,
+  prefer abstention plus alternatives over forcing a weak canonical paper
+  match.
 
 **Example requests and tool choices**:
 - "Find the paper called something like 'Scaling Laws for Neural Language Models'"
@@ -171,6 +174,8 @@ search_papers_match(query="Attention Is All You Need")
 
 - Disambiguation stays minimal.
 - Citation repair returns alternatives and uncertainty instead of forcing a bad match.
+- Exact-title recovery can escalate beyond Semantic Scholar when the paper is
+  real but missing from Semantic Scholar title-match results.
 - DOI, URL, and identifier-based lookups feel low friction.
 - Agents do not spend multiple topic-search turns on a known-item request.
 
@@ -264,14 +269,25 @@ as part of the intended agent contract.
   search, and exhausted match attempts return a structured no-match payload
   instead of surfacing a raw provider 404.
 
-### 2. CORE fallback follows redirects cleanly
+### 2. Known-item recovery now prefers abstention and cross-provider exact-title confirmation
+
+- `resolve_citation` now prefers abstention plus alternatives when report-like,
+  non-paper-looking, or otherwise weakly grounded inputs do not justify a
+  canonical paper match.
+- `search_papers_match` now tries strict OpenAlex exact-title recovery, then
+  strict Crossref exact-title recovery, before giving up on a real paper that
+  Semantic Scholar did not recover by title.
+- Agents should treat `matchProvider` and `matchStrategy` as useful provenance
+  when exact-title recovery succeeds outside the Semantic Scholar path.
+
+### 3. CORE fallback follows redirects cleanly
 
 - When the broker reaches CORE, predictable redirects are followed instead of
   recording an avoidable failed provider attempt.
 - Treat new redirect-driven CORE failures in `brokerMetadata.attemptedProviders`
   as a regression if they reappear.
 
-### 3. `nextStepHint` now distinguishes continuation from pivots
+### 4. `nextStepHint` now distinguishes continuation from pivots
 
 - Semantic Scholar results describe `search_papers_bulk` as the closest
   continuation path only when that preserves the research intent reasonably
@@ -281,7 +297,7 @@ as part of the intended agent contract.
 - Venue-filtered Semantic Scholar searches explicitly warn that bulk retrieval
   broadens the query semantics.
 
-### 4. Provider-specific schemas now match provider capability
+### 5. Provider-specific schemas now match provider capability
 
 - `search_papers_core`, `search_papers_serpapi`, and `search_papers_arxiv`
    expose only `query`, `limit`, and `year`.
@@ -291,7 +307,7 @@ as part of the intended agent contract.
 - `search_papers_semantic_scholar` continues to expose the wider Semantic
    Scholar-compatible filter set.
 
-### 5. Author and paper pivots now call out Semantic Scholar ID boundaries
+### 6. Author and paper pivots now call out Semantic Scholar ID boundaries
 
 - `search_authors` normalizes plain-text exact-name punctuation before calling
   Semantic Scholar.
@@ -304,14 +320,14 @@ as part of the intended agent contract.
   `paperId`/`sourceId`/`canonicalId` values still need a DOI or
   Semantic-Scholar-native lookup before expansion.
 
-### 6. Snippet-search provider failures now degrade cleanly
+### 7. Snippet-search provider failures now degrade cleanly
 
 - `search_snippets` now returns an empty degraded payload with retry guidance
   when Semantic Scholar rejects a phrase query or returns a transient 5xx.
 - Agents should prefer `search_papers_match` or `search_papers` before falling
   back to snippet search for quote recovery.
 
-### 7. Nonsense / low-relevance queries now surface an explicit weak-match signal
+### 8. Nonsense / low-relevance queries now surface an explicit weak-match signal
 
 - `search_papers` with Semantic Scholar now checks whether any distinctive
   query tokens (length ≥ 6, not a common academic term) appear in the returned
@@ -326,6 +342,23 @@ as part of the intended agent contract.
   Semantic Scholar returns papers that only match the generic words in the query.
 - `resultQuality="strong"` still means Semantic Scholar's semantic ranking was
   used and all inspected distinctive tokens appear in at least one result.
+
+### 9. Title-like broker misses now suppress obvious false positives
+
+- For title-like known-item queries, brokered `search_papers` now suppresses
+  obviously low-relevance Semantic Scholar hits instead of surfacing a bad
+  paper-shaped record.
+- Agents should treat this empty result plus `nextStepHint` as a prompt to
+  switch to `search_papers_match`, refine the title, or adjust `providerOrder`
+  rather than continuing with the brokered discovery set.
+
+### 10. Smart follow-up outputs are stricter about grounding and relevance
+
+- `ask_result_set(answerMode="comparison")` now prefers a grounded structured
+  comparison over a flat list of titles and venues.
+- `map_research_landscape` sanitizes weak theme labels before returning them.
+- `expand_research_graph` keeps saved-session intent in frontier scoring and
+  filters weak off-topic candidates before they become next-hop anchors.
 
 ### 8. `get_author_papers` open-ended `publicationDateOrYear` filter normalized
 

@@ -1189,6 +1189,51 @@ async def test_broker_metadata_result_quality_low_relevance_with_both_nonsense_t
 
 
 @pytest.mark.asyncio
+async def test_broker_search_suppresses_low_relevance_false_positives_for_title_like_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SemanticClient:
+        async def search_papers(self, **kwargs: Any) -> dict:
+            return {
+                "total": 2,
+                "offset": 0,
+                "data": [
+                    {
+                        "paperId": "ss-1",
+                        "title": "Scrub jay habitat management strategies",
+                        "abstract": "Generic habitat management discussion.",
+                    },
+                    {
+                        "paperId": "ss-2",
+                        "title": "Bird dispersal in fragmented landscapes",
+                        "abstract": "A general review article.",
+                    },
+                ],
+            }
+
+    monkeypatch.setattr(server, "enable_core", False)
+    monkeypatch.setattr(server, "enable_semantic_scholar", True)
+    monkeypatch.setattr(server, "enable_arxiv", False)
+    monkeypatch.setattr(server, "client", SemanticClient())
+
+    payload = _payload(
+        await server.call_tool(
+            "search_papers",
+            {"query": "Qzxqzxqzx Florida Scrub-Jay Demography and Dispersal"},
+        )
+    )
+    broker_meta = payload["brokerMetadata"]
+
+    assert payload["data"] == []
+    assert broker_meta["providerUsed"] == "none"
+    assert broker_meta["resultStatus"] == "no_results"
+    assert broker_meta["attemptedProviders"][0]["provider"] == "semantic_scholar"
+    assert broker_meta["attemptedProviders"][0]["status"] == "returned_no_results"
+    assert "suppressed" in (broker_meta["attemptedProviders"][0]["reason"] or "")
+    assert "suppressed" in broker_meta["nextStepHint"].lower()
+
+
+@pytest.mark.asyncio
 async def test_broker_metadata_result_quality_low_relevance_uses_abstract_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

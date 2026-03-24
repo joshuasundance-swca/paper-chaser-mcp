@@ -114,6 +114,7 @@ _RELEVANCE_STOPWORDS: frozenset[str] = frozenset(
         "would",
     }
 )
+_TITLEISH_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9'/-]*")
 
 
 @dataclass
@@ -157,6 +158,32 @@ def _has_unmatched_distinctive_tokens(query: str, papers: list[Paper]) -> bool:
         return False
     result_text = " ".join(" ".join(filter(None, [p.title, p.abstract])) for p in papers).lower()
     return any(token not in result_text for token in distinctive)
+
+
+def _is_title_like_query(query: str) -> bool:
+    """Return True when *query* looks more like a known-item title than a topic.
+
+    This heuristic is intentionally conservative and is only used together with
+    the low-relevance check. We only suppress brokered Semantic Scholar results
+    when the query looks title-like *and* the returned results failed the
+    distinctive-token relevance screen.
+    """
+
+    normalized = " ".join(str(query or "").split())
+    if not normalized:
+        return False
+    lowered = normalized.lower()
+    if any(marker in lowered for marker in ("doi:", "arxiv:", "site:", "author:")):
+        return False
+    if re.search(r"\b(?:19|20)\d{2}\b", normalized):
+        return False
+    words = _TITLEISH_WORD_RE.findall(normalized)
+    if not 4 <= len(words) <= 18:
+        return False
+    capitalized = sum(1 for word in words if word[:1].isupper())
+    capitalized_ratio = capitalized / max(len(words), 1)
+    has_title_punctuation = any(mark in normalized for mark in (":", '"', "“", "”", "-", "–", "—"))
+    return has_title_punctuation or capitalized_ratio >= 0.6
 
 
 def _enrich_ss_paper(paper: Paper) -> Paper:
@@ -226,6 +253,7 @@ def _metadata(
     preferred_provider: SearchProvider | None = None,
     provider_order: Sequence[SearchProvider] | None = None,
     low_relevance: bool = False,
+    suppressed_low_relevance_title: bool = False,
 ) -> BrokerMetadata:
     """Build consistent broker metadata for ``search_papers`` responses.
 
@@ -332,7 +360,14 @@ def _metadata(
             + "To expand from a paper use get_paper_citations or get_paper_references."
         )
     elif provider_used == "none":
-        if result_status == "provider_failed":
+        if suppressed_low_relevance_title:
+            next_step_hint = (
+                "Semantic Scholar returned low-relevance results for a title-like query, "
+                "so the broker suppressed them instead of surfacing likely false positives. "
+                "Try search_papers_match for exact-title recovery, refine the title, or "
+                "change providerOrder."
+            )
+        elif result_status == "provider_failed":
             failed_labels = [provider_labels.get(a.provider, a.provider) for a in attempts if a.status == "failed"]
             if len(failed_labels) == 1:
                 next_step_hint = (
@@ -713,11 +748,35 @@ async def search_papers_with_fallback(
     processed_providers = trace.processed_providers
 
     if provider_used != "none":
-        attempts.extend(_earlier_result_attempt(provider) for provider in effective_order[processed_providers:])
         if result is not None:
             low_relevance = provider_used == "semantic_scholar" and _has_unmatched_distinctive_tokens(
                 query, result.data
             )
+            suppress_low_relevance_title = low_relevance and _is_title_like_query(query)
+            if suppress_low_relevance_title:
+                for attempt in attempts:
+                    if attempt.provider == provider_used and attempt.status == "returned_results":
+                        attempt.status = "returned_no_results"
+                        attempt.reason = (
+                            "returned low-relevance results for a title-like query; broker suppressed "
+                            "them to avoid obvious false positives"
+                        )
+                        break
+                return _dump_search_response(
+                    SearchResponse(
+                        broker_metadata=_metadata(
+                            provider_used="none",
+                            attempts=attempts,
+                            ss_only_filters=ss_only_filters,
+                            venue=venue,
+                            preferred_provider=preferred_provider,
+                            provider_order=provider_order,
+                            suppressed_low_relevance_title=True,
+                        ),
+                    )
+                )
+        attempts.extend(_earlier_result_attempt(provider) for provider in effective_order[processed_providers:])
+        if result is not None:
             result.broker_metadata = _metadata(
                 provider_used=provider_used,
                 attempts=attempts,

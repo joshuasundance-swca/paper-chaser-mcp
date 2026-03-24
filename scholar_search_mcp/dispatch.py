@@ -911,6 +911,10 @@ async def dispatch_tool(
             await client.search_papers_match(
                 query=match_args.query,
                 fields=match_args.fields,
+                openalex_client=openalex_client,
+                enable_openalex=enable_openalex,
+                crossref_client=crossref_client,
+                enable_crossref=enable_crossref,
             )
         )
         if (

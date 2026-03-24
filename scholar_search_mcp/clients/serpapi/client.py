@@ -22,6 +22,20 @@ SERPAPI_ACCOUNT_URL = "https://serpapi.com/account.json"
 logger = logging.getLogger("scholar-search-mcp")
 
 
+_ACCOUNT_STATUS_FIELD_MAP: tuple[tuple[str, str], ...] = (
+    ("plan_id", "planId"),
+    ("plan_name", "planName"),
+    ("plan_monthly_price", "planMonthlyPrice"),
+    ("searches_per_month", "searchesPerMonth"),
+    ("plan_searches_left", "planSearchesLeft"),
+    ("extra_credits", "extraCredits"),
+    ("total_searches_left", "totalSearchesLeft"),
+    ("this_month_usage", "thisMonthUsage"),
+    ("last_hour_searches", "lastHourSearches"),
+    ("account_rate_limit_per_hour", "accountRateLimitPerHour"),
+)
+
+
 class SerpApiScholarClient:
     """SerpApi Google Scholar client (https://serpapi.com/google-scholar-api).
 
@@ -140,6 +154,15 @@ class SerpApiScholarClient:
         if returned < page_size:
             return None
         return current_start + returned
+
+    @staticmethod
+    def _sanitize_account_status(data: dict[str, Any]) -> dict[str, Any]:
+        sanitized: dict[str, Any] = {"provider": "serpapi_google_scholar"}
+        for raw_key, public_key in _ACCOUNT_STATUS_FIELD_MAP:
+            value = data.get(raw_key)
+            if value is not None:
+                sanitized[public_key] = value
+        return sanitized
 
     @staticmethod
     def _normalize_search_results(
@@ -351,7 +374,7 @@ class SerpApiScholarClient:
         """Return SerpApi account and quota metadata without consuming credits."""
 
         data = await self._get_json(url=SERPAPI_ACCOUNT_URL, params={})
-        return {"provider": "serpapi_google_scholar", **data}
+        return self._sanitize_account_status(data)
 
     async def get_citation_formats(
         self,

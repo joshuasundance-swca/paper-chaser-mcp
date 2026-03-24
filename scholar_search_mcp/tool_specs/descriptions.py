@@ -99,7 +99,9 @@ TOOL_DESCRIPTIONS = {
         "Known-item lookup for messy or partial titles. Find the single paper "
         "whose title best matches the query string. If the upstream exact-match "
         "endpoint misses a punctuation-heavy title, the server falls back to a "
-        "fuzzy Semantic Scholar title search instead of surfacing a raw 404. "
+        "fuzzy Semantic Scholar title search instead of surfacing a raw 404, "
+        "then tries strict OpenAlex and Crossref exact-title recovery before "
+        "returning a structured no-match payload. "
         "Optional includeEnrichment=true adds Crossref and Unpaywall metadata "
         "only to the final matched paper, never to the candidate-selection path. "
         "A no-match payload can still mean the item is a dissertation, software "
@@ -111,8 +113,10 @@ TOOL_DESCRIPTIONS = {
         "tries title-style recovery, quote/snippet recovery, and sparse "
         "metadata search to return the most likely canonical paper plus "
         "alternatives, confidence, disagreements, and the fastest next step "
-        "for disambiguation. Optional includeEnrichment=true enriches only the "
-        "final bestMatch.paper after resolution."
+        "for disambiguation. Report-style or non-paper-looking inputs prefer "
+        "abstention plus alternatives over forcing a weak canonical paper "
+        "match. Optional includeEnrichment=true enriches only the final "
+        "bestMatch.paper after resolution."
     ),
     "paper_autocomplete": ("Return paper title completions for a partial query string."),
     "paper_autocomplete_openalex": (
@@ -297,8 +301,10 @@ TOOL_DESCRIPTIONS = {
     ),
     "get_serpapi_account_status": (
         "Return SerpApi account and quota metadata, including remaining search "
-        "budget and hourly throughput guidance. Use this before expensive or "
-        "deep Scholar recovery workflows."
+        "budget and hourly throughput guidance. Returns a sanitized public "
+        "summary only; raw upstream credentials and secret-like account fields "
+        "are never exposed. Use this before expensive or deep Scholar recovery "
+        "workflows."
     ),
     "get_provider_diagnostics": (
         "Return shared provider-health diagnostics for Semantic Scholar, OpenAlex, "
@@ -367,20 +373,25 @@ TOOL_DESCRIPTIONS = {
         "Grounded follow-up over a saved searchSessionId. Answer a question using "
         "only the papers in that result set, returning evidence for every claim. "
         "answerMode supports qa, claim_check, and comparison, and latencyProfile "
-        "lets callers choose faster deterministic synthesis when needed."
+        "lets callers choose faster deterministic synthesis when needed. "
+        "comparison mode prefers a grounded structured comparison over flat "
+        "title-and-venue enumeration."
     ),
     "map_research_landscape": (
         "Cluster a saved searchSessionId into 3-5 themes, representative papers, "
         "gaps, disagreements, and suggested next searches. Use this when an "
         "agent needs a literature-review map rather than another flat result page. "
-        "latencyProfile controls how much model work is spent on theme labeling."
+        "latencyProfile controls how much model work is spent on theme labeling, "
+        "and weak theme labels are sanitized before response emission."
     ),
     "expand_research_graph": (
         "Expand a saved search session or explicit paper seeds into a compact "
         "citation, reference, or author graph. Returns nodes, edges, a ranked "
         "frontier, agentHints, and resourceUris for continued exploration. "
         "latencyProfile controls graph scoring cost without changing the explicit "
-        "seed, direction, or hop inputs."
+        "seed, direction, or hop inputs. Saved-session expansion keeps the "
+        "original search intent in frontier scoring and filters weak off-topic "
+        "next-hop candidates more aggressively."
     ),
 }
 

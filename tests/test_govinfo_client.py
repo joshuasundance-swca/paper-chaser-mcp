@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import types
 from typing import Any, cast
 
@@ -52,7 +53,114 @@ async def test_govinfo_get_cfr_text_uses_x_api_key_and_prefers_xml() -> None:
     assert payload["granuleId"] == "CFR-2025-title40-vol24-sec122-26"
     assert payload["resolvedVolume"] == 24
     assert payload["contentSource"] == "govinfo_xml"
-    assert payload["markdown"] == "# CFR\n\nSection text."
+    assert payload["markdown"] == "Section text."
+
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_govinfo_get_cfr_text_extracts_cfr_xml_without_markitdown() -> None:
+    client = GovInfoClient(api_key="gov-key")
+    client._markdown_converter = cast(
+        Any,
+        types.SimpleNamespace(
+            convert=lambda **kwargs: (_ for _ in ()).throw(AssertionError("converter should not run"))
+        ),
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/search":
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "packageId": "CFR-2024-title50-vol2",
+                            "granuleId": "CFR-2024-title50-vol2-sec17-11",
+                            "download": {
+                                "xmlLink": "https://api.govinfo.gov/packages/CFR-2024-title50-vol2/granules/CFR-2024-title50-vol2-sec17-11/xml"
+                            },
+                        }
+                    ]
+                },
+                request=request,
+            )
+        if request.method == "GET" and request.url.path.endswith("/xml"):
+            return httpx.Response(
+                200,
+                content=(
+                    b"<SECTION><SECTNO>Sec. 17.11</SECTNO><SUBJECT>Definitions.</SUBJECT>"
+                    b"<P>Section text.</P><P>More detail.</P></SECTION>"
+                ),
+                headers={"content-type": "application/xml"},
+                request=request,
+            )
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    transport = httpx.MockTransport(handler)
+    client._http_client = httpx.AsyncClient(transport=transport, follow_redirects=True)
+    client._document_client = httpx.AsyncClient(transport=transport, follow_redirects=True)
+
+    payload = await client.get_cfr_text(title_number=50, part_number=17, section_number="11", revision_year=2024)
+
+    assert payload["contentSource"] == "govinfo_xml"
+    assert payload["warnings"] == []
+    assert payload["markdown"] == "## Sec. 17.11\n\n### Definitions.\n\nSection text.\n\nMore detail."
+
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_govinfo_get_cfr_text_returns_warning_when_conversion_times_out() -> None:
+    client = GovInfoClient(api_key="gov-key", document_timeout=0.01)
+
+    def delayed_convert(**kwargs: object) -> str:
+        time.sleep(0.05)
+        return "# CFR\n\nDelayed text"
+
+    client._markdown_converter = cast(
+        Any,
+        types.SimpleNamespace(
+            convert=delayed_convert,
+        ),
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/search":
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "packageId": "CFR-2025-title40-vol24",
+                            "granuleId": "CFR-2025-title40-vol24-part122",
+                            "download": {
+                                "txtLink": "https://api.govinfo.gov/packages/CFR-2025-title40-vol24/granules/CFR-2025-title40-vol24-part122/txt"
+                            },
+                        }
+                    ]
+                },
+                request=request,
+            )
+        if request.method == "GET" and request.url.path.endswith("/txt"):
+            return httpx.Response(
+                200,
+                content=b"Plain text CFR body",
+                headers={"content-type": "text/plain"},
+                request=request,
+            )
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    transport = httpx.MockTransport(handler)
+    client._http_client = httpx.AsyncClient(transport=transport, follow_redirects=True)
+    client._document_client = httpx.AsyncClient(transport=transport, follow_redirects=True)
+
+    payload = await client.get_cfr_text(title_number=40, part_number=122, revision_year=2025)
+
+    assert payload["contentSource"] == "govinfo_html"
+    assert payload["markdown"] is None
+    assert payload["warnings"]
+    assert "timed out" in payload["warnings"][0].lower()
 
     await client.aclose()
 

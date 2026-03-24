@@ -329,3 +329,63 @@ async def test_search_papers_match_surfaces_match_metadata() -> None:
     assert result["matchConfidence"] == "high"
     assert "title" in result["matchedFields"]
     assert result["candidateCount"] == 1
+
+
+@pytest.mark.asyncio
+async def test_resolve_citation_report_style_input_abstains_instead_of_forcing_bad_paper_match() -> None:
+    class ReportStyleSemanticClient(RecordingSemanticClient):
+        async def search_papers_match(self, **kwargs) -> dict:
+            self.calls.append(("search_papers_match", kwargs))
+            return {
+                "paperId": "bird-noise-article",
+                "title": "Some lessons from the effects of highway noise on birds",
+                "year": 2016,
+                "venue": "Proceedings of Meetings on Acoustics",
+                "authors": [
+                    {"name": "Robert J. Dooling"},
+                    {"name": "Arthur N. Popper"},
+                ],
+                "matchFound": True,
+                "matchStrategy": "fuzzy_search",
+                "matchConfidence": "medium",
+                "matchedFields": ["author", "year"],
+                "conflictingFields": ["title", "venue"],
+                "titleSimilarity": 0.51,
+                "yearDelta": 0,
+                "authorOverlap": 2,
+                "candidateCount": 4,
+            }
+
+        async def search_snippets(self, **kwargs) -> dict:
+            self.calls.append(("search_snippets", kwargs))
+            return {"data": []}
+
+        async def search_papers(self, **kwargs) -> dict:
+            self.calls.append(("search_papers", kwargs))
+            return {"total": 0, "offset": 0, "data": []}
+
+    semantic = ReportStyleSemanticClient()
+
+    payload = await resolve_citation(
+        citation=(
+            "Dooling RJ, Popper AN. 2016. Technical Guidance for Assessment and "
+            "Mitigation of the Effects of Highway and Road Construction Noise on Birds. Caltrans."
+        ),
+        max_candidates=3,
+        client=semantic,
+        enable_core=False,
+        enable_semantic_scholar=True,
+        enable_openalex=False,
+        enable_arxiv=False,
+        enable_serpapi=False,
+        core_client=None,
+        openalex_client=None,
+        arxiv_client=None,
+        serpapi_client=None,
+    )
+
+    assert payload["resolutionConfidence"] == "low"
+    assert payload["bestMatch"] is None
+    assert payload["alternatives"]
+    assert payload["alternatives"][0]["paper"]["paperId"] == "bird-noise-article"
+    assert payload["message"].lower().startswith("this citation looks report-like")

@@ -54,6 +54,9 @@ NON_PAPER_TERMS = {
     "dataset",
     "datasheet",
     "dissertation",
+    "guidance",
+    "guidelines",
+    "handbook",
     "manual",
     "package",
     "policy",
@@ -437,13 +440,38 @@ def _serialize_citation_response(
         conflicting_fields=best.conflicting_fields if best is not None else [],
         resolution_strategy=best.resolution_strategy if best is not None else "none",
     )
-    alternatives = _filtered_alternative_candidates(
-        candidates=candidates,
-        confidence=confidence,
+    abstain = bool(
+        best is not None
+        and (
+            confidence == "low"
+            or (
+                parsed.looks_like_non_paper
+                and best.resolution_strategy
+                not in {
+                    "identifier",
+                    "identifier_openalex",
+                    "exact_title",
+                    "openalex_exact_title",
+                    "crossref_exact_title",
+                }
+                and "identifier" not in best.matched_fields
+            )
+        )
     )
-    serializable_candidates = [best, *alternatives] if best is not None else []
+    alternatives = (
+        _abstention_candidates(candidates)
+        if abstain
+        else _filtered_alternative_candidates(
+            candidates=candidates,
+            confidence=confidence,
+        )
+    )
+    best_for_response = None if abstain else best
+    serializable_candidates = ([best] if best is not None else []) if not abstain else alternatives
+    if not abstain and best is not None:
+        serializable_candidates = [best, *alternatives]
     response = CitationResolutionResponse(
-        bestMatch=_to_candidate_model(best) if best is not None else None,
+        bestMatch=_to_candidate_model(best_for_response) if best_for_response is not None else None,
         alternatives=[_to_candidate_model(candidate) for candidate in alternatives],
         resolutionConfidence=confidence,
         resolutionStrategy=best.resolution_strategy if best is not None else "none",
@@ -460,6 +488,23 @@ def _serialize_citation_response(
         ),
     )
     return dump_jsonable(response)
+
+
+def _abstention_candidates(
+    candidates: list[RankedCitationCandidate],
+) -> list[RankedCitationCandidate]:
+    abstained: list[RankedCitationCandidate] = []
+    for candidate in candidates:
+        if candidate.score < 0.4:
+            continue
+        if (
+            candidate.title_similarity < 0.5
+            and candidate.author_overlap == 0
+            and "identifier" not in candidate.matched_fields
+        ):
+            continue
+        abstained.append(candidate)
+    return abstained[:3]
 
 
 def _filtered_alternative_candidates(
@@ -581,6 +626,11 @@ def _resolution_message(
             "year, DOI fragment, quote fragment, or venue hint."
         )
     best = candidates[0]
+    if parsed.looks_like_non_paper and confidence != "high":
+        return (
+            "This citation looks report-like or otherwise outside the indexed paper surface. "
+            "The server is returning low-confidence alternatives instead of forcing a paper match."
+        )
     if confidence == "high":
         return (
             "Resolved the citation with strong field agreement. Use the returned "
@@ -1036,7 +1086,7 @@ def _classify_resolution_confidence(
     high_signal_fields = {"title", "author", "year"} & set(matched_fields)
     if resolution_strategy.startswith("identifier") and "identifier" in matched_fields:
         return "high"
-    if resolution_strategy == "exact_title" and "title" in matched_fields:
+    if resolution_strategy.endswith("exact_title") and "title" in matched_fields:
         return "high"
     if len(high_signal_fields) >= 3 and len(conflicting_fields) <= 1:
         return "high"
@@ -1352,6 +1402,8 @@ def _source_confidence(strategy: str) -> float:
         "identifier": 1.0,
         "identifier_openalex": 0.92,
         "exact_title": 0.9,
+        "openalex_exact_title": 0.9,
+        "crossref_exact_title": 0.84,
         "fuzzy_search": 0.82,
         "citation_ranked": 0.74,
         "snippet_recovery": 0.7,

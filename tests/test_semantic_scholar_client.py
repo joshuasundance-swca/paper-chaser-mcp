@@ -1378,6 +1378,85 @@ async def test_search_papers_match_fallback_citation_ranked_bulk_last_resort(
 
 
 @pytest.mark.asyncio
+async def test_search_papers_match_recovers_exact_title_from_openalex_after_semantic_miss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    class SequencedAsyncClient:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def request(self, *, url: str, **kwargs):
+            self.calls.append(url)
+            if url.endswith("/paper/search/match"):
+                return httpx.Response(
+                    status_code=404,
+                    request=httpx.Request("GET", url),
+                )
+            if url.endswith("/paper/search"):
+                return httpx.Response(
+                    status_code=200,
+                    request=httpx.Request("GET", url),
+                    json={"total": 0, "offset": 0, "data": []},
+                )
+            raise AssertionError(f"unexpected url: {url}")
+
+    class RecordingOpenAlex:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        async def search(self, **kwargs: object) -> dict[str, object]:
+            self.calls.append(dict(kwargs))
+            return {
+                "total": 2,
+                "offset": 0,
+                "data": [
+                    {
+                        "paperId": "W123",
+                        "title": "Florida Scrub-Jay Demography and Dispersal in a Fragmented Landscape",
+                        "source": "openalex",
+                        "sourceId": "W123",
+                        "canonicalId": "https://openalex.org/W123",
+                    },
+                    {"paperId": "other", "title": "Florida Scrub-Jay Habitat Patterns"},
+                ],
+            }
+
+    sequenced_client = SequencedAsyncClient()
+    monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: sequenced_client)
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    sc = server.SemanticScholarClient()
+    openalex = RecordingOpenAlex()
+    result = await sc.search_papers_match(
+        "Florida Scrub-Jay Demography and Dispersal in a Fragmented Landscape",
+        openalex_client=openalex,
+        enable_openalex=True,
+    )
+
+    assert result["matchFound"] is True
+    assert result["matchStrategy"] == "openalex_exact_title"
+    assert result["matchProvider"] == "openalex"
+    assert result["paperId"] == "W123"
+    assert any(url.endswith("/paper/search/match") for url in sequenced_client.calls)
+    assert any(url.endswith("/paper/search") for url in sequenced_client.calls)
+    assert openalex.calls == [
+        {
+            "query": "Florida Scrub-Jay Demography and Dispersal in a Fragmented Landscape",
+            "limit": 10,
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_search_papers_match_title_case_variant_succeeds_via_lowercase_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

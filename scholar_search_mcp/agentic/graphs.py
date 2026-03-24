@@ -82,6 +82,51 @@ _GRAPH_GENERIC_TERMS = COMMON_QUERY_WORDS | {
     "review",
     "wildlife",
 }
+_COMPARISON_MARKERS = {
+    "compare",
+    "compared",
+    "comparing",
+    "comparison",
+    "differences",
+    "different",
+    "tradeoff",
+    "tradeoffs",
+    "versus",
+    "vs",
+}
+_THEME_LABEL_STOPWORDS = _GRAPH_GENERIC_TERMS | {
+    "about",
+    "across",
+    "among",
+    "analysis",
+    "and",
+    "approach",
+    "approaches",
+    "based",
+    "between",
+    "cluster",
+    "clusters",
+    "for",
+    "from",
+    "into",
+    "method",
+    "methods",
+    "model",
+    "models",
+    "or",
+    "theme",
+    "themes",
+    "theory",
+    "using",
+    "with",
+}
+_COMPARISON_FOCUS_STOPWORDS = _THEME_LABEL_STOPWORDS | {
+    "paper",
+    "papers",
+    "results",
+    "study",
+    "studies",
+}
 
 InMemorySaver: Any = None
 StateGraph: Any = None
@@ -839,6 +884,17 @@ class AgenticRuntime:
             )
             for paper, score in zip(evidence_papers, evidence_scores, strict=False)
         ]
+        answer_text = str(synthesis.get("answer") or "")
+        if _should_use_structured_comparison_answer(
+            question=question,
+            answer_mode=answer_mode,
+            answer_text=answer_text,
+            evidence_papers=evidence_papers,
+        ):
+            answer_text = _build_grounded_comparison_answer(
+                question=question,
+                evidence_papers=evidence_papers,
+            )
         await self._emit_tool_progress(
             ctx=ctx,
             progress=2,
@@ -846,7 +902,7 @@ class AgenticRuntime:
             message="Drafting grounded answer",
         )
         response = AskResultSetResponse(
-            answer=str(synthesis.get("answer") or ""),
+            answer=answer_text,
             evidence=evidence,
             unsupportedAsks=list(synthesis.get("unsupportedAsks") or []),
             followUpQuestions=list(synthesis.get("followUpQuestions") or []),
@@ -930,11 +986,16 @@ class AgenticRuntime:
                     seed_terms=seed_terms,
                     papers=cluster,
                 )
-                title = await self._maybe_sample_theme_label(
+                sampled_title = await self._maybe_sample_theme_label(
                     seed_terms=seed_terms,
                     papers=cluster,
                     fallback=fallback,
                     ctx=ctx,
+                )
+                title = _finalize_theme_label(
+                    raw_label=sampled_title,
+                    seed_terms=seed_terms,
+                    papers=cluster,
                 )
                 summary = await provider_bundle.asummarize_theme(
                     title=title,
@@ -1051,6 +1112,13 @@ class AgenticRuntime:
         graph_warnings: list[str] = []
         queue = list(resolved_seeds)
         expansion_semaphore = asyncio.Semaphore(4)
+        seed_record = None
+        if seed_session_id:
+            try:
+                seed_record = self._workspace_registry.get(seed_session_id)
+            except (ExpiredSearchSessionError, SearchSessionNotFoundError):
+                seed_record = None
+        graph_intent_text = _graph_intent_text(seed_record, resolved_seeds)
 
         async def _expand_seed(
             *,
@@ -1098,6 +1166,7 @@ class AgenticRuntime:
                     seed=seed,
                     related_papers=related_papers,
                     provider_bundle=frontier_scoring_bundle,
+                    intent_text=graph_intent_text,
                 )
                 return {
                     "seed_id": seed_id,
@@ -1167,7 +1236,15 @@ class AgenticRuntime:
                 if len(ranked_related) < len(related_papers):
                     ranked_related.extend((paper, 0.0) for paper in related_papers[len(ranked_related) :])
                 ranked_related.sort(key=lambda item: item[1], reverse=True)
-                for paper, score in ranked_related:
+                retained_related = _filter_graph_frontier(ranked_related)
+                dropped_related = len(ranked_related) - len(retained_related)
+                if dropped_related > 0:
+                    graph_warnings.append(
+                        "Filtered "
+                        f"{dropped_related} off-topic {direction} candidate(s) "
+                        "while preserving the strongest topical frontier."
+                    )
+                for paper, score in retained_related:
                     try:
                         related_id = self._portable_seed_id(paper)
                     except ValueError as error:
@@ -1194,8 +1271,8 @@ class AgenticRuntime:
                             relation=("cites" if direction == "citations" else "references"),
                         )
                     )
-                frontier_papers.extend([paper for paper, _ in ranked_related])
-                next_queue.extend([paper for paper, _ in ranked_related[: min(5, len(ranked_related))]])
+                frontier_papers.extend([paper for paper, _ in retained_related])
+                next_queue.extend([paper for paper, _ in retained_related[: min(5, len(retained_related))]])
             queue = next_queue
 
         if not nodes:
@@ -1211,10 +1288,11 @@ class AgenticRuntime:
             graph_record = await self._workspace_registry.asave_result_set(
                 source_tool="expand_research_graph",
                 payload={"data": frontier_papers},
-                query=resolved_seeds[0].get("title") or resolved_seeds[0].get("paperId"),
+                query=graph_intent_text or resolved_seeds[0].get("title") or resolved_seeds[0].get("paperId"),
                 metadata={
                     "trailParentPaperId": resolved_seeds[0].get("paperId"),
                     "trailDirection": direction,
+                    "originalQuery": graph_intent_text,
                 },
             )
             graph_session_id = graph_record.search_session_id
@@ -1717,6 +1795,191 @@ def _truncate_text(value: str, *, limit: int = 72) -> str:
     return f"{normalized[: max(limit - 3, 1)].rstrip()}..."
 
 
+def _comparison_requested(question: str, answer_mode: str) -> bool:
+    if answer_mode == "comparison":
+        return True
+    question_tokens = set(re.findall(r"[a-z0-9]{2,}", question.lower()))
+    return bool(question_tokens & _COMPARISON_MARKERS)
+
+
+def _looks_like_title_venue_list(answer_text: str, evidence_papers: list[dict[str, Any]]) -> bool:
+    lines = [line.strip() for line in answer_text.splitlines() if line.strip()]
+    if not lines:
+        return True
+    bullet_lines = [line for line in lines if line.startswith("- ")]
+    if len(bullet_lines) < min(2, len(evidence_papers)):
+        return False
+    matched_lines = 0
+    normalized_titles = [str(paper.get("title") or paper.get("paperId") or "").strip() for paper in evidence_papers[:4]]
+    for line in bullet_lines[:4]:
+        lower_line = line.lower()
+        has_title = any(title and title in line for title in normalized_titles)
+        has_weak_metadata_pattern = any(marker in lower_line for marker in ("venue", "year", "unknown")) or bool(
+            re.search(r":\s*[^\n,]+,\s*(19|20)\d{2}\b", line)
+        )
+        if has_title and has_weak_metadata_pattern:
+            matched_lines += 1
+    return matched_lines >= min(2, len(bullet_lines))
+
+
+def _should_use_structured_comparison_answer(
+    *,
+    question: str,
+    answer_mode: str,
+    answer_text: str,
+    evidence_papers: list[dict[str, Any]],
+) -> bool:
+    del answer_text, evidence_papers
+    return _comparison_requested(question, answer_mode)
+
+
+def _build_grounded_comparison_answer(
+    *,
+    question: str,
+    evidence_papers: list[dict[str, Any]],
+) -> str:
+    papers = evidence_papers[: min(3, len(evidence_papers))]
+    if not papers:
+        return "The saved result set does not contain enough evidence to make a grounded comparison."
+    shared_terms = _shared_focus_terms(papers)
+    shared_ground = (
+        ", ".join(term.title() for term in shared_terms[:3])
+        if shared_terms
+        else "closely related problem settings from the saved result set"
+    )
+    detail_lines = []
+    for paper in papers:
+        title = str(paper.get("title") or paper.get("paperId") or "Untitled")
+        year = paper.get("year")
+        venue = str(paper.get("venue") or "venue not stated")
+        descriptor = _paper_focus_phrase(paper, question=question)
+        timing = str(year) if isinstance(year, int) else "year unknown"
+        detail_lines.append(f"- {title} ({timing}; {venue}) emphasizes {descriptor}.")
+    takeaway = _comparison_takeaway(papers, shared_terms)
+    return "\n".join(
+        [
+            "Grounded comparison from the saved result set.",
+            f"Shared ground: these papers converge on {shared_ground}.",
+            "Key differences:",
+            *detail_lines,
+            f"Takeaway: {takeaway}",
+        ]
+    )
+
+
+def _shared_focus_terms(papers: list[dict[str, Any]]) -> list[str]:
+    counts: dict[str, int] = {}
+    for paper in papers:
+        for token in _graph_topic_tokens(_paper_text(paper)):
+            if token in _COMPARISON_FOCUS_STOPWORDS:
+                continue
+            counts[token] = counts.get(token, 0) + 1
+    minimum_count = 2 if len(papers) >= 2 else 1
+    return [
+        token for token, count in sorted(counts.items(), key=lambda item: (-item[1], item[0])) if count >= minimum_count
+    ]
+
+
+def _paper_focus_phrase(paper: dict[str, Any], *, question: str) -> str:
+    question_tokens = set(_graph_topic_tokens(question))
+    focus_tokens: list[str] = []
+    for source_text in (str(paper.get("title") or ""), str(paper.get("abstract") or "")):
+        for token in re.findall(r"[a-z0-9]{3,}", source_text.lower()):
+            if token in _COMPARISON_FOCUS_STOPWORDS or token in question_tokens:
+                continue
+            if token in focus_tokens:
+                continue
+            focus_tokens.append(token)
+            if len(focus_tokens) >= 3:
+                break
+        if len(focus_tokens) >= 3:
+            break
+    if focus_tokens:
+        return ", ".join(focus_tokens)
+    abstract = str(paper.get("abstract") or "").strip()
+    if abstract:
+        return _truncate_text(abstract.lower(), limit=96)
+    return "the same core topic from a different angle"
+
+
+def _comparison_takeaway(papers: list[dict[str, Any]], shared_terms: list[str]) -> str:
+    years: list[int] = []
+    for paper in papers:
+        year = paper.get("year")
+        if isinstance(year, int):
+            years.append(year)
+    venues = [str(paper.get("venue") or "").strip() for paper in papers if str(paper.get("venue") or "").strip()]
+    if years and max(years) != min(years):
+        return (
+            f"the papers stay grounded in {', '.join(term.title() for term in shared_terms[:2]) or 'the same topic'}, "
+            "but they span different publication periods, so they likely reflect different stages of the literature."
+        )
+    if len(set(venues)) > 1:
+        venue_list = ", ".join(sorted(set(venues))[:2])
+        return (
+            "the main contrast is not the core topic but the research setting, "
+            f"with evidence spread across {venue_list}."
+        )
+    return (
+        "the papers are topically close, but they contribute different emphases, methods, or evaluation perspectives."
+    )
+
+
+def _label_tokens(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]{3,}", text.lower())
+
+
+def _theme_terms_from_papers(seed_terms: list[str], papers: list[dict[str, Any]]) -> list[str]:
+    counts: dict[str, int] = {}
+    for paper in papers[:8]:
+        for token in _label_tokens(str(paper.get("title") or "")):
+            if token in _THEME_LABEL_STOPWORDS:
+                continue
+            counts[token] = counts.get(token, 0) + 3
+        for token in _label_tokens(str(paper.get("abstract") or "")):
+            if token in _THEME_LABEL_STOPWORDS:
+                continue
+            counts[token] = counts.get(token, 0) + 1
+    for term in seed_terms:
+        for token in _label_tokens(term):
+            if token in _THEME_LABEL_STOPWORDS:
+                continue
+            counts[token] = counts.get(token, 0) + 2
+    return [term for term, _ in sorted(counts.items(), key=lambda item: (-item[1], item[0]))]
+
+
+def _normalized_theme_label(raw_label: str) -> str:
+    parts = [segment.strip() for segment in re.split(r"[/|,:;\-]+", raw_label) if segment.strip()]
+    if not parts:
+        return ""
+    return " / ".join(part.title() for part in parts[:2])
+
+
+def _finalize_theme_label(
+    *,
+    raw_label: str,
+    seed_terms: list[str],
+    papers: list[dict[str, Any]],
+) -> str:
+    normalized = " ".join(raw_label.split())
+    parts = [segment.strip() for segment in re.split(r"[/|,:;\-]+", normalized) if segment.strip()]
+    if normalized and parts:
+        part_tokens = [_label_tokens(part) for part in parts]
+        part_meaningful = [[token for token in tokens if token not in _THEME_LABEL_STOPWORDS] for tokens in part_tokens]
+        if all(tokens for tokens in part_meaningful):
+            return _normalized_theme_label(normalized)
+    derived_terms = _theme_terms_from_papers(seed_terms, papers)
+    if len(derived_terms) >= 2:
+        return " / ".join(term.title() for term in derived_terms[:2])
+    if derived_terms:
+        return derived_terms[0].title()
+    if normalized:
+        tokens = [token for token in _label_tokens(normalized) if token not in _THEME_LABEL_STOPWORDS]
+        if tokens:
+            return " / ".join(token.title() for token in tokens[:2])
+    return "General theme"
+
+
 def _top_terms_for_cluster(papers: list[dict[str, Any]]) -> list[str]:
     tokens: dict[str, int] = {}
     for paper in papers[:8]:
@@ -1833,6 +2096,7 @@ async def _graph_frontier_scores(
     seed: dict[str, Any],
     related_papers: list[dict[str, Any]],
     provider_bundle: ModelProviderBundle,
+    intent_text: str | None = None,
 ) -> list[float]:
     if not related_papers:
         return []
@@ -1840,14 +2104,26 @@ async def _graph_frontier_scores(
     seed_terms = [term for term in query_terms(seed_title or _paper_text(seed)) if term not in _GRAPH_GENERIC_TERMS]
     seed_facets = query_facets(seed_title or _paper_text(seed))
     seed_term_set = _graph_topic_tokens(seed_title or _paper_text(seed))
+    normalized_intent_text = (intent_text or "").strip()
+    intent_terms = [term for term in query_terms(normalized_intent_text) if term not in _GRAPH_GENERIC_TERMS]
+    intent_facets = query_facets(normalized_intent_text)
+    intent_term_set = _graph_topic_tokens(normalized_intent_text)
     query_similarities = await provider_bundle.abatched_similarity(
         _paper_text(seed),
         [_paper_text(related) for related in related_papers],
     )
+    if normalized_intent_text:
+        intent_similarities = await provider_bundle.abatched_similarity(
+            normalized_intent_text,
+            [_paper_text(related) for related in related_papers],
+        )
+    else:
+        intent_similarities = query_similarities
     scores: list[float] = []
-    for related, query_similarity in zip(
+    for related, query_similarity, intent_similarity in zip(
         related_papers,
         query_similarities,
+        intent_similarities,
         strict=False,
     ):
         related_title = str(related.get("title") or "")
@@ -1855,6 +2131,9 @@ async def _graph_frontier_scores(
         related_tokens = _graph_topic_tokens(related_text)
         related_title_tokens = _graph_topic_tokens(related_title.lower())
         anchor_overlap = sum(term in related_tokens for term in seed_terms) / len(seed_terms) if seed_terms else 0.0
+        intent_anchor_overlap = (
+            sum(term in related_tokens for term in intent_terms) / len(intent_terms) if intent_terms else 0.0
+        )
         facet_overlap = 0.0
         if seed_facets:
             matched_facets = 0
@@ -1866,9 +2145,23 @@ async def _graph_frontier_scores(
                 if sum(token in related_tokens for token in facet_tokens) >= required:
                     matched_facets += 1
             facet_overlap = matched_facets / len(seed_facets)
+        intent_facet_overlap = 0.0
+        if intent_facets:
+            matched_intent_facets = 0
+            for facet in intent_facets:
+                facet_tokens = re.findall(r"[a-z0-9]{3,}", facet.lower())
+                if not facet_tokens:
+                    continue
+                required = len(facet_tokens) if len(facet_tokens) <= 2 else 2
+                if sum(token in related_tokens for token in facet_tokens) >= required:
+                    matched_intent_facets += 1
+            intent_facet_overlap = matched_intent_facets / len(intent_facets)
         title_overlap = 0.0
         if seed_term_set and related_title_tokens:
             title_overlap = len(seed_term_set & related_title_tokens) / len(seed_term_set)
+        intent_title_overlap = 0.0
+        if intent_term_set and related_title_tokens:
+            intent_title_overlap = len(intent_term_set & related_title_tokens) / len(intent_term_set)
 
         citation_count = related.get("citationCount")
         citation_bonus = 0.0
@@ -1884,25 +2177,79 @@ async def _graph_frontier_scores(
             topic_penalty += 0.26
         elif seed_terms and anchor_overlap < 0.25:
             topic_penalty += 0.1
+        if intent_terms and intent_anchor_overlap == 0.0:
+            topic_penalty += 0.24
+        elif intent_terms and intent_anchor_overlap < 0.25:
+            topic_penalty += 0.1
         if seed_facets and facet_overlap == 0.0:
             topic_penalty += 0.2
         elif seed_facets and facet_overlap < 0.5:
+            topic_penalty += 0.08
+        if intent_facets and intent_facet_overlap == 0.0:
+            topic_penalty += 0.2
+        elif intent_facets and intent_facet_overlap < 0.5:
             topic_penalty += 0.08
         if title_overlap == 0.0:
             topic_penalty += 0.12
         elif title_overlap < 0.2:
             topic_penalty += 0.05
+        if intent_term_set and intent_title_overlap == 0.0:
+            topic_penalty += 0.14
+        elif intent_term_set and intent_title_overlap < 0.2:
+            topic_penalty += 0.06
+        if seed_terms and intent_terms and anchor_overlap == 0.0 and intent_anchor_overlap == 0.0:
+            topic_penalty += 0.12
         score = (
-            (query_similarity * 0.5)
-            + (anchor_overlap * 0.2)
-            + (facet_overlap * 0.18)
-            + (title_overlap * 0.14)
+            (query_similarity * 0.28)
+            + (intent_similarity * 0.24)
+            + (anchor_overlap * 0.12)
+            + (intent_anchor_overlap * 0.16)
+            + (facet_overlap * 0.08)
+            + (intent_facet_overlap * 0.12)
+            + (title_overlap * 0.05)
+            + (intent_title_overlap * 0.09)
             + citation_bonus
             + recency_bonus
             - topic_penalty
         )
         scores.append(round(max(score, 0.0), 6))
     return scores
+
+
+def _graph_intent_text(
+    record: Any | None,
+    resolved_seeds: list[dict[str, Any]],
+) -> str:
+    if record is not None:
+        metadata = record.metadata if isinstance(record.metadata, dict) else {}
+        strategy_metadata = metadata.get("strategyMetadata")
+        if isinstance(strategy_metadata, dict):
+            normalized_query = strategy_metadata.get("normalizedQuery")
+            if isinstance(normalized_query, str) and normalized_query.strip():
+                return normalized_query.strip()
+        original_query = metadata.get("originalQuery")
+        if isinstance(original_query, str) and original_query.strip():
+            return original_query.strip()
+        if isinstance(record.query, str) and record.query.strip():
+            return record.query.strip()
+    for seed in resolved_seeds:
+        for candidate in (seed.get("title"), seed.get("paperId")):
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+    return ""
+
+
+def _filter_graph_frontier(
+    ranked_related: list[tuple[dict[str, Any], float]],
+) -> list[tuple[dict[str, Any], float]]:
+    if not ranked_related:
+        return []
+    best_score = max(score for _, score in ranked_related)
+    threshold = max(0.18, best_score * 0.45)
+    retained = [(paper, score) for paper, score in ranked_related if score >= threshold]
+    if retained:
+        return retained
+    return ranked_related[: min(3, len(ranked_related))]
 
 
 def _graph_topic_tokens(text: str) -> set[str]:

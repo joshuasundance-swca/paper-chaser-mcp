@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
 from datetime import datetime
 from typing import Any
+
+from defusedxml import ElementTree as ET
 
 from ...document_markdown import DocumentMarkdownConverter
 from ...models import CfrTextResponse, FederalRegisterDocument, FederalRegisterDocumentTextResponse, dump_jsonable
@@ -13,6 +17,7 @@ from ...transport import httpx, maybe_close_async_resource
 GOVINFO_API_BASE = "https://api.govinfo.gov"
 GOVINFO_FR_LINK_RE = re.compile(r"/link/fr/(?P<volume>\d+)/(?P<page>\d+)", re.IGNORECASE)
 FR_CITATION_RE = re.compile(r"^(?P<volume>\d+)\s*F\.?R\.?\s*(?P<page>\d+)$", re.IGNORECASE)
+logger = logging.getLogger("scholar-search-mcp")
 
 
 class GovInfoApiError(RuntimeError):
@@ -44,6 +49,7 @@ class GovInfoClient:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.document_timeout = document_timeout
+        self.document_conversion_timeout = max(float(document_timeout), 0.001)
         self.max_document_bytes = max(int(max_document_size_mb), 1) * 1024 * 1024
         self._markdown_converter: Any = markdown_converter or DocumentMarkdownConverter()
         self._http_client: Any | None = None
@@ -176,6 +182,122 @@ class GovInfoClient:
             return f"{title_number} CFR {part_number}.{section_number}"
         return f"{title_number} CFR Part {part_number}"
 
+    @staticmethod
+    def _looks_like_xml(
+        *,
+        content_type: str | None,
+        source_url: str,
+        filename: str | None,
+    ) -> bool:
+        normalized_type = (content_type or "").split(";", 1)[0].strip().lower()
+        if normalized_type in {"application/xml", "text/xml"}:
+            return True
+        lowered_url = source_url.lower()
+        if lowered_url.endswith("/xml") or lowered_url.endswith(".xml"):
+            return True
+        lowered_filename = str(filename or "").strip().lower()
+        return lowered_filename.endswith(".xml")
+
+    @staticmethod
+    def _xml_local_name(tag: Any) -> str:
+        if not isinstance(tag, str):
+            return ""
+        return tag.rsplit("}", 1)[-1].upper()
+
+    @staticmethod
+    def _normalize_xml_text(value: str) -> str:
+        return " ".join(value.split())
+
+    @classmethod
+    def _extract_cfr_xml_markdown(
+        cls,
+        *,
+        content: bytes,
+        content_type: str | None,
+        source_url: str,
+        filename: str | None,
+    ) -> str | None:
+        if not cls._looks_like_xml(content_type=content_type, source_url=source_url, filename=filename):
+            return None
+        try:
+            root = ET.fromstring(content)
+        except ET.ParseError:
+            return None
+
+        blocks: list[str] = []
+        seen: set[str] = set()
+        heading_tags = {"TITLE", "SECTNO", "SUBJECT", "HEAD", "HD"}
+        paragraph_tags = {"P", "FP", "HD1", "HD2", "HD3"}
+
+        for element in root.iter():
+            tag = cls._xml_local_name(element.tag)
+            if tag not in heading_tags and tag not in paragraph_tags:
+                continue
+            text = cls._normalize_xml_text(" ".join(element.itertext()))
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            if tag in heading_tags:
+                prefix = "##" if tag in {"TITLE", "SECTNO"} else "###"
+                blocks.append(f"{prefix} {text}")
+            else:
+                blocks.append(text)
+
+        if not blocks:
+            flattened = cls._normalize_xml_text(" ".join(root.itertext()))
+            if not flattened:
+                return None
+            return flattened
+        return "\n\n".join(blocks).strip()
+
+    async def _convert_download_to_markdown(
+        self,
+        *,
+        content: bytes,
+        source_url: str,
+        content_type: str | None,
+        filename: str | None,
+        prefer_cfr_xml: bool = False,
+    ) -> tuple[str | None, list[str]]:
+        if len(content) > self.max_document_bytes:
+            logger.warning(
+                "GovInfo document exceeded size limit before conversion: url=%s bytes=%d limit=%d",
+                source_url,
+                len(content),
+                self.max_document_bytes,
+            )
+            return None, ["GovInfo document exceeded the configured size limit before Markdown extraction."]
+
+        if prefer_cfr_xml:
+            extracted_xml = self._extract_cfr_xml_markdown(
+                content=content,
+                content_type=content_type,
+                source_url=source_url,
+                filename=filename,
+            )
+            if extracted_xml:
+                return extracted_xml, []
+
+        try:
+            markdown = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self._markdown_converter.convert,
+                    content=content,
+                    source_url=source_url,
+                    content_type=content_type,
+                    filename=filename,
+                ),
+                timeout=self.document_conversion_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "GovInfo document conversion timed out after %.3f s: %s",
+                self.document_conversion_timeout,
+                source_url,
+            )
+            return None, ["GovInfo document conversion timed out before Markdown extraction finished."]
+        return markdown, []
+
     async def get_federal_register_document(
         self,
         *,
@@ -220,7 +342,7 @@ class GovInfoClient:
                 if not isinstance(url, str) or not url:
                     continue
                 content, content_type = await self._request_content(url)
-                markdown = self._markdown_converter.convert(
+                markdown, warnings = await self._convert_download_to_markdown(
                     content=content,
                     source_url=url,
                     content_type=content_type,
@@ -238,6 +360,7 @@ class GovInfoClient:
                     contentSource=source,
                     contentType=content_type,
                     authoritativeUrl=url,
+                    warnings=warnings,
                 )
                 return dump_jsonable(response)
 
@@ -251,7 +374,7 @@ class GovInfoClient:
         if not isinstance(body_html_url, str) or not body_html_url:
             raise ValueError("FederalRegister.gov did not provide a fallback bodyHtmlUrl for this document.")
         content, content_type = await self._request_content(body_html_url)
-        markdown = self._markdown_converter.convert(
+        markdown, warnings = await self._convert_download_to_markdown(
             content=content,
             source_url=body_html_url,
             content_type=content_type,
@@ -263,7 +386,10 @@ class GovInfoClient:
             contentSource="federal_register_html",
             contentType=content_type,
             authoritativeUrl=body_html_url,
-            warnings=["Returned FederalRegister.gov HTML because GovInfo authoritative resolution was unavailable."],
+            warnings=[
+                "Returned FederalRegister.gov HTML because GovInfo authoritative resolution was unavailable.",
+                *warnings,
+            ],
         )
         return dump_jsonable(response)
 
@@ -308,11 +434,12 @@ class GovInfoClient:
             if not isinstance(url, str) or not url:
                 continue
             content, content_type = await self._request_content(url)
-            markdown = self._markdown_converter.convert(
+            markdown, warnings = await self._convert_download_to_markdown(
                 content=content,
                 source_url=url,
                 content_type=content_type,
                 filename=f"{granule_id or package_id or 'cfr'}.{key.removesuffix('Link').lower()}",
+                prefer_cfr_xml=True,
             )
             response = CfrTextResponse(
                 titleNumber=title_number,
@@ -328,9 +455,9 @@ class GovInfoClient:
                 contentType=content_type,
                 sourceUrl=url,
                 markdown=markdown,
+                warnings=warnings,
             )
             return dump_jsonable(response)
         raise ValueError(
-            f"GovInfo returned a CFR record for {citation}, but no retrievable "
-            "content links were available."
+            f"GovInfo returned a CFR record for {citation}, but no retrievable content links were available."
         )

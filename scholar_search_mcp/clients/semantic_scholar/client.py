@@ -343,6 +343,7 @@ class SemanticScholarClient:
         candidate_query: str,
         strategy: str,
         candidate_count: int | None = None,
+        match_provider: str | None = None,
     ) -> dict[str, Any]:
         """Build a match payload for a fallback-found paper.
 
@@ -353,6 +354,8 @@ class SemanticScholarClient:
         payload = dump_jsonable(Paper.model_validate(matched))
         payload["matchFound"] = True
         payload["matchStrategy"] = strategy
+        if match_provider is not None:
+            payload["matchProvider"] = match_provider
         if candidate_query != query.strip():
             payload["normalizedQuery"] = candidate_query
         payload.update(
@@ -365,10 +368,100 @@ class SemanticScholarClient:
         )
         return payload
 
+    @classmethod
+    def _pick_exact_title_match_candidate(
+        cls,
+        query: str,
+        candidates: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        target_key = cls._normalize_title_match_key(query)
+        if not target_key:
+            return None
+        for candidate in candidates:
+            title = candidate.get("title")
+            if not isinstance(title, str) or not title.strip():
+                continue
+            if cls._normalize_title_match_key(title) == target_key:
+                return candidate
+        return None
+
+    @staticmethod
+    def _normalize_crossref_work_to_paper(work: dict[str, Any]) -> dict[str, Any]:
+        doi = str(work.get("doi") or "").strip() or None
+        url = str(work.get("url") or "").strip() or None
+        recommended_expansion_id = f"DOI:{doi}" if doi else None
+        return {
+            "paperId": doi or url or str(work.get("title") or "crossref-match"),
+            "title": work.get("title"),
+            "year": work.get("year"),
+            "authors": work.get("authors") or [],
+            "citationCount": work.get("citationCount"),
+            "venue": work.get("venue"),
+            "publicationDate": work.get("publicationDate"),
+            "url": url,
+            "source": "crossref",
+            "sourceId": doi or url,
+            "canonicalId": doi or url,
+            "recommendedExpansionId": recommended_expansion_id,
+            "expansionIdStatus": "portable" if recommended_expansion_id is not None else "not_portable",
+        }
+
+    async def _recover_exact_title_cross_provider(
+        self,
+        query: str,
+        *,
+        openalex_client: Any | None,
+        enable_openalex: bool,
+        crossref_client: Any | None,
+        enable_crossref: bool,
+    ) -> dict[str, Any] | None:
+        if enable_openalex and openalex_client is not None:
+            try:
+                openalex_response = await openalex_client.search(query=query, limit=10)
+            except Exception:
+                openalex_response = None
+            openalex_data = (openalex_response or {}).get("data") or []
+            if isinstance(openalex_data, list):
+                matched = self._pick_exact_title_match_candidate(query, openalex_data)
+                if matched is not None:
+                    return self._build_fallback_match_payload(
+                        matched,
+                        query,
+                        query,
+                        "openalex_exact_title",
+                        candidate_count=len(openalex_data),
+                        match_provider="openalex",
+                    )
+
+        if enable_crossref and crossref_client is not None:
+            try:
+                crossref_match = await crossref_client.search_work(query)
+            except Exception:
+                crossref_match = None
+            if isinstance(crossref_match, dict):
+                normalized = self._normalize_crossref_work_to_paper(crossref_match)
+                matched = self._pick_exact_title_match_candidate(query, [normalized])
+                if matched is not None:
+                    return self._build_fallback_match_payload(
+                        matched,
+                        query,
+                        query,
+                        "crossref_exact_title",
+                        candidate_count=1,
+                        match_provider="crossref",
+                    )
+
+        return None
+
     async def _search_papers_match_fallback(
         self,
         query: str,
         fields: Optional[list[str]] = None,
+        *,
+        openalex_client: Any | None = None,
+        enable_openalex: bool = False,
+        crossref_client: Any | None = None,
+        enable_crossref: bool = False,
     ) -> dict[str, Any]:
         candidate_queries = self._title_lookup_queries(query)
         # Also try quoted-phrase variants so that Semantic Scholar treats the
@@ -401,7 +494,18 @@ class SemanticScholarClient:
                 candidate_query,
                 "fuzzy_search",
                 candidate_count=len(fallback_response.get("data", [])),
+                match_provider="semantic_scholar",
             )
+
+        external_match = await self._recover_exact_title_cross_provider(
+            query,
+            openalex_client=openalex_client,
+            enable_openalex=enable_openalex,
+            crossref_client=crossref_client,
+            enable_crossref=enable_crossref,
+        )
+        if external_match is not None:
+            return external_match
 
         # Final fallback: citation-sorted bulk search.  Relevance-ranked search
         # may bury a very famous paper behind topic papers with higher textual
@@ -432,6 +536,7 @@ class SemanticScholarClient:
                 candidate_query,
                 "citation_ranked",
                 candidate_count=len(bulk_response.get("data", [])),
+                match_provider="semantic_scholar",
             )
 
         return {
@@ -583,6 +688,11 @@ class SemanticScholarClient:
         self,
         query: str,
         fields: Optional[list[str]] = None,
+        *,
+        openalex_client: Any | None = None,
+        enable_openalex: bool = False,
+        crossref_client: Any | None = None,
+        enable_crossref: bool = False,
     ) -> dict[str, Any]:
         """Best title-match paper search (``/paper/search/match``).
 
@@ -617,6 +727,7 @@ class SemanticScholarClient:
             result = dump_jsonable(paper)
             result["matchFound"] = True
             result["matchStrategy"] = "exact_title"
+            result["matchProvider"] = "semantic_scholar"
             if candidate_query != query:
                 result["normalizedQuery"] = candidate_query
             result.update(
@@ -628,7 +739,14 @@ class SemanticScholarClient:
                 )
             )
             return result
-        return await self._search_papers_match_fallback(query, fields=fields)
+        return await self._search_papers_match_fallback(
+            query,
+            fields=fields,
+            openalex_client=openalex_client,
+            enable_openalex=enable_openalex,
+            crossref_client=crossref_client,
+            enable_crossref=enable_crossref,
+        )
 
     async def paper_autocomplete(self, query: str) -> dict[str, Any]:
         """Query completion for paper titles (``/paper/autocomplete``).

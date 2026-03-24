@@ -549,6 +549,65 @@ async def test_ask_result_set_balanced_mode_skips_embedding_scoring() -> None:
 
 
 @pytest.mark.asyncio
+async def test_ask_result_set_comparison_uses_grounded_structure_when_model_answer_is_weak(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    registry, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
+    record = registry.save_result_set(
+        source_tool="search_papers_smart",
+        payload={
+            "data": [
+                {
+                    "paperId": "paper-1",
+                    "title": "Retrieval-Augmented Agents",
+                    "abstract": "Vector retrieval grounds agent answers with tool use.",
+                    "venue": "Agent Systems",
+                    "year": 2024,
+                },
+                {
+                    "paperId": "paper-2",
+                    "title": "Grounded Planning for Agents",
+                    "abstract": "Planning improves grounded decision making and retrieval handoffs.",
+                    "venue": "Planning Workshop",
+                    "year": 2023,
+                },
+            ]
+        },
+    )
+
+    async def _weak_list_answer(**kwargs: object) -> dict[str, object]:
+        del kwargs
+        return {
+            "answer": (
+                "Comparison grounded in the saved result set:\n"
+                "- Retrieval-Augmented Agents: Agent Systems, 2024\n"
+                "- Grounded Planning for Agents: Planning Workshop, 2023"
+            ),
+            "confidence": "medium",
+            "unsupportedAsks": [],
+            "followUpQuestions": [],
+        }
+
+    monkeypatch.setattr(runtime._provider_bundle, "aanswer_question", _weak_list_answer)
+    monkeypatch.setattr(runtime._deterministic_bundle, "aanswer_question", _weak_list_answer)
+
+    ask = await runtime.ask_result_set(
+        search_session_id=record.search_session_id,
+        question="Compare these agent papers.",
+        top_k=2,
+        answer_mode="comparison",
+        latency_profile="deep",
+    )
+
+    assert "Shared ground:" in ask["answer"]
+    assert "Key differences:" in ask["answer"]
+    assert "Takeaway:" in ask["answer"]
+    assert "Comparison grounded in the saved result set:" not in ask["answer"]
+
+
+@pytest.mark.asyncio
 async def test_map_research_landscape_balanced_mode_skips_embedding_clustering() -> None:
     semantic = RecordingSemanticClient()
     openalex = RecordingOpenAlexClient()
@@ -621,6 +680,58 @@ async def test_map_research_landscape_balanced_mode_skips_embedding_clustering()
     )
 
     assert landscape["themes"]
+
+
+@pytest.mark.asyncio
+async def test_map_research_landscape_sanitizes_junk_theme_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    registry, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
+    record = registry.save_result_set(
+        source_tool="search_papers_smart",
+        payload={
+            "data": [
+                {
+                    "paperId": "paper-1",
+                    "title": "Noise exposure effects on birds",
+                    "abstract": "Bird responses to anthropogenic noise exposure.",
+                    "year": 2024,
+                },
+                {
+                    "paperId": "paper-2",
+                    "title": "Wildlife responses to anthropogenic noise",
+                    "abstract": "Noise changes behavior across wildlife populations.",
+                    "year": 2023,
+                },
+                {
+                    "paperId": "paper-3",
+                    "title": "Acoustic disturbance in birds and mammals",
+                    "abstract": "Birds and mammals show disturbance under acoustic exposure.",
+                    "year": 2022,
+                },
+            ]
+        },
+    )
+
+    async def _junk_label(**kwargs: object) -> str:
+        del kwargs
+        return "Noise / And"
+
+    monkeypatch.setattr(runtime._provider_bundle, "alabel_theme", _junk_label)
+
+    landscape = await runtime.map_research_landscape(
+        search_session_id=record.search_session_id,
+        max_themes=1,
+        latency_profile="deep",
+    )
+
+    assert landscape["themes"]
+    theme_title = landscape["themes"][0]["title"]
+    assert theme_title != "Noise / And"
+    assert "And" not in theme_title
+    assert any(token in theme_title.lower() for token in ("noise", "birds", "acoustic", "anthropogenic"))
 
 
 @pytest.mark.asyncio
@@ -1260,8 +1371,9 @@ async def test_expand_research_graph_uses_scored_frontier_for_next_hop(
         seed: dict[str, Any],
         related_papers: list[dict[str, Any]],
         provider_bundle: Any,
+        intent_text: str | None = None,
     ) -> list[float]:
-        del seed, provider_bundle
+        del seed, provider_bundle, intent_text
         if related_papers and related_papers[0]["paperId"] == "low-1":
             return [0.1, 0.2, 0.3, 0.4, 0.5, 0.99]
         return [0.8 for _ in related_papers]
@@ -1377,6 +1489,86 @@ async def test_expand_research_graph_balanced_mode_skips_embedding_scoring() -> 
     )
 
     assert graph["frontier"]
+
+
+@pytest.mark.asyncio
+async def test_expand_research_graph_prefers_frontier_items_aligned_to_original_search_intent() -> None:
+    class GraphSemanticClient(RecordingSemanticClient):
+        async def get_paper_citations(self, **kwargs) -> dict:
+            self.calls.append(("get_paper_citations", kwargs))
+            paper_id = kwargs["paper_id"]
+            if paper_id == "seed-1":
+                return {
+                    "data": [
+                        {
+                            "paperId": "off-topic",
+                            "title": "Industrial noise control in factories",
+                            "abstract": "Engineering controls for machinery noise in industrial settings.",
+                            "year": 2025,
+                            "citationCount": 2500,
+                            "recommendedExpansionId": "off-topic",
+                            "expansionIdStatus": "portable",
+                        },
+                        {
+                            "paperId": "on-topic",
+                            "title": "Noise exposure effects on birds",
+                            "abstract": "Anthropogenic noise alters bird behaviour and wildlife responses.",
+                            "year": 2024,
+                            "citationCount": 40,
+                            "recommendedExpansionId": "on-topic",
+                            "expansionIdStatus": "portable",
+                        },
+                    ]
+                }
+            if paper_id == "on-topic":
+                return {
+                    "data": [
+                        {
+                            "paperId": "grandchild-1",
+                            "title": "Bird communication under anthropogenic noise",
+                            "recommendedExpansionId": "grandchild-1",
+                            "expansionIdStatus": "portable",
+                        }
+                    ]
+                }
+            return {"data": []}
+
+    semantic = GraphSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    registry, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
+    record = registry.save_result_set(
+        source_tool="search_papers_smart",
+        payload={
+            "data": [
+                {
+                    "paperId": "seed-1",
+                    "title": "Environmental effects review",
+                    "canonicalId": "seed-1",
+                    "recommendedExpansionId": "seed-1",
+                    "expansionIdStatus": "portable",
+                    "source": "semantic_scholar",
+                }
+            ]
+        },
+        query="anthropogenic noise effects on wildlife",
+        metadata={"strategyMetadata": {"normalizedQuery": "anthropogenic noise effects on wildlife"}},
+    )
+
+    graph = await runtime.expand_research_graph(
+        seed_paper_ids=None,
+        seed_search_session_id=record.search_session_id,
+        direction="citations",
+        hops=2,
+        per_seed_limit=5,
+    )
+
+    frontier_ids = [node["id"] for node in graph["frontier"]]
+
+    assert "on-topic" in frontier_ids
+    assert "off-topic" not in frontier_ids
+    assert "grandchild-1" in frontier_ids
+    assert any(call[0] == "get_paper_citations" and call[1]["paper_id"] == "on-topic" for call in semantic.calls)
+    assert all(call[1]["paper_id"] != "off-topic" for call in semantic.calls if call[0] == "get_paper_citations")
 
 
 @pytest.mark.asyncio
