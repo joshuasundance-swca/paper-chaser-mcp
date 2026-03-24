@@ -1,6 +1,28 @@
 default_install_hook_types: [pre-commit, pre-push]
+exclude: ^(build/|scholar_search_mcp\.egg-info/)
 
 repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: fix-byte-order-marker
+        types_or: [text]
+      - id: mixed-line-ending
+        args: [--fix=lf]
+        types_or: [text]
+      - id: end-of-file-fixer
+        types_or: [text]
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+        types_or: [text]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.12.9
+    hooks:
+      - id: ruff-format
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
@@ -9,22 +31,22 @@ repos:
         args: [--maxkb=1000]
       - id: check-merge-conflict
       - id: detect-private-key
-      - id: fix-byte-order-marker
-      - id: mixed-line-ending
-        args: [--fix=lf]
-      - id: end-of-file-fixer
-      - id: trailing-whitespace
-        args: [--markdown-linebreak-ext=md]
       - id: check-json
+        types_or: [json]
       - id: check-toml
+        types: [toml]
       - id: check-yaml
+        types_or: [yaml]
       - id: check-ast
+        types: [python]
       - id: debug-statements
+        types: [python]
 
   - repo: https://github.com/abravalheri/validate-pyproject
     rev: v0.25
     hooks:
       - id: validate-pyproject
+        files: ^pyproject\.toml$
         additional_dependencies:
           - validate-pyproject-schema-store[all]
 
@@ -32,12 +54,15 @@ repos:
     rev: 0.37.0
     hooks:
       - id: check-github-workflows
+        files: ^\.github/workflows/.*\.(yml|yaml)$
       - id: check-dependabot
+        files: ^\.github/dependabot\.ya?ml$
 
   - repo: https://github.com/rhysd/actionlint
     rev: v1.7.11
     hooks:
       - id: actionlint
+        files: ^\.github/workflows/.*\.(yml|yaml)$
         exclude: ^\.github/workflows/.*\.lock\.yml$
 
   - repo: https://github.com/gitleaks/gitleaks
@@ -49,19 +74,14 @@ repos:
     rev: v1.44.0
     hooks:
       - id: typos
+        types_or: [text]
         exclude: ^(\.github/workflows/test-scholar-search\.lock\.yml|infra/.*\.json)$
 
   - repo: https://github.com/shellcheck-py/shellcheck-py
     rev: v0.11.0.1
     hooks:
       - id: shellcheck
-
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.12.9
-    hooks:
-      - id: ruff
-        args: [--fix, --exit-non-zero-on-fix]
-      - id: ruff-format
+        types_or: [shell]
 
   - repo: https://github.com/PyCQA/bandit
     rev: 1.8.6
@@ -96,6 +116,7 @@ repos:
         name: mypy
         entry: python scripts/run_in_repo_venv.py -m mypy --config-file pyproject.toml --no-incremental
         language: system
+        files: ^(scholar_search_mcp/.*\.py|tests/.*\.py|pyproject\.toml)$
         pass_filenames: false
 
       # The stock hadolint docker_image hook can wedge under Docker Desktop on
@@ -175,4 +196,4 @@ repos:
         entry: python scripts/validate_deployment.py --skip-docker
         language: system
         pass_filenames: false
-        files: ^(infra/.*\.(bicep|bicepparam)|infra/policies/.*\.xml|\.github/workflows/deploy-azure\.yml|Dockerfile|scholar_search_mcp/deployment\.py|docs/azure-(architecture|deployment|security-model)\.md)$
+        files: ^(infra/.*\.(bicep|bicepparam)|infra/policies/.*\.xml|\.github/workflows/deploy-azure\.yml|Dockerfile|scholar_search_mcp/deployment\.py|docs/azure-(architecture|deployment|security-model)\.md|scripts/validate_deployment\.py)$

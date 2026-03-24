@@ -122,7 +122,10 @@ If search_papers_match returns no match, or if the user has a broken
 bibliography line, partial reference, or almost-right citation, prefer
 resolve_citation before guessing. A no-match can still mean the item is a
 dissertation, software release, report, or other output outside the indexed
-paper surface.
+paper surface. If the citation is clearly regulatory (for example a Federal
+Register or CFR reference), switch to search_federal_register,
+get_federal_register_document, or get_cfr_text instead of forcing a paper
+lookup.
 For common-name author lookup, add affiliation, coauthor, venue, or topic clues
 before expanding into get_author_info/get_author_papers.
 To steer the broker: use preferredProvider (try-first) or providerOrder (full override).
@@ -159,7 +162,9 @@ AGENT_WORKFLOW_GUIDE = """
   reuse `searchSessionId` with `ask_result_set`, `map_research_landscape`,
   or `expand_research_graph`. Use `latencyProfile=fast` for smoke baselines,
   `balanced` for the default path, and `deep` when controlled multi-provider
-  expansion is worth the extra latency.
+    expansion is worth the extra latency. In `known_item` mode, if one exact
+    anchor is not confidently resolved, the smart workflow now falls back to a
+    broader candidate set with warnings instead of stopping on a dead-end error.
 - **Quick literature discovery**: `search_papers` → inspect
   `brokerMetadata.nextStepHint`, `agentHints`, and `resourceUris` to decide
   whether to broaden, narrow, paginate, or pivot.
@@ -196,6 +201,10 @@ AGENT_WORKFLOW_GUIDE = """
   `resolve_citation` before bouncing between title match, snippets, and broad
   search. The resolver returns confidence, alternatives, conflicts, and the
   fastest next clue to add.
+- **Regulatory primary-source citations**: if `resolve_citation` identifies a
+    Federal Register or CFR-style reference, pivot to `search_federal_register`,
+    `get_federal_register_document`, or `get_cfr_text` instead of treating it as
+    a scholarly paper.
 - **Quote or snippet validation**: `search_snippets` — special-purpose recovery
   tool only when title/keyword search is weak; provider 4xx/5xx errors degrade
   to empty results with retry guidance.

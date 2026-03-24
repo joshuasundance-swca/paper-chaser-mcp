@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from ...models import FederalRegisterAgency, FederalRegisterDocument, FederalRegisterSearchResponse, dump_jsonable
 from ...transport import httpx, maybe_close_async_resource
 
 FEDERAL_REGISTER_API_BASE = "https://www.federalregister.gov/api/v1"
+_QUERY_TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 
 class FederalRegisterClient:
@@ -87,6 +89,140 @@ class FederalRegisterClient:
             govInfoLink=govinfo_link,
         )
 
+    @staticmethod
+    def _normalized_cfr_filter(
+        *,
+        cfr_citation: str | None,
+        cfr_title: int | None,
+        cfr_part: int | None,
+    ) -> str | None:
+        if isinstance(cfr_citation, str) and cfr_citation.strip():
+            return cfr_citation.strip()
+        if cfr_title is not None and cfr_part is not None:
+            return f"{cfr_title} CFR {cfr_part}"
+        return None
+
+    @staticmethod
+    def _matches_date_bounds(
+        publication_date: str | None,
+        *,
+        publication_date_from: str | None,
+        publication_date_to: str | None,
+    ) -> bool:
+        if not publication_date:
+            return publication_date_from is None and publication_date_to is None
+        if publication_date_from and publication_date < publication_date_from:
+            return False
+        if publication_date_to and publication_date > publication_date_to:
+            return False
+        return True
+
+    @classmethod
+    def _document_matches_filters(
+        cls,
+        document: dict[str, Any],
+        *,
+        query: str,
+        apply_query_filter: bool,
+        agencies: list[str] | None,
+        document_types: list[str] | None,
+        publication_date_from: str | None,
+        publication_date_to: str | None,
+        cfr_citation: str | None,
+        cfr_title: int | None,
+        cfr_part: int | None,
+        document_number: str | None,
+    ) -> bool:
+        normalized_query = str(query or "").strip().lower()
+        if apply_query_filter and normalized_query:
+            haystack_parts = [
+                str(document.get("title") or ""),
+                str(document.get("abstract") or ""),
+                str(document.get("citation") or ""),
+                str(document.get("documentNumber") or ""),
+                " ".join(str(value) for value in document.get("cfrReferences") or []),
+            ]
+            haystack = " ".join(part.lower() for part in haystack_parts if part).strip()
+            query_tokens = _QUERY_TOKEN_RE.findall(normalized_query)
+            if haystack and normalized_query not in haystack:
+                if not query_tokens or not all(token in haystack for token in query_tokens):
+                    return False
+            elif not haystack:
+                return False
+
+        if document_number:
+            normalized_document_number = str(document.get("documentNumber") or "").strip()
+            if normalized_document_number != str(document_number).strip():
+                return False
+
+        if agencies:
+            requested_agencies = {agency.strip() for agency in agencies if isinstance(agency, str) and agency.strip()}
+            document_agencies = {
+                str(item.get("slug") or "").strip() for item in document.get("agencies") or [] if isinstance(item, dict)
+            }
+            if requested_agencies and requested_agencies.isdisjoint(document_agencies):
+                return False
+
+        if document_types:
+            document_type = str(document.get("documentType") or "").strip().upper()
+            requested_types = {doc_type.strip().upper() for doc_type in document_types if isinstance(doc_type, str)}
+            if requested_types and document_type not in requested_types:
+                return False
+
+        if not cls._matches_date_bounds(
+            str(document.get("publicationDate") or "").strip() or None,
+            publication_date_from=publication_date_from,
+            publication_date_to=publication_date_to,
+        ):
+            return False
+
+        normalized_cfr_filter = cls._normalized_cfr_filter(
+            cfr_citation=cfr_citation,
+            cfr_title=cfr_title,
+            cfr_part=cfr_part,
+        )
+        if normalized_cfr_filter:
+            document_references = {str(value).strip() for value in document.get("cfrReferences") or [] if value}
+            if normalized_cfr_filter not in document_references:
+                return False
+
+        return True
+
+    @classmethod
+    def _filter_documents_locally(
+        cls,
+        documents: list[dict[str, Any]],
+        *,
+        query: str,
+        apply_query_filter: bool,
+        agencies: list[str] | None,
+        document_types: list[str] | None,
+        publication_date_from: str | None,
+        publication_date_to: str | None,
+        cfr_citation: str | None,
+        cfr_title: int | None,
+        cfr_part: int | None,
+        document_number: str | None,
+    ) -> list[FederalRegisterDocument]:
+        filtered: list[FederalRegisterDocument] = []
+        for document in documents:
+            if not cls._document_matches_filters(
+                document,
+                query=query,
+                apply_query_filter=apply_query_filter,
+                agencies=agencies,
+                document_types=document_types,
+                publication_date_from=publication_date_from,
+                publication_date_to=publication_date_to,
+                cfr_citation=cfr_citation,
+                cfr_title=cfr_title,
+                cfr_part=cfr_part,
+                document_number=document_number,
+            ):
+                continue
+            filtered.append(FederalRegisterDocument.model_validate(document))
+        return filtered
+
     async def search_documents(
         self,
         *,
@@ -101,6 +237,34 @@ class FederalRegisterClient:
         cfr_part: int | None = None,
         document_number: str | None = None,
     ) -> dict[str, Any]:
+        normalized_cfr_filter = self._normalized_cfr_filter(
+            cfr_citation=cfr_citation,
+            cfr_title=cfr_title,
+            cfr_part=cfr_part,
+        )
+        if document_number:
+            document = await self.get_document(document_number)
+            documents = [document] if isinstance(document, dict) else []
+            filtered = self._filter_documents_locally(
+                documents,
+                query=query,
+                apply_query_filter=True,
+                agencies=agencies,
+                document_types=document_types,
+                publication_date_from=publication_date_from,
+                publication_date_to=publication_date_to,
+                cfr_citation=normalized_cfr_filter,
+                cfr_title=cfr_title,
+                cfr_part=cfr_part,
+                document_number=document_number,
+            )
+            return dump_jsonable(
+                FederalRegisterSearchResponse(
+                    total=len(filtered),
+                    data=filtered,
+                )
+            )
+
         params: dict[str, Any] = {
             "conditions[term]": query,
             "order": "newest",
@@ -110,23 +274,43 @@ class FederalRegisterClient:
             params["conditions[publication_date][gte]"] = publication_date_from
         if publication_date_to:
             params["conditions[publication_date][lte]"] = publication_date_to
-        if document_number:
-            params["conditions[document_number]"] = document_number
-        if cfr_citation:
-            params["conditions[cfr][citation]"] = cfr_citation
-        if cfr_title is not None:
+        if normalized_cfr_filter:
+            params["conditions[cfr][citation]"] = normalized_cfr_filter
+        elif cfr_title is not None:
             params["conditions[cfr][title]"] = cfr_title
-        if cfr_part is not None:
+        if normalized_cfr_filter is None and cfr_part is not None:
             params["conditions[cfr][part]"] = cfr_part
         if agencies:
             params["conditions[agencies][]"] = agencies
         if document_types:
             params["conditions[type][]"] = document_types
 
-        payload = await self._get_json("/documents.json", params=params)
-        results = [self._normalize_document(item) for item in (payload.get("results") or []) if isinstance(item, dict)]
+        try:
+            payload = await self._get_json("/documents.json", params=params)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 400 or normalized_cfr_filter is None:
+                raise
+            retry_params = dict(params)
+            retry_params.pop("conditions[cfr][citation]", None)
+            payload = await self._get_json("/documents.json", params=retry_params)
+
+        raw_results = [item for item in (payload.get("results") or []) if isinstance(item, dict)]
+        normalized_results = [dump_jsonable(self._normalize_document(item)) for item in raw_results]
+        results = self._filter_documents_locally(
+            normalized_results,
+            query=query,
+            apply_query_filter=False,
+            agencies=agencies,
+            document_types=document_types,
+            publication_date_from=publication_date_from,
+            publication_date_to=publication_date_to,
+            cfr_citation=normalized_cfr_filter,
+            cfr_title=cfr_title,
+            cfr_part=cfr_part,
+            document_number=document_number,
+        )
         response = FederalRegisterSearchResponse(
-            total=int(payload.get("count") or len(results) or 0),
+            total=len(results),
             data=results,
         )
         return dump_jsonable(response)

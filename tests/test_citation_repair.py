@@ -389,3 +389,30 @@ async def test_resolve_citation_report_style_input_abstains_instead_of_forcing_b
     assert payload["alternatives"]
     assert payload["alternatives"][0]["paper"]["paperId"] == "bird-noise-article"
     assert payload["message"].lower().startswith("this citation looks report-like")
+
+
+@pytest.mark.asyncio
+async def test_resolve_citation_regulatory_input_redirects_to_regulatory_tools_without_paper_search() -> None:
+    semantic = RecordingSemanticClient()
+
+    payload = await resolve_citation(
+        citation="Federal Register (2012). Listing of loggerhead sea turtle DPS. 77 FR 4632.",
+        max_candidates=3,
+        client=semantic,
+        enable_core=False,
+        enable_semantic_scholar=True,
+        enable_openalex=False,
+        enable_arxiv=False,
+        enable_serpapi=False,
+        core_client=None,
+        openalex_client=None,
+        arxiv_client=None,
+        serpapi_client=None,
+    )
+
+    assert payload["bestMatch"] is None
+    assert payload["resolutionConfidence"] == "low"
+    assert payload["extractedFields"]["looksLikeRegulatory"] is True
+    assert payload["inferredFields"]["likelyOutputType"] == "regulatory_primary_source"
+    assert "federal register" in payload["message"].lower()
+    assert semantic.calls == []

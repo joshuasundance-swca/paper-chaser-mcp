@@ -7,6 +7,7 @@ import logging
 import re
 import statistics
 import time
+from difflib import SequenceMatcher
 from typing import Any
 from uuid import uuid4
 
@@ -114,13 +115,18 @@ _THEME_LABEL_STOPWORDS = _GRAPH_GENERIC_TERMS | {
     "model",
     "models",
     "or",
+    "that",
+    "the",
+    "these",
     "theme",
     "themes",
     "theory",
+    "those",
     "using",
     "with",
 }
 _COMPARISON_FOCUS_STOPWORDS = _THEME_LABEL_STOPWORDS | {
+    "noise",
     "paper",
     "papers",
     "results",
@@ -1463,16 +1469,30 @@ class AgenticRuntime:
             detail=(f"Attempting direct known-item resolution for '{_truncate_text(query, limit=96)}'."),
         )
         known_item_started = time.perf_counter()
-        known_item = await self._resolve_known_item(query)
+        known_item, resolution_strategy = await self._resolve_known_item(query)
         stage_timings_ms["knownItemResolution"] = int((time.perf_counter() - known_item_started) * 1000)
         if known_item is None:
-            return self._feature_not_configured(
-                "The known-item route could not resolve that identifier; try search_papers_match or search_papers.",
-                fallback_tools=[
-                    "search_papers_match",
-                    "get_paper_details",
-                    "search_papers",
-                ],
+            await self._emit_smart_search_status(
+                ctx=ctx,
+                request_id=request_id,
+                progress=45,
+                message="Known-item resolution fell back to broader retrieval",
+                detail=(
+                    "No exact paper anchor was confirmed, so the smart workflow is returning a broader candidate "
+                    "set instead of a dead-end error."
+                ),
+            )
+            return await self._fallback_known_item_search(
+                query=query,
+                limit=limit,
+                planner_intent=planner_intent,
+                search_session_id=search_session_id,
+                latency_profile=latency_profile,
+                request_id=request_id,
+                include_enrichment=include_enrichment,
+                provider_outcomes=provider_outcomes,
+                stage_timings_ms=stage_timings_ms,
+                ctx=ctx,
             )
         if include_enrichment and self._enrichment_service is not None:
             await self._emit_smart_search_status(
@@ -1501,9 +1521,16 @@ class AgenticRuntime:
         hit = SmartPaperHit(
             paper=Paper.model_validate(known_item),
             rank=1,
-            whyMatched="Direct identifier, citation, or title resolution.",
+            whyMatched=(
+                "Direct identifier, citation, or title resolution."
+                if resolution_strategy == "citation_resolution"
+                else (
+                    "Known-item recovery resolved a likely paper anchor; verify year, venue, or title details "
+                    "if needed."
+                )
+            ),
             matchedConcepts=[],
-            retrievedBy=["known_item_resolution"],
+            retrievedBy=[resolution_strategy],
             scoreBreakdown=ScoreBreakdown(finalScore=1.0),
         )
         strategy_metadata = SearchStrategyMetadata(
@@ -1516,7 +1543,13 @@ class AgenticRuntime:
             speculativeExpansions=[],
             providersUsed=[str(known_item.get("source") or "semantic_scholar")],
             resultCoverage="known_item",
-            driftWarnings=[],
+            driftWarnings=(
+                []
+                if resolution_strategy == "citation_resolution"
+                else [
+                    "Known-item fallback used title-style recovery; verify the anchor before treating it as canonical."
+                ]
+            ),
             providerOutcomes=provider_outcomes,
             stageTimingsMs=stage_timings_ms,
         )
@@ -1568,7 +1601,7 @@ class AgenticRuntime:
         )
         return final_response_dict
 
-    async def _resolve_known_item(self, query: str) -> dict[str, Any] | None:
+    async def _resolve_known_item(self, query: str) -> tuple[dict[str, Any] | None, str]:
         result = await resolve_citation(
             citation=query,
             max_candidates=5,
@@ -1585,8 +1618,186 @@ class AgenticRuntime:
         )
         best_match = result.get("bestMatch")
         if isinstance(best_match, dict) and isinstance(best_match.get("paper"), dict):
-            return best_match["paper"]
-        return None
+            return best_match["paper"], "citation_resolution"
+
+        try:
+            semantic_match = dump_jsonable(await self._client.search_papers_match(query=query, fields=None))
+        except Exception:
+            semantic_match = None
+        if isinstance(semantic_match, dict) and semantic_match.get("paperId"):
+            return semantic_match, str(semantic_match.get("matchStrategy") or "semantic_title_match")
+
+        if self._enable_openalex and self._openalex_client is not None:
+            try:
+                autocomplete = await self._openalex_client.paper_autocomplete(query=query, limit=5)
+            except Exception:
+                autocomplete = None
+            if isinstance(autocomplete, dict):
+                for match in autocomplete.get("matches") or []:
+                    if not isinstance(match, dict):
+                        continue
+                    match_id = str(match.get("id") or "").strip()
+                    match_title = str(match.get("displayName") or "").strip()
+                    if not match_id or _known_item_title_similarity(query, match_title) < 0.72:
+                        continue
+                    paper = None
+                    try:
+                        paper = await self._openalex_client.get_paper_details(paper_id=match_id)
+                    except Exception as exc:
+                        logger.debug("OpenAlex known-item detail lookup failed for %s: %s", match_id, exc)
+                    if paper is None:
+                        continue
+                    return dump_jsonable(paper), "openalex_autocomplete"
+
+            try:
+                openalex_search = await self._openalex_client.search(query=query, limit=3)
+            except Exception:
+                openalex_search = None
+            if isinstance(openalex_search, dict):
+                for paper in openalex_search.get("data") or []:
+                    if not isinstance(paper, dict) or not paper.get("paperId"):
+                        continue
+                    if _known_item_title_similarity(query, str(paper.get("title") or "")) < 0.58:
+                        continue
+                    return paper, "openalex_search"
+        return None, "none"
+
+    async def _fallback_known_item_search(
+        self,
+        *,
+        query: str,
+        limit: int,
+        planner_intent: str,
+        search_session_id: str | None,
+        latency_profile: LatencyProfile,
+        request_id: str,
+        include_enrichment: bool,
+        provider_outcomes: list[dict[str, Any]],
+        stage_timings_ms: dict[str, int],
+        ctx: Context | None,
+    ) -> dict[str, Any]:
+        profile_settings = self._config.latency_profile_settings(latency_profile)
+        provider_bundle = self._provider_bundle_for_profile(latency_profile)
+        retrieval_started = time.perf_counter()
+        batch = await retrieve_variant(
+            variant=query,
+            variant_source="from_input",
+            intent=planner_intent,
+            year=None,
+            venue=None,
+            enable_core=self._enable_core,
+            enable_semantic_scholar=self._enable_semantic_scholar,
+            enable_openalex=self._enable_openalex,
+            enable_arxiv=self._enable_arxiv,
+            enable_serpapi=self._enable_serpapi,
+            core_client=self._core_client,
+            semantic_client=self._client,
+            openalex_client=self._openalex_client,
+            arxiv_client=self._arxiv_client,
+            serpapi_client=self._serpapi_client,
+            widened=True,
+            is_expansion=False,
+            allow_serpapi=(self._enable_serpapi and profile_settings.allow_serpapi_on_input),
+            latency_profile=latency_profile,
+            provider_registry=self._provider_registry,
+            provider_budget=None,
+            request_outcomes=provider_outcomes,
+            request_id=request_id,
+        )
+        stage_timings_ms["knownItemFallbackRetrieval"] = int((time.perf_counter() - retrieval_started) * 1000)
+
+        merged_candidates = merge_candidates(batch.candidates)
+        ranked_candidates = await rerank_candidates(
+            query=query,
+            merged_candidates=merged_candidates,
+            provider_bundle=provider_bundle,
+            candidate_concepts=[],
+            candidate_pool_size=max(limit * 4, 8),
+            request_outcomes=provider_outcomes,
+            request_id=request_id,
+        )
+        top_candidates = ranked_candidates[:limit]
+        smart_hits = [
+            SmartPaperHit(
+                paper=Paper.model_validate(candidate["paper"]),
+                rank=index,
+                whyMatched=(
+                    "Exact known-item resolution was not confident, so this broader candidate was returned for manual "
+                    "verification."
+                ),
+                matchedConcepts=candidate.get("matchedConcepts") or [],
+                retrievedBy=candidate["providers"],
+                scoreBreakdown=ScoreBreakdown.model_validate(candidate["scoreBreakdown"]),
+            )
+            for index, candidate in enumerate(top_candidates, start=1)
+        ]
+        if include_enrichment and self._enrichment_service is not None and smart_hits:
+            smart_hits = await self._enrich_smart_hits(
+                smart_hits=smart_hits,
+                query=query,
+                request_id=request_id,
+                provider_outcomes=provider_outcomes,
+            )
+
+        strategy_metadata = SearchStrategyMetadata(
+            intent=planner_intent,
+            latencyProfile=latency_profile,
+            normalizedQuery=query,
+            queryVariantsTried=[query],
+            acceptedExpansions=[],
+            rejectedExpansions=[],
+            speculativeExpansions=[],
+            providersUsed=sorted(batch.providers_used),
+            resultCoverage=("narrow" if smart_hits else "none"),
+            driftWarnings=[
+                "Exact known-item resolution was not confident, so the smart workflow fell back to a broader candidate "
+                "set. Verify title, year, and venue before treating a result as canonical."
+            ],
+            providerOutcomes=provider_outcomes,
+            stageTimingsMs=stage_timings_ms,
+        )
+        response = SmartSearchResponse(
+            results=smart_hits,
+            searchSessionId=search_session_id or "pending",
+            strategyMetadata=strategy_metadata,
+            nextStepHint=(
+                "Pick the closest candidate, then inspect details or use exact-title and identifier tools to "
+                "confirm the "
+                "anchor before expanding citations."
+            ),
+            agentHints=build_agent_hints(
+                "search_papers_smart",
+                {"brokerMetadata": {"resultQuality": "low_relevance" if not smart_hits else "unknown"}},
+            ),
+            resourceUris=[],
+        )
+        record = await self._workspace_registry.asave_result_set(
+            source_tool="search_papers_smart",
+            payload=dump_jsonable(response),
+            query=query,
+            metadata={"strategyMetadata": dump_jsonable(strategy_metadata)},
+            search_session_id=search_session_id,
+        )
+        response.search_session_id = record.search_session_id
+        response.resource_uris = build_resource_uris(
+            "search_papers_smart",
+            {"results": [{"paper": hit.paper.model_dump(by_alias=True)} for hit in smart_hits]},
+            record.search_session_id,
+        )
+        final_response_dict = dump_jsonable(response)
+        record.payload = final_response_dict
+        record.metadata["strategyMetadata"] = final_response_dict["strategyMetadata"]
+        await self._emit_smart_search_status(
+            ctx=ctx,
+            request_id=request_id,
+            progress=100,
+            message="Known-item fallback complete",
+            detail=(
+                f"Known-item fallback complete with {len(smart_hits)} candidate(s). "
+                f"searchSessionId={record.search_session_id}."
+            ),
+        )
+        return final_response_dict
 
     def _resolve_graph_seeds(
         self,
@@ -1841,7 +2052,7 @@ def _build_grounded_comparison_answer(
     papers = evidence_papers[: min(3, len(evidence_papers))]
     if not papers:
         return "The saved result set does not contain enough evidence to make a grounded comparison."
-    shared_terms = _shared_focus_terms(papers)
+    shared_terms = _shared_focus_terms(papers, question=question)
     shared_ground = (
         ", ".join(term.title() for term in shared_terms[:3])
         if shared_terms
@@ -1867,11 +2078,12 @@ def _build_grounded_comparison_answer(
     )
 
 
-def _shared_focus_terms(papers: list[dict[str, Any]]) -> list[str]:
+def _shared_focus_terms(papers: list[dict[str, Any]], *, question: str) -> list[str]:
     counts: dict[str, int] = {}
+    question_tokens = set(_graph_topic_tokens(question))
     for paper in papers:
         for token in _graph_topic_tokens(_paper_text(paper)):
-            if token in _COMPARISON_FOCUS_STOPWORDS:
+            if token in _COMPARISON_FOCUS_STOPWORDS or token in question_tokens or token.isdigit():
                 continue
             counts[token] = counts.get(token, 0) + 1
     minimum_count = 2 if len(papers) >= 2 else 1
@@ -1933,16 +2145,16 @@ def _theme_terms_from_papers(seed_terms: list[str], papers: list[dict[str, Any]]
     counts: dict[str, int] = {}
     for paper in papers[:8]:
         for token in _label_tokens(str(paper.get("title") or "")):
-            if token in _THEME_LABEL_STOPWORDS:
+            if token in _THEME_LABEL_STOPWORDS or token.isdigit():
                 continue
             counts[token] = counts.get(token, 0) + 3
         for token in _label_tokens(str(paper.get("abstract") or "")):
-            if token in _THEME_LABEL_STOPWORDS:
+            if token in _THEME_LABEL_STOPWORDS or token.isdigit():
                 continue
             counts[token] = counts.get(token, 0) + 1
     for term in seed_terms:
         for token in _label_tokens(term):
-            if token in _THEME_LABEL_STOPWORDS:
+            if token in _THEME_LABEL_STOPWORDS or token.isdigit():
                 continue
             counts[token] = counts.get(token, 0) + 2
     return [term for term, _ in sorted(counts.items(), key=lambda item: (-item[1], item[0]))]
@@ -1978,6 +2190,17 @@ def _finalize_theme_label(
         if tokens:
             return " / ".join(token.title() for token in tokens[:2])
     return "General theme"
+
+
+def _known_item_title_similarity(query: str, title: str) -> float:
+    normalized_query = " ".join(re.findall(r"[a-z0-9]+", query.lower()))
+    normalized_title = " ".join(re.findall(r"[a-z0-9]+", title.lower()))
+    if not normalized_query or not normalized_title:
+        return 0.0
+    query_tokens = {token for token in normalized_query.split() if len(token) >= 3 and not token.isdigit()}
+    title_tokens = {token for token in normalized_title.split() if len(token) >= 3 and not token.isdigit()}
+    overlap = len(query_tokens & title_tokens) / len(query_tokens) if query_tokens else 0.0
+    return max(SequenceMatcher(None, normalized_query, normalized_title).ratio(), overlap)
 
 
 def _top_terms_for_cluster(papers: list[dict[str, Any]]) -> list[str]:

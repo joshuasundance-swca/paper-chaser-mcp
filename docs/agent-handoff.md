@@ -87,6 +87,22 @@ This document is the current working handoff for the fork. It is intended to giv
   weak report-style or non-paper-like references instead of forcing a bad paper
   match, and `search_papers_match` can now recover exact-title misses through
   strict OpenAlex or Crossref confirmation before falling back to no-match.
+- Regulatory known-item recovery is now explicit too: `resolve_citation`
+  recognizes Federal Register and CFR-style references as non-paper primary
+  sources, abstains early, and steers agents toward `search_federal_register`,
+  `get_federal_register_document`, or `get_cfr_text` instead of paper search.
+- Federal Register retrieval is more resilient for agent workflows: historical
+  FR citations now parse out of longer citation strings, GovInfo granule
+  failures fall back to FederalRegister.gov HTML when metadata is available,
+  and `search_federal_register` now tolerates document-number and CFR-filter
+  combinations that previously surfaced brittle 400 errors.
+- Smart known-item routing no longer ends in a dead-end structured error when
+  citation repair abstains. The smart workflow now falls back to title/OpenAlex
+  recovery and then to a broader candidate set with explicit warnings so agents
+  can keep moving while still treating the result as unconfirmed.
+- Semantic Scholar citation/reference list normalization now treats top-level
+  `data: null` payloads as empty lists, preventing valid graph-expansion seeds
+  from failing when upstream reference data is missing instead of merely empty.
 - Brokered `search_papers` now suppresses obviously low-relevance Semantic
   Scholar hits for title-like known-item queries instead of returning garbage
   false positives.

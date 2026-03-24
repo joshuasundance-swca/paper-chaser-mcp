@@ -8,6 +8,7 @@ import re
 import time
 from datetime import datetime
 from typing import Any, Awaitable, Callable, TypeVar, cast
+from urllib.parse import urlparse
 
 from ...ecos_markdown import (
     EcosDocumentConversionError,
@@ -40,6 +41,7 @@ SPECIES_REPORT_COLUMNS = "/species@cn,sn,status,desc,listing_date"
 SPECIES_REPORT_SORT = "/species@cn asc;/species@sn asc"
 SPECIES_PROFILE_RE = re.compile(r"/ecp/species/(?P<species_id>\d+)")
 GOVINFO_FR_LINK_RE = re.compile(r"/link/fr/(?P<volume>\d+)/(?P<page>\d+)", re.IGNORECASE)
+GOVINFO_FR_ISSUE_PDF_RE = re.compile(r"/content/pkg/FR-\d{4}-\d{2}-\d{2}/pdf/FR-\d{4}-\d{2}-\d{2}\.pdf$", re.IGNORECASE)
 DATE_FORMATS = ("%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%d")
 _PayloadT = TypeVar("_PayloadT")
 logger = logging.getLogger("scholar-search-mcp")
@@ -748,8 +750,42 @@ class EcosClient:
 
         return await self._with_tls_fallback(document_client=True, operation=_request)
 
+    @staticmethod
+    def _govinfo_issue_link_warning(url: str) -> str | None:
+        parsed = urlparse(url)
+        normalized_host = parsed.netloc.lower()
+        normalized_path = parsed.path
+        if normalized_host not in {"www.govinfo.gov", "govinfo.gov"}:
+            return None
+        if GOVINFO_FR_LINK_RE.search(normalized_path):
+            return (
+                "This GovInfo Federal Register link is issue-level and may resolve to a full daily package PDF. "
+                "Prefer get_federal_register_document with a document number or FR citation, or use a "
+                "document-specific "
+                "GovInfo PDF/HTML URL instead of get_document_text_ecos."
+            )
+        if GOVINFO_FR_ISSUE_PDF_RE.search(normalized_path):
+            return (
+                "This GovInfo PDF appears to be a full Federal Register issue package rather than one document. "
+                "Prefer get_federal_register_document or a document-specific GovInfo PDF/HTML URL."
+            )
+        return None
+
     async def get_document_text(self, *, url: str) -> dict[str, Any]:
         absolute_url = self.resolve_url(url)
+        if warning := self._govinfo_issue_link_warning(absolute_url):
+            logger.info("ECOS document extraction rerouted away from GovInfo issue link: %s", absolute_url)
+            response = EcosDocumentTextResponse(
+                document=EcosDocument(
+                    title=guess_document_title(absolute_url),
+                    url=absolute_url,
+                ),
+                contentType=None,
+                extractionStatus="fetch_failed",
+                warnings=[warning],
+            )
+            return dump_jsonable(response)
+
         fetch_started = time.perf_counter()
         logger.info("ECOS document fetch started: %s", absolute_url)
         lookup = await execute_provider_call(
@@ -832,16 +868,27 @@ class EcosClient:
             len(content),
         )
         try:
-            markdown = await asyncio.wait_for(
-                asyncio.to_thread(
-                    self._markdown_converter.convert,
+            convert_method = getattr(self._markdown_converter, "convert_with_timeout", None)
+            if callable(convert_method):
+                markdown = await asyncio.to_thread(
+                    convert_method,
                     content=bytes(content),
                     source_url=final_url,
                     content_type=content_type,
+                    timeout_seconds=self.document_conversion_timeout,
                     filename=filename,
-                ),
-                timeout=self.document_conversion_timeout,
-            )
+                )
+            else:
+                markdown = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        self._markdown_converter.convert,
+                        content=bytes(content),
+                        source_url=final_url,
+                        content_type=content_type,
+                        filename=filename,
+                    ),
+                    timeout=self.document_conversion_timeout,
+                )
         except asyncio.TimeoutError:
             logger.warning(
                 "ECOS document conversion timed out after %d ms: %s",

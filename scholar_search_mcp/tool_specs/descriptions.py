@@ -113,9 +113,13 @@ TOOL_DESCRIPTIONS = {
         "tries title-style recovery, quote/snippet recovery, and sparse "
         "metadata search to return the most likely canonical paper plus "
         "alternatives, confidence, disagreements, and the fastest next step "
-        "for disambiguation. Report-style or non-paper-looking inputs prefer "
-        "abstention plus alternatives over forcing a weak canonical paper "
-        "match. Optional includeEnrichment=true enriches only the final "
+        "for disambiguation. Start here for broken bibliography lines before "
+        "trying title match or broad search. Report-style or non-paper-looking "
+        "inputs prefer abstention plus alternatives over forcing a weak "
+        "canonical paper match. If the citation looks regulatory, such as a "
+        "Federal Register or CFR reference, use search_federal_register, "
+        "get_federal_register_document, or get_cfr_text instead of treating it "
+        "as a paper. Optional includeEnrichment=true enriches only the final "
         "bestMatch.paper after resolution."
     ),
     "paper_autocomplete": ("Return paper title completions for a partial query string."),
@@ -318,7 +322,9 @@ TOOL_DESCRIPTIONS = {
         "structured Pull Reports filters instead of page scraping. "
         "matchMode=auto tries exact common/scientific-name matches first, then "
         "falls back to prefix matching. Returns compact species hits with ECOS "
-        "species ids and profile URLs."
+        "species ids and profile URLs. Best path for regulatory wildlife work: "
+        "search_species_ecos -> get_species_profile_ecos -> list_species_documents_ecos "
+        "-> get_document_text_ecos."
     ),
     "get_species_profile_ecos": (
         "Fetch one ECOS species dossier by species id or species URL using the "
@@ -337,19 +343,30 @@ TOOL_DESCRIPTIONS = {
         "content type, and convert PDF/HTML/text content to Markdown for "
         "downstream analysis. Returns extractionStatus plus warnings when a "
         "document is too large, unsupported, nearly empty, conversion-timed "
-        "out, or failed to fetch."
+        "out, or failed to fetch. Prefer the direct PDF or document URL returned "
+        "by list_species_documents_ecos when available; landing pages and "
+        "intermediate ECOS links are more brittle. Do not use this as the primary "
+        "path for GovInfo Federal Register issue links such as /link/fr/... or full "
+        "daily FR package PDFs; prefer get_federal_register_document for Register items."
     ),
     "search_federal_register": (
         "Search FederalRegister.gov for notices, rules, proposed rules, and "
         "presidential documents. Supports agency, document-type, publication-date, "
-        "document-number, and CFR-aware narrowing. Use this for discovery; follow "
-        "with get_federal_register_document for authoritative or fallback full text."
+        "document-number, and CFR-aware narrowing. Use this for discovery, "
+        "especially when you have a topic, FR citation, or CFR clue but not a "
+        "stable document number yet. If you already have an exact document number, "
+        "prefer get_federal_register_document for direct retrieval. Multi-filter "
+        "queries are supported, but the best low-round-trip path is usually query + "
+        "agency/date narrowing first, then exact document retrieval."
     ),
     "get_federal_register_document": (
         "Resolve one Federal Register document from a document number, FR citation, "
         "or GovInfo FR link. Prefers authoritative GovInfo granule content when it "
         "can resolve package/granule ids cleanly, and falls back to FederalRegister.gov "
-        "HTML when GovInfo is unavailable."
+        "HTML when GovInfo is unavailable. Best direct-retrieval path once you know "
+        "the document number. Historical FR citations can be less reliable than "
+        "modern document numbers, so use search_federal_register first when an exact "
+        "citation-only lookup is ambiguous."
     ),
     "get_cfr_text": (
         "Resolve CFR part or section text through GovInfo using title/part/section "
@@ -367,7 +384,12 @@ TOOL_DESCRIPTIONS = {
         "per-provider, or paid usage for one smart search, and includeEnrichment "
         "adds Crossref + Unpaywall metadata only to the final returned hits after "
         "ranking is complete. Returns compact smart hits, strategyMetadata, "
-        "agentHints, resourceUris, and a concrete next-step recommendation."
+        "agentHints, resourceUris, and a concrete next-step recommendation. Best "
+        "entry point for concept discovery, but treat it as a lead generator on "
+        "sparse cross-domain queries and inspect strategyMetadata, driftWarnings, "
+        "and the returned evidence before trusting borderline results. In known-item "
+        "mode, if exact paper recovery is weak, the tool now falls back to a broader "
+        "candidate set instead of ending in a dead-end configuration error."
     ),
     "ask_result_set": (
         "Grounded follow-up over a saved searchSessionId. Answer a question using "
@@ -375,14 +397,21 @@ TOOL_DESCRIPTIONS = {
         "answerMode supports qa, claim_check, and comparison, and latencyProfile "
         "lets callers choose faster deterministic synthesis when needed. "
         "comparison mode prefers a grounded structured comparison over flat "
-        "title-and-venue enumeration."
+        "title-and-venue enumeration and, when possible, separates directly aligned "
+        "papers from broader analog or context papers. Best used after search_papers_smart when "
+        "the question stays inside the same corpus. Treat the answer as grounded "
+        "synthesis, not as a replacement for reading the cited evidence snippets."
     ),
     "map_research_landscape": (
         "Cluster a saved searchSessionId into 3-5 themes, representative papers, "
         "gaps, disagreements, and suggested next searches. Use this when an "
         "agent needs a literature-review map rather than another flat result page. "
         "latencyProfile controls how much model work is spent on theme labeling, "
-        "and weak theme labels are sanitized before response emission."
+        "and weak theme labels are sanitized before response emission. Theme summaries "
+        "now prioritize representative paper anchors and dominant cluster terms over "
+        "token-only labels. Use this "
+        "to orient on a corpus, then verify important themes against the returned "
+        "representative papers rather than trusting labels alone."
     ),
     "expand_research_graph": (
         "Expand a saved search session or explicit paper seeds into a compact "
@@ -391,7 +420,10 @@ TOOL_DESCRIPTIONS = {
         "latencyProfile controls graph scoring cost without changing the explicit "
         "seed, direction, or hop inputs. Saved-session expansion keeps the "
         "original search intent in frontier scoring and filters weak off-topic "
-        "next-hop candidates more aggressively."
+        "next-hop candidates more aggressively. Best follow-on after search_papers_smart "
+        "or a known portable seed paper. If a seed is brokered and expansionIdStatus "
+        "is not_portable, resolve it through DOI or a Semantic Scholar-native lookup "
+        "before retrying graph expansion."
     ),
 }
 

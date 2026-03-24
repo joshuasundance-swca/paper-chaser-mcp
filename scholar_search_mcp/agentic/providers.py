@@ -37,6 +37,24 @@ COMMON_QUERY_WORDS = {
     "work",
     "works",
 }
+COMPARISON_STOPWORDS = COMMON_QUERY_WORDS | {
+    "about",
+    "across",
+    "agent",
+    "agents",
+    "compare",
+    "comparison",
+    "different",
+    "directly",
+    "effects",
+    "generic",
+    "more",
+    "near",
+    "paper",
+    "papers",
+    "query",
+    "which",
+}
 MAX_EMBED_TEXT_LENGTH = 6_000
 THEME_LABEL_STOPWORDS = COMMON_QUERY_WORDS | {
     "effect",
@@ -217,6 +235,112 @@ def _paper_terms(paper: dict[str, Any]) -> set[str]:
     if "long" in normalized_tokens and "term" in normalized_tokens:
         normalized_tokens.add("longterm")
     return normalized_tokens
+
+
+def _question_focus_terms(question: str) -> list[str]:
+    return [token for token in _tokenize(question) if token not in COMPARISON_STOPWORDS]
+
+
+def _paper_focus_cues(paper: dict[str, Any], *, question_terms: list[str]) -> list[str]:
+    terms = _paper_terms(paper)
+    cues = [term for term in question_terms if term in terms]
+    if cues:
+        return cues[:3]
+    title_tokens = [token for token in _tokenize(str(paper.get("title") or "")) if token not in THEME_LABEL_STOPWORDS]
+    return title_tokens[:3]
+
+
+def _paper_alignment_bucket(paper: dict[str, Any], *, question_terms: list[str]) -> str:
+    if not question_terms:
+        return "related"
+    terms = _paper_terms(paper)
+    overlap = sum(term in terms for term in question_terms)
+    overlap_ratio = overlap / len(question_terms)
+    if overlap_ratio >= 0.5 or overlap >= 3:
+        return "direct"
+    if overlap > 0:
+        return "analog"
+    return "broad"
+
+
+def _format_paper_anchor(paper: dict[str, Any]) -> str:
+    title = str(paper.get("title") or paper.get("paperId") or "Untitled")
+    venue = str(paper.get("venue") or "venue unknown")
+    year = paper.get("year")
+    year_text = str(year) if isinstance(year, int) else "year unknown"
+    return f"{title} ({venue}; {year_text})"
+
+
+def _deterministic_comparison_answer(question: str, evidence_papers: list[dict[str, Any]]) -> str:
+    question_terms = _question_focus_terms(question)
+    direct: list[str] = []
+    analog: list[str] = []
+    broad: list[str] = []
+    for paper in evidence_papers[:5]:
+        bucket = _paper_alignment_bucket(paper, question_terms=question_terms)
+        cues = _paper_focus_cues(paper, question_terms=question_terms)
+        cue_text = ", ".join(cues) if cues else "broader contextual overlap"
+        line = f"- {_format_paper_anchor(paper)}; strongest cues: {cue_text}."
+        if bucket == "direct":
+            direct.append(line)
+        elif bucket == "analog":
+            analog.append(line)
+        else:
+            broad.append(line)
+
+    sections = ["Comparison grounded in the saved result set."]
+    if direct:
+        sections.append("Most directly aligned papers:")
+        sections.extend(direct)
+    if analog:
+        sections.append("Related analog papers:")
+        sections.extend(analog)
+    if broad:
+        sections.append("Broader context papers:")
+        sections.extend(broad)
+
+    takeaway_parts: list[str] = []
+    if direct:
+        takeaway_parts.append(f"{len(direct)} paper(s) are directly aligned to the query focus")
+    if analog:
+        takeaway_parts.append(f"{len(analog)} provide analog evidence")
+    if broad:
+        takeaway_parts.append(f"{len(broad)} are only broader context")
+    if takeaway_parts:
+        sections.append("Takeaway: " + "; ".join(takeaway_parts) + ".")
+    return "\n".join(sections)
+
+
+def _deterministic_theme_summary(title: str, papers: list[dict[str, Any]]) -> str:
+    if not papers:
+        return f"{title}: no papers were available to summarize."
+
+    venues = sorted(
+        {str(paper["venue"]) for paper in papers if isinstance(paper.get("venue"), str) and paper.get("venue")}
+    )
+    years = sorted({paper["year"] for paper in papers if isinstance(paper.get("year"), int)})
+    representative_titles = [
+        str(paper.get("title") or "").strip() for paper in papers[:3] if str(paper.get("title") or "").strip()
+    ]
+    top_terms = _top_terms(
+        [
+            " ".join(part for part in [str(paper.get("title") or ""), str(paper.get("abstract") or "")] if part)
+            for paper in papers
+        ],
+        limit=5,
+    )
+    top_terms = [term for term in top_terms if term not in THEME_LABEL_STOPWORDS]
+
+    venue_text = f" across {', '.join(venues[:2])}" if venues else ""
+    if years:
+        year_text = f" spanning {years[0]}-{years[-1]}" if len(years) > 1 else f" in {years[0]}"
+    else:
+        year_text = ""
+    title_text = (
+        f" Representative papers include {', '.join(representative_titles[:2])}." if representative_titles else ""
+    )
+    term_text = f" The cluster centers on {', '.join(top_terms[:3])}." if top_terms else ""
+    return f"{title} groups {len(papers)} papers{venue_text}{year_text}.{title_text}{term_text}"
 
 
 def _deterministic_gap_insights(evidence_papers: list[dict[str, Any]]) -> list[str]:
@@ -575,38 +699,7 @@ class DeterministicProviderBundle(ModelProviderBundle):
         title: str,
         papers: list[dict[str, Any]],
     ) -> str:
-        if not papers:
-            return f"{title}: no papers were available to summarize."
-
-        venues = sorted(
-            [str(paper["venue"]) for paper in papers if isinstance(paper.get("venue"), str) and paper.get("venue")]
-        )
-        years = sorted([paper["year"] for paper in papers if isinstance(paper.get("year"), int)])
-        venue_text = f" across {', '.join(venues[:2])}" if venues else ""
-        if years:
-            year_text = f" spanning {years[0]}-{years[-1]}" if len(years) > 1 else f" in {years[0]}"
-        else:
-            year_text = ""
-        top_terms = _top_terms(
-            [
-                " ".join(
-                    part
-                    for part in [
-                        str(paper.get("title") or ""),
-                        str(paper.get("abstract") or ""),
-                    ]
-                    if part
-                )
-                for paper in papers
-            ],
-            limit=4,
-        )
-        term_text = f" Common threads include {', '.join(top_terms[:3])}." if top_terms else ""
-        return (
-            f"{title} groups {len(papers)} papers{venue_text}{year_text}. "
-            "These papers share overlapping terms in their titles and abstracts."
-            f"{term_text}"
-        )
+        return _deterministic_theme_summary(title, papers)
 
     def answer_question(
         self,
@@ -641,16 +734,8 @@ class DeterministicProviderBundle(ModelProviderBundle):
                 "confidence": "medium" if status == "supported" else "low",
             }
         if answer_mode == "comparison":
-            comparison_lines = [
-                (
-                    f"- {paper.get('title') or paper.get('paperId')}: "
-                    f"{paper.get('venue') or 'venue unknown'}, "
-                    f"{paper.get('year') or 'year unknown'}"
-                )
-                for paper in evidence_papers[:4]
-            ]
             return {
-                "answer": "Comparison grounded in the saved result set:\n" + "\n".join(comparison_lines),
+                "answer": _deterministic_comparison_answer(question, evidence_papers),
                 "unsupportedAsks": [],
                 "followUpQuestions": ["Which comparison dimension matters most: method, data, or recency?"],
                 "confidence": "medium",

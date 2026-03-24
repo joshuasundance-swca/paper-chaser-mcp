@@ -190,10 +190,26 @@ class SemanticScholarClient:
         if isinstance(response, dict):
             normalized = dict(response)
             raw_items = normalized.get("data")
+            if raw_items is None:
+                normalized["data"] = []
+                response = normalized
+                return PaperListResponse.model_validate(response)
             if isinstance(raw_items, list):
-                normalized["data"] = [
-                    item.get(nested_key, item) if isinstance(item, dict) else item for item in raw_items
-                ]
+                normalized_items: list[dict[str, Any]] = []
+                for item in raw_items:
+                    if not isinstance(item, dict):
+                        continue
+                    nested_paper = item.get(nested_key)
+                    if isinstance(nested_paper, dict):
+                        paper_payload = dict(nested_paper)
+                    elif "paperId" in item or "title" in item:
+                        paper_payload = dict(item)
+                    else:
+                        continue
+                    if paper_payload.get("authors") is None:
+                        paper_payload["authors"] = []
+                    normalized_items.append(paper_payload)
+                normalized["data"] = normalized_items
             response = normalized
         return PaperListResponse.model_validate(response)
 

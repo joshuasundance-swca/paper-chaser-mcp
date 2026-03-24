@@ -67,6 +67,28 @@ def build_agent_hints(
         best_match = result.get("bestMatch")
         confidence = str(result.get("resolutionConfidence") or "low")
         alternatives = result.get("alternatives") or []
+        extracted_fields = result.get("extractedFields") or {}
+        if (
+            not best_match
+            and isinstance(extracted_fields, dict)
+            and extracted_fields.get("looksLikeRegulatory") is True
+        ):
+            return AgentHints(
+                nextToolCandidates=[
+                    "search_federal_register",
+                    "get_federal_register_document",
+                    "get_cfr_text",
+                ],
+                whyThisNextStep=(
+                    "The input looks like a regulatory primary source, so the next move is Federal Register or CFR "
+                    "retrieval rather than paper matching."
+                ),
+                safeRetry=(
+                    "Retry with an FR citation, Federal Register document number, GovInfo FR link, or explicit CFR "
+                    "title/part details."
+                ),
+                warnings=warnings + ["This reference looks regulatory rather than scholarly."],
+            )
         if isinstance(best_match, dict) and isinstance(best_match.get("paper"), dict):
             return AgentHints(
                 nextToolCandidates=[
@@ -471,6 +493,20 @@ def build_clarification(
             venue_hint=arguments.get("venueHint"),
             doi_hint=arguments.get("doiHint"),
         )
+        if parsed.looks_like_regulatory and not result.get("bestMatch"):
+            return Clarification(
+                reason="likely_regulatory_primary_source",
+                question=(
+                    "This looks like a Federal Register or CFR reference. Do you want discovery, exact FR retrieval, "
+                    "or codified CFR text?"
+                ),
+                options=[
+                    "search_federal_register",
+                    "get_federal_register_document",
+                    "get_cfr_text",
+                ],
+                canProceedWithoutAnswer=True,
+            )
         if parsed.looks_like_non_paper and not result.get("bestMatch"):
             return Clarification(
                 reason="likely_non_paper_output",

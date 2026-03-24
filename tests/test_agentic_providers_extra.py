@@ -173,6 +173,7 @@ def test_provider_helpers_and_deterministic_bundle_paths() -> None:
     assert "no papers were available" in empty_summary
     assert "Nature, Science" in populated_summary
     assert "2022-2024" in populated_summary
+    assert "Representative papers include A, B." in populated_summary
 
     no_evidence = bundle.answer_question(
         question="What is the strongest result?",
@@ -223,6 +224,7 @@ def test_provider_helpers_and_deterministic_bundle_paths() -> None:
     assert claim_check["confidence"] == "medium"
     assert "supported" in claim_check["answer"]
     assert comparison["answer"].startswith("Comparison grounded")
+    assert "Takeaway:" in comparison["answer"]
     assert "Paper A" in qa["answer"]
     assert gap_qa["confidence"] == "medium"
     assert "main recurring knowledge gaps" in gap_qa["answer"]

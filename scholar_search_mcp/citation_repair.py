@@ -27,6 +27,10 @@ YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
 PAGES_RE = re.compile(r"\b\d{1,4}\s*[-:]\s*\d{1,4}\b")
 QUOTED_RE = re.compile(r'["“”](.+?)["“”]')
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9'/-]*")
+REGULATORY_CITATION_RE = re.compile(
+    r"\b\d+\s*(?:F\.?\s*R\.?|FED(?:ERAL)?\.?\s+REG(?:ISTER)?\.?)\s*\d+\b|\b\d+\s+CFR\b",
+    re.IGNORECASE,
+)
 VENUE_HINTS = (
     "annual review",
     "annual review of ecology",
@@ -66,6 +70,16 @@ NON_PAPER_TERMS = {
     "thesis",
     "whitepaper",
 }
+REGULATORY_TERMS = {
+    "federal register",
+    "fed. reg",
+    "cfr",
+    "code of federal regulations",
+    "final rule",
+    "proposed rule",
+    "rulemaking",
+    "notice of",
+}
 GENERIC_TITLE_WORDS = {
     "and",
     "the",
@@ -104,6 +118,7 @@ class ParsedCitation:
     issue: str | None = None
     pages: str | None = None
     looks_like_non_paper: bool = False
+    looks_like_regulatory: bool = False
 
 
 @dataclass(slots=True)
@@ -201,6 +216,9 @@ def parse_citation(
     pages = _extract_pages(normalized)
     volume, issue = _extract_volume_issue(normalized)
     lowered = normalized.lower()
+    looks_like_regulatory = bool(REGULATORY_CITATION_RE.search(normalized)) or any(
+        term in lowered for term in REGULATORY_TERMS
+    )
     return ParsedCitation(
         original_text=citation,
         normalized_text=normalized,
@@ -214,7 +232,8 @@ def parse_citation(
         volume=volume,
         issue=issue,
         pages=pages,
-        looks_like_non_paper=any(term in lowered for term in NON_PAPER_TERMS),
+        looks_like_non_paper=looks_like_regulatory or any(term in lowered for term in NON_PAPER_TERMS),
+        looks_like_regulatory=looks_like_regulatory,
     )
 
 
@@ -284,6 +303,13 @@ async def resolve_citation(
     )
     candidate_map: dict[str, RankedCitationCandidate] = {}
     stage_order: list[str] = []
+
+    if parsed.looks_like_regulatory and not parsed.identifier:
+        return _serialize_citation_response(
+            citation=citation,
+            parsed=parsed,
+            candidates=[],
+        )
 
     if parsed.identifier:
         identifier_candidate = await _resolve_identifier_candidate(
@@ -584,6 +610,7 @@ def _parsed_fields_payload(parsed: ParsedCitation) -> dict[str, Any]:
         "issue": parsed.issue,
         "pages": parsed.pages,
         "looksLikeNonPaper": parsed.looks_like_non_paper,
+        "looksLikeRegulatory": parsed.looks_like_regulatory,
     }
 
 
@@ -591,7 +618,12 @@ def _inferred_fields_payload(
     parsed: ParsedCitation,
     candidates: list[RankedCitationCandidate],
 ) -> dict[str, Any]:
-    likely_output_type = "non_paper_candidate" if parsed.looks_like_non_paper else "paper"
+    if parsed.looks_like_regulatory:
+        likely_output_type = "regulatory_primary_source"
+    elif parsed.looks_like_non_paper:
+        likely_output_type = "non_paper_candidate"
+    else:
+        likely_output_type = "paper"
     disambiguation_fields: list[str] = []
     if candidates:
         best = candidates[0]
@@ -615,6 +647,12 @@ def _resolution_message(
     confidence: str,
 ) -> str:
     if not candidates:
+        if parsed.looks_like_regulatory:
+            return (
+                "This input looks like a Federal Register or CFR citation rather than a paper. "
+                "Use search_federal_register for discovery, get_federal_register_document for one notice or rule, "
+                "or get_cfr_text for codified text."
+            )
         if parsed.looks_like_non_paper:
             return (
                 "No confident paper match was found. This input may refer to a "
@@ -626,6 +664,11 @@ def _resolution_message(
             "year, DOI fragment, quote fragment, or venue hint."
         )
     best = candidates[0]
+    if parsed.looks_like_regulatory and confidence != "high":
+        return (
+            "This input looks regulatory rather than paper-like. Prefer the Federal Register or CFR tools over "
+            "forcing a scholarly citation match."
+        )
     if parsed.looks_like_non_paper and confidence != "high":
         return (
             "This citation looks report-like or otherwise outside the indexed paper surface. "

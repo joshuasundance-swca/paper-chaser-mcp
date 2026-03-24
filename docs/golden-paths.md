@@ -33,6 +33,10 @@ result-set paths are exercised by the agentic smoke test in
 3. Save the returned `searchSessionId`.
 4. Use `ask_result_set` for grounded QA, `map_research_landscape` for themes,
    and `expand_research_graph` for compact citation/reference/author expansion.
+5. If `mode="known_item"` does not confirm one exact anchor, the smart workflow
+  now returns a broader candidate set with warnings instead of a dead-end
+  error; verify title, year, and venue before treating that fallback set as
+  canonical.
 
 **Example request**: "Map the main research themes in retrieval-augmented generation for coding agents"
 
@@ -51,6 +55,7 @@ search_papers_smart(query="retrieval-augmented generation for coding agents", li
 - `strategyMetadata` explains what the server tried instead of acting like a black box.
 - `searchSessionId` is enough to continue without rerunning the whole discovery step.
 - Grounded follow-up answers cite papers from the saved result set instead of guessing.
+- Known-item smart search degrades into a reviewable candidate set rather than a hard dead end when exact recovery is weak.
 
 ### 2. Quick literature discovery
 
@@ -159,6 +164,10 @@ search_papers_match(query="Attention Is All You Need")
 6. When `resolve_citation` sees a report-style or non-paper-looking reference,
   prefer abstention plus alternatives over forcing a weak canonical paper
   match.
+7. When `resolve_citation` sees a clearly regulatory reference such as a
+  Federal Register or CFR citation, switch to `search_federal_register`,
+  `get_federal_register_document`, or `get_cfr_text` instead of continuing to
+  force scholarly-paper recovery.
 
 **Example requests and tool choices**:
 - "Find the paper called something like 'Scaling Laws for Neural Language Models'"
@@ -174,6 +183,7 @@ search_papers_match(query="Attention Is All You Need")
 
 - Disambiguation stays minimal.
 - Citation repair returns alternatives and uncertainty instead of forcing a bad match.
+- Regulatory citations are redirected into the Federal Register / CFR workflow instead of being treated as papers.
 - Exact-title recovery can escalate beyond Semantic Scholar when the paper is
   real but missing from Semantic Scholar title-match results.
 - DOI, URL, and identifier-based lookups feel low friction.
@@ -219,7 +229,9 @@ search_authors(query="Yoshua Bengio", limit=5)
   `get_federal_register_document` to anchor the Federal Register notice or
   rule, then use `get_cfr_text` for the affected CFR part or section. Use
   `search_federal_register` when the ECOS clue is still too broad and you need
-  agency/date/type narrowing before retrieval.
+  agency/date/type narrowing before retrieval. Direct document numbers remain
+  the strongest anchor, but FR citation strings now retry broader Federal
+  Register discovery before giving up.
 - **Quote or snippet validation**: use `search_snippets` only when title or
   keyword search is weak, or when `resolve_citation` suggests a quote fragment
   is the strongest remaining clue.

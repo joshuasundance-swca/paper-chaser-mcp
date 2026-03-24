@@ -16,7 +16,10 @@ from ...transport import httpx, maybe_close_async_resource
 
 GOVINFO_API_BASE = "https://api.govinfo.gov"
 GOVINFO_FR_LINK_RE = re.compile(r"/link/fr/(?P<volume>\d+)/(?P<page>\d+)", re.IGNORECASE)
-FR_CITATION_RE = re.compile(r"^(?P<volume>\d+)\s*F\.?R\.?\s*(?P<page>\d+)$", re.IGNORECASE)
+FR_CITATION_RE = re.compile(
+    r"(?P<volume>\d+)\s*(?:F\.?\s*R\.?|FED(?:ERAL)?\.?\s+REG(?:ISTER)?\.?)\s*(?P<page>\d+)",
+    re.IGNORECASE,
+)
 logger = logging.getLogger("scholar-search-mcp")
 
 
@@ -143,11 +146,63 @@ class GovInfoClient:
         link_match = GOVINFO_FR_LINK_RE.search(normalized)
         if link_match:
             return {"citation": f"{link_match.group('volume')} FR {link_match.group('page')}"}
-        citation_match = FR_CITATION_RE.match(normalized)
+        citation_match = FR_CITATION_RE.search(normalized)
         if citation_match:
             return {"citation": f"{citation_match.group('volume')} FR {citation_match.group('page')}"}
         if re.fullmatch(r"\d{4}-\d{4,6}", normalized):
             return {"documentNumber": normalized}
+        return None
+
+    async def _find_federal_register_document(
+        self,
+        *,
+        parsed: dict[str, str],
+        federal_register_client: Any | None,
+    ) -> dict[str, Any] | None:
+        if federal_register_client is None:
+            return None
+        document_number = parsed.get("documentNumber")
+        if document_number:
+            return await federal_register_client.get_document(document_number)
+        citation = parsed.get("citation")
+        if not citation:
+            return None
+        search_queries = [citation]
+        citation_match = FR_CITATION_RE.search(citation)
+        if citation_match:
+            volume = citation_match.group("volume")
+            page = citation_match.group("page")
+            search_queries.extend(
+                [
+                    f"{volume} {page}",
+                    page,
+                ]
+            )
+
+        seen_document_numbers: set[str] = set()
+        fallback_candidates: list[dict[str, Any]] = []
+        for query_text in search_queries:
+            search_payload = None
+            try:
+                search_payload = await federal_register_client.search_documents(query=query_text, limit=5)
+            except Exception as exc:
+                logger.debug("Federal Register search fallback failed for %s: %s", query_text, exc)
+            if not isinstance(search_payload, dict):
+                continue
+            for candidate in search_payload.get("data") or []:
+                if not isinstance(candidate, dict):
+                    continue
+                normalized_document_number = str(candidate.get("documentNumber") or "").strip()
+                if normalized_document_number and normalized_document_number in seen_document_numbers:
+                    continue
+                if normalized_document_number:
+                    seen_document_numbers.add(normalized_document_number)
+                if str(candidate.get("citation") or "").strip().lower() == citation.lower():
+                    return candidate
+                fallback_candidates.append(candidate)
+        for candidate in fallback_candidates:
+            if isinstance(candidate, dict):
+                return candidate
         return None
 
     async def _govinfo_search(self, query: str) -> dict[str, Any]:
@@ -279,16 +334,27 @@ class GovInfoClient:
                 return extracted_xml, []
 
         try:
-            markdown = await asyncio.wait_for(
-                asyncio.to_thread(
-                    self._markdown_converter.convert,
+            convert_method = getattr(self._markdown_converter, "convert_with_timeout", None)
+            if callable(convert_method):
+                markdown = await asyncio.to_thread(
+                    convert_method,
                     content=content,
                     source_url=source_url,
                     content_type=content_type,
+                    timeout_seconds=self.document_conversion_timeout,
                     filename=filename,
-                ),
-                timeout=self.document_conversion_timeout,
-            )
+                )
+            else:
+                markdown = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        self._markdown_converter.convert,
+                        content=content,
+                        source_url=source_url,
+                        content_type=content_type,
+                        filename=filename,
+                    ),
+                    timeout=self.document_conversion_timeout,
+                )
         except asyncio.TimeoutError:
             logger.warning(
                 "GovInfo document conversion timed out after %.3f s: %s",
@@ -309,8 +375,10 @@ class GovInfoClient:
             raise ValueError("identifier must be an FR document number, FR citation, or GovInfo FR link.")
 
         document_payload: dict[str, Any] | None = None
-        if parsed.get("documentNumber") and federal_register_client is not None:
-            document_payload = await federal_register_client.get_document(parsed["documentNumber"])
+        document_payload = await self._find_federal_register_document(
+            parsed=parsed,
+            federal_register_client=federal_register_client,
+        )
 
         package_id = None
         granule_id = None
@@ -332,37 +400,58 @@ class GovInfoClient:
 
         normalized_document = FederalRegisterDocument.model_validate(document_payload or {})
         if package_id and granule_id:
-            summary = await self._request_json(
-                "GET",
-                f"/packages/{package_id}/granules/{granule_id}/summary",
-            )
-            download: dict[str, Any] = summary["download"] if isinstance(summary.get("download"), dict) else {}
-            for key, source in (("xmlLink", "govinfo_xml"), ("txtLink", "govinfo_html"), ("pdfLink", "govinfo_pdf")):
-                url = download.get(key)
-                if not isinstance(url, str) or not url:
-                    continue
-                content, content_type = await self._request_content(url)
-                markdown, warnings = await self._convert_download_to_markdown(
-                    content=content,
-                    source_url=url,
-                    content_type=content_type,
-                    filename=f"{granule_id}.{key.removesuffix('Link').lower()}",
+            try:
+                summary = await self._request_json(
+                    "GET",
+                    f"/packages/{package_id}/granules/{granule_id}/summary",
                 )
-                response = FederalRegisterDocumentTextResponse(
-                    document=FederalRegisterDocument.model_validate(
-                        {
-                            **normalized_document.model_dump(by_alias=True),
-                            "govInfoPackageId": package_id,
-                            "govInfoGranuleId": granule_id,
-                        }
-                    ),
-                    markdown=markdown,
-                    contentSource=source,
-                    contentType=content_type,
-                    authoritativeUrl=url,
-                    warnings=warnings,
+                download: dict[str, Any] = summary["download"] if isinstance(summary.get("download"), dict) else {}
+                for key, source in (
+                    ("xmlLink", "govinfo_xml"),
+                    ("txtLink", "govinfo_html"),
+                    ("pdfLink", "govinfo_pdf"),
+                ):
+                    url = download.get(key)
+                    if not isinstance(url, str) or not url:
+                        continue
+                    content, content_type = await self._request_content(url)
+                    markdown, warnings = await self._convert_download_to_markdown(
+                        content=content,
+                        source_url=url,
+                        content_type=content_type,
+                        filename=f"{granule_id}.{key.removesuffix('Link').lower()}",
+                    )
+                    response = FederalRegisterDocumentTextResponse(
+                        document=FederalRegisterDocument.model_validate(
+                            {
+                                **normalized_document.model_dump(by_alias=True),
+                                "govInfoPackageId": package_id,
+                                "govInfoGranuleId": granule_id,
+                            }
+                        ),
+                        markdown=markdown,
+                        contentSource=source,
+                        contentType=content_type,
+                        authoritativeUrl=url,
+                        warnings=warnings,
+                    )
+                    return dump_jsonable(response)
+            except (GovInfoApiError, httpx.HTTPError, ValueError) as error:
+                logger.warning(
+                    "GovInfo FR authoritative retrieval failed for %s (%s/%s): %s",
+                    identifier,
+                    package_id,
+                    granule_id,
+                    error,
                 )
-                return dump_jsonable(response)
+                if federal_register_client is not None and (
+                    document_payload is None or not isinstance(document_payload.get("bodyHtmlUrl"), str)
+                ):
+                    document_payload = await self._find_federal_register_document(
+                        parsed=parsed,
+                        federal_register_client=federal_register_client,
+                    )
+                    normalized_document = FederalRegisterDocument.model_validate(document_payload or {})
 
         if federal_register_client is None or document_payload is None:
             raise ValueError(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .document_markdown import (
     DocumentConversionError,
+    DocumentConversionTimeoutError,
     DocumentMarkdownConverter,
     UnsupportedDocumentTypeError,
 )
@@ -42,5 +43,29 @@ class EcosMarkdownConverter(DocumentMarkdownConverter):
             )
         except UnsupportedDocumentTypeError as exc:
             raise EcosUnsupportedDocumentTypeError(str(exc)) from exc
+        except DocumentConversionError as exc:
+            raise EcosDocumentConversionError(str(exc)) from exc
+
+    def convert_with_timeout(
+        self,
+        *,
+        content: bytes,
+        source_url: str,
+        content_type: str | None,
+        timeout_seconds: float,
+        filename: str | None = None,
+    ) -> str:
+        try:
+            return super().convert_with_timeout(
+                content=content,
+                source_url=source_url,
+                content_type=content_type,
+                timeout_seconds=timeout_seconds,
+                filename=filename,
+            )
+        except UnsupportedDocumentTypeError as exc:
+            raise EcosUnsupportedDocumentTypeError(str(exc)) from exc
+        except DocumentConversionTimeoutError as exc:
+            raise EcosDocumentConversionError(str(exc)) from exc
         except DocumentConversionError as exc:
             raise EcosDocumentConversionError(str(exc)) from exc

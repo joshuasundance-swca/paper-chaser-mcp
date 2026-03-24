@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from scholar_search_mcp.clients.ecos import EcosClient
-from scholar_search_mcp.ecos_markdown import EcosMarkdownConverter
+from scholar_search_mcp.ecos_markdown import EcosDocumentConversionError, EcosMarkdownConverter
 from scholar_search_mcp.provider_runtime import ProviderDiagnosticsRegistry
 
 CALIFORNIA_LEAST_TERN_PROFILE = {
@@ -454,6 +454,69 @@ async def test_ecos_get_document_text_times_out_conversion(
     assert payload["extractionStatus"] == "conversion_timed_out"
     assert payload["markdown"] is None
     assert payload["warnings"]
+
+
+@pytest.mark.asyncio
+async def test_ecos_get_document_text_prefers_hard_timeout_converter_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = EcosClient(document_conversion_timeout=0.01)
+
+    async def fake_download(url: str) -> dict:
+        return {
+            "finalUrl": url,
+            "contentType": "application/pdf",
+            "filename": "slow.pdf",
+            "content": b"%PDF-1.4 slow",
+            "status": "ok",
+        }
+
+    class RecordingConverter:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def convert(self, **kwargs: Any) -> str:
+            raise AssertionError("convert() should not be used when convert_with_timeout() is available")
+
+        def convert_with_timeout(self, **kwargs: Any) -> str:
+            self.calls.append(dict(kwargs))
+            raise EcosDocumentConversionError(
+                "Document conversion exceeded the configured timeout before Markdown extraction finished."
+            )
+
+    monkeypatch.setattr(client, "_download_document", fake_download)
+    converter = RecordingConverter()
+    client._markdown_converter = cast(Any, converter)
+
+    payload = await client.get_document_text(url="https://example.com/slow.pdf")
+
+    assert payload["extractionStatus"] == "fetch_failed"
+    assert converter.calls
+    assert converter.calls[0]["timeout_seconds"] == 0.01
+
+
+@pytest.mark.asyncio
+async def test_ecos_get_document_text_rejects_govinfo_federal_register_issue_links_early() -> None:
+    client = EcosClient()
+
+    payload = await client.get_document_text(url="https://www.govinfo.gov/link/fr/54/20598?link-type=pdf")
+
+    assert payload["extractionStatus"] == "fetch_failed"
+    assert payload["warnings"]
+    assert "get_federal_register_document" in payload["warnings"][0]
+
+
+@pytest.mark.asyncio
+async def test_ecos_get_document_text_rejects_govinfo_full_issue_pdf_early() -> None:
+    client = EcosClient()
+
+    payload = await client.get_document_text(
+        url="https://www.govinfo.gov/content/pkg/FR-2024-06-06/pdf/FR-2024-06-06.pdf"
+    )
+
+    assert payload["extractionStatus"] == "fetch_failed"
+    assert payload["warnings"]
+    assert "full Federal Register issue package" in payload["warnings"][0]
 
 
 @pytest.mark.asyncio

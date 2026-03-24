@@ -11,7 +11,11 @@ from scholar_search_mcp.agentic import (
     WorkspaceRegistry,
     resolve_provider_bundle,
 )
-from scholar_search_mcp.agentic.graphs import _graph_frontier_scores
+from scholar_search_mcp.agentic.graphs import (
+    _build_grounded_comparison_answer,
+    _finalize_theme_label,
+    _graph_frontier_scores,
+)
 from scholar_search_mcp.agentic.models import PlannerDecision
 from scholar_search_mcp.agentic.planner import (
     classify_query,
@@ -1569,6 +1573,150 @@ async def test_expand_research_graph_prefers_frontier_items_aligned_to_original_
     assert "grandchild-1" in frontier_ids
     assert any(call[0] == "get_paper_citations" and call[1]["paper_id"] == "on-topic" for call in semantic.calls)
     assert all(call[1]["paper_id"] != "off-topic" for call in semantic.calls if call[0] == "get_paper_citations")
+
+
+@pytest.mark.asyncio
+async def test_search_papers_smart_known_item_falls_back_to_title_match_instead_of_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    registry, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
+
+    async def fake_resolve_citation(**kwargs: object) -> dict[str, object]:
+        del kwargs
+        return {"bestMatch": None, "alternatives": [], "resolutionConfidence": "low"}
+
+    async def fake_search_papers_match(**kwargs: object) -> dict[str, object]:
+        semantic.calls.append(("search_papers_match", dict(kwargs)))
+        return {
+            "paperId": "match-1",
+            "title": "Recovered title match",
+            "year": 2023,
+            "venue": "Journal of Tests",
+            "matchStrategy": "fuzzy_search",
+        }
+
+    monkeypatch.setattr("scholar_search_mcp.agentic.graphs.resolve_citation", fake_resolve_citation)
+    semantic.search_papers_match = fake_search_papers_match  # type: ignore[method-assign]
+
+    smart = await runtime.search_papers_smart(
+        query="Dooling Popper traffic noise road construction birds 2016",
+        limit=5,
+        mode="known_item",
+        latency_profile="fast",
+    )
+
+    assert smart["results"]
+    assert smart["results"][0]["paper"]["paperId"] == "match-1"
+    assert any("title-style recovery" in warning for warning in smart["strategyMetadata"]["driftWarnings"])
+
+
+@pytest.mark.asyncio
+async def test_search_papers_smart_known_item_uses_openalex_autocomplete_when_other_recovery_misses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    registry, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
+
+    async def fake_resolve_citation(**kwargs: object) -> dict[str, object]:
+        del kwargs
+        return {"bestMatch": None, "alternatives": [], "resolutionConfidence": "low"}
+
+    async def fake_search_papers_match(**kwargs: object) -> dict[str, object]:
+        semantic.calls.append(("search_papers_match", dict(kwargs)))
+        return {"matchFound": False}
+
+    async def fake_openalex_autocomplete(**kwargs: object) -> dict[str, object]:
+        openalex.calls.append(("paper_autocomplete", dict(kwargs)))
+        return {
+            "matches": [
+                {
+                    "id": "W123",
+                    "displayName": (
+                        "Assessing the influence of rocket launch and landing noise on threatened and endangered "
+                        "species at Vandenberg Space Force Base"
+                    ),
+                }
+            ]
+        }
+
+    async def fake_openalex_details(**kwargs: object) -> dict[str, object]:
+        openalex.calls.append(("get_paper_details", dict(kwargs)))
+        return {
+            "paperId": "W123",
+            "title": (
+                "Assessing the influence of rocket launch and landing noise on threatened and endangered species at "
+                "Vandenberg Space Force Base"
+            ),
+            "source": "openalex",
+            "recommendedExpansionId": "10.1121/10.0018203",
+            "expansionIdStatus": "portable",
+        }
+
+    monkeypatch.setattr("scholar_search_mcp.agentic.graphs.resolve_citation", fake_resolve_citation)
+    semantic.search_papers_match = fake_search_papers_match  # type: ignore[method-assign]
+    openalex.paper_autocomplete = fake_openalex_autocomplete  # type: ignore[method-assign]
+    openalex.get_paper_details = fake_openalex_details  # type: ignore[method-assign]
+
+    smart = await runtime.search_papers_smart(
+        query=(
+            "Assessing the influence of rocket launch and landing noise on threatened and endangered species at "
+            "Vandenberg Space Force Base"
+        ),
+        limit=5,
+        mode="known_item",
+        latency_profile="fast",
+    )
+
+    assert smart["results"]
+    assert smart["results"][0]["paper"]["paperId"] == "W123"
+    assert smart["results"][0]["retrievedBy"] == ["openalex_autocomplete"]
+
+
+def test_grounded_comparison_answer_filters_question_echo_and_year_tokens() -> None:
+    answer = _build_grounded_comparison_answer(
+        question="Which results are directly about rocket launch noise or wildlife effects near launch sites?",
+        evidence_papers=[
+            {
+                "title": "Acoustic monitoring near launch pads",
+                "abstract": "Acoustic monitoring quantified impulsive exposure near launch facilities.",
+                "year": 2024,
+                "venue": "Journal A",
+            },
+            {
+                "title": "Acoustic monitoring for endangered species response",
+                "abstract": "Acoustic monitoring linked species observations to disturbance conditions.",
+                "year": 2024,
+                "venue": "Journal B",
+            },
+            {
+                "title": "Acoustic monitoring and habitat response",
+                "abstract": "Acoustic monitoring supported repeated habitat-response surveys.",
+                "year": 2024,
+                "venue": "Journal C",
+            },
+        ],
+    )
+
+    assert "Acoustic" in answer
+    assert "Shared ground: these papers converge on Noise" not in answer
+    assert "Shared ground: these papers converge on 2024" not in answer
+
+
+def test_finalize_theme_label_replaces_article_noise_label_with_derived_terms() -> None:
+    label = _finalize_theme_label(
+        raw_label="The / Noise",
+        seed_terms=["rocket launch", "species response"],
+        papers=[
+            {"title": "Launch acoustics and species monitoring", "abstract": "Acoustic monitoring near launch pads."},
+            {"title": "Species response to launch acoustics", "abstract": "Monitoring species response to acoustics."},
+        ],
+    )
+
+    assert label != "The / Noise"
+    assert "Launch" in label or "Acoustics" in label or "Species" in label
 
 
 @pytest.mark.asyncio

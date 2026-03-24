@@ -120,6 +120,63 @@ async def test_get_recommendations_uses_recommendations_base_url(
 
 
 @pytest.mark.asyncio
+async def test_semantic_scholar_nested_paper_lists_skip_empty_wrappers_and_normalize_null_authors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    class NestedPaperAsyncClient:
+        async def request(self, **kwargs):
+            return DummyResponse(
+                status_code=200,
+                payload={
+                    "data": [
+                        {"citingPaper": {"paperId": "child-1", "title": "Child paper", "authors": None}},
+                        {"citingPaper": None},
+                    ]
+                },
+            )
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: NestedPaperAsyncClient())
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    client = server.SemanticScholarClient()
+    payload = await client.get_paper_citations("seed-paper")
+
+    assert len(payload["data"]) == 1
+    assert payload["data"][0]["paperId"] == "child-1"
+    assert payload["data"][0]["title"] == "Child paper"
+    assert payload["data"][0]["authors"] == []
+
+
+@pytest.mark.asyncio
+async def test_semantic_scholar_nested_paper_lists_treat_none_data_as_empty_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    class EmptyNestedPaperAsyncClient:
+        async def request(self, **kwargs):
+            return DummyResponse(status_code=200, payload={"data": None})
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: EmptyNestedPaperAsyncClient())
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    client = server.SemanticScholarClient()
+    payload = await client.get_paper_references("seed-paper")
+
+    assert payload["data"] == []
+
+
+@pytest.mark.asyncio
 async def test_semantic_scholar_client_reuses_lazy_async_client_and_closes_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
