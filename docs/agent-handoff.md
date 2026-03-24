@@ -52,6 +52,11 @@ This document is the current working handoff for the fork. It is intended to giv
 - OpenAlex now has an explicit provider-specific MCP surface for OpenAlex-native
   search, cursor pagination, DOI/OpenAlex-ID lookup, citation/reference
   traversal, and author pivots without changing the default broker path.
+- The repo now also exposes a regulation-oriented raw-tool slice: keyless
+  `search_federal_register` discovery, GovInfo-backed
+  `get_federal_register_document`, GovInfo-only `get_cfr_text`, and ECOS
+  `frCitation` enrichment for GovInfo-linked Federal Register items so species
+  dossiers can hand off directly into regulatory primary sources.
 - `docs/golden-paths.md` records the primary personas, golden paths, concrete example
   flows, and success signals for future agent work.
 - `.github/copilot-instructions.md` now gives GitHub-native guidance for Copilot
@@ -142,6 +147,10 @@ This document is the current working handoff for the fork. It is intended to giv
 - `scholar_search_mcp/agentic/` contains the additive smart-tool runtime:
   config, models, provider adapters, planner, retrieval, ranking, workspace,
   and LangGraph scaffolding.
+- `scholar_search_mcp/clients/federal_register/` contains the keyless
+  FederalRegister.gov discovery client.
+- `scholar_search_mcp/clients/govinfo/` contains the GovInfo retrieval client
+  for authoritative Federal Register and CFR text.
 - `scholar_search_mcp/deployment.py` wraps the HTTP app with `/healthz`,
   optional backend-token auth, and optional Origin allowlisting for hosted
   deployments.
@@ -151,7 +160,8 @@ This document is the current working handoff for the fork. It is intended to giv
 - `scholar_search_mcp/deployment_utils.py` resolves smoke-test endpoints from
   Azure deployment outputs or an explicit environment override.
 - `scholar_search_mcp/clients/` contains provider clients for Semantic Scholar,
-  arXiv, CORE, OpenAlex, SerpApi, Crossref, Unpaywall, and ECOS.
+  arXiv, CORE, OpenAlex, SerpApi, Crossref, Unpaywall, ECOS, Federal Register,
+  and GovInfo.
 - `scholar_search_mcp/models/common.py` contains shared Pydantic models including `Paper` (with `scholarResultId`).
 - `scholar_search_mcp/parsing.py`, `scholar_search_mcp/constants.py`, and `scholar_search_mcp/transport.py` hold shared helper code and compatibility imports.
 - `scripts/validate_deployment.py` validates the Azure/Docker deployment path.

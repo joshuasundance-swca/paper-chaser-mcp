@@ -45,6 +45,9 @@ def test_core_and_full_tool_assets_exist_and_use_streamable_http() -> None:
     assert "get_paper_metadata_crossref" in full["tools"]
     assert "get_paper_open_access_unpaywall" in full["tools"]
     assert "enrich_paper" in full["tools"]
+    assert "search_federal_register" in full["tools"]
+    assert "get_federal_register_document" in full["tools"]
+    assert "get_cfr_text" in full["tools"]
     assert "ask_result_set" in full["tools"]
     assert "map_research_landscape" in full["tools"]
     assert "expand_research_graph" in full["tools"]
@@ -56,4 +59,5 @@ def test_microsoft_plugin_sample_points_at_full_tool_asset() -> None:
     assert sample["tool_package"] == "mcp-tools.full.json"
     assert len(sample["conversation_starters"]) >= 5
     assert any("citation" in starter.lower() for starter in sample["conversation_starters"])
+    assert any("Federal Register" in starter for starter in sample["conversation_starters"])
     assert any("searchSessionId" in note for note in sample["notes"])

@@ -1136,6 +1136,73 @@ class GetDocumentTextEcosArgs(ToolArgsModel):
     url: str = Field(description="Absolute or ECOS-relative document URL to fetch and convert.")
 
 
+class SearchFederalRegisterArgs(ToolArgsModel):
+    query: str = Field(description="Federal Register search query.")
+    limit: int = Field(default=10, description="Max documents to return (default 10, max 25).")
+    agencies: list[str] | None = Field(
+        default=None,
+        description="Optional agency slug filter list, e.g. fish-and-wildlife-service.",
+    )
+    document_types: list[Literal["RULE", "PRORULE", "NOTICE", "PRESDOCU"]] | None = Field(
+        default=None,
+        alias="documentTypes",
+        description="Optional Federal Register document-type filter.",
+    )
+    publication_date_from: str | None = Field(
+        default=None,
+        alias="publicationDateFrom",
+        description="Optional publication-date lower bound in YYYY-MM-DD format.",
+    )
+    publication_date_to: str | None = Field(
+        default=None,
+        alias="publicationDateTo",
+        description="Optional publication-date upper bound in YYYY-MM-DD format.",
+    )
+    cfr_citation: str | None = Field(
+        default=None,
+        alias="cfrCitation",
+        description="Optional CFR citation filter, e.g. 50 CFR 17 or 40 CFR 122.26.",
+    )
+    cfr_title: int | None = Field(default=None, alias="cfrTitle", description="Optional CFR title filter.")
+    cfr_part: int | None = Field(default=None, alias="cfrPart", description="Optional CFR part filter.")
+    document_number: str | None = Field(
+        default=None,
+        alias="documentNumber",
+        description="Optional explicit Federal Register document number filter.",
+    )
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def clamp_limit(cls, value: int | None) -> int:
+        return _clamp_limit(value, 10, 25)
+
+
+class GetFederalRegisterDocumentArgs(ToolArgsModel):
+    identifier: str = Field(
+        description="Federal Register document number, FR citation, or GovInfo FR link.",
+    )
+
+
+class GetCfrTextArgs(ToolArgsModel):
+    title_number: int = Field(alias="titleNumber", description="CFR title number, e.g. 40.")
+    part_number: int = Field(alias="partNumber", description="CFR part number, e.g. 122.")
+    section_number: str | None = Field(
+        default=None,
+        alias="sectionNumber",
+        description="Optional CFR section suffix, e.g. 26 for 40 CFR 122.26.",
+    )
+    revision_year: int | None = Field(
+        default=None,
+        alias="revisionYear",
+        description="Optional CFR revision year used during volume resolution.",
+    )
+    effective_date: str | None = Field(
+        default=None,
+        alias="effectiveDate",
+        description="Optional effective date hint in YYYY-MM-DD format.",
+    )
+
+
 TOOL_INPUT_MODELS: dict[str, type[ToolArgsModel]] = {
     "search_papers": SearchPapersArgs,
     "search_papers_core": MinimalProviderSearchPapersArgs,
@@ -1183,6 +1250,9 @@ TOOL_INPUT_MODELS: dict[str, type[ToolArgsModel]] = {
     "get_species_profile_ecos": EcosSpeciesLookupArgs,
     "list_species_documents_ecos": ListSpeciesDocumentsEcosArgs,
     "get_document_text_ecos": GetDocumentTextEcosArgs,
+    "search_federal_register": SearchFederalRegisterArgs,
+    "get_federal_register_document": GetFederalRegisterDocumentArgs,
+    "get_cfr_text": GetCfrTextArgs,
     "search_papers_smart": SmartSearchPapersArgs,
     "ask_result_set": AskResultSetArgs,
     "map_research_landscape": MapResearchLandscapeArgs,

@@ -225,6 +225,7 @@ async def test_ecos_species_profile_normalizes_grouped_documents(
     assert payload["range"]["currentRangeStates"] == ["CA"]
     assert payload["documents"]["recoveryPlans"][0]["url"].startswith("https://")
     assert payload["documents"]["biologicalOpinions"][0]["url"].endswith("/tails/pub/document/527831")
+    assert payload["documents"]["federalRegisterDocuments"][0]["frCitation"] == "89 FR 83510"
     assert payload["conservationPlanLinks"][0]["url"].startswith("https://ecos.fws.gov/ecp/report/conservation-plan")
 
 

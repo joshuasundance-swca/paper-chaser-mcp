@@ -30,6 +30,8 @@ ProviderName = Literal[
     "unpaywall",
     "openai",
     "ecos",
+    "federal_register",
+    "govinfo",
 ]
 ProviderStatusBucket = Literal[
     "success",
@@ -117,6 +119,20 @@ DEFAULT_PROVIDER_POLICIES: dict[str, ProviderPolicy] = {
         paywalled=True,
     ),
     "ecos": ProviderPolicy(
+        concurrency_limit=2,
+        max_attempts=2,
+        base_delay_seconds=0.5,
+        failure_threshold=2,
+        suppression_seconds=60.0,
+    ),
+    "federal_register": ProviderPolicy(
+        concurrency_limit=2,
+        max_attempts=2,
+        base_delay_seconds=0.5,
+        failure_threshold=2,
+        suppression_seconds=60.0,
+    ),
+    "govinfo": ProviderPolicy(
         concurrency_limit=2,
         max_attempts=2,
         base_delay_seconds=0.5,

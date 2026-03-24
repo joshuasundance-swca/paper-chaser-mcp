@@ -49,6 +49,13 @@ from .ecos import (
     EcosSpeciesHit,
     EcosSpeciesProfile,
 )
+from .regulations import (
+    CfrTextResponse,
+    FederalRegisterAgency,
+    FederalRegisterDocument,
+    FederalRegisterDocumentTextResponse,
+    FederalRegisterSearchResponse,
+)
 from .tools import TOOL_INPUT_MODELS
 
 __all__ = [
@@ -70,6 +77,7 @@ __all__ = [
     "CrossrefEnrichment",
     "CrossrefEnrichmentResult",
     "CrossrefWorkSummary",
+    "CfrTextResponse",
     "DoiResolution",
     "EcosDocument",
     "EcosDocumentGroups",
@@ -82,6 +90,10 @@ __all__ = [
     "EcosSpeciesHit",
     "EcosSpeciesProfile",
     "ExportLink",
+    "FederalRegisterAgency",
+    "FederalRegisterDocument",
+    "FederalRegisterDocumentTextResponse",
+    "FederalRegisterSearchResponse",
     "Pagination",
     "Paper",
     "PaperEnrichmentResponse",

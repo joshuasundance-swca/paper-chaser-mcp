@@ -4,6 +4,8 @@ from .arxiv import ArxivClient
 from .core import CoreApiClient
 from .crossref import CrossrefClient
 from .ecos import EcosClient
+from .federal_register import FederalRegisterClient
+from .govinfo import GovInfoClient
 from .openalex import OpenAlexClient
 from .semantic_scholar import SemanticScholarClient
 from .serpapi import SerpApiScholarClient
@@ -14,6 +16,8 @@ __all__ = [
     "CoreApiClient",
     "CrossrefClient",
     "EcosClient",
+    "FederalRegisterClient",
+    "GovInfoClient",
     "OpenAlexClient",
     "SemanticScholarClient",
     "SerpApiScholarClient",

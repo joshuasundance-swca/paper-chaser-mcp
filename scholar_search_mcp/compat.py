@@ -313,6 +313,51 @@ def build_agent_hints(
             ),
             warnings=warnings,
         )
+    if hint_profile == "search_federal_register":
+        return AgentHints(
+            nextToolCandidates=[
+                "get_federal_register_document",
+                "get_cfr_text",
+                "search_species_ecos",
+            ],
+            whyThisNextStep=(
+                "Federal Register search is a discovery surface; once you have a citation or document number, "
+                "move to authoritative retrieval or the affected CFR text."
+            ),
+            safeRetry=("Retry with a tighter agency, documentTypes, or CFR filter when the result set is broad."),
+            warnings=warnings,
+        )
+    if hint_profile == "get_federal_register_document":
+        return AgentHints(
+            nextToolCandidates=[
+                "get_cfr_text",
+                "search_federal_register",
+                "search_species_ecos",
+            ],
+            whyThisNextStep=(
+                "Once the notice or rule is anchored, the next step is usually the affected CFR text or a broader "
+                "Federal Register search around the same regulation."
+            ),
+            safeRetry=(
+                "Retry with a Federal Register document number when citation-only GovInfo resolution is ambiguous."
+            ),
+            warnings=warnings,
+        )
+    if hint_profile == "get_cfr_text":
+        return AgentHints(
+            nextToolCandidates=[
+                "search_federal_register",
+                "get_federal_register_document",
+            ],
+            whyThisNextStep=(
+                "After resolving CFR text, the next useful move is usually tracing the rulemaking notice that created "
+                "or amended it."
+            ),
+            safeRetry=(
+                "Retry with revisionYear or remove sectionNumber when the requested section spans multiple CFR volumes."
+            ),
+            warnings=warnings,
+        )
     return AgentHints(
         nextToolCandidates=[],
         whyThisNextStep=("Use the returned IDs, resourceUris, or searchSessionId to keep the workflow moving."),

@@ -333,6 +333,24 @@ TOOL_DESCRIPTIONS = {
         "document is too large, unsupported, nearly empty, conversion-timed "
         "out, or failed to fetch."
     ),
+    "search_federal_register": (
+        "Search FederalRegister.gov for notices, rules, proposed rules, and "
+        "presidential documents. Supports agency, document-type, publication-date, "
+        "document-number, and CFR-aware narrowing. Use this for discovery; follow "
+        "with get_federal_register_document for authoritative or fallback full text."
+    ),
+    "get_federal_register_document": (
+        "Resolve one Federal Register document from a document number, FR citation, "
+        "or GovInfo FR link. Prefers authoritative GovInfo granule content when it "
+        "can resolve package/granule ids cleanly, and falls back to FederalRegister.gov "
+        "HTML when GovInfo is unavailable."
+    ),
+    "get_cfr_text": (
+        "Resolve CFR part or section text through GovInfo using title/part/section "
+        "citation semantics, with an explicit volume-resolution step and a preference "
+        "for XML over HTML or PDF. Use this when you need authoritative regulatory text, "
+        "not broad document discovery."
+    ),
     "search_papers_smart": (
         "Agent-oriented concept and literature-review search. Starts from a broad "
         "concept, known item, author clue, or citation seed; runs grounded query "

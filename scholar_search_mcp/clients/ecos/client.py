@@ -39,6 +39,7 @@ from ...transport import (
 SPECIES_REPORT_COLUMNS = "/species@cn,sn,status,desc,listing_date"
 SPECIES_REPORT_SORT = "/species@cn asc;/species@sn asc"
 SPECIES_PROFILE_RE = re.compile(r"/ecp/species/(?P<species_id>\d+)")
+GOVINFO_FR_LINK_RE = re.compile(r"/link/fr/(?P<volume>\d+)/(?P<page>\d+)", re.IGNORECASE)
 DATE_FORMATS = ("%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%d")
 _PayloadT = TypeVar("_PayloadT")
 logger = logging.getLogger("scholar-search-mcp")
@@ -472,6 +473,11 @@ class EcosClient:
             if not isinstance(item, dict):
                 continue
             title, url = self._normalize_document_title_and_url(item.get("publication_title"))
+            fr_citation = None
+            if isinstance(url, str):
+                match = GOVINFO_FR_LINK_RE.search(url)
+                if match:
+                    fr_citation = f"{match.group('volume')} FR {match.group('page')}"
             normalized.append(
                 EcosDocument(
                     documentKind=document_kind,
@@ -481,6 +487,7 @@ class EcosClient:
                     sourceId=item.get("id"),
                     publicationId=item.get("pub_id"),
                     publicationPage=str(item.get("publication_page") or "").strip() or None,
+                    frCitation=fr_citation,
                     documentTypes=[str(value).strip() for value in (item.get("doc_types") or []) if str(value).strip()],
                 )
             )

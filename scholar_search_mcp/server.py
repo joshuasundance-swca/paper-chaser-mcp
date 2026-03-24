@@ -23,6 +23,8 @@ from .clients import (
     CoreApiClient,
     CrossrefClient,
     EcosClient,
+    FederalRegisterClient,
+    GovInfoClient,
     OpenAlexClient,
     SemanticScholarClient,
     UnpaywallClient,
@@ -94,7 +96,10 @@ Decision tree for tool selection:
    list_species_documents_ecos → get_document_text_ecos for species pages,
    regulatory documents, and recovery PDFs from the U.S. Fish and Wildlife
    Service ECOS system
-15. PROVIDER HEALTH / DEBUGGING → get_provider_diagnostics
+15. REGULATORY PRIMARY SOURCES → search_federal_register for discovery,
+    get_federal_register_document for one notice or rule, and get_cfr_text for
+    authoritative CFR part/section text
+16. PROVIDER HEALTH / DEBUGGING → get_provider_diagnostics
 
 After search_papers: read brokerMetadata.nextStepHint for the recommended next move.
 After search_papers_smart: reuse searchSessionId for ask_result_set,
@@ -212,6 +217,10 @@ AGENT_WORKFLOW_GUIDE = """
 - **Provider/runtime debugging**: `get_provider_diagnostics`
 - **ECOS species dossiers**: `search_species_ecos` -> `get_species_profile_ecos`
   -> `list_species_documents_ecos` -> `get_document_text_ecos`
+- **Regulatory primary sources**: `search_federal_register` for discovery,
+    `get_federal_register_document` for one notice or rule, and `get_cfr_text`
+    for authoritative CFR text. This is the preferred path after an ECOS
+    document exposes `frCitation` or a GovInfo FR link.
 - **Grounded follow-up over a saved result set**: `ask_result_set` for QA,
   claim checks, or comparisons; `map_research_landscape` for themes, gaps, and
   disagreements; `expand_research_graph` for a compact citation or author graph.
@@ -443,9 +452,13 @@ async def _execute_tool(
         crossref_client=crossref_client,
         unpaywall_client=unpaywall_client,
         ecos_client=ecos_client,
+        federal_register_client=federal_register_client,
+        govinfo_client=govinfo_client,
         enable_crossref=enable_crossref,
         enable_unpaywall=enable_unpaywall,
         enable_ecos=enable_ecos,
+        enable_federal_register=enable_federal_register,
+        enable_govinfo_cfr=enable_govinfo_cfr,
         enrichment_service=enrichment_service,
         provider_order=provider_order,
         provider_registry=provider_registry,
@@ -463,6 +476,7 @@ core_api_key = settings.core_api_key
 openalex_api_key = settings.openalex_api_key
 openalex_mailto = settings.openalex_mailto
 serpapi_api_key = settings.serpapi_api_key
+govinfo_api_key = settings.govinfo_api_key
 crossref_mailto = settings.crossref_mailto
 unpaywall_email = settings.unpaywall_email
 ecos_base_url = settings.ecos_base_url
@@ -474,10 +488,19 @@ enable_serpapi = settings.enable_serpapi
 enable_crossref = settings.enable_crossref
 enable_unpaywall = settings.enable_unpaywall
 enable_ecos = settings.enable_ecos
+enable_federal_register = settings.enable_federal_register
+enable_govinfo_cfr = settings.enable_govinfo_cfr
 provider_order = list(settings.provider_order)
 provider_registry = ProviderDiagnosticsRegistry()
 client = SemanticScholarClient(api_key=api_key)
 core_client = CoreApiClient(api_key=core_api_key)
+federal_register_client = FederalRegisterClient(timeout=settings.federal_register_timeout_seconds)
+govinfo_client = GovInfoClient(
+    api_key=govinfo_api_key,
+    timeout=settings.govinfo_timeout_seconds,
+    document_timeout=settings.govinfo_document_timeout_seconds,
+    max_document_size_mb=settings.govinfo_max_document_size_mb,
+)
 crossref_client = CrossrefClient(
     mailto=crossref_mailto,
     timeout=settings.crossref_timeout_seconds,
@@ -555,6 +578,8 @@ async def _server_lifespan(_: FastMCP):
         await maybe_close_async_resource(crossref_client)
         await maybe_close_async_resource(unpaywall_client)
         await maybe_close_async_resource(ecos_client)
+        await maybe_close_async_resource(federal_register_client)
+        await maybe_close_async_resource(govinfo_client)
 
 
 app = FastMCP(

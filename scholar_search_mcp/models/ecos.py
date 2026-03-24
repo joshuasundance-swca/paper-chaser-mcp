@@ -134,6 +134,7 @@ class EcosDocument(ApiModel):
     document_type: str | None = Field(default=None, alias="documentType")
     qualifier: str | None = None
     publication_page: str | None = Field(default=None, alias="publicationPage")
+    fr_citation: str | None = Field(default=None, alias="frCitation")
     document_types: list[str] = Field(default_factory=list, alias="documentTypes")
     category: str | None = None
     event_code: str | None = Field(default=None, alias="eventCode")

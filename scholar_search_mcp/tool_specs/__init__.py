@@ -148,6 +148,22 @@ def _default_tags(name: str) -> tuple[str, ...]:
             "provider-specific",
             "provider:ecos",
         ),
+        "search_federal_register": (
+            "search",
+            "regulations",
+            "provider-specific",
+            "provider:federal_register",
+        ),
+        "get_federal_register_document": (
+            "regulations",
+            "provider-specific",
+            "provider:govinfo",
+        ),
+        "get_cfr_text": (
+            "regulations",
+            "provider-specific",
+            "provider:govinfo",
+        ),
         "enrich_paper": ("paper", "enrichment"),
         "get_provider_diagnostics": ("diagnostics", "provider-health"),
         "ask_result_set": ("smart", "grounded-answer"),
@@ -184,6 +200,7 @@ def _default_execution_kind(name: str) -> ToolHandlerKind:
         "search_authors_openalex",
         "search_entities_openalex",
         "search_papers_openalex_by_entity",
+        "search_federal_register",
     }:
         return "search"
     if name in {
@@ -219,6 +236,7 @@ def _default_search_session_policy(name: str) -> SearchSessionPolicy:
         "get_author_papers_openalex",
         "resolve_citation",
         "search_papers_smart",
+        "search_federal_register",
     }:
         return SearchSessionPolicy(
             persist_result_set=True,
@@ -279,6 +297,12 @@ def _default_hint_profile(name: str) -> str | None:
         return "list_species_documents_ecos"
     if name == "get_document_text_ecos":
         return "get_document_text_ecos"
+    if name == "search_federal_register":
+        return "search_federal_register"
+    if name == "get_federal_register_document":
+        return "get_federal_register_document"
+    if name == "get_cfr_text":
+        return "get_cfr_text"
     return None
 
 
@@ -310,6 +334,7 @@ def _default_resource_emitters(name: str) -> tuple[ResourceEmitter, ...]:
         "search_authors_openalex",
         "get_author_papers",
         "get_author_papers_openalex",
+        "search_federal_register",
     }:
         emitters.extend(("data_items",))
     if name in {

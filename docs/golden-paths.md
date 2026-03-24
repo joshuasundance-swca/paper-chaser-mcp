@@ -209,6 +209,12 @@ search_authors(query="Yoshua Bengio", limit=5)
 
 ## Secondary Workflows
 
+- **Regulatory follow-through from ECOS**: when an ECOS dossier or flattened
+  ECOS document inventory exposes `frCitation` or a GovInfo FR link, use
+  `get_federal_register_document` to anchor the Federal Register notice or
+  rule, then use `get_cfr_text` for the affected CFR part or section. Use
+  `search_federal_register` when the ECOS clue is still too broad and you need
+  agency/date/type narrowing before retrieval.
 - **Quote or snippet validation**: use `search_snippets` only when title or
   keyword search is weak, or when `resolve_citation` suggests a quote fragment
   is the strongest remaining clue.

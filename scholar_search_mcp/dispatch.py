@@ -18,13 +18,16 @@ from .models.tools import (
     BasicSearchPapersArgs,
     EcosSpeciesLookupArgs,
     ExpandResearchGraphArgs,
+    GetCfrTextArgs,
     GetCitationFormatsArgs,
     GetDocumentTextEcosArgs,
+    GetFederalRegisterDocumentArgs,
     ListSpeciesDocumentsEcosArgs,
     MapResearchLandscapeArgs,
     PaperLookupArgs,
     PaperMatchArgs,
     ResolveCitationArgs,
+    SearchFederalRegisterArgs,
     SearchPapersArgs,
     SearchProvider,
     SearchSpeciesEcosArgs,
@@ -477,9 +480,13 @@ async def dispatch_tool(
     crossref_client: Any = None,
     unpaywall_client: Any = None,
     ecos_client: Any = None,
+    federal_register_client: Any = None,
+    govinfo_client: Any = None,
     enable_crossref: bool = True,
     enable_unpaywall: bool = True,
     enable_ecos: bool = True,
+    enable_federal_register: bool = True,
+    enable_govinfo_cfr: bool = True,
     enrichment_service: PaperEnrichmentService | None = None,
     provider_order: list[SearchProvider] | None = None,
     provider_registry: Any = None,
@@ -620,6 +627,8 @@ async def dispatch_tool(
                 "unpaywall": enable_unpaywall,
                 "openai": agentic_runtime is not None,
                 "ecos": enable_ecos,
+                "federal_register": enable_federal_register,
+                "govinfo": enable_govinfo_cfr,
             },
             provider_order=[
                 *(provider_order or []),
@@ -628,6 +637,8 @@ async def dispatch_tool(
                 "unpaywall",
                 "openai",
                 "ecos",
+                "federal_register",
+                "govinfo",
             ],
         )
         if not args_dict.get("include_recent_outcomes", True):
@@ -717,6 +728,77 @@ async def dispatch_tool(
             workspace_registry=workspace_registry,
         )
 
+    if name == "search_federal_register":
+        if not enable_federal_register or federal_register_client is None:
+            raise ValueError(
+                "search_federal_register requires Federal Register support, which is disabled. "
+                "Set SCHOLAR_SEARCH_ENABLE_FEDERAL_REGISTER=true to use this tool."
+            )
+        fr_args = cast(
+            SearchFederalRegisterArgs,
+            TOOL_INPUT_MODELS[name].model_validate(arguments),
+        )
+        result = await federal_register_client.search_documents(
+            query=fr_args.query,
+            limit=fr_args.limit,
+            agencies=fr_args.agencies,
+            document_types=fr_args.document_types,
+            publication_date_from=fr_args.publication_date_from,
+            publication_date_to=fr_args.publication_date_to,
+            cfr_citation=fr_args.cfr_citation,
+            cfr_title=fr_args.cfr_title,
+            cfr_part=fr_args.cfr_part,
+            document_number=fr_args.document_number,
+        )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            result,
+            workspace_registry=workspace_registry,
+        )
+
+    if name == "get_federal_register_document":
+        if govinfo_client is None:
+            raise ValueError("get_federal_register_document requires GovInfo client initialization.")
+        document_args = cast(
+            GetFederalRegisterDocumentArgs,
+            TOOL_INPUT_MODELS[name].model_validate(arguments),
+        )
+        result = await govinfo_client.get_federal_register_document(
+            identifier=document_args.identifier,
+            federal_register_client=federal_register_client if enable_federal_register else None,
+        )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            result,
+            workspace_registry=workspace_registry,
+        )
+
+    if name == "get_cfr_text":
+        if not enable_govinfo_cfr or govinfo_client is None:
+            raise ValueError(
+                "get_cfr_text requires GovInfo CFR support, which is disabled. "
+                "Set SCHOLAR_SEARCH_ENABLE_GOVINFO_CFR=true to use this tool."
+            )
+        cfr_args = cast(
+            GetCfrTextArgs,
+            TOOL_INPUT_MODELS[name].model_validate(arguments),
+        )
+        result = await govinfo_client.get_cfr_text(
+            title_number=cfr_args.title_number,
+            part_number=cfr_args.part_number,
+            section_number=cfr_args.section_number,
+            revision_year=cfr_args.revision_year,
+            effective_date=cfr_args.effective_date,
+        )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            result,
+            workspace_registry=workspace_registry,
+        )
+
     if name == "get_paper_metadata_crossref":
         crossref_result = await resolved_enrichment_service.get_crossref_metadata(
             **TOOL_INPUT_MODELS[name].model_validate(arguments).model_dump(by_alias=False)
@@ -790,6 +872,9 @@ async def dispatch_tool(
             serpapi_client=serpapi_client,
             crossref_client=crossref_client,
             unpaywall_client=unpaywall_client,
+            ecos_client=ecos_client,
+            federal_register_client=federal_register_client,
+            govinfo_client=govinfo_client,
             enable_core=enable_core,
             enable_semantic_scholar=enable_semantic_scholar,
             enable_openalex=enable_openalex,
@@ -797,6 +882,9 @@ async def dispatch_tool(
             enable_serpapi=enable_serpapi,
             enable_crossref=enable_crossref,
             enable_unpaywall=enable_unpaywall,
+            enable_ecos=enable_ecos,
+            enable_federal_register=enable_federal_register,
+            enable_govinfo_cfr=enable_govinfo_cfr,
             provider_order=provider_order,
             provider_registry=provider_registry,
             workspace_registry=workspace_registry,
@@ -853,6 +941,9 @@ async def dispatch_tool(
             serpapi_client=serpapi_client,
             crossref_client=crossref_client,
             unpaywall_client=unpaywall_client,
+            ecos_client=ecos_client,
+            federal_register_client=federal_register_client,
+            govinfo_client=govinfo_client,
             enable_core=enable_core,
             enable_semantic_scholar=enable_semantic_scholar,
             enable_openalex=enable_openalex,
@@ -860,6 +951,9 @@ async def dispatch_tool(
             enable_serpapi=enable_serpapi,
             enable_crossref=enable_crossref,
             enable_unpaywall=enable_unpaywall,
+            enable_ecos=enable_ecos,
+            enable_federal_register=enable_federal_register,
+            enable_govinfo_cfr=enable_govinfo_cfr,
             provider_order=provider_order,
             provider_registry=provider_registry,
             workspace_registry=workspace_registry,
@@ -1531,6 +1625,9 @@ async def dispatch_tool(
         serpapi_client=serpapi_client,
         crossref_client=crossref_client,
         unpaywall_client=unpaywall_client,
+        ecos_client=ecos_client,
+        federal_register_client=federal_register_client,
+        govinfo_client=govinfo_client,
         enable_core=enable_core,
         enable_semantic_scholar=enable_semantic_scholar,
         enable_openalex=enable_openalex,
@@ -1538,6 +1635,9 @@ async def dispatch_tool(
         enable_serpapi=enable_serpapi,
         enable_crossref=enable_crossref,
         enable_unpaywall=enable_unpaywall,
+        enable_ecos=enable_ecos,
+        enable_federal_register=enable_federal_register,
+        enable_govinfo_cfr=enable_govinfo_cfr,
         provider_order=provider_order,
         provider_registry=provider_registry,
         workspace_registry=workspace_registry,
@@ -1596,6 +1696,9 @@ async def _maybe_elicit_and_retry(
     serpapi_client: Any,
     crossref_client: Any,
     unpaywall_client: Any,
+    ecos_client: Any,
+    federal_register_client: Any,
+    govinfo_client: Any,
     enable_core: bool,
     enable_semantic_scholar: bool,
     enable_openalex: bool,
@@ -1603,6 +1706,9 @@ async def _maybe_elicit_and_retry(
     enable_serpapi: bool,
     enable_crossref: bool,
     enable_unpaywall: bool,
+    enable_ecos: bool,
+    enable_federal_register: bool,
+    enable_govinfo_cfr: bool,
     provider_order: list[SearchProvider] | None,
     provider_registry: Any,
     workspace_registry: Any,
@@ -1691,8 +1797,14 @@ async def _maybe_elicit_and_retry(
         enable_serpapi=enable_serpapi,
         crossref_client=crossref_client,
         unpaywall_client=unpaywall_client,
+        ecos_client=ecos_client,
+        federal_register_client=federal_register_client,
+        govinfo_client=govinfo_client,
         enable_crossref=enable_crossref,
         enable_unpaywall=enable_unpaywall,
+        enable_ecos=enable_ecos,
+        enable_federal_register=enable_federal_register,
+        enable_govinfo_cfr=enable_govinfo_cfr,
         enrichment_service=enrichment_service,
         provider_order=provider_order,
         provider_registry=provider_registry,
