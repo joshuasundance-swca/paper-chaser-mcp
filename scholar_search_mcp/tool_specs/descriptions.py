@@ -114,9 +114,7 @@ TOOL_DESCRIPTIONS = {
         "for disambiguation. Optional includeEnrichment=true enriches only the "
         "final bestMatch.paper after resolution."
     ),
-    "paper_autocomplete": (
-        "Return paper title completions for a partial query string."
-    ),
+    "paper_autocomplete": ("Return paper title completions for a partial query string."),
     "paper_autocomplete_openalex": (
         "Return lightweight OpenAlex work autocomplete matches for a partial "
         "paper title. This is useful when an agent wants OpenAlex-native title "
@@ -256,9 +254,7 @@ TOOL_DESCRIPTIONS = {
         "result with retry guidance instead of surfacing a raw provider 4xx/5xx."
     ),
     "get_paper_recommendations": "Get similar paper recommendations for a paper.",
-    "get_paper_recommendations_post": (
-        "Get paper recommendations from positive and negative seed sets."
-    ),
+    "get_paper_recommendations_post": ("Get paper recommendations from positive and negative seed sets."),
     "batch_get_papers": "Get details for multiple papers (up to 500).",
     "get_paper_citation_formats": (
         "Citation export step after discovery: get MLA, APA, BibTeX, and other "

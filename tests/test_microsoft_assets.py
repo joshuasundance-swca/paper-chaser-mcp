@@ -55,7 +55,5 @@ def test_microsoft_plugin_sample_points_at_full_tool_asset() -> None:
 
     assert sample["tool_package"] == "mcp-tools.full.json"
     assert len(sample["conversation_starters"]) >= 5
-    assert any(
-        "citation" in starter.lower() for starter in sample["conversation_starters"]
-    )
+    assert any("citation" in starter.lower() for starter in sample["conversation_starters"])
     assert any("searchSessionId" in note for note in sample["notes"])

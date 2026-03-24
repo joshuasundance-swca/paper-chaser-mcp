@@ -108,6 +108,7 @@ class SemanticScholarClient:
         json_data: Optional[dict[str, Any]] = None,
         base_url: Optional[str] = None,
         max_retries: int = 4,
+        max_429_retries: Optional[int] = None,
         base_delay: float = 1.0,
     ) -> Any:
         """Send HTTP request with rate pacing and exponential backoff on 429.
@@ -118,7 +119,8 @@ class SemanticScholarClient:
         """
         resolved_base = base_url if base_url is not None else API_BASE_URL
         url = f"{resolved_base}/{endpoint}"
-        total_attempts = max(max_retries, MAX_429_RETRIES) + 1
+        retry_429_limit = MAX_429_RETRIES if max_429_retries is None else max(0, max_429_retries)
+        total_attempts = max(max_retries, retry_429_limit) + 1
 
         client = self._get_http_client()
         for attempt in range(total_attempts):
@@ -132,7 +134,7 @@ class SemanticScholarClient:
             )
 
             if response.status_code == 429:
-                if attempt < MAX_429_RETRIES:
+                if attempt < retry_429_limit:
                     delay = base_delay * (2**attempt)
                     retry_after = response.headers.get("Retry-After")
                     if retry_after and retry_after.isdigit():
@@ -141,7 +143,7 @@ class SemanticScholarClient:
                         "Rate limited (429), retrying in %.1fs (%s/%s)",
                         delay,
                         attempt + 1,
-                        MAX_429_RETRIES,
+                        retry_429_limit,
                     )
                     await asyncio.sleep(delay)
                     continue
@@ -190,8 +192,7 @@ class SemanticScholarClient:
             raw_items = normalized.get("data")
             if isinstance(raw_items, list):
                 normalized["data"] = [
-                    item.get(nested_key, item) if isinstance(item, dict) else item
-                    for item in raw_items
+                    item.get(nested_key, item) if isinstance(item, dict) else item for item in raw_items
                 ]
             response = normalized
         return PaperListResponse.model_validate(response)
@@ -257,9 +258,7 @@ class SemanticScholarClient:
         results expose the same ``recommendedExpansionId`` / ``expansionIdStatus``
         signals as brokered ``search_papers_semantic_scholar`` results.
         """
-        external_ids: dict[str, Any] = (paper.model_extra or {}).get(
-            "externalIds"
-        ) or {}
+        external_ids: dict[str, Any] = (paper.model_extra or {}).get("externalIds") or {}
         doi: str | None = external_ids.get("DOI") or None
         arxiv_id: str | None = external_ids.get("ArXiv") or None
         paper_id: str | None = paper.paper_id
@@ -559,9 +558,7 @@ class SemanticScholarClient:
                 # The bulk endpoint supports fewer fields than /paper/search.
                 # Retry with default fields so agents always get results.
                 params["fields"] = ",".join(DEFAULT_PAPER_FIELDS)
-                response = await self._request(
-                    "GET", "paper/search/bulk", params=params
-                )
+                response = await self._request("GET", "paper/search/bulk", params=params)
                 fields_dropped = True
             else:
                 raise
@@ -608,9 +605,7 @@ class SemanticScholarClient:
                 "fields": fields_str,
             }
             try:
-                response = await self._request(
-                    "GET", "paper/search/match", params=params
-                )
+                response = await self._request("GET", "paper/search/match", params=params)
             except httpx.HTTPStatusError as exc:
                 status_code = self._status_code_from_error(exc)
                 if status_code in {400, 404}:
@@ -657,30 +652,20 @@ class SemanticScholarClient:
         normalized_id = self._normalize_paper_id(paper_id)
         params = {"fields": ",".join(fields or DEFAULT_PAPER_FIELDS)}
         try:
-            response = await self._request(
-                "GET", f"paper/{normalized_id}", params=params
-            )
+            response = await self._request("GET", f"paper/{normalized_id}", params=params)
         except httpx.HTTPStatusError as exc:
             status_code = self._status_code_from_error(exc)
             if status_code == 404:
                 raise ValueError(
                     f"Semantic Scholar could not find paper {paper_id!r}"
-                    + (
-                        f" (normalized to {normalized_id!r})"
-                        if normalized_id != paper_id
-                        else ""
-                    )
+                    + (f" (normalized to {normalized_id!r})" if normalized_id != paper_id else "")
                     + ". "
                     + self._paper_id_portability_hint()
                 ) from exc
             if status_code == 400:
                 raise ValueError(
                     f"Semantic Scholar rejected paper identifier {paper_id!r}"
-                    + (
-                        f" (normalized to {normalized_id!r})"
-                        if normalized_id != paper_id
-                        else ""
-                    )
+                    + (f" (normalized to {normalized_id!r})" if normalized_id != paper_id else "")
                     + " for get_paper_details. Use a Semantic Scholar-compatible "
                     "paper identifier. " + self._paper_id_portability_hint()
                 ) from exc
@@ -706,9 +691,7 @@ class SemanticScholarClient:
             f"paper/{paper_id}/citations",
             params=params,
         )
-        return dump_jsonable(
-            self._normalize_nested_paper_list_response(response, "citingPaper")
-        )
+        return dump_jsonable(self._normalize_nested_paper_list_response(response, "citingPaper"))
 
     async def get_paper_references(
         self,
@@ -729,9 +712,7 @@ class SemanticScholarClient:
             f"paper/{paper_id}/references",
             params=params,
         )
-        return dump_jsonable(
-            self._normalize_nested_paper_list_response(response, "citedPaper")
-        )
+        return dump_jsonable(self._normalize_nested_paper_list_response(response, "citedPaper"))
 
     async def get_paper_authors(
         self,
@@ -844,12 +825,10 @@ class SemanticScholarClient:
                     "'2020-01-01:2023-12-31'). Open-ended ranges require a trailing "
                     "colon ('2022:'), not a trailing hyphen."
                     if publication_date_or_year
-                    else " Use a Semantic Scholar authorId returned by "
-                    "search_authors or get_paper_authors."
+                    else " Use a Semantic Scholar authorId returned by search_authors or get_paper_authors."
                 )
                 raise ValueError(
-                    f"Semantic Scholar rejected get_author_papers for author "
-                    f"{author_id!r}.{filter_hint}"
+                    f"Semantic Scholar rejected get_author_papers for author {author_id!r}.{filter_hint}"
                 ) from exc
             if status_code == 404:
                 raise ValueError(
@@ -941,10 +920,15 @@ class SemanticScholarClient:
         if venue:
             params["venue"] = venue
         try:
-            response = await self._request("GET", "snippet/search", params=params)
+            response = await self._request(
+                "GET",
+                "snippet/search",
+                params=params,
+                max_429_retries=0,
+            )
         except httpx.HTTPStatusError as exc:
             status_code = self._status_code_from_error(exc)
-            if status_code in {400, 404, 500, 502, 503, 504}:
+            if status_code in {400, 404, 429, 500, 502, 503, 504}:
                 payload = dump_jsonable(SnippetSearchResponse(data=[]))
                 payload["query"] = query
                 payload["degraded"] = True

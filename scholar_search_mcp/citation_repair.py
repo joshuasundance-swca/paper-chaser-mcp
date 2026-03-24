@@ -41,6 +41,14 @@ VENUE_HINTS = (
     "global change biology",
     "environmental science",
     "environmental research letters",
+    "acl",
+    "cvpr",
+    "emnlp",
+    "iclr",
+    "icml",
+    "naacl",
+    "neurips",
+    "nips",
 )
 NON_PAPER_TERMS = {
     "dataset",
@@ -282,9 +290,7 @@ async def resolve_citation(
             enable_openalex=enable_openalex,
         )
         if identifier_candidate is not None:
-            candidate_map[_paper_identity_key(identifier_candidate.paper)] = (
-                identifier_candidate
-            )
+            candidate_map[_paper_identity_key(identifier_candidate.paper)] = identifier_candidate
             stage_order.append("identifier")
             if identifier_candidate.score >= 0.95:
                 response = _serialize_citation_response(
@@ -296,6 +302,7 @@ async def resolve_citation(
                     response = await _enrich_best_match(
                         response,
                         enrichment_service=enrichment_service,
+                        detail_client=client,
                     )
                 return response
 
@@ -310,6 +317,24 @@ async def resolve_citation(
             _merge_ranked_candidate(candidate_map, candidate)
         if matched_candidates:
             stage_order.append("title_match")
+            ranked_candidates = _ranked_candidates(
+                candidate_map,
+                max_candidates=max_candidates,
+            )
+            if _best_candidate_confidence(ranked_candidates) == "high":
+                response = _serialize_citation_response(
+                    citation=citation,
+                    parsed=parsed,
+                    candidates=ranked_candidates,
+                )
+                if include_enrichment and enrichment_service is not None:
+                    response = await _enrich_best_match(
+                        response,
+                        enrichment_service=enrichment_service,
+                        detail_client=client,
+                    )
+                response["resolutionStrategy"] = ranked_candidates[0].resolution_strategy
+                return response
 
     snippet_candidates = await _resolve_snippet_candidates(
         parsed=parsed,
@@ -340,11 +365,10 @@ async def resolve_citation(
     if sparse_candidates:
         stage_order.append("sparse_metadata")
 
-    ranked_candidates = sorted(
-        candidate_map.values(),
-        key=lambda item: (item.score, item.author_overlap, item.title_similarity),
-        reverse=True,
-    )[:max_candidates]
+    ranked_candidates = _ranked_candidates(
+        candidate_map,
+        max_candidates=max_candidates,
+    )
     response = _serialize_citation_response(
         citation=citation,
         parsed=parsed,
@@ -354,12 +378,11 @@ async def resolve_citation(
         response = await _enrich_best_match(
             response,
             enrichment_service=enrichment_service,
+            detail_client=client,
         )
     if stage_order:
         response["resolutionStrategy"] = (
-            ranked_candidates[0].resolution_strategy
-            if ranked_candidates
-            else stage_order[-1]
+            ranked_candidates[0].resolution_strategy if ranked_candidates else stage_order[-1]
         )
     return response
 
@@ -368,20 +391,33 @@ async def _enrich_best_match(
     response: dict[str, Any],
     *,
     enrichment_service: Any,
+    detail_client: Any | None,
 ) -> dict[str, Any]:
+    from .enrichment import (
+        attach_enrichments_to_paper_payload,
+        hydrate_paper_for_enrichment,
+    )
+
     best_match = response.get("bestMatch")
     if not isinstance(best_match, dict) or not isinstance(
         best_match.get("paper"),
         dict,
     ):
         return response
-    enriched_paper = await enrichment_service.enrich_paper_payload(
+    hydrated_paper = await hydrate_paper_for_enrichment(
         best_match["paper"],
-        query=response.get("normalizedCitation"),
+        detail_client=detail_client,
+    )
+    enriched_paper = await enrichment_service.enrich_paper_payload(
+        hydrated_paper,
+        query=(hydrated_paper.get("title") or best_match["paper"].get("title") or response.get("normalizedCitation")),
     )
     updated_response = dict(response)
     updated_best_match = dict(best_match)
-    updated_best_match["paper"] = enriched_paper
+    updated_best_match["paper"] = attach_enrichments_to_paper_payload(
+        best_match["paper"],
+        enriched_paper=enriched_paper,
+    )
     updated_response["bestMatch"] = updated_best_match
     return updated_response
 
@@ -401,24 +437,76 @@ def _serialize_citation_response(
         conflicting_fields=best.conflicting_fields if best is not None else [],
         resolution_strategy=best.resolution_strategy if best is not None else "none",
     )
+    alternatives = _filtered_alternative_candidates(
+        candidates=candidates,
+        confidence=confidence,
+    )
+    serializable_candidates = [best, *alternatives] if best is not None else []
     response = CitationResolutionResponse(
         bestMatch=_to_candidate_model(best) if best is not None else None,
-        alternatives=[_to_candidate_model(candidate) for candidate in candidates[1:]],
+        alternatives=[_to_candidate_model(candidate) for candidate in alternatives],
         resolutionConfidence=confidence,
         resolutionStrategy=best.resolution_strategy if best is not None else "none",
         matchedFields=best.matched_fields if best is not None else [],
         conflictingFields=best.conflicting_fields if best is not None else [],
         normalizedCitation=parsed.normalized_text or normalize_citation_text(citation),
         extractedFields=_parsed_fields_payload(parsed),
-        inferredFields=_inferred_fields_payload(parsed, candidates),
-        candidateCount=len(candidates),
+        inferredFields=_inferred_fields_payload(parsed, serializable_candidates),
+        candidateCount=len(serializable_candidates),
         message=_resolution_message(
             parsed=parsed,
-            candidates=candidates,
+            candidates=serializable_candidates,
             confidence=confidence,
         ),
     )
     return dump_jsonable(response)
+
+
+def _filtered_alternative_candidates(
+    *,
+    candidates: list[RankedCitationCandidate],
+    confidence: str,
+) -> list[RankedCitationCandidate]:
+    if len(candidates) <= 1:
+        return []
+    best = candidates[0]
+    filtered: list[RankedCitationCandidate] = []
+    for candidate in candidates[1:]:
+        if candidate.score < 0.4:
+            continue
+        if confidence == "high":
+            if candidate.score < max(0.5, best.score - 0.18):
+                continue
+            if (
+                "identifier" not in candidate.matched_fields
+                and "title" not in candidate.matched_fields
+                and candidate.author_overlap == 0
+            ):
+                continue
+            if candidate.title_similarity < 0.72 and candidate.author_overlap == 0:
+                continue
+            if (
+                "title" in candidate.conflicting_fields
+                and candidate.title_similarity < 0.78
+                and "identifier" not in candidate.matched_fields
+            ):
+                continue
+        else:
+            if (
+                candidate.title_similarity < 0.55
+                and candidate.author_overlap == 0
+                and "identifier" not in candidate.matched_fields
+            ):
+                continue
+            if (
+                candidate.author_overlap == 0
+                and "author" in candidate.conflicting_fields
+                and candidate.year_delta not in {0, 1}
+                and "identifier" not in candidate.matched_fields
+            ):
+                continue
+        filtered.append(candidate)
+    return filtered
 
 
 def _to_candidate_model(
@@ -458,9 +546,7 @@ def _inferred_fields_payload(
     parsed: ParsedCitation,
     candidates: list[RankedCitationCandidate],
 ) -> dict[str, Any]:
-    likely_output_type = (
-        "non_paper_candidate" if parsed.looks_like_non_paper else "paper"
-    )
+    likely_output_type = "non_paper_candidate" if parsed.looks_like_non_paper else "paper"
     disambiguation_fields: list[str] = []
     if candidates:
         best = candidates[0]
@@ -473,9 +559,7 @@ def _inferred_fields_payload(
     return {
         "likelyOutputType": likely_output_type,
         "needsDisambiguationBy": disambiguation_fields,
-        "primaryTitleCandidate": (
-            parsed.title_candidates[0] if parsed.title_candidates else None
-        ),
+        "primaryTitleCandidate": (parsed.title_candidates[0] if parsed.title_candidates else None),
     }
 
 
@@ -579,9 +663,7 @@ async def _resolve_title_candidates(
     ranked: list[RankedCitationCandidate] = []
     for title_candidate in title_candidates:
         try:
-            payload = dump_jsonable(
-                await client.search_papers_match(query=title_candidate, fields=None)
-            )
+            payload = dump_jsonable(await client.search_papers_match(query=title_candidate, fields=None))
         except Exception as exc:
             logger.debug(
                 "Citation title recovery failed for %r: %s",
@@ -592,16 +674,52 @@ async def _resolve_title_candidates(
             if not payload.get("paperId"):
                 continue
             strategy = str(payload.get("matchStrategy") or "title_match")
-            ranked.append(
-                _rank_candidate(
-                    paper=payload,
-                    parsed=parsed,
-                    resolution_strategy=strategy,
-                    candidate_count=int(payload.get("candidateCount") or 1),
-                    snippet_text=None,
-                )
+            candidate = _rank_candidate(
+                paper=payload,
+                parsed=parsed,
+                resolution_strategy=strategy,
+                candidate_count=int(payload.get("candidateCount") or 1),
+                snippet_text=None,
             )
+            ranked.append(candidate)
+            if (
+                _classify_resolution_confidence(
+                    best_score=candidate.score,
+                    runner_up_score=None,
+                    matched_fields=candidate.matched_fields,
+                    conflicting_fields=candidate.conflicting_fields,
+                    resolution_strategy=candidate.resolution_strategy,
+                )
+                == "high"
+            ):
+                break
     return ranked
+
+
+def _ranked_candidates(
+    candidate_map: dict[str, RankedCitationCandidate],
+    *,
+    max_candidates: int,
+) -> list[RankedCitationCandidate]:
+    return sorted(
+        candidate_map.values(),
+        key=lambda item: (item.score, item.author_overlap, item.title_similarity),
+        reverse=True,
+    )[:max_candidates]
+
+
+def _best_candidate_confidence(
+    candidates: list[RankedCitationCandidate],
+) -> Literal["high", "medium", "low"]:
+    best = candidates[0] if candidates else None
+    runner_up_score = candidates[1].score if len(candidates) > 1 else None
+    return _classify_resolution_confidence(
+        best_score=best.score if best is not None else None,
+        runner_up_score=runner_up_score,
+        matched_fields=best.matched_fields if best is not None else [],
+        conflicting_fields=best.conflicting_fields if best is not None else [],
+        resolution_strategy=best.resolution_strategy if best is not None else "none",
+    )
 
 
 async def _resolve_snippet_candidates(
@@ -617,9 +735,7 @@ async def _resolve_snippet_candidates(
     else:
         return []
     try:
-        snippet_payload = dump_jsonable(
-            await client.search_snippets(query=snippet_query, limit=max_candidates)
-        )
+        snippet_payload = dump_jsonable(await client.search_snippets(query=snippet_query, limit=max_candidates))
     except Exception:
         return []
 
@@ -684,9 +800,7 @@ async def _resolve_sparse_metadata_candidates(
                 year=str(parsed.year) if parsed.year is not None else None,
                 fields=None,
                 venue=parsed.venue_hints[:1] or None,
-                preferred_provider=(
-                    "semantic_scholar" if enable_semantic_scholar else None
-                ),
+                preferred_provider=("semantic_scholar" if enable_semantic_scholar else None),
                 provider_order=None,
                 default_provider_order=DEFAULT_SEARCH_PROVIDER_ORDER,
                 ss_only_filters=[],
@@ -718,11 +832,7 @@ async def _resolve_sparse_metadata_candidates(
                 exc,
             )
         else:
-            data = (
-                search_trace.result.model_dump(by_alias=True)["data"]
-                if search_trace.result is not None
-                else []
-            )
+            data = search_trace.result.model_dump(by_alias=True)["data"] if search_trace.result is not None else []
             for paper in data[: max_candidates * 2]:
                 if not isinstance(paper, dict):
                     continue
@@ -784,12 +894,8 @@ def _merge_ranked_candidate(
         existing.year_delta = candidate.year_delta
     elif candidate.year_delta is not None:
         existing.year_delta = min(existing.year_delta, candidate.year_delta)
-    existing.matched_fields = _dedupe_strings(
-        [*existing.matched_fields, *candidate.matched_fields]
-    )
-    existing.conflicting_fields = _dedupe_strings(
-        [*existing.conflicting_fields, *candidate.conflicting_fields]
-    )
+    existing.matched_fields = _dedupe_strings([*existing.matched_fields, *candidate.matched_fields])
+    existing.conflicting_fields = _dedupe_strings([*existing.conflicting_fields, *candidate.conflicting_fields])
     if candidate.score >= existing.score:
         existing.resolution_strategy = candidate.resolution_strategy
         existing.why_selected = candidate.why_selected
@@ -850,9 +956,7 @@ def _rank_candidate(
     matched_fields: list[str] = []
     conflicting_fields: list[str] = []
     matched_fields.extend(str(field) for field in paper.get("matchedFields") or [])
-    conflicting_fields.extend(
-        str(field) for field in paper.get("conflictingFields") or []
-    )
+    conflicting_fields.extend(str(field) for field in paper.get("conflictingFields") or [])
     if identifier_hit:
         matched_fields.append("identifier")
     if title_similarity >= 0.72:
@@ -914,10 +1018,7 @@ def _why_selected(
             )
         return f"{title} matched on {matched_text} via {resolution_strategy}."
     if parsed.looks_like_non_paper:
-        return (
-            f"{title} is the nearest paper-like candidate, but the input may describe "
-            "a non-paper output."
-        )
+        return f"{title} is the nearest paper-like candidate, but the input may describe a non-paper output."
     return f"{title} is a weak fallback candidate from {resolution_strategy}."
 
 
@@ -1016,9 +1117,15 @@ def _extract_author_surnames(
 ) -> list[str]:
     surnames: list[str] = []
     if author_hint:
-        surnames.extend(
-            token for token in WORD_RE.findall(author_hint) if len(token) >= 3
-        )
+        surnames.extend(token for token in WORD_RE.findall(author_hint) if len(token) >= 3)
+    for segment in re.split(r"[,;]", text):
+        words = WORD_RE.findall(segment)
+        if not words:
+            continue
+        first = words[0]
+        tail = words[1:]
+        if len(first) >= 3 and first[0].isupper() and tail and all(len(word) <= 2 for word in tail[:3]):
+            surnames.append(first)
     lowered = text.lower()
     words = WORD_RE.findall(text)
     if "et al" in lowered and words:
@@ -1045,6 +1152,35 @@ def _extract_title_candidates(
     if title_hint:
         candidates.append(normalize_citation_text(title_hint))
     candidates.extend(match.strip() for match in QUOTED_RE.findall(normalized))
+    if year is not None:
+        year_match = re.search(rf"\b{year}\b", normalized)
+        if year_match:
+            suffix = normalized[year_match.end() :]
+            for fragment in re.split(r"[.;]", suffix):
+                cleaned = normalize_citation_text(fragment).strip(" -,:")
+                if not cleaned:
+                    continue
+                for venue in venue_hints:
+                    cleaned = re.sub(
+                        re.escape(venue),
+                        " ",
+                        cleaned,
+                        flags=re.IGNORECASE,
+                    )
+                cleaned = re.sub(r"\bet\s+al\b", " ", cleaned, flags=re.IGNORECASE)
+                cleaned = PAGES_RE.sub(" ", cleaned)
+                cleaned = re.sub(r"[,;:()]+", " ", cleaned)
+                cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
+                words = WORD_RE.findall(cleaned)
+                if len(words) < 2 or len(words) > 18:
+                    continue
+                if (
+                    len(words) <= 4
+                    and words[0].lower() in author_surnames
+                    and all(len(word) <= 2 for word in words[1:])
+                ):
+                    continue
+                candidates.append(" ".join(words))
 
     working = normalized
     if year is not None:
@@ -1072,17 +1208,11 @@ def _extract_title_candidates(
         if len(words) > 3 and author_surnames and words[0].lower() in author_surnames:
             candidates.append(" ".join(words[1:]))
     compact_tokens = [
-        token
-        for token in (word.lower() for word in words)
-        if len(token) >= 3 and token not in GENERIC_TITLE_WORDS
+        token for token in (word.lower() for word in words) if len(token) >= 3 and token not in GENERIC_TITLE_WORDS
     ]
     if compact_tokens:
         candidates.append(" ".join(compact_tokens[:10]))
-    return _dedupe_strings(
-        candidate
-        for candidate in candidates
-        if 2 <= len(WORD_RE.findall(candidate)) <= 18
-    )
+    return _dedupe_strings(candidate for candidate in candidates if 2 <= len(WORD_RE.findall(candidate)) <= 18)
 
 
 def _sparse_search_queries(parsed: ParsedCitation) -> list[str]:
@@ -1164,9 +1294,7 @@ def _venue_overlap(parsed: ParsedCitation, paper: dict[str, Any]) -> bool:
     venue = normalize_citation_text(str(paper.get("venue") or "")).lower()
     if not venue:
         return False
-    return any(
-        hint.lower() in venue or venue in hint.lower() for hint in parsed.venue_hints
-    )
+    return any(hint.lower() in venue or venue in hint.lower() for hint in parsed.venue_hints)
 
 
 def _identifier_hit(parsed: ParsedCitation, paper: dict[str, Any]) -> bool:
@@ -1184,20 +1312,14 @@ def _identifier_hit(parsed: ParsedCitation, paper: dict[str, Any]) -> bool:
     if parsed.identifier_type == "doi":
         normalized_identifier = lowered_identifier.removeprefix("doi:")
         return any(
-            normalized_identifier == candidate.lower().removeprefix("doi:")
-            for candidate in candidates
-            if candidate
+            normalized_identifier == candidate.lower().removeprefix("doi:") for candidate in candidates if candidate
         )
     if parsed.identifier_type == "arxiv":
         normalized_identifier = lowered_identifier.removeprefix("arxiv:")
         return any(
-            normalized_identifier == candidate.lower().removeprefix("arxiv:")
-            for candidate in candidates
-            if candidate
+            normalized_identifier == candidate.lower().removeprefix("arxiv:") for candidate in candidates if candidate
         )
-    return any(
-        lowered_identifier == candidate.lower() for candidate in candidates if candidate
-    )
+    return any(lowered_identifier == candidate.lower() for candidate in candidates if candidate)
 
 
 def _snippet_alignment(
@@ -1209,9 +1331,7 @@ def _snippet_alignment(
     if not snippet_text:
         return 0.0
     paper_text = " ".join(
-        part
-        for part in [str(paper.get("title") or ""), str(paper.get("abstract") or "")]
-        if part
+        part for part in [str(paper.get("title") or ""), str(paper.get("abstract") or "")] if part
     ).lower()
     if not paper_text:
         return 0.0
@@ -1247,16 +1367,8 @@ def _surname(name: str) -> str:
 
 
 def _token_overlap_ratio(left: str, right: str) -> float:
-    left_tokens = {
-        token
-        for token in re.findall(r"[a-z0-9]{3,}", left.lower())
-        if token not in GENERIC_TITLE_WORDS
-    }
-    right_tokens = {
-        token
-        for token in re.findall(r"[a-z0-9]{3,}", right.lower())
-        if token not in GENERIC_TITLE_WORDS
-    }
+    left_tokens = {token for token in re.findall(r"[a-z0-9]{3,}", left.lower()) if token not in GENERIC_TITLE_WORDS}
+    right_tokens = {token for token in re.findall(r"[a-z0-9]{3,}", right.lower()) if token not in GENERIC_TITLE_WORDS}
     if not left_tokens or not right_tokens:
         return 0.0
     intersection = left_tokens & right_tokens

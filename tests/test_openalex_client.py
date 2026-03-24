@@ -13,9 +13,7 @@ def test_openalex_work_to_paper_reconstructs_abstract_and_marks_truncation() -> 
         "display_name": "OpenAlex Paper",
         "publication_year": 2024,
         "publication_date": "2024-01-02",
-        "authorships": [
-            {"author": {"display_name": f"Author {index}"}} for index in range(1, 101)
-        ],
+        "authorships": [{"author": {"display_name": f"Author {index}"}} for index in range(1, 101)],
         "cited_by_count": 42,
         "referenced_works_count": 8,
         "primary_location": {"source": {"display_name": "Nature"}},
@@ -146,10 +144,7 @@ async def test_openalex_search_uses_polite_pool_and_range_filters(
     assert params["api_key"] == "oa-key"
     assert params["mailto"] == "team@example.com"
     assert params["search"] == "alignment"
-    assert (
-        params["filter"]
-        == "from_publication_date:2020-01-01,to_publication_date:2024-12-31"
-    )
+    assert params["filter"] == "from_publication_date:2020-01-01,to_publication_date:2024-12-31"
 
 
 @pytest.mark.asyncio
@@ -267,9 +262,7 @@ async def test_openalex_get_paper_citations_falls_back_when_cited_by_api_url_abs
     # Must not return empty results; must have constructed the fallback URL
     assert result["total"] == 462
     assert result["data"][0]["paperId"] == "W99"
-    assert (
-        captured[1]["url"] == "https://api.openalex.org/works?filter=cites:W3139434170"
-    )
+    assert captured[1]["url"] == "https://api.openalex.org/works?filter=cites:W3139434170"
 
 
 @pytest.mark.asyncio

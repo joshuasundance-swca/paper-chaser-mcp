@@ -77,8 +77,7 @@ class SerpApiScholarClient:
         except Exception as exc:
             logger.warning("SerpApi request failed: %s", exc)
             raise SerpApiUpstreamError(
-                f"SerpApi request failed: {exc}. "
-                "This may be a transient network error — try again later."
+                f"SerpApi request failed: {exc}. This may be a transient network error — try again later."
             ) from exc
 
         if response.status_code == 429:
@@ -90,15 +89,13 @@ class SerpApiScholarClient:
             )
         if response.status_code >= 500:
             raise SerpApiUpstreamError(
-                f"SerpApi returned HTTP {response.status_code}. "
-                "This is a transient upstream error — try again later."
+                f"SerpApi returned HTTP {response.status_code}. This is a transient upstream error — try again later."
             )
         try:
             response.raise_for_status()
         except Exception as exc:
             raise SerpApiError(
-                f"SerpApi returned HTTP {response.status_code}. "
-                "Check your API key and request parameters."
+                f"SerpApi returned HTTP {response.status_code}. Check your API key and request parameters."
             ) from exc
 
         data: dict[str, Any] = response.json()
@@ -109,18 +106,11 @@ class SerpApiScholarClient:
             msg = str(error_msg).lower()
             if "api_key" in msg or "invalid" in msg or "unauthorized" in msg:
                 raise SerpApiKeyMissingError(
-                    f"SerpApi authentication error: {error_msg}. "
-                    "Check your SERPAPI_API_KEY value."
+                    f"SerpApi authentication error: {error_msg}. Check your SERPAPI_API_KEY value."
                 )
             if "quota" in msg or "limit" in msg or "credits" in msg:
-                raise SerpApiQuotaError(
-                    f"SerpApi quota error: {error_msg}. "
-                    "Consider upgrading your SerpApi plan."
-                )
-            raise SerpApiError(
-                f"SerpApi returned an error: {error_msg}. "
-                "Check your request parameters and try again."
-            )
+                raise SerpApiQuotaError(f"SerpApi quota error: {error_msg}. Consider upgrading your SerpApi plan.")
+            raise SerpApiError(f"SerpApi returned an error: {error_msg}. Check your request parameters and try again.")
 
         return data
 
@@ -313,9 +303,7 @@ class SerpApiScholarClient:
             "provider": "serpapi_google_scholar",
             "authorId": author.get("author_id") or author_id.strip(),
             "name": author.get("name"),
-            "affiliations": [affiliations]
-            if isinstance(affiliations, str) and affiliations.strip()
-            else [],
+            "affiliations": [affiliations] if isinstance(affiliations, str) and affiliations.strip() else [],
             "homepage": author.get("website"),
             "citationCount": total_citations,
             "interests": interests,

@@ -103,11 +103,7 @@ def merge_candidates(candidates: list[RetrievedCandidate]) -> list[dict[str, Any
     for candidate in candidates:
         identity_keys = candidate_identity_keys(candidate.paper)
         existing_key = next(
-            (
-                alias_map[identity_key]
-                for identity_key in identity_keys
-                if identity_key in alias_map
-            ),
+            (alias_map[identity_key] for identity_key in identity_keys if identity_key in alias_map),
             None,
         )
         key = existing_key or canonical_dedupe_key(candidate.paper)
@@ -163,14 +159,9 @@ async def rerank_candidates(
         pre_ranked: list[tuple[float, dict[str, Any], str]] = []
         for item, paper_text in zip(merged_candidates, paper_texts):
             paper = item["paper"]
-            fused_rank_score = sum(
-                1.0 / (60.0 + rank) for rank in item["providerRanks"].values()
-            )
+            fused_rank_score = sum(1.0 / (60.0 + rank) for rank in item["providerRanks"].values())
             provider_bonus = max(
-                (
-                    PROVIDER_QUALITY_BONUS.get(provider, 0.0)
-                    for provider in item["providers"]
-                ),
+                (PROVIDER_QUALITY_BONUS.get(provider, 0.0) for provider in item["providers"]),
                 default=0.0,
             )
             provider_bonus += min(max(len(item["providers"]) - 1, 0) * 0.02, 0.06)
@@ -184,10 +175,7 @@ async def rerank_candidates(
                 citation_bonus += max(0.0, 0.05 - min(age * 0.004, 0.05))
             pre_ranked.append(
                 (
-                    _lexical_similarity(query, paper_text)
-                    + fused_rank_score
-                    + provider_bonus
-                    + citation_bonus,
+                    _lexical_similarity(query, paper_text) + fused_rank_score + provider_bonus + citation_bonus,
                     item,
                     paper_text,
                 )
@@ -217,39 +205,23 @@ async def rerank_candidates(
         lowered_paper_text = paper_text.lower()
         paper_tokens = _tokenize_text(lowered_paper_text)
         title_tokens = _tokenize_text(title_text.lower())
-        fused_rank_score = sum(
-            1.0 / (60.0 + rank) for rank in item["providerRanks"].values()
-        )
+        fused_rank_score = sum(1.0 / (60.0 + rank) for rank in item["providerRanks"].values())
         matched_candidate_concepts = [
-            concept
-            for concept in candidate_concepts
-            if concept and _concept_matches_tokens(concept, paper_tokens)
+            concept for concept in candidate_concepts if concept and _concept_matches_tokens(concept, paper_tokens)
         ]
-        matched_facets = [
-            facet for facet in facets if _paper_matches_facet(paper_tokens, facet)
-        ]
+        matched_facets = [facet for facet in facets if _paper_matches_facet(paper_tokens, facet)]
         matched_terms = [term for term in terms if term in paper_tokens]
-        matched_title_facets = [
-            facet for facet in facets if _paper_matches_facet(title_tokens, facet)
-        ]
+        matched_title_facets = [facet for facet in facets if _paper_matches_facet(title_tokens, facet)]
         matched_title_terms = [term for term in terms if term in title_tokens]
         matched_anchor_terms = [term for term in anchor_terms if term in paper_tokens]
-        matched_title_anchor_terms = [
-            term for term in anchor_terms if term in title_tokens
-        ]
+        matched_title_anchor_terms = [term for term in anchor_terms if term in title_tokens]
         matched_concepts = _dedupe_strings(matched_facets + matched_candidate_concepts)
         facet_coverage = len(matched_facets) / len(facets) if facets else 0.0
         term_coverage = len(matched_terms) / len(terms) if terms else 0.0
-        title_facet_coverage = (
-            len(matched_title_facets) / len(facets) if facets else 0.0
-        )
+        title_facet_coverage = len(matched_title_facets) / len(facets) if facets else 0.0
         title_term_coverage = len(matched_title_terms) / len(terms) if terms else 0.0
-        anchor_coverage = (
-            len(matched_anchor_terms) / len(anchor_terms) if anchor_terms else 0.0
-        )
-        title_anchor_coverage = (
-            len(matched_title_anchor_terms) / len(anchor_terms) if anchor_terms else 0.0
-        )
+        anchor_coverage = len(matched_anchor_terms) / len(anchor_terms) if anchor_terms else 0.0
+        title_anchor_coverage = len(matched_title_anchor_terms) / len(anchor_terms) if anchor_terms else 0.0
         concept_bonus = (
             min(len(matched_candidate_concepts) * 0.02, 0.08)
             + min(facet_coverage * 0.12, 0.12)
@@ -260,10 +232,7 @@ async def rerank_candidates(
             + min(title_anchor_coverage * 0.14, 0.14)
         )
         provider_bonus = max(
-            (
-                PROVIDER_QUALITY_BONUS.get(provider, 0.0)
-                for provider in item["providers"]
-            ),
+            (PROVIDER_QUALITY_BONUS.get(provider, 0.0) for provider in item["providers"]),
             default=0.0,
         )
         provider_bonus += min(max(len(item["providers"]) - 1, 0) * 0.02, 0.06)
@@ -345,10 +314,7 @@ def evaluate_speculative_variants(
     for item in top_pool:
         for variant in item["variants"]:
             if "speculative" in item["variantSources"]:
-                if (
-                    item.get("querySimilarity", 0.0)
-                    >= config.drift_similarity_threshold
-                ):
+                if item.get("querySimilarity", 0.0) >= config.drift_similarity_threshold:
                     contributions[variant] += 1
                 else:
                     drift_rejections.add(variant)
@@ -356,12 +322,9 @@ def evaluate_speculative_variants(
     accepted = sorted(
         variant
         for variant, count in contributions.items()
-        if count >= config.speculative_accept_min_novel_papers
-        and variant not in drift_rejections
+        if count >= config.speculative_accept_min_novel_papers and variant not in drift_rejections
     )
-    rejected = sorted(
-        variant for variant in drift_rejections if variant not in accepted
-    )
+    rejected = sorted(variant for variant in drift_rejections if variant not in accepted)
     drift_warnings = [
         (
             f"Rejected speculative expansion '{variant}' because its "
@@ -373,11 +336,7 @@ def evaluate_speculative_variants(
 
 
 def _paper_text(paper: dict[str, Any]) -> str:
-    authors = ", ".join(
-        author.get("name", "")
-        for author in (paper.get("authors") or [])
-        if isinstance(author, dict)
-    )
+    authors = ", ".join(author.get("name", "") for author in (paper.get("authors") or []) if isinstance(author, dict))
     abstract = ""
     if paper.get("source") != "serpapi_google_scholar":
         abstract = str(paper.get("abstract") or "")
@@ -426,9 +385,7 @@ def _normalized_string(value: Any) -> str:
 
 def _looks_like_arxiv(value: str) -> bool:
     normalized = value.lower()
-    return normalized.startswith("arxiv:") or bool(
-        re.match(r"^\d{4}\.\d{4,5}(?:v\d+)?$", normalized)
-    )
+    return normalized.startswith("arxiv:") or bool(re.match(r"^\d{4}\.\d{4,5}(?:v\d+)?$", normalized))
 
 
 def _paper_title_text(paper: dict[str, Any]) -> str:
@@ -456,9 +413,7 @@ def _tokenize_text(text: str) -> set[str]:
 
 
 def _paper_matches_facet(paper_tokens: set[str], facet: str) -> bool:
-    facet_tokens = [
-        token for token in re.findall(r"[a-z0-9]{3,}", facet.lower()) if token
-    ]
+    facet_tokens = [token for token in re.findall(r"[a-z0-9]{3,}", facet.lower()) if token]
     if not facet_tokens:
         return False
     matched = sum(token in paper_tokens for token in facet_tokens)
@@ -467,9 +422,7 @@ def _paper_matches_facet(paper_tokens: set[str], facet: str) -> bool:
 
 
 def _concept_matches_tokens(concept: str, paper_tokens: set[str]) -> bool:
-    concept_tokens = [
-        token for token in re.findall(r"[a-z0-9]{3,}", concept.lower()) if token
-    ]
+    concept_tokens = [token for token in re.findall(r"[a-z0-9]{3,}", concept.lower()) if token]
     if not concept_tokens:
         return False
     if len(concept_tokens) == 1:

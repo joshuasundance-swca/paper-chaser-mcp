@@ -81,9 +81,7 @@ def test_core_result_to_paper_uses_nested_download_url_variants() -> None:
         {
             "id": "core-1",
             "title": "Nested download url",
-            "downloadUrl": {
-                "urls": [{"link": "https://downloads.example/from-urls.pdf"}]
-            },
+            "downloadUrl": {"urls": [{"link": "https://downloads.example/from-urls.pdf"}]},
             "authors": [{"name": "Author One"}, {"orcid": "missing-name"}],
         }
     )

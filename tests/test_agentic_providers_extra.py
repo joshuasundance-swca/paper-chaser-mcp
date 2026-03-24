@@ -85,9 +85,7 @@ def test_provider_helpers_and_deterministic_bundle_paths() -> None:
         "search",
         "papers",
     ]
-    assert _normalized_embedding_text("  graph\n search   papers  ") == (
-        "graph search papers"
-    )
+    assert _normalized_embedding_text("  graph\n search   papers  ") == ("graph search papers")
     top_terms = _top_terms(
         [
             "recent graph retrieval papers",
@@ -103,9 +101,7 @@ def test_provider_helpers_and_deterministic_bundle_paths() -> None:
     assert _normalize_confidence_label("very high") == "high"
     assert _normalize_confidence_label("mixed") == "medium"
     assert _normalize_confidence_label(0.2) == "low"
-    assert _extract_seed_identifiers(
-        "doi 10.1234/example arxiv:2401.12345 https://example.com/paper 2401.12345"
-    ) == [
+    assert _extract_seed_identifiers("doi 10.1234/example arxiv:2401.12345 https://example.com/paper 2401.12345") == [
         "10.1234/example",
         "arxiv:2401.12345",
         "https://example.com/paper",
@@ -151,15 +147,20 @@ def test_provider_helpers_and_deterministic_bundle_paths() -> None:
     assert all(isinstance(item, ExpansionCandidate) for item in expansions)
     assert all("retrieval agents" in item.variant for item in expansions)
 
-    assert (
-        bundle.label_theme(seed_terms=["graph retrieval", "grounding"], papers=[])
-        == "Graph Retrieval / Grounding"
-    )
-    assert (
-        bundle.label_theme(seed_terms=[], papers=[{"venue": "Nature"}])
-        == "Nature cluster"
-    )
+    assert bundle.label_theme(seed_terms=["graph retrieval", "grounding"], papers=[]) == "Graph Retrieval / Grounding"
+    assert bundle.label_theme(seed_terms=[], papers=[{"venue": "Nature"}]) == "Nature cluster"
     assert bundle.label_theme(seed_terms=[], papers=[]) == "General theme"
+    assert (
+        bundle.label_theme(
+            seed_terms=[],
+            papers=[
+                {"title": "Noise impacts on wildlife"},
+                {"title": "Noise effects on wildlife physiology"},
+                {"title": "Noise and wildlife population trends"},
+            ],
+        )
+        == "Noise / Wildlife"
+    )
 
     empty_summary = bundle.summarize_theme(title="Agents", papers=[])
     populated_summary = bundle.summarize_theme(
@@ -199,12 +200,38 @@ def test_provider_helpers_and_deterministic_bundle_paths() -> None:
         evidence_papers=[{"title": "Paper A"}, {"title": "Paper B"}],
         answer_mode="qa",
     )
+    gap_qa = bundle.answer_question(
+        question="What are the main knowledge gaps highlighted across these papers?",
+        evidence_papers=[
+            {
+                "title": "Anthropogenic noise effects on wildlife behavior in birds",
+                "abstract": "Acoustic behavior responses in North America.",
+            },
+            {
+                "title": "Noise and wildlife behavior across birds",
+                "abstract": "Behavioral communication changes in North America.",
+            },
+            {
+                "title": "Noise response of mammals in Canada",
+                "abstract": "Acoustic behavior study near protected areas.",
+            },
+        ],
+        answer_mode="qa",
+    )
 
     assert no_evidence["confidence"] == "low"
     assert claim_check["confidence"] == "medium"
     assert "supported" in claim_check["answer"]
     assert comparison["answer"].startswith("Comparison grounded")
     assert "Paper A" in qa["answer"]
+    assert gap_qa["confidence"] == "medium"
+    assert "main recurring knowledge gaps" in gap_qa["answer"]
+    assert ("behavioral responses are better covered than physiological or demographic consequences") in gap_qa[
+        "answer"
+    ]
+    assert "long-term or chronic exposure evidence is still thin" in gap_qa["answer"]
+    assert ("community- and ecosystem-level impacts remain underrepresented") in gap_qa["answer"]
+    assert ("interactions with other stressors are rarely studied directly") in gap_qa["answer"]
 
     assert isinstance(
         resolve_provider_bundle(
@@ -285,19 +312,13 @@ def test_openai_provider_loaders_and_response_helpers(
     ]
 
     assert (
-        OpenAIProviderBundle._extract_response_text(
-            types.SimpleNamespace(output_text="  direct answer  ")
-        )
+        OpenAIProviderBundle._extract_response_text(types.SimpleNamespace(output_text="  direct answer  "))
         == "direct answer"
     )
     assert (
         OpenAIProviderBundle._extract_response_text(
             types.SimpleNamespace(
-                output=[
-                    types.SimpleNamespace(
-                        content=[types.SimpleNamespace(text="  nested answer  ")]
-                    )
-                ]
+                output=[types.SimpleNamespace(content=[types.SimpleNamespace(text="  nested answer  ")])]
             )
         )
         == "nested answer"
@@ -369,9 +390,9 @@ def test_openai_provider_loaders_and_response_helpers(
         )
 
     assert bundle._embedding_vectors({"data": [{"embedding": [1, 2]}]}) == [[1.0, 2.0]]
-    assert bundle._embedding_vectors(
-        types.SimpleNamespace(data=[types.SimpleNamespace(embedding=[3, 4])])
-    ) == [[3.0, 4.0]]
+    assert bundle._embedding_vectors(types.SimpleNamespace(data=[types.SimpleNamespace(embedding=[3, 4])])) == [
+        [3.0, 4.0]
+    ]
 
 
 def test_openai_provider_sync_response_and_embedding_methods(
@@ -528,9 +549,7 @@ def test_openai_provider_sync_high_level_methods_cover_direct_and_model_fallback
         def __init__(self, response: Any) -> None:
             self._response = response
 
-        def with_structured_output(
-            self, schema: Any, method: str
-        ) -> _StructuredInvoker:
+        def with_structured_output(self, schema: Any, method: str) -> _StructuredInvoker:
             assert schema is not None
             assert method == "function_calling"
             return _StructuredInvoker(self._response)
@@ -539,9 +558,7 @@ def test_openai_provider_sync_high_level_methods_cover_direct_and_model_fallback
         def __init__(self, response: Any) -> None:
             self._response = response
 
-        def with_structured_output(
-            self, schema: Any, method: str
-        ) -> _StructuredInvoker:
+        def with_structured_output(self, schema: Any, method: str) -> _StructuredInvoker:
             assert schema is not None
             assert method == "function_calling"
             return _StructuredInvoker(self._response)
@@ -597,6 +614,42 @@ def test_openai_provider_sync_high_level_methods_cover_direct_and_model_fallback
     assert fallback_label == "Graph Retrieval"
     assert "These papers share overlapping terms" in fallback_summary
     assert fallback_answer["confidence"] == "medium"
+
+
+def test_deterministic_provider_gap_answers_and_theme_labels_are_more_specific() -> None:
+    bundle = DeterministicProviderBundle(_config(provider="deterministic"))
+
+    label = bundle.label_theme(
+        seed_terms=["noise", "effects"],
+        papers=[
+            {"title": "Anthropogenic noise effects on wildlife"},
+            {"title": "Noise impacts on birds"},
+        ],
+    )
+    answer = bundle.answer_question(
+        question="What are the main knowledge gaps highlighted across these papers?",
+        evidence_papers=[
+            {
+                "title": "Anthropogenic noise effects on wildlife",
+                "abstract": (
+                    "Behavioral responses in birds dominate the evidence base, "
+                    "while long-term and community consequences remain unclear."
+                ),
+            },
+            {
+                "title": "Noise exposure in mammals",
+                "abstract": (
+                    "Acute playback experiments emphasize behaviour more than "
+                    "physiology, demography, or multistressor contexts."
+                ),
+            },
+        ],
+        answer_mode="qa",
+    )
+
+    assert "Effects" not in label
+    assert "Noise" in label
+    assert "long-term" in answer["answer"] or "community" in answer["answer"]
 
 
 def test_openai_provider_sync_embedding_fallbacks() -> None:
@@ -795,9 +848,7 @@ def test_openai_provider_loader_failures_and_sync_wrapper_none_paths(
         is None
     )
 
-    bundle._openai_client = types.SimpleNamespace(
-        responses=types.SimpleNamespace(create=lambda **kwargs: object())
-    )
+    bundle._openai_client = types.SimpleNamespace(responses=types.SimpleNamespace(create=lambda **kwargs: object()))
     assert (
         bundle._responses_parse(
             endpoint="responses.parse:planner",
@@ -836,11 +887,7 @@ def test_openai_provider_sync_wrapper_error_and_embedding_edge_paths(
     def _invalid_payload(**kwargs: Any) -> ProviderCallResult:
         return _success_result(
             types.SimpleNamespace(
-                output=[
-                    types.SimpleNamespace(
-                        content=[types.SimpleNamespace(text="not valid json")]
-                    )
-                ]
+                output=[types.SimpleNamespace(content=[types.SimpleNamespace(text="not valid json")])]
             ),
             endpoint=kwargs["endpoint"],
         )
@@ -867,9 +914,7 @@ def test_openai_provider_sync_wrapper_error_and_embedding_edge_paths(
         is None
     )
 
-    monkeypatch.setattr(
-        providers_module, "execute_provider_call_sync", _invalid_payload
-    )
+    monkeypatch.setattr(providers_module, "execute_provider_call_sync", _invalid_payload)
     assert (
         bundle._responses_parse(
             endpoint="responses.parse:planner",
@@ -880,10 +925,7 @@ def test_openai_provider_sync_wrapper_error_and_embedding_edge_paths(
         )
         is None
     )
-    assert any(
-        "OpenAI Responses parse failed" in record.getMessage()
-        for record in caplog.records
-    )
+    assert any("OpenAI Responses parse failed" in record.getMessage() for record in caplog.records)
 
     disabled_bundle = OpenAIProviderBundle(
         _config(disable_embeddings=True),
@@ -1010,11 +1052,7 @@ async def test_openai_provider_async_wrapper_and_embedding_success_paths(
     async def _invalid_async(**kwargs: Any) -> ProviderCallResult:
         return _success_result(
             types.SimpleNamespace(
-                output=[
-                    types.SimpleNamespace(
-                        content=[types.SimpleNamespace(text="not valid json")]
-                    )
-                ]
+                output=[types.SimpleNamespace(content=[types.SimpleNamespace(text="not valid json")])]
             ),
             endpoint=kwargs["endpoint"],
         )
@@ -1062,27 +1100,17 @@ async def test_openai_provider_async_wrapper_and_embedding_success_paths(
         )
         is None
     )
-    assert any(
-        "OpenAI Responses parse failed" in record.getMessage()
-        for record in caplog.records
-    )
+    assert any("OpenAI Responses parse failed" in record.getMessage() for record in caplog.records)
 
     class _EmbeddingsClient:
         async def create(self, *, model: str, input: Any) -> dict[str, Any]:
             del model
             if isinstance(input, list):
-                return {
-                    "data": [
-                        {"embedding": [1.0, 0.0] if "retrieval" in text else [0.0, 1.0]}
-                        for text in input
-                    ]
-                }
+                return {"data": [{"embedding": [1.0, 0.0] if "retrieval" in text else [0.0, 1.0]} for text in input]}
             return {"data": [{"embedding": [1.0, 0.0]}]}
 
     async_bundle = OpenAIProviderBundle(_config(), api_key="sk-test")
-    async_bundle._async_openai_client = types.SimpleNamespace(
-        embeddings=_EmbeddingsClient()
-    )
+    async_bundle._async_openai_client = types.SimpleNamespace(embeddings=_EmbeddingsClient())
     monkeypatch.setattr(providers_module, "execute_provider_call", _success_async)
     query_embedding = await async_bundle.aembed_query(
         "retrieval agents",

@@ -356,8 +356,7 @@ def _build_spec(name: str, input_model: type) -> ToolSpec:
 
 
 TOOL_SPECS: dict[str, ToolSpec] = {
-    name: _build_spec(name, input_model)
-    for name, input_model in TOOL_INPUT_MODELS.items()
+    name: _build_spec(name, input_model) for name, input_model in TOOL_INPUT_MODELS.items()
 }
 
 

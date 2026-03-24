@@ -7,9 +7,7 @@ import scholar_search_mcp.cli as cli
 
 
 def test_cli_version_fallback_and_parser_help(monkeypatch) -> None:
-    monkeypatch.setattr(
-        cli, "version", lambda _: (_ for _ in ()).throw(PackageNotFoundError())
-    )
+    monkeypatch.setattr(cli, "version", lambda _: (_ for _ in ()).throw(PackageNotFoundError()))
 
     parser = cli.build_parser()
     help_text = parser.format_help()

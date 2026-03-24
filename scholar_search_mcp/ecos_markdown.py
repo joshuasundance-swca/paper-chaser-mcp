@@ -88,9 +88,7 @@ class EcosMarkdownConverter:
             filename=filename,
         )
         if extension is None:
-            raise EcosUnsupportedDocumentTypeError(
-                f"Unsupported ECOS document type: {content_type or 'unknown'}"
-            )
+            raise EcosUnsupportedDocumentTypeError(f"Unsupported ECOS document type: {content_type or 'unknown'}")
 
         converter = self._get_converter()
         result = converter.convert_stream(

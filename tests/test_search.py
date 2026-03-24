@@ -538,11 +538,7 @@ async def test_provider_specific_search_tool_upstream_5xx_is_provider_failed(
     monkeypatch.setattr(server, "core_client", FailingCoreClient())
     monkeypatch.setattr(server, "client", semantic_client)
 
-    payload = _payload(
-        await server.call_tool(
-            "search_papers_core", {"query": "transformer architecture"}
-        )
-    )
+    payload = _payload(await server.call_tool("search_papers_core", {"query": "transformer architecture"}))
 
     # Top-level data must be empty — no results were returned.
     assert payload["total"] == 0
@@ -555,8 +551,7 @@ async def test_provider_specific_search_tool_upstream_5xx_is_provider_failed(
     # resultStatus must be 'provider_failed', NOT 'no_results', so agents can
     # distinguish a transient outage from a genuinely empty query.
     assert meta["resultStatus"] == "provider_failed", (
-        "Expected 'provider_failed' when the sole provider raises an upstream error, "
-        f"got {meta['resultStatus']!r}"
+        f"Expected 'provider_failed' when the sole provider raises an upstream error, got {meta['resultStatus']!r}"
     )
 
     # The failed attempt must be recorded.
@@ -571,9 +566,7 @@ async def test_provider_specific_search_tool_upstream_5xx_is_provider_failed(
     )
     assert "CORE" in hint, "nextStepHint should name the failing provider"
     # Must NOT give the misleading "broaden the query" guidance for a failure.
-    assert "broaden" not in hint.lower(), (
-        "nextStepHint must not suggest broadening the query for a provider failure"
-    )
+    assert "broaden" not in hint.lower(), "nextStepHint must not suggest broadening the query for a provider failure"
 
     # No fallback to Semantic Scholar should have occurred.
     assert semantic_client.called is False
@@ -599,9 +592,7 @@ async def test_all_providers_fail_gives_provider_failed_status(
     monkeypatch.setattr(server, "core_client", FailingCoreClient())
     monkeypatch.setattr(server, "client", FailingSemanticClient())
 
-    payload = _payload(
-        await server.call_tool("search_papers", {"query": "neural nets"})
-    )
+    payload = _payload(await server.call_tool("search_papers", {"query": "neural nets"}))
 
     meta = payload["brokerMetadata"]
     assert meta["resultStatus"] == "provider_failed"
@@ -633,9 +624,7 @@ async def test_mixed_failure_and_no_results_gives_no_results_status(
     monkeypatch.setattr(server, "core_client", FailingCoreClient())
     monkeypatch.setattr(server, "client", EmptySemanticClient())
 
-    payload = _payload(
-        await server.call_tool("search_papers", {"query": "neural nets"})
-    )
+    payload = _payload(await server.call_tool("search_papers", {"query": "neural nets"}))
 
     meta = payload["brokerMetadata"]
     assert meta["resultStatus"] == "no_results"
@@ -743,9 +732,7 @@ async def test_search_papers_ss_filters_always_bypass_core(
 
     await server.call_tool("search_papers", {"query": "test", **extra_filter})
 
-    assert not spy_core.called, (
-        f"CORE should be skipped when filter {extra_filter} is set"
-    )
+    assert not spy_core.called, f"CORE should be skipped when filter {extra_filter} is set"
 
 
 @pytest.mark.asyncio
@@ -1067,10 +1054,7 @@ async def test_search_papers_broker_metadata_reports_attempts_and_filter_routing
     assert broker_meta["attemptedProviders"][0]["reason"] is None
     assert broker_meta["attemptedProviders"][1]["provider"] == "arxiv"
     assert broker_meta["attemptedProviders"][1]["status"] == "skipped"
-    assert (
-        "earlier provider already returned results"
-        in broker_meta["attemptedProviders"][1]["reason"]
-    )
+    assert "earlier provider already returned results" in broker_meta["attemptedProviders"][1]["reason"]
 
 
 # ---------------------------------------------------------------------------
@@ -1101,9 +1085,7 @@ async def test_broker_metadata_result_quality_strong_for_semantic_scholar(
     monkeypatch.setattr(server, "enable_arxiv", False)
     monkeypatch.setattr(server, "client", SemanticClient())
 
-    payload = _payload(
-        await server.call_tool("search_papers", {"query": "transformers"})
-    )
+    payload = _payload(await server.call_tool("search_papers", {"query": "transformers"}))
     broker_meta = payload["brokerMetadata"]
 
     assert broker_meta["resultQuality"] == "strong"
@@ -1233,9 +1215,7 @@ async def test_broker_metadata_result_quality_low_relevance_uses_abstract_text(
     monkeypatch.setattr(server, "enable_arxiv", False)
     monkeypatch.setattr(server, "client", SemanticClient())
 
-    payload = _payload(
-        await server.call_tool("search_papers", {"query": "transformers"})
-    )
+    payload = _payload(await server.call_tool("search_papers", {"query": "transformers"}))
     broker_meta = payload["brokerMetadata"]
 
     assert broker_meta["providerUsed"] == "semantic_scholar"
@@ -1268,11 +1248,7 @@ async def test_broker_metadata_result_quality_lexical_for_core(
     monkeypatch.setattr(server, "core_client", CoreClient())
 
     # Use a nonsense-style query to mirror the live UX audit scenario
-    payload = _payload(
-        await server.call_tool(
-            "search_papers", {"query": "asdkfjhasdkjfh research paper nonsense"}
-        )
-    )
+    payload = _payload(await server.call_tool("search_papers", {"query": "asdkfjhasdkjfh research paper nonsense"}))
     broker_meta = payload["brokerMetadata"]
 
     assert broker_meta["providerUsed"] == "core"
@@ -1364,9 +1340,7 @@ async def test_broker_metadata_result_quality_unknown_for_no_results(
     monkeypatch.setattr(server, "enable_arxiv", False)
     monkeypatch.setattr(server, "enable_serpapi", False)
 
-    payload = _payload(
-        await server.call_tool("search_papers", {"query": "asdkfjhasdkjfh"})
-    )
+    payload = _payload(await server.call_tool("search_papers", {"query": "asdkfjhasdkjfh"}))
     broker_meta = payload["brokerMetadata"]
 
     assert broker_meta["providerUsed"] == "none"

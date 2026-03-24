@@ -4,7 +4,12 @@ import pytest
 
 from scholar_search_mcp import server
 from scholar_search_mcp.agentic import WorkspaceRegistry
-from scholar_search_mcp.citation_repair import parse_citation
+from scholar_search_mcp.citation_repair import (
+    RankedCitationCandidate,
+    _filtered_alternative_candidates,
+    parse_citation,
+    resolve_citation,
+)
 from scholar_search_mcp.enrichment import PaperEnrichmentService
 from tests.helpers import (
     RecordingCrossrefClient,
@@ -21,10 +26,109 @@ def test_parse_citation_extracts_environmental_reference_fields() -> None:
     assert parsed.year == 2009
     assert "rockstrom" in parsed.author_surnames
     assert "nature" in parsed.venue_hints
-    assert any(
-        "planetary boundaries" in candidate.lower()
-        for candidate in parsed.title_candidates
+    assert any("planetary boundaries" in candidate.lower() for candidate in parsed.title_candidates)
+
+
+def test_parse_citation_extracts_bibliography_title_after_year() -> None:
+    parsed = parse_citation("Vaswani A, Shazeer N, Parmar N, et al. 2017. Attention Is All You Need. NeurIPS.")
+
+    assert parsed.year == 2017
+    assert {"vaswani", "shazeer", "parmar"} <= set(parsed.author_surnames)
+    assert "neurips" in parsed.venue_hints
+    assert "Attention Is All You Need" in parsed.title_candidates
+
+
+def test_filtered_alternative_candidates_drop_weak_year_only_matches() -> None:
+    best = RankedCitationCandidate(
+        paper={"paperId": "best", "title": "Attention Is All You Need", "year": 2017},
+        score=0.96,
+        resolution_strategy="exact_title",
+        matched_fields=["title", "author", "year"],
+        conflicting_fields=[],
+        title_similarity=0.99,
+        year_delta=0,
+        author_overlap=2,
+        candidate_count=3,
+        why_selected="Best candidate.",
     )
+    weak = RankedCitationCandidate(
+        paper={"paperId": "weak", "title": "Orthopedic Review Handbook", "year": 2017},
+        score=0.46,
+        resolution_strategy="sparse_metadata",
+        matched_fields=["year"],
+        conflicting_fields=["title", "author"],
+        title_similarity=0.18,
+        year_delta=0,
+        author_overlap=0,
+        candidate_count=3,
+        why_selected="Weak candidate.",
+    )
+
+    assert (
+        _filtered_alternative_candidates(
+            candidates=[best, weak],
+            confidence="high",
+        )
+        == []
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_citation_short_circuits_after_high_confidence_title_match() -> None:
+    class FastExactSemanticClient(RecordingSemanticClient):
+        async def search_papers_match(self, **kwargs) -> dict:
+            self.calls.append(("search_papers_match", kwargs))
+            return {
+                "paperId": "transformer-1",
+                "title": "Attention Is All You Need",
+                "year": 2017,
+                "venue": "NeurIPS",
+                "authors": [
+                    {"name": "Ashish Vaswani"},
+                    {"name": "Noam Shazeer"},
+                    {"name": "Niki Parmar"},
+                ],
+                "matchFound": True,
+                "matchStrategy": "exact_title",
+                "matchConfidence": "high",
+                "matchedFields": ["title", "author", "year"],
+                "candidateCount": 1,
+            }
+
+        async def search_snippets(self, **kwargs) -> dict:
+            raise AssertionError(f"snippet recovery should be skipped after exact title match: {kwargs!r}")
+
+        async def search_papers(self, **kwargs) -> dict:
+            raise AssertionError(f"sparse metadata search should be skipped after exact title match: {kwargs!r}")
+
+    semantic = FastExactSemanticClient()
+
+    payload = await resolve_citation(
+        citation=("Vaswani A, Shazeer N, Parmar N, et al. 2017. Attention Is All You Need. NeurIPS."),
+        max_candidates=3,
+        client=semantic,
+        enable_core=False,
+        enable_semantic_scholar=True,
+        enable_openalex=False,
+        enable_arxiv=False,
+        enable_serpapi=False,
+        core_client=None,
+        openalex_client=None,
+        arxiv_client=None,
+        serpapi_client=None,
+    )
+
+    assert payload["resolutionConfidence"] == "high"
+    assert payload["resolutionStrategy"] == "exact_title"
+    assert semantic.calls == [
+        (
+            "search_papers_match",
+            {
+                "query": "Attention Is All You Need",
+                "fields": None,
+            },
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -102,7 +206,24 @@ async def test_resolve_citation_include_enrichment_only_updates_best_match(
     semantic = RecordingSemanticClient()
     openalex = RecordingOpenAlexClient()
     registry = WorkspaceRegistry(ttl_seconds=1800, enable_trace_log=False)
-    crossref = RecordingCrossrefClient()
+
+    class MatchingCrossrefClient(RecordingCrossrefClient):
+        async def search_work(self, query: str) -> dict:
+            self.calls.append(("search_work", {"query": query}))
+            return {
+                "doi": "10.1234/crossref-query",
+                "title": "Climate adaptation pathways",
+                "authors": [{"name": "Lead Author"}],
+                "venue": "Nature Climate Change",
+                "publisher": "Crossref Publisher",
+                "publicationType": "journal-article",
+                "publicationDate": "2021-05-01",
+                "year": 2021,
+                "url": "https://doi.org/10.1234/crossref-query",
+                "citationCount": 7,
+            }
+
+    crossref = MatchingCrossrefClient()
     unpaywall = RecordingUnpaywallClient()
     enrichment_service = PaperEnrichmentService(
         crossref_client=crossref,
@@ -170,9 +291,7 @@ async def test_resolve_citation_include_enrichment_only_updates_best_match(
     assert best_paper["enrichments"]["crossref"]["doi"] == "10.1234/crossref-query"
     assert best_paper["enrichments"]["unpaywall"]["isOa"] is True
     assert payload["alternatives"] == []
-    assert crossref.calls == [
-        ("search_work", {"query": "Climate adaptation pathways 2021 lead author"})
-    ]
+    assert crossref.calls == [("search_work", {"query": "Climate adaptation pathways"})]
     assert unpaywall.calls == [("get_open_access", {"doi": "10.1234/crossref-query"})]
 
 

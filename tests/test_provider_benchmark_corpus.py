@@ -23,9 +23,7 @@ def test_provider_benchmark_corpus_covers_required_scenarios() -> None:
         "provider_outage",
     }.issubset(categories)
 
-    outage_providers = {
-        case["provider"] for case in cases if case["category"] == "provider_outage"
-    }
+    outage_providers = {case["provider"] for case in cases if case["category"] == "provider_outage"}
     assert outage_providers == {
         "semantic_scholar",
         "openalex",

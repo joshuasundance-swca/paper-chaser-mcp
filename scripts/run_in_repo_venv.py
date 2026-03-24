@@ -20,17 +20,12 @@ def _repo_venv_python() -> Path:
     for candidate in candidates:
         if candidate.exists():
             return candidate
-    raise SystemExit(
-        "Could not find a repo-local virtualenv Python at "
-        f"{candidates[0]} or {candidates[1]}."
-    )
+    raise SystemExit(f"Could not find a repo-local virtualenv Python at {candidates[0]} or {candidates[1]}.")
 
 
 def main() -> int:
     if len(sys.argv) < 2:
-        raise SystemExit(
-            "Usage: python scripts/run_in_repo_venv.py <command> [args...]"
-        )
+        raise SystemExit("Usage: python scripts/run_in_repo_venv.py <command> [args...]")
 
     venv_python = _repo_venv_python()
     completed = subprocess.run(  # nosec B603

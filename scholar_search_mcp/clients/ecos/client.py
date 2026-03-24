@@ -49,9 +49,7 @@ def _filename_from_headers(headers: Any) -> str | None:
     if isinstance(headers, dict):
         content_disposition = headers.get("content-disposition")
     else:
-        content_disposition = getattr(headers, "get", lambda *_args, **_kwargs: None)(
-            "content-disposition"
-        )
+        content_disposition = getattr(headers, "get", lambda *_args, **_kwargs: None)("content-disposition")
     if not isinstance(content_disposition, str):
         return None
     match = re.search(r'filename="?([^";]+)"?', content_disposition)
@@ -79,9 +77,7 @@ class EcosClient:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.document_timeout = document_timeout
-        self.document_conversion_timeout = max(
-            float(document_conversion_timeout), 0.001
-        )
+        self.document_conversion_timeout = max(float(document_conversion_timeout), 0.001)
         self.max_document_bytes = max(int(max_document_size_mb), 1) * 1024 * 1024
         self.verify_tls = verify_tls
         self.ca_bundle = str(ca_bundle or "").strip() or None
@@ -92,9 +88,7 @@ class EcosClient:
         self._api_uses_system_store = False
         self._document_uses_system_store = False
 
-    def _build_client(
-        self, *, timeout: float, prefer_system_store: bool = False
-    ) -> Any:
+    def _build_client(self, *, timeout: float, prefer_system_store: bool = False) -> Any:
         return httpx.AsyncClient(
             timeout=timeout,
             follow_redirects=True,
@@ -148,9 +142,7 @@ class EcosClient:
         document_client: bool,
         operation: Callable[[Any], Awaitable[_PayloadT]],
     ) -> _PayloadT:
-        client = (
-            self._get_document_client() if document_client else self._get_api_client()
-        )
+        client = self._get_document_client() if document_client else self._get_api_client()
         try:
             return await operation(client)
         except httpx.ConnectError as exc:
@@ -211,9 +203,7 @@ class EcosClient:
         normalized = str(value).strip()
         if not normalized:
             return []
-        values = [
-            segment.strip() for segment in normalized.split(",") if segment.strip()
-        ]
+        values = [segment.strip() for segment in normalized.split(",") if segment.strip()]
         return sorted(dict.fromkeys(values))
 
     @staticmethod
@@ -267,11 +257,7 @@ class EcosClient:
         if lookup.payload is None:
             if lookup.outcome.status_bucket in {"success", "empty"}:
                 return {"meta": {"totalCount": 0}, "data": []}
-            raise ValueError(
-                lookup.outcome.error
-                or lookup.outcome.fallback_reason
-                or "ECOS species search failed."
-            )
+            raise ValueError(lookup.outcome.error or lookup.outcome.fallback_reason or "ECOS species search failed.")
         return cast(dict[str, Any], lookup.payload)
 
     async def list_label_values(
@@ -295,9 +281,7 @@ class EcosClient:
             if lookup.outcome.status_bucket in {"success", "empty"}:
                 return []
             raise ValueError(
-                lookup.outcome.error
-                or lookup.outcome.fallback_reason
-                or "ECOS label value lookup failed."
+                lookup.outcome.error or lookup.outcome.fallback_reason or "ECOS label value lookup failed."
             )
         payload = cast(dict[str, Any], lookup.payload)
         values = payload.get("data")
@@ -397,40 +381,22 @@ class EcosClient:
                     description=str(item.get("desc") or "").strip() or None,
                     dps=str(item.get("dps") or "").strip() or None,
                     status=str(item.get("status") or "").strip() or None,
-                    statusCategory=str(item.get("status_category") or "").strip()
-                    or None,
+                    statusCategory=str(item.get("status_category") or "").strip() or None,
                     listingDate=str(item.get("listing_date") or "").strip() or None,
-                    leadFwsRegion=str(item.get("lead_fws_region") or "").strip()
-                    or None,
-                    recoveryPriorityNumber=str(
-                        item.get("recovery_priority_number") or ""
-                    ).strip()
-                    or None,
+                    leadFwsRegion=str(item.get("lead_fws_region") or "").strip() or None,
+                    recoveryPriorityNumber=str(item.get("recovery_priority_number") or "").strip() or None,
                     moreInfoUrl=(
                         self.resolve_url(item["more_info_url"])
-                        if isinstance(item.get("more_info_url"), str)
-                        and str(item["more_info_url"]).strip()
+                        if isinstance(item.get("more_info_url"), str) and str(item["more_info_url"]).strip()
                         else None
                     ),
-                    currentRangeCountries=self._parse_multi_value(
-                        item.get("current_range_country")
-                    ),
-                    currentRangeStates=self._parse_multi_value(
-                        item.get("current_range_state")
-                    ),
-                    currentRangeCounties=self._parse_multi_value(
-                        item.get("current_range_county")
-                    ),
-                    currentRangeRefuges=self._parse_multi_value(
-                        item.get("current_range_refuge")
-                    ),
+                    currentRangeCountries=self._parse_multi_value(item.get("current_range_country")),
+                    currentRangeStates=self._parse_multi_value(item.get("current_range_state")),
+                    currentRangeCounties=self._parse_multi_value(item.get("current_range_county")),
+                    currentRangeRefuges=self._parse_multi_value(item.get("current_range_refuge")),
                     rangeEnvelope=str(item.get("range_envelope") or "").strip() or None,
-                    rangeShapefile=str(item.get("range_shapefile") or "").strip()
-                    or None,
-                    shapefileLastUpdated=str(
-                        item.get("shapefile_last_updated") or ""
-                    ).strip()
-                    or None,
+                    rangeShapefile=str(item.get("range_shapefile") or "").strip() or None,
+                    shapefileLastUpdated=str(item.get("shapefile_last_updated") or "").strip() or None,
                 )
             )
         return entities
@@ -449,9 +415,7 @@ class EcosClient:
             return sorted(dict.fromkeys(value for value in values if value))
 
         return EcosRangeSummary(
-            historicalRangeStates=self._parse_multi_value(
-                payload.get("historical_range_state")
-            ),
+            historicalRangeStates=self._parse_multi_value(payload.get("historical_range_state")),
             currentRangeCountries=_collect("current_range_countries"),
             currentRangeStates=_collect("current_range_states"),
             currentRangeCounties=_collect("current_range_counties"),
@@ -465,9 +429,7 @@ class EcosClient:
         if isinstance(value, dict):
             title = str(value.get("value") or "").strip() or None
             url = value.get("url")
-            normalized_url = (
-                self.resolve_url(url) if isinstance(url, str) and url.strip() else None
-            )
+            normalized_url = self.resolve_url(url) if isinstance(url, str) and url.strip() else None
             return title, normalized_url
         if value is None:
             return None, None
@@ -509,25 +471,17 @@ class EcosClient:
         for item in documents:
             if not isinstance(item, dict):
                 continue
-            title, url = self._normalize_document_title_and_url(
-                item.get("publication_title")
-            )
+            title, url = self._normalize_document_title_and_url(item.get("publication_title"))
             normalized.append(
                 EcosDocument(
                     documentKind=document_kind,
                     title=title,
                     url=url,
-                    documentDate=str(item.get("publication_date") or "").strip()
-                    or None,
+                    documentDate=str(item.get("publication_date") or "").strip() or None,
                     sourceId=item.get("id"),
                     publicationId=item.get("pub_id"),
-                    publicationPage=str(item.get("publication_page") or "").strip()
-                    or None,
-                    documentTypes=[
-                        str(value).strip()
-                        for value in (item.get("doc_types") or [])
-                        if str(value).strip()
-                    ],
+                    publicationPage=str(item.get("publication_page") or "").strip() or None,
+                    documentTypes=[str(value).strip() for value in (item.get("doc_types") or []) if str(value).strip()],
                 )
             )
         return normalized
@@ -543,9 +497,7 @@ class EcosClient:
             for item in entity.get("biological_opinion") or []:
                 if not isinstance(item, dict):
                     continue
-                title, url = self._normalize_document_title_and_url(
-                    item.get("file_name")
-                )
+                title, url = self._normalize_document_title_and_url(item.get("file_name"))
                 normalized.append(
                     EcosDocument(
                         documentKind="biological_opinion",
@@ -556,12 +508,9 @@ class EcosClient:
                         documentType=str(item.get("category") or "").strip() or None,
                         category=str(item.get("category") or "").strip() or None,
                         eventCode=str(item.get("event_code") or "").strip() or None,
-                        leadAgencies=str(item.get("lead_agencies_csv") or "").strip()
-                        or None,
-                        leadOffices=str(item.get("lead_offices_csv") or "").strip()
-                        or None,
-                        activities=str(item.get("activity_titles_csv") or "").strip()
-                        or None,
+                        leadAgencies=str(item.get("lead_agencies_csv") or "").strip() or None,
+                        leadOffices=str(item.get("lead_offices_csv") or "").strip() or None,
+                        activities=str(item.get("activity_titles_csv") or "").strip() or None,
                         locations=str(item.get("locations_csv") or "").strip() or None,
                         workTypes=str(item.get("work_types_csv") or "").strip() or None,
                     )
@@ -582,9 +531,7 @@ class EcosClient:
             for item in values:
                 if not isinstance(item, dict):
                     continue
-                title, url = self._normalize_document_title_and_url(
-                    item.get("plan_title")
-                )
+                title, url = self._normalize_document_title_and_url(item.get("plan_title"))
                 normalized.append(
                     EcosDocument(
                         documentKind="conservation_plan_link",
@@ -636,9 +583,7 @@ class EcosClient:
 
         escaped = self._escape_filter_literal(normalized_query)
         exact_filter = f"/species@cn = '{escaped}' or /species@sn = '{escaped}'"
-        prefix_filter = (
-            f"/species@cn like '{escaped}%' or /species@sn like '{escaped}%'"
-        )
+        prefix_filter = f"/species@cn like '{escaped}%' or /species@sn like '{escaped}%'"
 
         raw_hits: dict[str, tuple[int, EcosSpeciesHit]] = {}
 
@@ -684,13 +629,9 @@ class EcosClient:
             except ValueError:
                 continue
             entities = payload.get("species_entities") or []
-            first_entity = (
-                entities[0] if entities and isinstance(entities[0], dict) else {}
-            )
+            first_entity = entities[0] if entities and isinstance(entities[0], dict) else {}
             hit.group = str(payload.get("group") or "").strip() or None
-            hit.status_category = (
-                str(first_entity.get("status_category") or "").strip() or None
-            )
+            hit.status_category = str(first_entity.get("status_category") or "").strip() or None
             hit.lead_agency = str(first_entity.get("agency") or "").strip() or None
 
         return {
@@ -732,9 +673,7 @@ class EcosClient:
                     flattened.extend(item for item in values if isinstance(item, dict))
         conservation_links = profile.get("conservationPlanLinks") or []
         if isinstance(conservation_links, list):
-            flattened.extend(
-                item for item in conservation_links if isinstance(item, dict)
-            )
+            flattened.extend(item for item in conservation_links if isinstance(item, dict))
         return flattened
 
     async def list_species_documents(
@@ -749,11 +688,7 @@ class EcosClient:
         normalized_kinds = list(dict.fromkeys(document_kinds or []))
         if normalized_kinds:
             allowed = set(normalized_kinds)
-            documents = [
-                document
-                for document in documents
-                if document.get("documentKind") in allowed
-            ]
+            documents = [document for document in documents if document.get("documentKind") in allowed]
         ordered = sorted(
             documents,
             key=lambda document: (
@@ -831,11 +766,7 @@ class EcosClient:
                 ),
                 contentType=None,
                 extractionStatus="fetch_failed",
-                warnings=[
-                    lookup.outcome.error
-                    or lookup.outcome.fallback_reason
-                    or "ECOS document fetch failed."
-                ],
+                warnings=[lookup.outcome.error or lookup.outcome.fallback_reason or "ECOS document fetch failed."],
             )
             return dump_jsonable(response)
 
@@ -849,10 +780,7 @@ class EcosClient:
         )
 
         logger.info(
-            (
-                "ECOS document fetch completed after %d ms: url=%s "
-                "final_url=%s status=%s content_type=%s bytes=%s"
-            ),
+            ("ECOS document fetch completed after %d ms: url=%s final_url=%s status=%s content_type=%s bytes=%s"),
             fetch_elapsed_ms,
             absolute_url,
             final_url,
@@ -863,22 +791,14 @@ class EcosClient:
 
         if payload.get("status") == "too_large":
             logger.warning(
-                (
-                    "ECOS document conversion skipped because the document "
-                    "exceeded the size limit: %s"
-                ),
+                ("ECOS document conversion skipped because the document exceeded the size limit: %s"),
                 final_url,
             )
             response = EcosDocumentTextResponse(
                 document=document,
                 contentType=content_type,
                 extractionStatus="too_large",
-                warnings=[
-                    (
-                        "ECOS document exceeded the configured size limit "
-                        "before conversion."
-                    )
-                ],
+                warnings=[("ECOS document exceeded the configured size limit before conversion.")],
             )
             return dump_jsonable(response)
 
@@ -926,10 +846,7 @@ class EcosClient:
                 contentType=content_type,
                 extractionStatus="conversion_timed_out",
                 warnings=[
-                    (
-                        "ECOS document conversion exceeded the configured "
-                        "timeout before Markdown extraction finished."
-                    )
+                    ("ECOS document conversion exceeded the configured timeout before Markdown extraction finished.")
                 ],
             )
             return dump_jsonable(response)
@@ -970,10 +887,7 @@ class EcosClient:
 
         if len(markdown.strip()) < 50:
             logger.warning(
-                (
-                    "ECOS document conversion produced nearly empty markdown "
-                    "after %d ms: %s"
-                ),
+                ("ECOS document conversion produced nearly empty markdown after %d ms: %s"),
                 conversion_elapsed_ms,
                 final_url,
             )
@@ -982,12 +896,7 @@ class EcosClient:
                 markdown=markdown,
                 contentType=content_type,
                 extractionStatus="empty_or_image_only",
-                warnings=[
-                    (
-                        "Converted Markdown was nearly empty. The source may "
-                        "be image-only or poorly extractable."
-                    )
-                ],
+                warnings=[("Converted Markdown was nearly empty. The source may be image-only or poorly extractable.")],
             )
             return dump_jsonable(response)
 

@@ -36,10 +36,7 @@ def test_expected_ghcr_identifier_rejects_non_canonical_repository_urls(
 ) -> None:
     with pytest.raises(
         SystemExit,
-        match=(
-            "server.json repository.url must point to an "
-            "https://github.com/<owner>/<repo> path"
-        ),
+        match=("server.json repository.url must point to an https://github.com/<owner>/<repo> path"),
     ):
         validate_deployment._expected_ghcr_identifier(repository_url, "1.2.3")
 

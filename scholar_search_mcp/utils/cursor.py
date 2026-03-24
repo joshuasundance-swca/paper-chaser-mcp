@@ -139,8 +139,7 @@ def decode_cursor(cursor: str) -> CursorState:
         payload = json.loads(json_bytes)
     except Exception as exc:
         raise ValueError(
-            f"Corrupted pagination cursor {cursor!r}: cannot decode. "
-            "Restart the request without a cursor."
+            f"Corrupted pagination cursor {cursor!r}: cannot decode. Restart the request without a cursor."
         ) from exc
 
     try:
@@ -153,8 +152,7 @@ def decode_cursor(cursor: str) -> CursorState:
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(
-            f"Corrupted pagination cursor {cursor!r}: missing required fields. "
-            "Restart the request without a cursor."
+            f"Corrupted pagination cursor {cursor!r}: missing required fields. Restart the request without a cursor."
         ) from exc
 
 
@@ -183,8 +181,7 @@ def decode_bulk_cursor(cursor: str) -> BulkCursorState:
         payload = json.loads(json_bytes)
     except Exception as exc:
         raise ValueError(
-            f"Corrupted pagination cursor {cursor!r}: cannot decode. "
-            "Restart the request without a cursor."
+            f"Corrupted pagination cursor {cursor!r}: cannot decode. Restart the request without a cursor."
         ) from exc
 
     try:
@@ -197,8 +194,7 @@ def decode_bulk_cursor(cursor: str) -> BulkCursorState:
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(
-            f"Corrupted pagination cursor {cursor!r}: missing required fields. "
-            "Restart the request without a cursor."
+            f"Corrupted pagination cursor {cursor!r}: missing required fields. Restart the request without a cursor."
         ) from exc
 
 

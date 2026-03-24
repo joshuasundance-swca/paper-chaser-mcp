@@ -11,6 +11,7 @@ from scholar_search_mcp.agentic import (
     WorkspaceRegistry,
     resolve_provider_bundle,
 )
+from scholar_search_mcp.agentic.graphs import _graph_frontier_scores
 from scholar_search_mcp.agentic.models import PlannerDecision
 from scholar_search_mcp.agentic.planner import (
     classify_query,
@@ -133,9 +134,7 @@ async def test_smart_search_and_follow_up_tools_work_with_deterministic_runtime(
     monkeypatch.setattr(server, "agentic_runtime", runtime)
     monkeypatch.setattr(server, "workspace_registry", registry)
 
-    smart = _payload(
-        await server.call_tool("search_papers_smart", {"query": "transformers"})
-    )
+    smart = _payload(await server.call_tool("search_papers_smart", {"query": "transformers"}))
 
     assert smart["searchSessionId"]
     assert smart["results"]
@@ -196,7 +195,47 @@ async def test_search_papers_smart_include_enrichment_enriches_final_hits(
     semantic = RecordingSemanticClient()
     openalex = RecordingOpenAlexClient()
     registry, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
-    crossref = RecordingCrossrefClient()
+
+    async def semantic_search(**kwargs: object) -> dict:
+        semantic.calls.append(("search_papers", dict(kwargs)))
+        return {
+            "total": 1,
+            "offset": 0,
+            "data": [
+                {
+                    "paperId": "semantic-1",
+                    "title": "Transformers in Wildlife Acoustics",
+                    "year": 2024,
+                    "authors": [{"name": "Lead Author"}],
+                    "venue": "Journal of Tests",
+                }
+            ],
+        }
+
+    async def empty_openalex_search(**kwargs: object) -> dict:
+        openalex.calls.append(("search", dict(kwargs)))
+        return {"total": 0, "offset": 0, "data": []}
+
+    semantic.search_papers = semantic_search  # type: ignore[method-assign]
+    openalex.search = empty_openalex_search  # type: ignore[method-assign]
+
+    class MatchingCrossrefClient(RecordingCrossrefClient):
+        async def search_work(self, query: str) -> dict:
+            self.calls.append(("search_work", {"query": query}))
+            return {
+                "doi": "10.1234/crossref-query",
+                "title": "Transformers in Wildlife Acoustics",
+                "authors": [{"name": "Lead Author"}],
+                "venue": "Journal of Tests",
+                "publisher": "Crossref Publisher",
+                "publicationType": "journal-article",
+                "publicationDate": "2024-05-01",
+                "year": 2024,
+                "url": "https://doi.org/10.1234/crossref-query",
+                "citationCount": 7,
+            }
+
+    crossref = MatchingCrossrefClient()
     unpaywall = RecordingUnpaywallClient()
     runtime._enrichment_service = PaperEnrichmentService(
         crossref_client=crossref,
@@ -221,17 +260,9 @@ async def test_search_papers_smart_include_enrichment_enriches_final_hits(
     first_paper = smart["results"][0]["paper"]
     assert first_paper["enrichments"]["crossref"]["doi"] == "10.1234/crossref-query"
     assert first_paper["enrichments"]["unpaywall"]["isOa"] is True
-    assert (
-        record.papers[0]["enrichments"]["crossref"]["doi"] == "10.1234/crossref-query"
-    )
-    assert any(
-        outcome["provider"] == "crossref"
-        for outcome in smart["strategyMetadata"]["providerOutcomes"]
-    )
-    assert any(
-        outcome["provider"] == "unpaywall"
-        for outcome in smart["strategyMetadata"]["providerOutcomes"]
-    )
+    assert record.papers[0]["enrichments"]["crossref"]["doi"] == "10.1234/crossref-query"
+    assert any(outcome["provider"] == "crossref" for outcome in smart["strategyMetadata"]["providerOutcomes"])
+    assert any(outcome["provider"] == "unpaywall" for outcome in smart["strategyMetadata"]["providerOutcomes"])
     assert crossref.calls
     assert unpaywall.calls
 
@@ -257,19 +288,14 @@ async def test_search_papers_smart_emits_progress_logs_and_provider_events(
     await asyncio.sleep(0)
 
     assert payload["results"]
-    progress_messages = [
-        update["message"] for update in ctx.progress_updates if update["message"]
-    ]
+    progress_messages = [update["message"] for update in ctx.progress_updates if update["message"]]
     assert "Planning smart search" in progress_messages
     assert "Running initial retrieval" in progress_messages
     assert "No grounded expansions to run" in progress_messages
     assert "Smart search complete" in progress_messages
 
     info_messages = [entry["message"] for entry in ctx.info_messages]
-    assert any(
-        "Initial retrieval stayed close to the query" in str(message)
-        for message in info_messages
-    )
+    assert any("Initial retrieval stayed close to the query" in str(message) for message in info_messages)
     assert any("searchSessionId=" in str(message) for message in info_messages)
 
     log_messages = [record.getMessage() for record in caplog.records]
@@ -278,9 +304,7 @@ async def test_search_papers_smart_emits_progress_logs_and_provider_events(
 
 
 @pytest.mark.asyncio
-async def test_search_papers_smart_skips_context_notifications_on_stdio_transport() -> (
-    None
-):
+async def test_search_papers_smart_skips_context_notifications_on_stdio_transport() -> None:
     semantic = RecordingSemanticClient()
     openalex = RecordingOpenAlexClient()
     _, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
@@ -417,9 +441,7 @@ async def test_ask_result_set_normalizes_non_literal_confidence_values(
     monkeypatch.setattr(server, "agentic_runtime", runtime)
     monkeypatch.setattr(server, "workspace_registry", registry)
 
-    smart = _payload(
-        await server.call_tool("search_papers_smart", {"query": "transformers"})
-    )
+    smart = _payload(await server.call_tool("search_papers_smart", {"query": "transformers"}))
 
     original_answer_question = runtime._provider_bundle.answer_question
 
@@ -481,9 +503,7 @@ async def test_ask_result_set_balanced_mode_skips_embedding_scoring() -> None:
         texts: list[str],
         **kwargs: object,
     ) -> list[tuple[float, ...] | None]:
-        raise AssertionError(
-            f"balanced ask_result_set should not call embeddings: {texts!r}, {kwargs!r}"
-        )
+        raise AssertionError(f"balanced ask_result_set should not call embeddings: {texts!r}, {kwargs!r}")
 
     bundle.aembed_texts = _unexpected_aembed_texts  # type: ignore[method-assign]
 
@@ -529,9 +549,7 @@ async def test_ask_result_set_balanced_mode_skips_embedding_scoring() -> None:
 
 
 @pytest.mark.asyncio
-async def test_map_research_landscape_balanced_mode_skips_embedding_clustering() -> (
-    None
-):
+async def test_map_research_landscape_balanced_mode_skips_embedding_clustering() -> None:
     semantic = RecordingSemanticClient()
     openalex = RecordingOpenAlexClient()
     config = AgenticConfig(
@@ -555,10 +573,7 @@ async def test_map_research_landscape_balanced_mode_skips_embedding_clustering()
         texts: list[str],
         **kwargs: object,
     ) -> list[tuple[float, ...] | None]:
-        raise AssertionError(
-            "balanced landscape mapping should not call embeddings: "
-            f"{texts!r}, {kwargs!r}"
-        )
+        raise AssertionError(f"balanced landscape mapping should not call embeddings: {texts!r}, {kwargs!r}")
 
     bundle.aembed_texts = _unexpected_aembed_texts  # type: ignore[method-assign]
 
@@ -648,9 +663,7 @@ async def test_async_embeddings_degrade_without_sync_retry_when_openai_fails() -
 
 
 @pytest.mark.asyncio
-async def test_async_similarity_falls_back_to_lexical_scores_when_embeddings_fail() -> (
-    None
-):
+async def test_async_similarity_falls_back_to_lexical_scores_when_embeddings_fail() -> None:
     config = AgenticConfig(
         enabled=True,
         provider="openai",
@@ -751,8 +764,7 @@ async def test_search_papers_smart_records_embedding_timeout_provider_outcome(
     openai_outcomes = [
         outcome
         for outcome in payload["strategyMetadata"]["providerOutcomes"]
-        if outcome["provider"] == "openai"
-        and outcome["endpoint"] == "embeddings.create"
+        if outcome["provider"] == "openai" and outcome["endpoint"] == "embeddings.create"
     ]
     assert openai_outcomes
     assert openai_outcomes[-1]["statusBucket"] == "provider_error"
@@ -760,10 +772,7 @@ async def test_search_papers_smart_records_embedding_timeout_provider_outcome(
 
     log_messages = [record.getMessage() for record in caplog.records]
     assert any("embedding-batch[smart-" in message for message in log_messages)
-    assert any(
-        "OpenAI embeddings.create exceeded total timeout" in message
-        for message in log_messages
-    )
+    assert any("OpenAI embeddings.create exceeded total timeout" in message for message in log_messages)
 
 
 @pytest.mark.asyncio
@@ -789,9 +798,7 @@ async def test_search_papers_smart_balanced_mode_skips_embedding_rerank() -> Non
 
     class _EmbeddingsClient:
         async def create(self, **kwargs: object) -> object:
-            raise AssertionError(
-                f"balanced rerank should not call embeddings: {kwargs!r}"
-            )
+            raise AssertionError(f"balanced rerank should not call embeddings: {kwargs!r}")
 
     class _ResponsesClient:
         async def parse(self, **kwargs: object) -> object:
@@ -841,8 +848,7 @@ async def test_search_papers_smart_balanced_mode_skips_embedding_rerank() -> Non
     assert not [
         outcome
         for outcome in payload["strategyMetadata"]["providerOutcomes"]
-        if outcome["provider"] == "openai"
-        and outcome["endpoint"] == "embeddings.create"
+        if outcome["provider"] == "openai" and outcome["endpoint"] == "embeddings.create"
     ]
 
 
@@ -870,9 +876,7 @@ async def test_search_papers_smart_deep_mode_skips_embeddings_when_disabled() ->
 
     class _EmbeddingsClient:
         async def create(self, **kwargs: object) -> object:
-            raise AssertionError(
-                f"global embedding disable should prevent embedding calls: {kwargs!r}"
-            )
+            raise AssertionError(f"global embedding disable should prevent embedding calls: {kwargs!r}")
 
     class _ResponsesClient:
         async def parse(self, **kwargs: object) -> object:
@@ -932,8 +936,7 @@ async def test_search_papers_smart_deep_mode_skips_embeddings_when_disabled() ->
     assert not [
         outcome
         for outcome in payload["strategyMetadata"]["providerOutcomes"]
-        if outcome["provider"] == "openai"
-        and outcome["endpoint"] == "embeddings.create"
+        if outcome["provider"] == "openai" and outcome["endpoint"] == "embeddings.create"
     ]
 
 
@@ -1219,10 +1222,7 @@ async def test_expand_research_graph_uses_scored_frontier_for_next_hop(
             paper_id = kwargs["paper_id"]
             if paper_id == "seed-1":
                 return {
-                    "data": [
-                        {"paperId": f"low-{index}", "title": f"Low {index}"}
-                        for index in range(1, 6)
-                    ]
+                    "data": [{"paperId": f"low-{index}", "title": f"Low {index}"} for index in range(1, 6)]
                     + [{"paperId": "high-6", "title": "High 6"}]
                 }
             if paper_id == "high-6":
@@ -1282,10 +1282,7 @@ async def test_expand_research_graph_uses_scored_frontier_for_next_hop(
     node_ids = {node["id"] for node in graph["nodes"]}
 
     assert "grandchild-1" in node_ids
-    assert any(
-        call[0] == "get_paper_citations" and call[1]["paper_id"] == "high-6"
-        for call in semantic.calls
-    )
+    assert any(call[0] == "get_paper_citations" and call[1]["paper_id"] == "high-6" for call in semantic.calls)
 
 
 @pytest.mark.asyncio
@@ -1328,9 +1325,7 @@ async def test_expand_research_graph_balanced_mode_skips_embedding_scoring() -> 
 
     class _EmbeddingsClient:
         async def create(self, **kwargs: object) -> object:
-            raise AssertionError(
-                f"balanced graph expansion should not call embeddings: {kwargs!r}"
-            )
+            raise AssertionError(f"balanced graph expansion should not call embeddings: {kwargs!r}")
 
     class _AsyncClient:
         embeddings = _EmbeddingsClient()
@@ -1384,6 +1379,36 @@ async def test_expand_research_graph_balanced_mode_skips_embedding_scoring() -> 
     assert graph["frontier"]
 
 
+@pytest.mark.asyncio
+async def test_graph_frontier_scores_penalize_off_topic_high_citation_papers() -> None:
+    bundle = resolve_provider_bundle(_deterministic_config(), openai_api_key=None)
+    scores = await _graph_frontier_scores(
+        seed={
+            "title": "Anthropogenic noise effects on wildlife",
+            "abstract": "Bird and mammal responses to anthropogenic noise.",
+        },
+        related_papers=[
+            {
+                "paperId": "off-topic",
+                "title": "Brewery waste restoration methods",
+                "abstract": "Industrial wastewater treatment and restoration planning.",
+                "year": 2026,
+                "citationCount": 1200,
+            },
+            {
+                "paperId": "on-topic",
+                "title": "Noise exposure effects on birds",
+                "abstract": "Wildlife acoustic disturbance and bird responses.",
+                "year": 2020,
+                "citationCount": 10,
+            },
+        ],
+        provider_bundle=bundle,
+    )
+
+    assert scores[1] > scores[0]
+
+
 def test_grounded_expansions_filter_stopwords_and_single_paper_noise() -> None:
     config = _deterministic_config()
 
@@ -1392,9 +1417,7 @@ def test_grounded_expansions_filter_stopwords_and_single_paper_noise() -> None:
         papers=[
             {
                 "title": "Agentic systematic review workflow",
-                "abstract": (
-                    "This workflow supports literature review with agent orchestration."
-                ),
+                "abstract": ("This workflow supports literature review with agent orchestration."),
             },
             {
                 "title": "Retrieval-augmented literature review agents",
@@ -1420,26 +1443,19 @@ def test_grounded_expansions_dedupe_near_duplicate_variants() -> None:
 
     variants = grounded_expansion_candidates(
         original_query=(
-            "Florida Scrub-Jay Aphelocoma coerulescens demography habitat "
-            "survival reproduction conservation Brevard"
+            "Florida Scrub-Jay Aphelocoma coerulescens demography habitat survival reproduction conservation Brevard"
         ),
         papers=[
             {
                 "title": "Florida Scrub-Jay demography Brevard County",
-                "abstract": (
-                    "Demography and survival in Brevard County scrub-jay populations."
-                ),
+                "abstract": ("Demography and survival in Brevard County scrub-jay populations."),
             },
             {
                 "title": "Florida Scrub-Jay demography habitat survival",
-                "abstract": (
-                    "Habitat, survival, and reproduction of Florida Scrub-Jays."
-                ),
+                "abstract": ("Habitat, survival, and reproduction of Florida Scrub-Jays."),
             },
             {
-                "title": (
-                    "Florida Scrub-Jay metapopulation viability habitat connectivity"
-                ),
+                "title": ("Florida Scrub-Jay metapopulation viability habitat connectivity"),
                 "abstract": "Metapopulation viability and habitat connectivity.",
             },
         ],
@@ -1579,10 +1595,7 @@ async def test_rerank_candidates_prefers_multi_facet_consensus_match() -> None:
                 "paper": {
                     "paperId": "sem-1",
                     "title": "Tool-using agents for systematic literature review",
-                    "abstract": (
-                        "Autonomous agents combine tool use and retrieval "
-                        "for literature review workflows."
-                    ),
+                    "abstract": ("Autonomous agents combine tool use and retrieval for literature review workflows."),
                     "year": 2025,
                     "authors": [{"name": "Author Two"}],
                     "citationCount": 12,
@@ -1710,10 +1723,7 @@ async def test_rerank_candidates_downweights_serpapi_echo_without_title_match() 
                 "paper": {
                     "paperId": "sem-good",
                     "title": "Tool-using agents for systematic literature review",
-                    "abstract": (
-                        "Autonomous agents combine tool use and retrieval "
-                        "for literature review workflows."
-                    ),
+                    "abstract": ("Autonomous agents combine tool use and retrieval for literature review workflows."),
                     "year": 2025,
                     "authors": [{"name": "Author Two"}],
                     "source": "semantic_scholar",
@@ -1730,10 +1740,7 @@ async def test_rerank_candidates_downweights_serpapi_echo_without_title_match() 
     )
 
     assert ranked[0]["paper"]["paperId"] == "sem-good"
-    assert (
-        ranked[0]["scoreBreakdown"]["titleFacetCoverage"]
-        > (ranked[1]["scoreBreakdown"]["titleFacetCoverage"])
-    )
+    assert ranked[0]["scoreBreakdown"]["titleFacetCoverage"] > (ranked[1]["scoreBreakdown"]["titleFacetCoverage"])
 
 
 @pytest.mark.asyncio
@@ -1748,13 +1755,9 @@ async def test_rerank_candidates_penalizes_review_papers_missing_anchor_terms() 
             {
                 "paper": {
                     "paperId": "sem-medical",
-                    "title": (
-                        "Cholestatic pruritus treatments: a systematic literature "
-                        "review"
-                    ),
+                    "title": ("Cholestatic pruritus treatments: a systematic literature review"),
                     "abstract": (
-                        "Therapeutic agents were evaluated with multiple clinical "
-                        "tools across treatment studies."
+                        "Therapeutic agents were evaluated with multiple clinical tools across treatment studies."
                     ),
                     "year": 2025,
                     "authors": [{"name": "Author One"}],
@@ -1770,10 +1773,7 @@ async def test_rerank_candidates_penalizes_review_papers_missing_anchor_terms() 
                 "paper": {
                     "paperId": "sem-tool",
                     "title": "Tool Use for Autonomous Agents",
-                    "abstract": (
-                        "A survey of tool-using autonomous agents and research "
-                        "workflows."
-                    ),
+                    "abstract": ("A survey of tool-using autonomous agents and research workflows."),
                     "year": 2024,
                     "authors": [{"name": "Author Two"}],
                     "source": "semantic_scholar",
@@ -1790,10 +1790,7 @@ async def test_rerank_candidates_penalizes_review_papers_missing_anchor_terms() 
     )
 
     assert ranked[0]["paper"]["paperId"] == "sem-tool"
-    assert (
-        ranked[0]["scoreBreakdown"]["titleAnchorCoverage"]
-        > (ranked[1]["scoreBreakdown"]["titleAnchorCoverage"])
-    )
+    assert ranked[0]["scoreBreakdown"]["titleAnchorCoverage"] > (ranked[1]["scoreBreakdown"]["titleAnchorCoverage"])
 
 
 @pytest.mark.asyncio

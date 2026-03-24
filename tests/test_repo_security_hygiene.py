@@ -6,9 +6,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 GITIGNORE = REPO_ROOT / ".gitignore"
 DOCKERIGNORE = REPO_ROOT / ".dockerignore"
 DEPLOY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy-azure.yml"
-PUBLIC_MCP_PUBLISH_WORKFLOW = (
-    REPO_ROOT / ".github" / "workflows" / "publish-public-mcp-package.yml"
-)
+PUBLIC_MCP_PUBLISH_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "publish-public-mcp-package.yml"
 
 REQUIRED_GITIGNORE_PATTERNS = {
     ".env",

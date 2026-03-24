@@ -33,10 +33,7 @@ def is_tls_verification_error(error: Exception) -> bool:
     """Return True when an exception looks like a certificate verification failure."""
 
     message = str(error)
-    return (
-        "certificate verify failed" in message.lower()
-        or "CERTIFICATE_VERIFY_FAILED" in message
-    )
+    return "certificate verify failed" in message.lower() or "CERTIFICATE_VERIFY_FAILED" in message
 
 
 async def maybe_close_async_resource(resource: Any) -> None:
@@ -55,8 +52,7 @@ async def maybe_close_async_resource(resource: Any) -> None:
             if "Event loop is closed" not in str(error):
                 raise
             logger.debug(
-                "Ignoring async resource close after the original event loop "
-                "has already been torn down.",
+                "Ignoring async resource close after the original event loop has already been torn down.",
                 exc_info=True,
             )
         return

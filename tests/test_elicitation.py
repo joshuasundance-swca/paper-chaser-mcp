@@ -53,9 +53,7 @@ async def test_search_papers_elicitation_refines_low_specificity_query() -> None
         ctx=ctx,
     )
 
-    semantic_search_calls = [
-        kwargs for name, kwargs in semantic.calls if name == "search_papers"
-    ]
+    semantic_search_calls = [kwargs for name, kwargs in semantic.calls if name == "search_papers"]
     assert len(semantic_search_calls) == 2
     assert semantic_search_calls[-1]["query"] == "AI method focus"
     assert ctx.elicit_calls
@@ -103,9 +101,7 @@ async def test_search_authors_decline_or_cancel_falls_back_to_clarification(
         ctx=ctx,
     )
 
-    author_search_calls = [
-        kwargs for name, kwargs in semantic.calls if name == "search_authors"
-    ]
+    author_search_calls = [kwargs for name, kwargs in semantic.calls if name == "search_authors"]
     assert len(author_search_calls) == 1
     assert ctx.elicit_calls
     assert result["clarification"]["reason"] == "ambiguous_author_identity"

@@ -94,10 +94,7 @@ def provider_limits(
             increment, cap = 4, 16
         else:
             increment, cap = 6, 20
-        base_limits = {
-            provider: min(limit + increment, cap)
-            for provider, limit in base_limits.items()
-        }
+        base_limits = {provider: min(limit + increment, cap) for provider, limit in base_limits.items()}
     if is_expansion:
         expansion_caps = {
             "fast": {
@@ -122,10 +119,7 @@ def provider_limits(
                 "serpapi_google_scholar": 4,
             },
         }[latency_profile]
-        return {
-            provider: min(limit, expansion_caps[provider])
-            for provider, limit in base_limits.items()
-        }
+        return {provider: min(limit, expansion_caps[provider]) for provider, limit in base_limits.items()}
     return base_limits
 
 
@@ -210,12 +204,7 @@ async def retrieve_variant(
                 ),
             )
         )
-    if (
-        enable_serpapi
-        and serpapi_client is not None
-        and allow_serpapi
-        and limits["serpapi_google_scholar"] > 0
-    ):
+    if enable_serpapi and serpapi_client is not None and allow_serpapi and limits["serpapi_google_scholar"] > 0:
         provider_calls.append(
             (
                 "serpapi_google_scholar",

@@ -116,11 +116,7 @@ async def test_provider_budget_state_and_registry_snapshot() -> None:
     )
 
     openalex_snapshot = snapshot["providers"][0]
-    serpapi_snapshot = next(
-        item
-        for item in snapshot["providers"]
-        if item["provider"] == "serpapi_google_scholar"
-    )
+    serpapi_snapshot = next(item for item in snapshot["providers"] if item["provider"] == "serpapi_google_scholar")
 
     assert snapshot["providerOrder"][0] == "openalex"
     assert openalex_snapshot["enabled"] is True
@@ -139,9 +135,7 @@ def test_provider_runtime_helper_functions(
     assert policy_for_provider("unknown").concurrency_limit == 2
     assert _default_fallback_reason("auth_error") == "Provider authentication failed."
     assert _default_fallback_reason("success") is None
-    assert _provider_semaphore_key("openai", "responses.parse:planner") == (
-        "openai:responses.parse:planner"
-    )
+    assert _provider_semaphore_key("openai", "responses.parse:planner") == ("openai:responses.parse:planner")
     assert _provider_semaphore_key("openalex", "works.search") == "openalex"
     assert _classify_exception(SerpApiKeyMissingError("missing")) == "auth_error"
     assert _classify_exception(SerpApiQuotaError("quota")) == "quota_exhausted"
@@ -149,17 +143,11 @@ def test_provider_runtime_helper_functions(
     assert _classify_exception(RuntimeError("429 too many requests")) == "rate_limited"
     assert _classify_exception(RuntimeError("quota exceeded")) == "quota_exhausted"
     assert _classify_exception(RuntimeError("forbidden")) == "auth_error"
-    assert _classify_exception(RuntimeError("timeout while calling upstream")) == (
-        "provider_error"
-    )
+    assert _classify_exception(RuntimeError("timeout while calling upstream")) == ("provider_error")
     assert _classify_exception(RuntimeError("HTTP 503")) == "provider_error"
-    assert _classify_exception(RuntimeError("network transport failure")) == (
-        "provider_error"
-    )
+    assert _classify_exception(RuntimeError("network transport failure")) == ("provider_error")
 
-    monkeypatch.setattr(
-        "scholar_search_mcp.provider_runtime.random.uniform", lambda a, b: 0.1
-    )
+    monkeypatch.setattr("scholar_search_mcp.provider_runtime.random.uniform", lambda a, b: 0.1)
     assert _retry_delay_seconds(2, policy=ProviderPolicy(base_delay_seconds=0.5)) == 2.1
 
     assert _empty_payload(None) is True
@@ -211,9 +199,7 @@ def test_provider_runtime_helper_functions(
         retries=1,
         reason="This reason is deliberately long enough to be shortened in logs.",
     )
-    assert any(
-        "provider-call[req-1]" in record.getMessage() for record in caplog.records
-    )
+    assert any("provider-call[req-1]" in record.getMessage() for record in caplog.records)
 
     outcome = ProviderOutcomeEnvelope(
         provider="openalex",
@@ -262,9 +248,7 @@ async def test_execute_provider_call_async_paths(
         return None
 
     monkeypatch.setattr("scholar_search_mcp.provider_runtime.asyncio.sleep", _no_sleep)
-    monkeypatch.setattr(
-        "scholar_search_mcp.provider_runtime.random.uniform", lambda a, b: 0.0
-    )
+    monkeypatch.setattr("scholar_search_mcp.provider_runtime.random.uniform", lambda a, b: 0.0)
 
     registry = ProviderDiagnosticsRegistry()
     registry._suppressed_until["core"] = time.time() + 60.0
@@ -298,9 +282,7 @@ async def test_execute_provider_call_async_paths(
         endpoint="works.search",
         operation=_retry_then_succeed,
         registry=ProviderDiagnosticsRegistry(),
-        policy=ProviderPolicy(
-            max_attempts=2, base_delay_seconds=0.0, max_delay_seconds=0.0
-        ),
+        policy=ProviderPolicy(max_attempts=2, base_delay_seconds=0.0, max_delay_seconds=0.0),
         request_outcomes=outcomes,
         request_id="req-2",
     )
@@ -354,9 +336,7 @@ async def test_execute_provider_call_records_budget_skips_and_waits_for_slots(
     assert skipped.outcome.status_bucket == "skipped"
     assert outcomes[-1]["statusBucket"] == "skipped"
     assert any(
-        item["lastOutcome"] == "skipped"
-        for item in registry.snapshot()["providers"]
-        if item["provider"] == "openai"
+        item["lastOutcome"] == "skipped" for item in registry.snapshot()["providers"] if item["provider"] == "openai"
     )
 
     semaphore = registry.semaphore("openai:responses.parse:planner", 1)
@@ -386,12 +366,8 @@ async def test_execute_provider_call_records_budget_skips_and_waits_for_slots(
 def test_execute_provider_call_sync_paths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        "scholar_search_mcp.provider_runtime.time.sleep", lambda seconds: None
-    )
-    monkeypatch.setattr(
-        "scholar_search_mcp.provider_runtime.random.uniform", lambda a, b: 0.0
-    )
+    monkeypatch.setattr("scholar_search_mcp.provider_runtime.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("scholar_search_mcp.provider_runtime.random.uniform", lambda a, b: 0.0)
 
     registry = ProviderDiagnosticsRegistry()
     registry._suppressed_until["crossref"] = time.time() + 60.0
@@ -416,9 +392,7 @@ def test_execute_provider_call_sync_paths(
         endpoint="works",
         operation=_retry_then_succeed,
         registry=ProviderDiagnosticsRegistry(),
-        policy=ProviderPolicy(
-            max_attempts=2, base_delay_seconds=0.0, max_delay_seconds=0.0
-        ),
+        policy=ProviderPolicy(max_attempts=2, base_delay_seconds=0.0, max_delay_seconds=0.0),
     )
     assert success.outcome.status_bucket == "success"
     assert success.outcome.retries == 1

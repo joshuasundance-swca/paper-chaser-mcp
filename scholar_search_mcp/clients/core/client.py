@@ -54,9 +54,7 @@ class CoreApiClient:
                 year_start = year_start.strip()[:4]
                 year_end = year_end.strip()[:4]
                 if year_start.isdigit() and year_end.isdigit():
-                    params["q"] = (
-                        f"{params['q']} yearPublished:[{year_start} TO {year_end}]"
-                    )
+                    params["q"] = f"{params['q']} yearPublished:[{year_start} TO {year_end}]"
             else:
                 single_year = year.strip()[:4]
                 if single_year.isdigit():
@@ -100,8 +98,7 @@ class CoreApiClient:
                 entries.append(Paper.model_validate(paper))
         if results and len(entries) < len(results):
             logger.debug(
-                "CORE returned %s results, %s had valid url/title "
-                "(some may lack doi/downloadUrl)",
+                "CORE returned %s results, %s had valid url/title (some may lack doi/downloadUrl)",
                 len(results),
                 len(entries),
             )
@@ -132,11 +129,7 @@ class CoreApiClient:
                 url = download_url
             elif isinstance(download_url, dict):
                 url = download_url.get("url") or download_url.get("link")
-                if (
-                    not url
-                    and isinstance(download_url.get("urls"), list)
-                    and download_url["urls"]
-                ):
+                if not url and isinstance(download_url.get("urls"), list) and download_url["urls"]:
                     first_url = download_url["urls"][0]
                     if isinstance(first_url, str):
                         url = first_url
@@ -153,11 +146,7 @@ class CoreApiClient:
                 elif isinstance(first_source_url, dict):
                     url = first_source_url.get("url") or first_source_url.get("link")
             elif isinstance(source_urls, dict):
-                urls = (
-                    source_urls.get("urls")
-                    or source_urls.get("url")
-                    or source_urls.get("link")
-                )
+                urls = source_urls.get("urls") or source_urls.get("url") or source_urls.get("link")
                 if isinstance(urls, list) and urls:
                     url = urls[0]
                 elif isinstance(urls, str):
@@ -225,8 +214,7 @@ class CoreApiClient:
             Paper(
                 paperId=str(result.get("id", result.get("doi", ""))),
                 title=title,
-                abstract=(result.get("abstract") or result.get("fullText") or "")[:5000]
-                or None,
+                abstract=(result.get("abstract") or result.get("fullText") or "")[:5000] or None,
                 year=year_val,
                 authors=authors,
                 citationCount=result.get("citationCount"),

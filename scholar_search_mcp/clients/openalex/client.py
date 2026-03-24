@@ -23,16 +23,11 @@ OPENALEX_DETAIL_SELECT = (
     "abstract_inverted_index,related_works"
 )
 OPENALEX_AUTHOR_SELECT = (
-    "id,display_name,works_count,cited_by_count,summary_stats,"
-    "last_known_institutions,orcid,works_api_url"
+    "id,display_name,works_count,cited_by_count,summary_stats,last_known_institutions,orcid,works_api_url"
 )
 OPENALEX_SOURCE_SELECT = "id,display_name,works_count,cited_by_count,type,summary_stats"
-OPENALEX_INSTITUTION_SELECT = (
-    "id,display_name,works_count,cited_by_count,country_code,type,summary_stats"
-)
-OPENALEX_TOPIC_SELECT = (
-    "id,display_name,works_count,cited_by_count,description,subfield,field,domain"
-)
+OPENALEX_INSTITUTION_SELECT = "id,display_name,works_count,cited_by_count,country_code,type,summary_stats"
+OPENALEX_TOPIC_SELECT = "id,display_name,works_count,cited_by_count,description,subfield,field,domain"
 _MAILTO_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
@@ -65,14 +60,9 @@ class OpenAlexClient:
             return None
         normalized = value.strip()
         if not normalized:
-            raise ValueError(
-                "OPENALEX_MAILTO must be a non-empty email address when it is set."
-            )
+            raise ValueError("OPENALEX_MAILTO must be a non-empty email address when it is set.")
         if not _MAILTO_PATTERN.match(normalized):
-            raise ValueError(
-                "OPENALEX_MAILTO must look like a valid email address, e.g. "
-                "'team@example.com'."
-            )
+            raise ValueError("OPENALEX_MAILTO must look like a valid email address, e.g. 'team@example.com'.")
         return normalized
 
     def _get_rate_lock(self) -> asyncio.Lock:
@@ -109,11 +99,7 @@ class OpenAlexClient:
         params: Optional[dict[str, Any]] = None,
     ) -> Any:
         """Send one OpenAlex request with light pacing and bounded retries."""
-        url = (
-            endpoint
-            if endpoint.startswith("http")
-            else f"{OPENALEX_API_BASE}{endpoint}"
-        )
+        url = endpoint if endpoint.startswith("http") else f"{OPENALEX_API_BASE}{endpoint}"
         request_params = {**self._default_params(), **(params or {})}
         client = self._get_http_client()
         for attempt in range(self.max_retries + 1):
@@ -123,10 +109,7 @@ class OpenAlexClient:
                 params=request_params,
                 follow_redirects=True,
             )
-            if (
-                response.status_code in {429, 500, 502, 503, 504}
-                and attempt < self.max_retries
-            ):
+            if response.status_code in {429, 500, 502, 503, 504} and attempt < self.max_retries:
                 delay = self.base_delay * (2**attempt)
                 retry_after = response.headers.get("Retry-After")
                 if retry_after and retry_after.isdigit():
@@ -198,9 +181,7 @@ class OpenAlexClient:
     def _normalize_author_id(cls, value: str) -> str:
         author_id = cls._extract_openalex_id(value, "A")
         if author_id is None:
-            raise ValueError(
-                "OpenAlex author_id must be an OpenAlex A-id or OpenAlex author URL."
-            )
+            raise ValueError("OpenAlex author_id must be an OpenAlex A-id or OpenAlex author URL.")
         return author_id
 
     @staticmethod
@@ -273,9 +254,7 @@ class OpenAlexClient:
         try:
             return metadata[entity_type]
         except KeyError as exc:
-            raise ValueError(
-                "OpenAlex entity_type must be one of: source, institution, topic."
-            ) from exc
+            raise ValueError("OpenAlex entity_type must be one of: source, institution, topic.") from exc
 
     @classmethod
     def _normalize_entity_id(cls, entity_type: str, value: str) -> str:
@@ -283,8 +262,7 @@ class OpenAlexClient:
         entity_id = cls._extract_openalex_id(value, prefix)
         if entity_id is None:
             raise ValueError(
-                f"OpenAlex {entity_type} IDs must be OpenAlex {prefix}-ids or "
-                f"OpenAlex {entity_type} URLs."
+                f"OpenAlex {entity_type} IDs must be OpenAlex {prefix}-ids or OpenAlex {entity_type} URLs."
             )
         return entity_id
 
@@ -352,9 +330,7 @@ class OpenAlexClient:
         start_year = start_raw.strip()[:4]
         end_year = end_raw.strip()[:4]
         return (
-            f"from_publication_date:{start_year}-01-01"
-            if start_year.isdigit()
-            else None,
+            f"from_publication_date:{start_year}-01-01" if start_year.isdigit() else None,
             f"to_publication_date:{end_year}-12-31" if end_year.isdigit() else None,
         )
 
@@ -367,14 +343,8 @@ class OpenAlexClient:
         source_id = self._extract_openalex_id(work.get("id"), "W")
         doi = self._normalize_doi(work.get("doi"))
         doi_url = f"https://doi.org/{doi}" if doi else None
-        authors, author_list_truncated = self._authors_from_authorships(
-            work.get("authorships")
-        )
-        abstract = (
-            self._reconstruct_abstract(work.get("abstract_inverted_index"))
-            if include_abstract
-            else None
-        )
+        authors, author_list_truncated = self._authors_from_authorships(work.get("authorships"))
+        abstract = self._reconstruct_abstract(work.get("abstract_inverted_index")) if include_abstract else None
         paper = dump_jsonable(
             Paper(
                 paperId=source_id,
@@ -421,9 +391,7 @@ class OpenAlexClient:
             if isinstance(name, str) and name.strip():
                 institutions.append(name.strip())
         raw_summary_stats = author.get("summary_stats")
-        summary_stats: dict[str, Any] = (
-            raw_summary_stats if isinstance(raw_summary_stats, dict) else {}
-        )
+        summary_stats: dict[str, Any] = raw_summary_stats if isinstance(raw_summary_stats, dict) else {}
         return AuthorProfile(
             authorId=OpenAlexClient._extract_openalex_id(author.get("id"), "A"),
             name=author.get("display_name"),
@@ -453,9 +421,7 @@ class OpenAlexClient:
                 raise ValueError(f"No OpenAlex work found for {paper_id!r}.")
             return first
         if work_id is None:
-            raise ValueError(
-                "OpenAlex paper_id must be an OpenAlex W-id, OpenAlex work URL, or DOI."
-            )
+            raise ValueError("OpenAlex paper_id must be an OpenAlex W-id, OpenAlex work URL, or DOI.")
         response = await self._request(
             f"/works/{work_id}",
             params={"select": OPENALEX_DETAIL_SELECT},
@@ -483,20 +449,12 @@ class OpenAlexClient:
         )
         results = response.get("results") or []
         normalized_papers = [
-            self._work_to_paper(work, include_abstract=False)
-            for work in results
-            if isinstance(work, dict)
+            self._work_to_paper(work, include_abstract=False) for work in results if isinstance(work, dict)
         ]
         papers_by_id = {
-            str(paper["sourceId"]): paper
-            for paper in normalized_papers
-            if paper.get("sourceId") is not None
+            str(paper["sourceId"]): paper for paper in normalized_papers if paper.get("sourceId") is not None
         }
-        return [
-            papers_by_id[work_id]
-            for work_id in normalized_ids
-            if work_id in papers_by_id
-        ]
+        return [papers_by_id[work_id] for work_id in normalized_ids if work_id in papers_by_id]
 
     async def search(
         self,
@@ -516,11 +474,7 @@ class OpenAlexClient:
             },
         )
         results = response.get("results") or []
-        data = [
-            self._work_to_paper(work, include_abstract=False)
-            for work in results
-            if isinstance(work, dict)
-        ]
+        data = [self._work_to_paper(work, include_abstract=False) for work in results if isinstance(work, dict)]
         meta = response.get("meta") if isinstance(response.get("meta"), dict) else {}
         return dump_jsonable(
             {
@@ -580,11 +534,7 @@ class OpenAlexClient:
         results = response.get("results") or []
         meta = response.get("meta") if isinstance(response.get("meta"), dict) else {}
         next_cursor = meta.get("next_cursor")
-        data = [
-            self._work_to_paper(work, include_abstract=False)
-            for work in results
-            if isinstance(work, dict)
-        ]
+        data = [self._work_to_paper(work, include_abstract=False) for work in results if isinstance(work, dict)]
         return dump_jsonable(
             {
                 "total": meta.get("count", len(data)),
@@ -618,11 +568,7 @@ class OpenAlexClient:
         meta = response.get("meta") if isinstance(response.get("meta"), dict) else {}
         next_cursor = meta.get("next_cursor")
         results = response.get("results") or []
-        data = [
-            self._normalize_entity_result(entity_type, item)
-            for item in results
-            if isinstance(item, dict)
-        ]
+        data = [self._normalize_entity_result(entity_type, item) for item in results if isinstance(item, dict)]
         return dump_jsonable(
             {
                 "entityType": entity_type,
@@ -668,11 +614,7 @@ class OpenAlexClient:
         meta = response.get("meta") if isinstance(response.get("meta"), dict) else {}
         next_cursor = meta.get("next_cursor")
         results = response.get("results") or []
-        data = [
-            self._work_to_paper(work, include_abstract=False)
-            for work in results
-            if isinstance(work, dict)
-        ]
+        data = [self._work_to_paper(work, include_abstract=False) for work in results if isinstance(work, dict)]
         return dump_jsonable(
             {
                 "entityType": entity_type,
@@ -726,11 +668,7 @@ class OpenAlexClient:
         meta = response.get("meta") if isinstance(response.get("meta"), dict) else {}
         next_cursor = meta.get("next_cursor")
         results = response.get("results") or []
-        data = [
-            self._work_to_paper(item, include_abstract=False)
-            for item in results
-            if isinstance(item, dict)
-        ]
+        data = [self._work_to_paper(item, include_abstract=False) for item in results if isinstance(item, dict)]
         return dump_jsonable(
             {
                 "total": meta.get("count", len(data)),
@@ -752,9 +690,7 @@ class OpenAlexClient:
         """Return referenced OpenAlex works using batched ID hydration."""
         work = await self._lookup_work_raw(paper_id)
         raw_referenced_works = work.get("referenced_works")
-        referenced_works: list[Any] = (
-            raw_referenced_works if isinstance(raw_referenced_works, list) else []
-        )
+        referenced_works: list[Any] = raw_referenced_works if isinstance(raw_referenced_works, list) else []
         total = len(referenced_works)
         start = max(offset, 0)
         end = min(start + min(limit, 100), total)
@@ -792,11 +728,7 @@ class OpenAlexClient:
         meta = response.get("meta") if isinstance(response.get("meta"), dict) else {}
         next_cursor = meta.get("next_cursor")
         results = response.get("results") or []
-        data = [
-            self._author_profile(author)
-            for author in results
-            if isinstance(author, dict)
-        ]
+        data = [self._author_profile(author) for author in results if isinstance(author, dict)]
         return dump_jsonable(
             {
                 "total": meta.get("count", len(data)),
@@ -848,11 +780,7 @@ class OpenAlexClient:
         meta = response.get("meta") if isinstance(response.get("meta"), dict) else {}
         next_cursor = meta.get("next_cursor")
         results = response.get("results") or []
-        data = [
-            self._work_to_paper(work, include_abstract=False)
-            for work in results
-            if isinstance(work, dict)
-        ]
+        data = [self._work_to_paper(work, include_abstract=False) for work in results if isinstance(work, dict)]
         return dump_jsonable(
             {
                 "total": meta.get("count", len(data)),

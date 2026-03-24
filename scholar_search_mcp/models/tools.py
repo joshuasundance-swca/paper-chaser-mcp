@@ -23,26 +23,18 @@ OPAQUE_CURSOR_FIELD_DESCRIPTION = (
 
 SUPPORTED_AUTHOR_FIELDS_TEXT = ", ".join(SUPPORTED_AUTHOR_FIELDS)
 SUPPORTED_PAPER_FIELDS_TEXT = ", ".join(SUPPORTED_PAPER_FIELDS)
-AUTHOR_FIELDS_DESCRIPTION = (
-    "Fields to return. Supported values: " + SUPPORTED_AUTHOR_FIELDS_TEXT
-)
-PAPER_FIELDS_DESCRIPTION = (
-    "Paper fields to return. Supported values: " + SUPPORTED_PAPER_FIELDS_TEXT
-)
-AUTHOR_ID_DESCRIPTION = (
-    "Semantic Scholar author ID from search_authors or get_paper_authors"
-)
+AUTHOR_FIELDS_DESCRIPTION = "Fields to return. Supported values: " + SUPPORTED_AUTHOR_FIELDS_TEXT
+PAPER_FIELDS_DESCRIPTION = "Paper fields to return. Supported values: " + SUPPORTED_PAPER_FIELDS_TEXT
+AUTHOR_ID_DESCRIPTION = "Semantic Scholar author ID from search_authors or get_paper_authors"
 AUTHOR_SEARCH_QUERY_DESCRIPTION = (
     "Author name to search for. Plain-text only; initials and exact-name "
     "punctuation may be normalized before the upstream request."
 )
 OPENALEX_WORK_ID_DESCRIPTION = (
-    "OpenAlex work identifier for OpenAlex-specific tools. Accepts an OpenAlex "
-    "W-id, OpenAlex work URL, or DOI."
+    "OpenAlex work identifier for OpenAlex-specific tools. Accepts an OpenAlex W-id, OpenAlex work URL, or DOI."
 )
 OPENALEX_AUTHOR_ID_DESCRIPTION = (
-    "OpenAlex author identifier for OpenAlex-specific tools. Accepts an OpenAlex "
-    "A-id or OpenAlex author URL."
+    "OpenAlex author identifier for OpenAlex-specific tools. Accepts an OpenAlex A-id or OpenAlex author URL."
 )
 SEMANTIC_SCHOLAR_EXPANSION_PAPER_ID_DESCRIPTION = (
     "Paper identifier for Semantic Scholar expansion tools. Prefer "
@@ -55,10 +47,7 @@ ENRICHMENT_PAPER_ID_DESCRIPTION = (
     "Existing paper identifier for enrichment tools. Accepts a bare DOI, DOI URL, "
     "canonicalId, recommendedExpansionId, or any paperId that already embeds a DOI."
 )
-DOI_INPUT_DESCRIPTION = (
-    "Bare DOI or DOI URL. When both doi and paper_id are supplied, the explicit doi "
-    "wins."
-)
+DOI_INPUT_DESCRIPTION = "Bare DOI or DOI URL. When both doi and paper_id are supplied, the explicit doi wins."
 INCLUDE_ENRICHMENT_DESCRIPTION = (
     "When true, add post-resolution Crossref and Unpaywall enrichment to the final "
     "resolved paper output. Matching, ranking, and retrieval behavior stay unchanged."
@@ -132,18 +121,12 @@ def _supported_provider_names() -> str:
 
 def _normalize_provider_name(value: object) -> SearchProvider:
     if not isinstance(value, str):
-        raise ValueError(
-            "Provider names must be strings. Supported values: "
-            + _supported_provider_names()
-        )
+        raise ValueError("Provider names must be strings. Supported values: " + _supported_provider_names())
     normalized = value.strip().lower()
     try:
         return SEARCH_PROVIDER_ALIASES[normalized]
     except KeyError as exc:
-        raise ValueError(
-            f"Unsupported provider {value!r}. Supported values: "
-            f"{_supported_provider_names()}."
-        ) from exc
+        raise ValueError(f"Unsupported provider {value!r}. Supported values: {_supported_provider_names()}.") from exc
 
 
 def _validate_provider_order(
@@ -189,9 +172,7 @@ class SearchPapersBaseArgs(BasicSearchPapersArgs):
     publication_date_or_year: str | None = Field(
         default=None,
         alias="publicationDateOrYear",
-        description=(
-            "Date or date-range filter, e.g. '2019-03-05', '2016:2020', '2010-'"
-        ),
+        description=("Date or date-range filter, e.g. '2019-03-05', '2016:2020', '2010-'"),
     )
     fields_of_study: str | None = Field(
         default=None,
@@ -245,9 +226,7 @@ class SearchPapersArgs(SearchPapersBaseArgs):
 
     @field_validator("provider_order", mode="before")
     @classmethod
-    def validate_provider_order(
-        cls, value: list[object] | None
-    ) -> list[SearchProvider] | None:
+    def validate_provider_order(cls, value: list[object] | None) -> list[SearchProvider] | None:
         return _validate_provider_order(value)
 
 
@@ -296,10 +275,7 @@ class BulkSearchPapersArgs(ToolArgsModel):
     )
     sort: str | None = Field(
         default=None,
-        description=(
-            "Sort order, e.g. 'paperId:asc', 'citationCount:desc', "
-            "'publicationDate:desc'"
-        ),
+        description=("Sort order, e.g. 'paperId:asc', 'citationCount:desc', 'publicationDate:desc'"),
     )
     year: str | None = Field(
         default=None,
@@ -448,8 +424,7 @@ class CrossrefEnrichmentArgs(PaperEnrichmentLookupArgs):
     query: str | None = Field(
         default=None,
         description=(
-            "Optional title or bibliographic query fallback used only when no DOI "
-            "can be resolved from the inputs."
+            "Optional title or bibliographic query fallback used only when no DOI can be resolved from the inputs."
         ),
     )
 
@@ -714,9 +689,7 @@ class BatchGetAuthorsArgs(ToolArgsModel):
     @classmethod
     def validate_author_ids(cls, value: list[str]) -> list[str]:
         if len(value) > 1000:
-            raise ValueError(
-                f"Maximum 1000 author IDs per batch request, got {len(value)}"
-            )
+            raise ValueError(f"Maximum 1000 author IDs per batch request, got {len(value)}")
         return value
 
     @field_validator("fields")
@@ -798,9 +771,7 @@ class BatchGetPapersArgs(ToolArgsModel):
     @classmethod
     def validate_paper_ids(cls, value: list[str]) -> list[str]:
         if len(value) > 500:
-            raise ValueError(
-                f"Maximum 500 paper IDs per batch request, got {len(value)}"
-            )
+            raise ValueError(f"Maximum 500 paper IDs per batch request, got {len(value)}")
         return value
 
 
@@ -967,10 +938,7 @@ class SmartSearchPapersArgs(ToolArgsModel):
     search_session_id: str | None = Field(
         default=None,
         alias="searchSessionId",
-        description=(
-            "Optional prior searchSessionId to continue refining an existing "
-            "research workspace."
-        ),
+        description=("Optional prior searchSessionId to continue refining an existing research workspace."),
     )
     mode: Literal[
         "auto",
@@ -1020,8 +988,7 @@ class SmartSearchPapersArgs(ToolArgsModel):
         default=False,
         alias="includeEnrichment",
         description=(
-            "When true, enrich only the final returned smart hits after retrieval, "
-            "fusion, and ranking complete."
+            "When true, enrich only the final returned smart hits after retrieval, fusion, and ranking complete."
         ),
     )
 
@@ -1036,17 +1003,11 @@ class AskResultSetArgs(ToolArgsModel):
         alias="searchSessionId",
         description="searchSessionId from search_papers_smart or a reusable list tool.",
     )
-    question: str = Field(
-        description=(
-            "Follow-up question to answer using only papers from the saved result set."
-        )
-    )
+    question: str = Field(description=("Follow-up question to answer using only papers from the saved result set."))
     top_k: int = Field(
         default=8,
         alias="topK",
-        description=(
-            "Number of evidence papers to retrieve from the result set (max 12)."
-        ),
+        description=("Number of evidence papers to retrieve from the result set (max 12)."),
     )
     answer_mode: Literal["qa", "claim_check", "comparison"] = Field(
         default="qa",
@@ -1135,9 +1096,7 @@ class ExpandResearchGraphArgs(ToolArgsModel):
 
 
 class SearchSpeciesEcosArgs(ToolArgsModel):
-    query: str = Field(
-        description="Common-name or scientific-name species query for ECOS."
-    )
+    query: str = Field(description="Common-name or scientific-name species query for ECOS.")
     limit: int = Field(
         default=10,
         description="Max species hits to return (default 10, max 25).",
@@ -1174,9 +1133,7 @@ class ListSpeciesDocumentsEcosArgs(EcosSpeciesLookupArgs):
 
 
 class GetDocumentTextEcosArgs(ToolArgsModel):
-    url: str = Field(
-        description="Absolute or ECOS-relative document URL to fetch and convert."
-    )
+    url: str = Field(description="Absolute or ECOS-relative document URL to fetch and convert.")
 
 
 TOOL_INPUT_MODELS: dict[str, type[ToolArgsModel]] = {

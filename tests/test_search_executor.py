@@ -29,8 +29,7 @@ def test_search_executor_reports_missing_serpapi_client_as_skipped() -> None:
 
 
 @pytest.mark.asyncio
-async def test_search_executor_parallel_search_shapes_semantic_and_openalex_results(
-) -> None:
+async def test_search_executor_parallel_search_shapes_semantic_and_openalex_results() -> None:
     from scholar_search_mcp.search_executor import (
         ProviderSearchRequest,
         SearchClientBundle,

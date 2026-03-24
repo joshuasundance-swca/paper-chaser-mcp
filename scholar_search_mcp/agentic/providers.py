@@ -38,6 +38,87 @@ COMMON_QUERY_WORDS = {
     "works",
 }
 MAX_EMBED_TEXT_LENGTH = 6_000
+THEME_LABEL_STOPWORDS = COMMON_QUERY_WORDS | {
+    "effect",
+    "effects",
+    "impact",
+    "impacts",
+    "response",
+    "responses",
+    "change",
+    "changes",
+    "documenting",
+    "evidence",
+    "findings",
+    "highlighted",
+    "main",
+}
+GAP_QUESTION_MARKERS = {
+    "gap",
+    "gaps",
+    "limitation",
+    "limitations",
+    "missing",
+    "unknown",
+    "uncertainty",
+    "uncertainties",
+    "understudied",
+    "underrepresented",
+}
+BEHAVIOR_TERMS = {"behavior", "behaviour", "acoustic", "communication", "response"}
+PHYSIOLOGY_TERMS = {
+    "physiology",
+    "physiological",
+    "hormone",
+    "cortisol",
+    "stress",
+    "endocrine",
+}
+DEMOGRAPHY_TERMS = {
+    "demographic",
+    "demographics",
+    "population",
+    "survival",
+    "reproduction",
+    "fitness",
+    "fecundity",
+}
+COMMUNITY_TERMS = {"community", "ecosystem", "ecosystems", "assemblage", "foodweb"}
+MULTISTRESSOR_TERMS = {
+    "interaction",
+    "interactions",
+    "combined",
+    "cumulative",
+    "multiple",
+    "multistressor",
+    "climate",
+    "habitat",
+    "pollution",
+}
+LONGITUDINAL_TERMS = {"longterm", "longitudinal", "chronic", "temporal"}
+GEO_TOKENS = {
+    "africa",
+    "antarctic",
+    "arctic",
+    "asia",
+    "australia",
+    "canada",
+    "china",
+    "europe",
+    "global",
+    "northamerica",
+    "southamerica",
+    "tropics",
+    "usa",
+}
+TAXON_GROUPS: dict[str, set[str]] = {
+    "birds": {"bird", "birds", "avian"},
+    "mammals": {"mammal", "mammals", "cetacean", "cetaceans", "bat", "bats"},
+    "fish": {"fish", "fishes"},
+    "amphibians": {"amphibian", "amphibians", "frog", "frogs", "toad", "toads"},
+    "reptiles": {"reptile", "reptiles", "lizard", "lizards", "snake", "snakes"},
+    "invertebrates": {"invertebrate", "invertebrates", "insect", "insects"},
+}
 
 
 class _PlannerConstraintsSchema(BaseModel):
@@ -58,9 +139,7 @@ class _PlannerResponseSchema(BaseModel):
         "author",
         "citation",
     ] = "discovery"
-    constraints: _PlannerConstraintsSchema = Field(
-        default_factory=_PlannerConstraintsSchema
-    )
+    constraints: _PlannerConstraintsSchema = Field(default_factory=_PlannerConstraintsSchema)
     seedIdentifiers: list[str] = Field(default_factory=list)
     candidateConcepts: list[str] = Field(default_factory=list)
     providerPlan: list[str] = Field(default_factory=list)
@@ -69,11 +148,7 @@ class _PlannerResponseSchema(BaseModel):
     def to_planner_decision(self) -> PlannerDecision:
         return PlannerDecision(
             intent=self.intent,
-            constraints={
-                key: value
-                for key, value in self.constraints.model_dump(exclude_none=True).items()
-                if value
-            },
+            constraints={key: value for key, value in self.constraints.model_dump(exclude_none=True).items() if value},
             seedIdentifiers=self.seedIdentifiers,
             candidateConcepts=self.candidateConcepts,
             providerPlan=self.providerPlan,
@@ -92,10 +167,92 @@ def _normalized_embedding_text(text: str) -> str:
 def _top_terms(texts: list[str], *, limit: int = 8) -> list[str]:
     counts: Counter[str] = Counter()
     for text in texts:
-        counts.update(
-            token for token in _tokenize(text) if token not in COMMON_QUERY_WORDS
-        )
+        counts.update(token for token in _tokenize(text) if token not in COMMON_QUERY_WORDS)
     return [term for term, _ in counts.most_common(limit)]
+
+
+def _theme_label_terms(seed_terms: list[str], papers: list[dict[str, Any]]) -> list[str]:
+    if papers:
+        title_terms = _top_terms(
+            [str(paper.get("title") or "") for paper in papers],
+            limit=6,
+        )
+        prioritized = [term for term in title_terms if term not in THEME_LABEL_STOPWORDS]
+        if prioritized:
+            return prioritized[:3]
+    normalized_seed_terms = [
+        " ".join(token.capitalize() for token in _tokenize(term)) for term in seed_terms if _tokenize(term)
+    ]
+    return [term for term in normalized_seed_terms if term][:2]
+
+
+def _compact_theme_label(seed_terms: list[str], papers: list[dict[str, Any]]) -> str:
+    chosen_terms = _theme_label_terms(seed_terms, papers)
+    if papers and len(chosen_terms) >= 2:
+        return " / ".join(term.title() for term in chosen_terms[:2])
+    if chosen_terms:
+        return " / ".join(chosen_terms[:2])
+    if papers and papers[0].get("venue"):
+        return f"{papers[0]['venue']} cluster"
+    return "General theme"
+
+
+def _paper_terms(paper: dict[str, Any]) -> set[str]:
+    tokens = _tokenize(
+        " ".join(
+            part
+            for part in [
+                str(paper.get("title") or ""),
+                str(paper.get("abstract") or ""),
+                str(paper.get("venue") or ""),
+            ]
+            if part
+        )
+    )
+    normalized_tokens = set(tokens)
+    if "north" in normalized_tokens and "america" in normalized_tokens:
+        normalized_tokens.add("northamerica")
+    if "south" in normalized_tokens and "america" in normalized_tokens:
+        normalized_tokens.add("southamerica")
+    if "long" in normalized_tokens and "term" in normalized_tokens:
+        normalized_tokens.add("longterm")
+    return normalized_tokens
+
+
+def _deterministic_gap_insights(evidence_papers: list[dict[str, Any]]) -> list[str]:
+    if not evidence_papers:
+        return []
+    paper_terms = [_paper_terms(paper) for paper in evidence_papers]
+    behavior_hits = sum(bool(terms & BEHAVIOR_TERMS) for terms in paper_terms)
+    physiology_hits = sum(bool(terms & PHYSIOLOGY_TERMS) for terms in paper_terms)
+    demography_hits = sum(bool(terms & DEMOGRAPHY_TERMS) for terms in paper_terms)
+    community_hits = sum(bool(terms & COMMUNITY_TERMS) for terms in paper_terms)
+    multistressor_hits = sum(bool(terms & MULTISTRESSOR_TERMS) for terms in paper_terms)
+    longitudinal_hits = sum(bool(terms & LONGITUDINAL_TERMS) for terms in paper_terms)
+
+    represented_taxa = {group for terms in paper_terms for group, cues in TAXON_GROUPS.items() if terms & cues}
+    represented_geographies = {token for terms in paper_terms for token in GEO_TOKENS if token in terms}
+
+    insights: list[str] = []
+    if behavior_hits >= max(physiology_hits + demography_hits, 1):
+        insights.append("behavioral responses are better covered than physiological or demographic consequences")
+    if longitudinal_hits <= max(1, len(evidence_papers) // 2):
+        insights.append("long-term or chronic exposure evidence is still thin")
+    if community_hits <= max(1, len(evidence_papers) // 2):
+        insights.append("community- and ecosystem-level impacts remain underrepresented")
+    if multistressor_hits < max(1, len(evidence_papers) // 2):
+        insights.append("interactions with other stressors are rarely studied directly")
+    if 0 < len(represented_taxa) <= 2 and len(evidence_papers) >= 3:
+        insights.append("taxonomic coverage is still narrow relative to the breadth of affected systems")
+    if 0 < len(represented_geographies) <= 2 and len(evidence_papers) >= 3:
+        insights.append("geographic coverage looks concentrated in a small set of regions")
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for insight in insights:
+        if insight not in seen:
+            seen.add(insight)
+            deduped.append(insight)
+    return deduped[:5]
 
 
 def _lexical_similarity(left: str, right: str) -> float:
@@ -118,9 +275,7 @@ def _cosine_similarity(left: tuple[float, ...], right: tuple[float, ...]) -> flo
     try:
         import numpy as np
     except ImportError:
-        numerator = sum(
-            left_value * right_value for left_value, right_value in zip(left, right)
-        )
+        numerator = sum(left_value * right_value for left_value, right_value in zip(left, right))
         left_norm = math.sqrt(sum(value * value for value in left))
         right_norm = math.sqrt(sum(value * value for value in right))
         if left_norm == 0 or right_norm == 0:
@@ -362,36 +517,18 @@ class DeterministicProviderBundle(ModelProviderBundle):
         normalized = query.strip()
         lowered = normalized.lower()
         inferred_intent = mode if mode != "auto" else "discovery"
-        if any(
-            marker in lowered for marker in ("doi", "arxiv:", "https://", "http://")
-        ):
+        if any(marker in lowered for marker in ("doi", "arxiv:", "https://", "http://")):
             inferred_intent = "known_item"
         elif "author" in lowered and mode == "auto":
             inferred_intent = "author"
-        elif (
-            any(marker in lowered for marker in ("citation", "cites", "cited by"))
-            and mode == "auto"
-        ):
+        elif any(marker in lowered for marker in ("citation", "cites", "cited by")) and mode == "auto":
             inferred_intent = "citation"
-        elif (
-            any(marker in lowered for marker in ("survey", "review", "landscape"))
-            and mode == "auto"
-        ):
+        elif any(marker in lowered for marker in ("survey", "review", "landscape")) and mode == "auto":
             inferred_intent = "review"
 
-        concept_text = " ".join(
-            part for part in [normalized, focus or ""] if isinstance(part, str) and part
-        )
-        candidate_concepts = [
-            token
-            for token in _tokenize(concept_text)
-            if token not in COMMON_QUERY_WORDS
-        ][:8]
-        constraints = {
-            key: value
-            for key, value in {"year": year, "venue": venue, "focus": focus}.items()
-            if value
-        }
+        concept_text = " ".join(part for part in [normalized, focus or ""] if isinstance(part, str) and part)
+        candidate_concepts = [token for token in _tokenize(concept_text) if token not in COMMON_QUERY_WORDS][:8]
+        constraints = {key: value for key, value in {"year": year, "venue": venue, "focus": focus}.items() if value}
         return PlannerDecision(
             intent=inferred_intent,  # type: ignore[arg-type]
             constraints=constraints,
@@ -417,9 +554,7 @@ class DeterministicProviderBundle(ModelProviderBundle):
                 ExpansionCandidate(
                     variant=f"{query} {term}",
                     source="from_retrieved_evidence",
-                    rationale=(
-                        f"Common evidence term '{term}' appears across top results."
-                    ),
+                    rationale=(f"Common evidence term '{term}' appears across top results."),
                 )
             )
             if len(variants) >= max_variants:
@@ -432,11 +567,7 @@ class DeterministicProviderBundle(ModelProviderBundle):
         seed_terms: list[str],
         papers: list[dict[str, Any]],
     ) -> str:
-        if seed_terms:
-            return " / ".join(seed_terms[:2]).title()
-        if papers and papers[0].get("venue"):
-            return f"{papers[0]['venue']} cluster"
-        return "General theme"
+        return _compact_theme_label(seed_terms, papers)
 
     def summarize_theme(
         self,
@@ -448,27 +579,33 @@ class DeterministicProviderBundle(ModelProviderBundle):
             return f"{title}: no papers were available to summarize."
 
         venues = sorted(
-            [
-                str(paper["venue"])
-                for paper in papers
-                if isinstance(paper.get("venue"), str) and paper.get("venue")
-            ]
+            [str(paper["venue"]) for paper in papers if isinstance(paper.get("venue"), str) and paper.get("venue")]
         )
-        years = sorted(
-            [paper["year"] for paper in papers if isinstance(paper.get("year"), int)]
-        )
+        years = sorted([paper["year"] for paper in papers if isinstance(paper.get("year"), int)])
         venue_text = f" across {', '.join(venues[:2])}" if venues else ""
         if years:
-            year_text = (
-                f" spanning {years[0]}-{years[-1]}"
-                if len(years) > 1
-                else f" in {years[0]}"
-            )
+            year_text = f" spanning {years[0]}-{years[-1]}" if len(years) > 1 else f" in {years[0]}"
         else:
             year_text = ""
+        top_terms = _top_terms(
+            [
+                " ".join(
+                    part
+                    for part in [
+                        str(paper.get("title") or ""),
+                        str(paper.get("abstract") or ""),
+                    ]
+                    if part
+                )
+                for paper in papers
+            ],
+            limit=4,
+        )
+        term_text = f" Common threads include {', '.join(top_terms[:3])}." if top_terms else ""
         return (
             f"{title} groups {len(papers)} papers{venue_text}{year_text}. "
             "These papers share overlapping terms in their titles and abstracts."
+            f"{term_text}"
         )
 
     def answer_question(
@@ -480,10 +617,7 @@ class DeterministicProviderBundle(ModelProviderBundle):
     ) -> dict[str, Any]:
         if not evidence_papers:
             return {
-                "answer": (
-                    "The saved result set does not contain enough evidence to answer "
-                    "this confidently."
-                ),
+                "answer": ("The saved result set does not contain enough evidence to answer this confidently."),
                 "unsupportedAsks": [question],
                 "followUpQuestions": [
                     "Try a broader search query.",
@@ -493,24 +627,17 @@ class DeterministicProviderBundle(ModelProviderBundle):
             }
 
         titles: list[str] = [
-            str(paper.get("title") or paper.get("paperId") or "Untitled")
-            for paper in evidence_papers[:4]
+            str(paper.get("title") or paper.get("paperId") or "Untitled") for paper in evidence_papers[:4]
         ]
         if answer_mode == "claim_check":
-            status = (
-                "supported" if len(evidence_papers) >= 2 else "insufficient_evidence"
-            )
+            status = "supported" if len(evidence_papers) >= 2 else "insufficient_evidence"
             return {
                 "answer": (
                     f"Claim check status: {status}. The strongest supporting "
                     f"evidence in this result set comes from {', '.join(titles[:2])}."
                 ),
-                "unsupportedAsks": (
-                    [] if status != "insufficient_evidence" else [question]
-                ),
-                "followUpQuestions": [
-                    "Would you like a comparison of the top evidence papers?"
-                ],
+                "unsupportedAsks": ([] if status != "insufficient_evidence" else [question]),
+                "followUpQuestions": ["Would you like a comparison of the top evidence papers?"],
                 "confidence": "medium" if status == "supported" else "low",
             }
         if answer_mode == "comparison":
@@ -523,13 +650,33 @@ class DeterministicProviderBundle(ModelProviderBundle):
                 for paper in evidence_papers[:4]
             ]
             return {
-                "answer": "Comparison grounded in the saved result set:\n"
-                + "\n".join(comparison_lines),
+                "answer": "Comparison grounded in the saved result set:\n" + "\n".join(comparison_lines),
+                "unsupportedAsks": [],
+                "followUpQuestions": ["Which comparison dimension matters most: method, data, or recency?"],
+                "confidence": "medium",
+            }
+        question_tokens = set(_tokenize(question))
+        if question_tokens & GAP_QUESTION_MARKERS:
+            insights = _deterministic_gap_insights(evidence_papers)
+            answer_text = (
+                "Across these papers, the main recurring knowledge gaps are " + "; ".join(insights[:4]) + "."
+                if insights
+                else (
+                    "Across these papers, the evidence still looks uneven, so the "
+                    "remaining gaps are best framed as broader taxonomic or "
+                    "geographic coverage, stronger long-term outcome tracking, and "
+                    "clearer links from observed responses to population or fitness "
+                    "consequences."
+                )
+            )
+            return {
+                "answer": answer_text,
                 "unsupportedAsks": [],
                 "followUpQuestions": [
-                    "Which comparison dimension matters most: method, data, or recency?"
+                    "Should I map which papers support each gap?",
+                    "Do you want a deeper landscape summary for this result set?",
                 ],
-                "confidence": "medium",
+                "confidence": "medium" if insights else "low",
             }
         return {
             "answer": (
@@ -579,10 +726,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         try:
             from openai import OpenAI
         except ImportError:
-            logger.info(
-                "openai is not installed; falling back to LangChain and "
-                "deterministic smart-provider adapters."
-            )
+            logger.info("openai is not installed; falling back to LangChain and deterministic smart-provider adapters.")
             return None
         self._openai_client = OpenAI(
             api_key=self._api_key,
@@ -599,10 +743,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         try:
             from openai import AsyncOpenAI
         except ImportError:
-            logger.info(
-                "openai is not installed; falling back to deterministic "
-                "smart-provider adapters."
-            )
+            logger.info("openai is not installed; falling back to deterministic smart-provider adapters.")
             return None
         self._async_openai_client = AsyncOpenAI(
             api_key=self._api_key,
@@ -620,8 +761,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             from langchain.chat_models import init_chat_model
         except ImportError:
             logger.info(
-                "LangChain v1 chat model helpers are not installed; falling "
-                "back to deterministic smart planning."
+                "LangChain v1 chat model helpers are not installed; falling back to deterministic smart planning."
             )
             return None, None
 
@@ -649,10 +789,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         try:
             from langchain_openai import OpenAIEmbeddings
         except ImportError:
-            logger.info(
-                "langchain-openai is not installed; falling back to lexical "
-                "similarity for smart ranking."
-            )
+            logger.info("langchain-openai is not installed; falling back to lexical similarity for smart ranking.")
             return None
 
         self._embeddings = OpenAIEmbeddings(
@@ -685,8 +822,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             return await asyncio.wait_for(awaitable, timeout=self._timeout_seconds)
         except TimeoutError as exc:
             raise TimeoutError(
-                f"OpenAI {operation_name} exceeded total timeout of "
-                f"{self._timeout_seconds:.1f}s"
+                f"OpenAI {operation_name} exceeded total timeout of {self._timeout_seconds:.1f}s"
             ) from exc
 
     @staticmethod
@@ -936,8 +1072,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         if request_id is None:
             return
         logger.info(
-            "embedding-batch[%s] model=%s total_texts=%s "
-            "uncached_texts=%s timeout_s=%s",
+            "embedding-batch[%s] model=%s total_texts=%s uncached_texts=%s timeout_s=%s",
             request_id,
             self.embedding_model_name,
             total_texts,
@@ -957,8 +1092,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         if request_id is None:
             return
         logger.warning(
-            "embedding-batch[%s] model=%s total_texts=%s uncached_texts=%s "
-            "timeout_s=%s status=%s reason=%s",
+            "embedding-batch[%s] model=%s total_texts=%s uncached_texts=%s timeout_s=%s status=%s reason=%s",
             request_id,
             self.embedding_model_name,
             total_texts,
@@ -993,19 +1127,14 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 if vectors:
                     return self._cache_embedding(normalized, vectors[0])
             except Exception:
-                logger.exception(
-                    "OpenAI embeddings failed; falling back to LangChain "
-                    "or lexical similarity."
-                )
+                logger.exception("OpenAI embeddings failed; falling back to LangChain or lexical similarity.")
         embeddings = self._load_embeddings()
         if embeddings is None:
             return None
         try:
             vector = embeddings.embed_query(normalized)
         except Exception:
-            logger.exception(
-                "OpenAI embeddings failed; falling back to lexical similarity."
-            )
+            logger.exception("OpenAI embeddings failed; falling back to lexical similarity.")
             return None
         return self._cache_embedding(normalized, vector)
 
@@ -1014,11 +1143,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             return [None for _ in texts]
         normalized_texts = [_normalized_embedding_text(text) for text in texts]
         client = self._load_openai_client()
-        pending = [
-            text
-            for text in normalized_texts
-            if text and text not in self._embedding_cache
-        ]
+        pending = [text for text in normalized_texts if text and text not in self._embedding_cache]
         if client is not None and hasattr(client, "embeddings") and pending:
             try:
                 response = execute_provider_call_sync(
@@ -1034,34 +1159,21 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 for text, vector in zip(pending, vectors):
                     self._cache_embedding(text, vector)
             except Exception:
-                logger.exception(
-                    "Batched OpenAI embeddings failed; falling back to "
-                    "LangChain or lexical similarity."
-                )
+                logger.exception("Batched OpenAI embeddings failed; falling back to LangChain or lexical similarity.")
         embeddings = self._load_embeddings()
         if embeddings is None:
             return [self.embed_query(text) for text in normalized_texts]
 
-        pending = [
-            text
-            for text in normalized_texts
-            if text and text not in self._embedding_cache
-        ]
+        pending = [text for text in normalized_texts if text and text not in self._embedding_cache]
         if pending:
             try:
                 vectors = embeddings.embed_documents(pending)
             except Exception:
-                logger.exception(
-                    "Batched OpenAI embeddings failed; falling back to per-text "
-                    "lexical similarity."
-                )
+                logger.exception("Batched OpenAI embeddings failed; falling back to per-text lexical similarity.")
                 return [self.embed_query(text) for text in normalized_texts]
             for text, vector in zip(pending, vectors):
                 self._cache_embedding(text, vector)
-        return [
-            self._embedding_cache.get(text) if text else None
-            for text in normalized_texts
-        ]
+        return [self._embedding_cache.get(text) if text else None for text in normalized_texts]
 
     def similarity(self, left: str, right: str) -> float:
         lexical = super().similarity(left, right)
@@ -1112,11 +1224,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         if self._disable_embeddings:
             return [None for _ in texts]
         normalized_texts = [_normalized_embedding_text(text) for text in texts]
-        pending = [
-            text
-            for text in normalized_texts
-            if text and text not in self._embedding_cache
-        ]
+        pending = [text for text in normalized_texts if text and text not in self._embedding_cache]
         client = self._load_async_openai_client()
         if client is not None and hasattr(client, "embeddings") and pending:
             self._log_embedding_batch_start(
@@ -1155,10 +1263,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                     request_id or "request",
                     response.outcome.error or response.outcome.fallback_reason,
                 )
-        return [
-            self._embedding_cache.get(text) if text else None
-            for text in normalized_texts
-        ]
+        return [self._embedding_cache.get(text) if text else None for text in normalized_texts]
 
     async def abatched_similarity(
         self,
@@ -1225,9 +1330,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             if direct is not None:
                 return direct.to_planner_decision()
         except Exception:
-            logger.exception(
-                "Async OpenAI planner failed; falling back to deterministic planning."
-            )
+            logger.exception("Async OpenAI planner failed; falling back to deterministic planning.")
         return super().plan_search(
             query=query,
             mode=mode,
@@ -1287,20 +1390,13 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 variant = item.variant.strip()
                 if not variant:
                     continue
-                new_tokens = [
-                    token for token in _tokenize(variant) if token not in query_tokens
-                ]
-                if not new_tokens or all(
-                    token in COMMON_QUERY_WORDS for token in new_tokens
-                ):
+                new_tokens = [token for token in _tokenize(variant) if token not in query_tokens]
+                if not new_tokens or all(token in COMMON_QUERY_WORDS for token in new_tokens):
                     continue
                 variants.append(ExpansionCandidate.model_validate(item.model_dump()))
             return variants
         except Exception:
-            logger.exception(
-                "Async OpenAI variant generation failed; falling back to "
-                "deterministic expansions."
-            )
+            logger.exception("Async OpenAI variant generation failed; falling back to deterministic expansions.")
             return super().suggest_speculative_expansions(
                 query=query,
                 evidence_texts=evidence_texts,
@@ -1331,10 +1427,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             if direct:
                 return direct.strip().strip('"')
         except Exception:
-            logger.exception(
-                "Async OpenAI theme labeling failed; falling back to deterministic "
-                "theme labels."
-            )
+            logger.exception("Async OpenAI theme labeling failed; falling back to deterministic theme labels.")
         return super().label_theme(seed_terms=seed_terms, papers=papers)
 
     async def asummarize_theme(
@@ -1369,10 +1462,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             if direct:
                 return direct
         except Exception:
-            logger.exception(
-                "Async OpenAI theme summarization failed; falling back to "
-                "deterministic summaries."
-            )
+            logger.exception("Async OpenAI theme summarization failed; falling back to deterministic summaries.")
         return super().summarize_theme(title=title, papers=papers)
 
     async def aanswer_question(
@@ -1419,15 +1509,10 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             )
             if direct is not None:
                 parsed = direct.model_dump()
-                parsed["confidence"] = self.normalize_confidence(
-                    parsed.get("confidence")
-                )
+                parsed["confidence"] = self.normalize_confidence(parsed.get("confidence"))
                 return parsed
         except Exception:
-            logger.exception(
-                "Async OpenAI synthesis failed; falling back to deterministic "
-                "answer generation."
-            )
+            logger.exception("Async OpenAI synthesis failed; falling back to deterministic answer generation.")
         return super().answer_question(
             question=question,
             evidence_papers=evidence_papers,
@@ -1501,9 +1586,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             )
             return response.to_planner_decision()
         except Exception:
-            logger.exception(
-                "OpenAI planner failed; falling back to deterministic planning."
-            )
+            logger.exception("OpenAI planner failed; falling back to deterministic planning.")
             return super().plan_search(
                 query=query,
                 mode=mode,
@@ -1588,22 +1671,13 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 variant = item.variant.strip()
                 if not variant:
                     continue
-                new_tokens = [
-                    token
-                    for token in _tokenize(variant)
-                    if token not in set(_tokenize(query))
-                ]
-                if not new_tokens or all(
-                    token in COMMON_QUERY_WORDS for token in new_tokens
-                ):
+                new_tokens = [token for token in _tokenize(variant) if token not in set(_tokenize(query))]
+                if not new_tokens or all(token in COMMON_QUERY_WORDS for token in new_tokens):
                     continue
                 variants.append(ExpansionCandidate.model_validate(item.model_dump()))
             return variants
         except Exception:
-            logger.exception(
-                "OpenAI variant generation failed; falling back to "
-                "deterministic expansions."
-            )
+            logger.exception("OpenAI variant generation failed; falling back to deterministic expansions.")
             return super().suggest_speculative_expansions(
                 query=query,
                 evidence_texts=evidence_texts,
@@ -1793,10 +1867,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             if isinstance(parsed, dict):
                 return parsed
         except Exception:
-            logger.exception(
-                "OpenAI synthesis failed; falling back to deterministic answer "
-                "generation."
-            )
+            logger.exception("OpenAI synthesis failed; falling back to deterministic answer generation.")
         return super().answer_question(
             question=question,
             evidence_papers=evidence_papers,

@@ -41,9 +41,7 @@ async def test_crossref_get_work_normalizes_response_and_sets_contact_headers(
         lambda timeout: CapturingAsyncClient(),
     )
 
-    result = await CrossrefClient(mailto="ops@example.com").get_work(
-        "https://doi.org/10.1234/example"
-    )
+    result = await CrossrefClient(mailto="ops@example.com").get_work("https://doi.org/10.1234/example")
 
     assert result is not None
     assert result["doi"] == "10.1234/example"

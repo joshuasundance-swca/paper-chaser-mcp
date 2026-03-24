@@ -75,12 +75,7 @@ def resolve_bicep_path() -> str:
     if not az_command:
         raise SystemExit("PSRule validation requires `az` or `bicep` on PATH.")
 
-    bicep_path = (
-        Path.home()
-        / ".azure"
-        / "bin"
-        / ("bicep.exe" if sys.platform.startswith("win") else "bicep")
-    )
+    bicep_path = Path.home() / ".azure" / "bin" / ("bicep.exe" if sys.platform.startswith("win") else "bicep")
     if not bicep_path.exists():
         subprocess.run(  # nosec B603 - fixed local Azure CLI command
             [az_command, "bicep", "install"],
@@ -103,9 +98,7 @@ def main() -> None:
 
     pwsh_command = resolve_command("pwsh") or resolve_command("powershell")
     if not pwsh_command:
-        raise SystemExit(
-            "PSRule validation requires PowerShell (`pwsh` or `powershell`)."
-        )
+        raise SystemExit("PSRule validation requires PowerShell (`pwsh` or `powershell`).")
 
     ensure_psrule_module(pwsh_command)
     bicep_path = resolve_bicep_path()

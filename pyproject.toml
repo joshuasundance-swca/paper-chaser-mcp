@@ -77,7 +77,7 @@ addopts = "-ra --strict-config --strict-markers"
 xfail_strict = true
 
 [tool.ruff]
-line-length = 88
+line-length = 120
 target-version = "py310"
 
 [tool.ruff.lint]

@@ -42,15 +42,11 @@ ProviderStatusBucket = Literal[
     "skipped",
 ]
 
-_RETRYABLE_STATUSES: frozenset[ProviderStatusBucket] = frozenset(
-    {"rate_limited", "provider_error"}
-)
+_RETRYABLE_STATUSES: frozenset[ProviderStatusBucket] = frozenset({"rate_limited", "provider_error"})
 _FAILURE_STATUSES: frozenset[ProviderStatusBucket] = frozenset(
     {"rate_limited", "quota_exhausted", "auth_error", "provider_error"}
 )
-_SUCCESSISH_STATUSES: frozenset[ProviderStatusBucket] = frozenset(
-    {"success", "empty", "skipped"}
-)
+_SUCCESSISH_STATUSES: frozenset[ProviderStatusBucket] = frozenset({"success", "empty", "skipped"})
 
 
 @dataclass(frozen=True)
@@ -144,9 +140,7 @@ class ProviderOutcomeEnvelope:
     cache_info: dict[str, Any] = field(default_factory=dict)
     quota_metadata: dict[str, Any] = field(default_factory=dict)
     request_id: str | None = None
-    created_at: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -242,10 +236,7 @@ class ProviderBudgetState:
         async with lock:
             if paywalled and not self.allow_paid_providers:
                 return "Skipped because providerBudget disallows paid providers."
-            if (
-                self.max_total_calls is not None
-                and self._total_calls >= self.max_total_calls
-            ):
+            if self.max_total_calls is not None and self._total_calls >= self.max_total_calls:
                 return "Skipped because providerBudget exhausted maxTotalCalls."
             per_provider_limit = {
                 "semantic_scholar": self.max_semantic_scholar_calls,
@@ -254,14 +245,8 @@ class ProviderBudgetState:
                 "arxiv": self.max_arxiv_calls,
                 "serpapi_google_scholar": self.max_serpapi_calls,
             }.get(provider)
-            if (
-                per_provider_limit is not None
-                and self._counts[provider] >= per_provider_limit
-            ):
-                return (
-                    "Skipped because providerBudget exhausted "
-                    f"the per-provider limit for {provider}."
-                )
+            if per_provider_limit is not None and self._counts[provider] >= per_provider_limit:
+                return f"Skipped because providerBudget exhausted the per-provider limit for {provider}."
             self._total_calls += 1
             self._counts[provider] += 1
             return None
@@ -313,9 +298,7 @@ class ProviderDiagnosticsRegistry:
             deque(maxlen=self._recent_outcomes_per_provider),
         )
         recent.append(outcome)
-        self._status_counts.setdefault(outcome.provider, Counter())[
-            outcome.status_bucket
-        ] += 1
+        self._status_counts.setdefault(outcome.provider, Counter())[outcome.status_bucket] += 1
         self._last_latency_ms[outcome.provider] = outcome.latency_ms
         self._last_endpoint[outcome.provider] = outcome.endpoint
         self._last_outcome[outcome.provider] = outcome.status_bucket
@@ -331,12 +314,8 @@ class ProviderDiagnosticsRegistry:
                     policy.suppression_seconds,
                     300.0,
                 )
-            elif (
-                self._consecutive_failures[outcome.provider] >= policy.failure_threshold
-            ):
-                self._suppressed_until[outcome.provider] = (
-                    time.time() + policy.suppression_seconds
-                )
+            elif self._consecutive_failures[outcome.provider] >= policy.failure_threshold:
+                self._suppressed_until[outcome.provider] = time.time() + policy.suppression_seconds
 
     def snapshot(
         self,
@@ -349,11 +328,7 @@ class ProviderDiagnosticsRegistry:
         if enabled:
             providers.update(enabled)
         ordered_providers = list(provider_order or [])
-        ordered_providers.extend(
-            sorted(
-                provider for provider in providers if provider not in ordered_providers
-            )
-        )
+        ordered_providers.extend(sorted(provider for provider in providers if provider not in ordered_providers))
         return {
             "generatedAt": datetime.now(timezone.utc).isoformat(),
             "startedAt": self._started_at,
@@ -370,10 +345,7 @@ class ProviderDiagnosticsRegistry:
                     "lastEndpoint": self._last_endpoint.get(provider),
                     "lastLatencyMs": self._last_latency_ms.get(provider),
                     "lastError": self._last_error.get(provider),
-                    "recentOutcomes": [
-                        envelope.to_dict()
-                        for envelope in self._recent.get(provider, deque())
-                    ],
+                    "recentOutcomes": [envelope.to_dict() for envelope in self._recent.get(provider, deque())],
                 }
                 for provider in ordered_providers
             ],
@@ -416,21 +388,13 @@ def _classify_exception(exc: Exception) -> ProviderStatusBucket:
         return "rate_limited"
     if "quota" in text or "credits" in text:
         return "quota_exhausted"
-    if any(
-        token in text
-        for token in ("api key", "unauthorized", "forbidden", "authentication")
-    ):
+    if any(token in text for token in ("api key", "unauthorized", "forbidden", "authentication")):
         return "auth_error"
     if "timeout" in text or "timed out" in text:
         return "provider_error"
     if any(token in text for token in ("http 5", "500", "502", "503", "504")):
         return "provider_error"
-    if (
-        "connect" in text
-        or "network" in text
-        or "transport" in text
-        or "remoteprotocolerror" in type_name
-    ):
+    if "connect" in text or "network" in text or "transport" in text or "remoteprotocolerror" in type_name:
         return "provider_error"
     return "provider_error"
 
@@ -595,11 +559,7 @@ async def execute_provider_call(
             return ProviderCallResult(payload=None, outcome=outcome)
 
     semaphore_key = _provider_semaphore_key(provider, endpoint)
-    semaphore = (
-        registry.semaphore(semaphore_key, resolved_policy.concurrency_limit)
-        if registry
-        else None
-    )
+    semaphore = registry.semaphore(semaphore_key, resolved_policy.concurrency_limit) if registry else None
     if semaphore is not None:
         if semaphore.locked():
             _log_request_scoped_provider_event(
@@ -625,9 +585,7 @@ async def execute_provider_call(
                 status_bucket = _classify_exception(exc)
                 retries = attempt
                 latency_ms = int((time.perf_counter() - started) * 1000)
-                if status_bucket in _RETRYABLE_STATUSES and attempt + 1 < max(
-                    resolved_policy.max_attempts, 1
-                ):
+                if status_bucket in _RETRYABLE_STATUSES and attempt + 1 < max(resolved_policy.max_attempts, 1):
                     retry_reason = str(exc)
                     _log_request_scoped_provider_event(
                         request_id=request_id,
@@ -638,9 +596,7 @@ async def execute_provider_call(
                         retries=attempt + 1,
                         reason=retry_reason,
                     )
-                    await asyncio.sleep(
-                        _retry_delay_seconds(attempt, policy=resolved_policy)
-                    )
+                    await asyncio.sleep(_retry_delay_seconds(attempt, policy=resolved_policy))
                     continue
                 outcome = ProviderOutcomeEnvelope(
                     provider=provider,
@@ -734,9 +690,7 @@ def execute_provider_call_sync(
         except Exception as exc:
             status_bucket = _classify_exception(exc)
             latency_ms = int((time.perf_counter() - started) * 1000)
-            if status_bucket in _RETRYABLE_STATUSES and attempt + 1 < max(
-                resolved_policy.max_attempts, 1
-            ):
+            if status_bucket in _RETRYABLE_STATUSES and attempt + 1 < max(resolved_policy.max_attempts, 1):
                 time.sleep(_retry_delay_seconds(attempt, policy=resolved_policy))
                 continue
             outcome = ProviderOutcomeEnvelope(

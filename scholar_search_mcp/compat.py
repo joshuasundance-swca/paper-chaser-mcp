@@ -9,11 +9,7 @@ from .agentic.workspace import WorkspaceRegistry
 from .citation_repair import looks_like_citation_query, parse_citation
 from .tool_specs import get_tool_spec, iter_tool_specs
 
-SEARCH_SESSION_TOOLS = {
-    spec.name
-    for spec in iter_tool_specs()
-    if spec.result_policy.search_session.persist_result_set
-}
+SEARCH_SESSION_TOOLS = {spec.name for spec in iter_tool_specs() if spec.result_policy.search_session.persist_result_set}
 
 LOW_SPECIFICITY_TOKENS = {
     "ai",
@@ -40,15 +36,9 @@ def build_agent_hints(
     if isinstance(result.get("brokerMetadata"), dict):
         metadata = result["brokerMetadata"]
         if metadata.get("resultQuality") == "low_relevance":
-            warnings.append(
-                "Results look weak for the full query; narrow or rephrase "
-                "before trusting them."
-            )
+            warnings.append("Results look weak for the full query; narrow or rephrase before trusting them.")
         if metadata.get("resultStatus") == "provider_failed":
-            warnings.append(
-                "Providers failed upstream; retry later before concluding "
-                "the topic has no results."
-            )
+            warnings.append("Providers failed upstream; retry later before concluding the topic has no results.")
     if result.get("retrievalNote"):
         warnings.append(str(result["retrievalNote"]))
 
@@ -115,19 +105,9 @@ def build_agent_hints(
                 "The citation is still ambiguous, so the best next move is to add "
                 "one stronger clue or broaden into discovery."
             ),
-            safeRetry=(
-                "Retry with one concrete field such as a DOI fragment, year, author "
-                "surname, or quoted phrase."
-            ),
+            safeRetry=("Retry with one concrete field such as a DOI fragment, year, author surname, or quoted phrase."),
             warnings=warnings
-            + (
-                []
-                if alternatives
-                else [
-                    "No convincing paper candidate was found from the current "
-                    "citation text."
-                ]
-            ),
+            + ([] if alternatives else ["No convincing paper candidate was found from the current citation text."]),
         )
     if hint_profile == "paper_anchor":
         next_tools = [
@@ -148,10 +128,7 @@ def build_agent_hints(
                 "You already have a concrete paper anchor, so the highest-value "
                 "next move is citation chasing or graph expansion."
             ),
-            safeRetry=(
-                "If this paper ID is not portable, retry via DOI or a "
-                "Semantic Scholar-native lookup."
-            ),
+            safeRetry=("If this paper ID is not portable, retry via DOI or a Semantic Scholar-native lookup."),
             warnings=warnings,
         )
     if hint_profile == "paper_enrichment":
@@ -184,22 +161,14 @@ def build_agent_hints(
                 "You now have a reusable result set; ask grounded follow-up questions "
                 "or cluster the frontier before expanding again."
             ),
-            safeRetry=(
-                "Reuse the same searchSessionId or pagination cursor exactly "
-                "as returned."
-            ),
+            safeRetry=("Reuse the same searchSessionId or pagination cursor exactly as returned."),
             warnings=warnings,
         )
     if hint_profile == "author_search":
         return AgentHints(
             nextToolCandidates=["get_author_info", "get_author_papers"],
-            whyThisNextStep=(
-                "Confirm the right person first, then pivot into that author's papers."
-            ),
-            safeRetry=(
-                "Add affiliation, coauthor, venue, or topic clues if the "
-                "name is ambiguous."
-            ),
+            whyThisNextStep=("Confirm the right person first, then pivot into that author's papers."),
+            safeRetry=("Add affiliation, coauthor, venue, or topic clues if the name is ambiguous."),
             warnings=warnings,
         )
     if hint_profile == "author_search_openalex":
@@ -209,13 +178,9 @@ def build_agent_hints(
                 "get_author_papers_openalex",
             ],
             whyThisNextStep=(
-                "Confirm the right OpenAlex author first, then pivot into that "
-                "author's OpenAlex paper set."
+                "Confirm the right OpenAlex author first, then pivot into that author's OpenAlex paper set."
             ),
-            safeRetry=(
-                "Add affiliation, coauthor, venue, or topic clues if the "
-                "name is ambiguous."
-            ),
+            safeRetry=("Add affiliation, coauthor, venue, or topic clues if the name is ambiguous."),
             warnings=warnings,
         )
     if hint_profile == "author_papers":
@@ -226,13 +191,9 @@ def build_agent_hints(
                 "map_research_landscape",
             ],
             whyThisNextStep=(
-                "Author paper lists work best as a launch point for "
-                "paper-level inspection or theme mapping."
+                "Author paper lists work best as a launch point for paper-level inspection or theme mapping."
             ),
-            safeRetry=(
-                "Narrow with publicationDateOrYear or year if the author's "
-                "output is too broad."
-            ),
+            safeRetry=("Narrow with publicationDateOrYear or year if the author's output is too broad."),
             warnings=warnings,
         )
     if hint_profile == "author_papers_openalex":
@@ -243,38 +204,25 @@ def build_agent_hints(
                 "map_research_landscape",
             ],
             whyThisNextStep=(
-                "OpenAlex author paper lists work best as a launch point for "
-                "paper-level inspection or theme mapping."
+                "OpenAlex author paper lists work best as a launch point for paper-level inspection or theme mapping."
             ),
-            safeRetry=(
-                "Narrow with year if the author's OpenAlex output is too broad."
-            ),
+            safeRetry=("Narrow with year if the author's OpenAlex output is too broad."),
             warnings=warnings,
         )
     if hint_profile == "ask_result_set":
         return AgentHints(
             nextToolCandidates=["map_research_landscape", "expand_research_graph"],
             whyThisNextStep=(
-                "Follow the answer by either clustering the same corpus or "
-                "expanding from the cited anchors."
+                "Follow the answer by either clustering the same corpus or expanding from the cited anchors."
             ),
-            safeRetry=(
-                "Ask a narrower question or increase topK if the evidence "
-                "set feels thin."
-            ),
+            safeRetry=("Ask a narrower question or increase topK if the evidence set feels thin."),
             warnings=warnings,
         )
     if hint_profile == "map_research_landscape":
         return AgentHints(
             nextToolCandidates=["ask_result_set", "expand_research_graph"],
-            whyThisNextStep=(
-                "Themes are most useful when followed by a pointed question "
-                "or a citation expansion."
-            ),
-            safeRetry=(
-                "Reduce maxThemes or refine the discovery query if "
-                "everything collapses into one bucket."
-            ),
+            whyThisNextStep=("Themes are most useful when followed by a pointed question or a citation expansion."),
+            safeRetry=("Reduce maxThemes or refine the discovery query if everything collapses into one bucket."),
             warnings=warnings,
         )
     if hint_profile == "search_snippets":
@@ -332,10 +280,7 @@ def build_agent_hints(
                 "next move is usually flattening the inventory or extracting one "
                 "document to Markdown."
             ),
-            safeRetry=(
-                "Retry with the numeric species id if a pasted ECOS species URL "
-                "fails validation."
-            ),
+            safeRetry=("Retry with the numeric species id if a pasted ECOS species URL fails validation."),
             warnings=warnings,
         )
     if hint_profile == "list_species_documents_ecos":
@@ -346,13 +291,9 @@ def build_agent_hints(
                 "search_species_ecos",
             ],
             whyThisNextStep=(
-                "A flattened document list is most useful when followed by one "
-                "specific PDF or HTML extraction."
+                "A flattened document list is most useful when followed by one specific PDF or HTML extraction."
             ),
-            safeRetry=(
-                "Retry with a tighter documentKinds filter when the inventory is "
-                "too broad."
-            ),
+            safeRetry=("Retry with a tighter documentKinds filter when the inventory is too broad."),
             warnings=warnings,
         )
     if hint_profile == "get_document_text_ecos":
@@ -368,20 +309,14 @@ def build_agent_hints(
                 "species dossier for context."
             ),
             safeRetry=(
-                "Retry with the direct PDF or ECOS document URL if a linked landing "
-                "page produced thin Markdown."
+                "Retry with the direct PDF or ECOS document URL if a linked landing page produced thin Markdown."
             ),
             warnings=warnings,
         )
     return AgentHints(
         nextToolCandidates=[],
-        whyThisNextStep=(
-            "Use the returned IDs, resourceUris, or searchSessionId to keep "
-            "the workflow moving."
-        ),
-        safeRetry=(
-            "Retry the exact call if the upstream provider had a transient failure."
-        ),
+        whyThisNextStep=("Use the returned IDs, resourceUris, or searchSessionId to keep the workflow moving."),
+        safeRetry=("Retry the exact call if the upstream provider had a transient failure."),
         warnings=warnings,
     )
 
@@ -397,9 +332,7 @@ def build_clarification(
     if clarification_profile == "search_papers":
         query = str(arguments.get("query") or "").strip()
         tokens = [token.lower() for token in query.split() if token.strip()]
-        if len(tokens) <= 2 and all(
-            len(token) <= 4 or token in LOW_SPECIFICITY_TOKENS for token in tokens
-        ):
+        if len(tokens) <= 2 and all(len(token) <= 4 or token in LOW_SPECIFICITY_TOKENS for token in tokens):
             return Clarification(
                 reason="low_specificity_query",
                 question=(
@@ -409,10 +342,7 @@ def build_clarification(
                 options=["method focus", "application focus", "recent work only"],
                 canProceedWithoutAnswer=True,
             )
-    if (
-        clarification_profile == "search_papers_match"
-        and result.get("matchFound") is False
-    ):
+    if clarification_profile == "search_papers_match" and result.get("matchFound") is False:
         parsed = parse_citation(str(arguments.get("query") or ""))
         if parsed.identifier:
             return Clarification(
@@ -483,10 +413,7 @@ def build_clarification(
             )
         return Clarification(
             reason="near_tied_or_missing_title_match",
-            question=(
-                "If you know the DOI, arXiv ID, or URL, use that instead of "
-                "a title-only match."
-            ),
+            question=("If you know the DOI, arXiv ID, or URL, use that instead of a title-only match."),
             options=["use DOI", "use arXiv ID", "broaden to search_papers"],
             canProceedWithoutAnswer=True,
         )
@@ -525,8 +452,7 @@ def build_clarification(
             return Clarification(
                 reason="missing_author",
                 question=(
-                    "This citation is still ambiguous. Adding one author surname "
-                    "would usually disambiguate it fastest."
+                    "This citation is still ambiguous. Adding one author surname would usually disambiguate it fastest."
                 ),
                 options=["add author", "add venue", "broaden to search_papers"],
                 canProceedWithoutAnswer=True,
@@ -557,8 +483,7 @@ def build_clarification(
             return Clarification(
                 reason="ambiguous_author_identity",
                 question=(
-                    "Several authors may match this name. Can you add an affiliation, "
-                    "coauthor, venue, or topic clue?"
+                    "Several authors may match this name. Can you add an affiliation, coauthor, venue, or topic clue?"
                 ),
                 options=["affiliation", "coauthor", "topic clue"],
                 canProceedWithoutAnswer=True,
@@ -652,16 +577,12 @@ def augment_tool_result(
             by_alias=True,
             exclude_none=True,
         )
-    response["resourceUris"] = build_resource_uris(
-        tool_name, response, search_session_id
-    )
+    response["resourceUris"] = build_resource_uris(tool_name, response, search_session_id)
     return response
 
 
 def _query_hint(tool_name: str, arguments: dict[str, Any]) -> str | None:
-    query_hint_arg = get_tool_spec(
-        tool_name
-    ).result_policy.search_session.query_hint_arg
+    query_hint_arg = get_tool_spec(tool_name).result_policy.search_session.query_hint_arg
     return (
         str(arguments.get(query_hint_arg))
         if query_hint_arg is not None and arguments.get(query_hint_arg) is not None
@@ -682,9 +603,7 @@ def _result_set_metadata(
         "get_paper_references_openalex",
     }:
         metadata["trailParentPaperId"] = arguments.get("paper_id")
-        metadata["trailDirection"] = (
-            "citations" if "citations" in tool_name else "references"
-        )
+        metadata["trailDirection"] = "citations" if "citations" in tool_name else "references"
     if tool_name == "search_papers_smart" and "strategyMetadata" in result:
         metadata["strategyMetadata"] = result["strategyMetadata"]
     return metadata

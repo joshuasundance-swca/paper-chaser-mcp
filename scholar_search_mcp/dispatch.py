@@ -1,11 +1,16 @@
 """Dispatch helpers for MCP tool routing."""
 
+import re
 from typing import Any, Callable, cast
 
 from .citation_repair import looks_like_paper_identifier, resolve_citation
 from .clients.serpapi import SerpApiKeyMissingError
 from .compat import augment_tool_result, build_clarification
-from .enrichment import PaperEnrichmentService
+from .enrichment import (
+    PaperEnrichmentService,
+    attach_enrichments_to_paper_payload,
+    hydrate_paper_for_enrichment,
+)
 from .models import TOOL_INPUT_MODELS, CitationFormatsResponse, dump_jsonable
 from .models.common import CitationFormat, ExportLink
 from .models.tools import (
@@ -113,11 +118,7 @@ def _cursor_to_offset(
             "code=INVALID_CURSOR. "
             f"{CURSOR_REUSE_HINT} Restart the request without a cursor."
         )
-    if (
-        context_hash is not None
-        and state.context_hash is not None
-        and state.context_hash != context_hash
-    ):
+    if context_hash is not None and state.context_hash is not None and state.context_hash != context_hash:
         raise ValueError(
             "Invalid pagination cursor: cursor was issued for a different query "
             "context and cannot be reused here. "
@@ -160,6 +161,81 @@ def _encode_next_cursor(
     return result
 
 
+def _snippet_fallback_query(query: str) -> str:
+    normalized = " ".join(str(query or "").strip().strip("\"'").split())
+    tokens = re.findall(r"[A-Za-z0-9]{3,}", normalized)
+    return " ".join(tokens[:10]) if tokens else normalized
+
+
+def _snippet_fallback_results(
+    degraded_payload: dict[str, Any],
+    papers_payload: dict[str, Any],
+) -> dict[str, Any]:
+    fallback_items: list[dict[str, Any]] = []
+    for index, paper in enumerate((papers_payload.get("data") or []), start=1):
+        if not isinstance(paper, dict):
+            continue
+        snippet_text = str(paper.get("abstract") or paper.get("title") or "").strip()
+        if not snippet_text:
+            continue
+        fallback_items.append(
+            {
+                "score": round(max(0.0, 1.0 - ((index - 1) * 0.05)), 6),
+                "snippet": {
+                    "text": snippet_text[:400],
+                    "snippetKind": "fallback_paper_match",
+                    "section": "abstract" if paper.get("abstract") else "title",
+                },
+                "paper": {
+                    "paperId": paper.get("paperId"),
+                    "title": paper.get("title"),
+                    "year": paper.get("year"),
+                    "url": paper.get("url"),
+                },
+            }
+        )
+    if not fallback_items:
+        return degraded_payload
+
+    payload = dict(degraded_payload)
+    payload["data"] = fallback_items
+    payload["fallbackUsed"] = "search_papers"
+    payload["message"] = (
+        "Semantic Scholar snippet search could not serve this query, so the "
+        "server returned best-effort paper matches from search_papers instead."
+    )
+    return payload
+
+
+async def _maybe_fallback_snippet_search(
+    *,
+    serialized: dict[str, Any],
+    args_dict: dict[str, Any],
+    client: Any,
+) -> dict[str, Any]:
+    if serialized.get("degraded") is not True or serialized.get("data"):
+        return serialized
+    fallback_query = _snippet_fallback_query(str(args_dict.get("query") or ""))
+    if not fallback_query:
+        return serialized
+    try:
+        fallback_payload = dump_jsonable(
+            await client.search_papers(
+                query=fallback_query,
+                limit=args_dict.get("limit", 10),
+                fields=["paperId", "title", "year", "url", "abstract"],
+                year=args_dict.get("year"),
+                publication_date_or_year=args_dict.get("publication_date_or_year"),
+                fields_of_study=args_dict.get("fields_of_study"),
+                min_citation_count=args_dict.get("min_citation_count"),
+                venue=[args_dict["venue"]] if args_dict.get("venue") else None,
+            )
+        )
+    except Exception:
+        return serialized
+    return _snippet_fallback_results(serialized, fallback_payload)
+
+
 def _cursor_to_bulk_token(
     cursor: str | None,
     *,
@@ -199,11 +275,7 @@ def _cursor_to_bulk_token(
             "code=INVALID_CURSOR. "
             f"{CURSOR_REUSE_HINT} Restart the request without a cursor."
         )
-    if (
-        context_hash is not None
-        and state.context_hash is not None
-        and state.context_hash != context_hash
-    ):
+    if context_hash is not None and state.context_hash is not None and state.context_hash != context_hash:
         raise ValueError(
             "Invalid pagination cursor: cursor was issued for a different query "
             "context and cannot be reused here. "
@@ -432,10 +504,7 @@ async def dispatch_tool(
         if agentic_runtime is None:
             return {
                 "error": "FEATURE_NOT_CONFIGURED",
-                "message": (
-                    "search_papers_smart is not available because the agentic runtime "
-                    "was not initialized."
-                ),
+                "message": ("search_papers_smart is not available because the agentic runtime was not initialized."),
                 "fallbackTools": [
                     "search_papers",
                     "search_papers_bulk",
@@ -492,9 +561,7 @@ async def dispatch_tool(
         if agentic_runtime is None:
             return {
                 "error": "FEATURE_NOT_CONFIGURED",
-                "message": (
-                    "map_research_landscape requires the agentic runtime to be enabled."
-                ),
+                "message": ("map_research_landscape requires the agentic runtime to be enabled."),
                 "fallbackTools": [
                     "search_papers",
                     "search_papers_bulk",
@@ -516,9 +583,7 @@ async def dispatch_tool(
         if agentic_runtime is None:
             return {
                 "error": "FEATURE_NOT_CONFIGURED",
-                "message": (
-                    "expand_research_graph requires the agentic runtime to be enabled."
-                ),
+                "message": ("expand_research_graph requires the agentic runtime to be enabled."),
                 "fallbackTools": [
                     "get_paper_citations",
                     "get_paper_references",
@@ -654,9 +719,7 @@ async def dispatch_tool(
 
     if name == "get_paper_metadata_crossref":
         crossref_result = await resolved_enrichment_service.get_crossref_metadata(
-            **TOOL_INPUT_MODELS[name]
-            .model_validate(arguments)
-            .model_dump(by_alias=False)
+            **TOOL_INPUT_MODELS[name].model_validate(arguments).model_dump(by_alias=False)
         )
         return _finalize_tool_result(
             name,
@@ -667,9 +730,7 @@ async def dispatch_tool(
 
     if name == "get_paper_open_access_unpaywall":
         unpaywall_result = await resolved_enrichment_service.get_unpaywall_open_access(
-            **TOOL_INPUT_MODELS[name]
-            .model_validate(arguments)
-            .model_dump(by_alias=False)
+            **TOOL_INPUT_MODELS[name].model_validate(arguments).model_dump(by_alias=False)
         )
         return _finalize_tool_result(
             name,
@@ -680,9 +741,7 @@ async def dispatch_tool(
 
     if name == "enrich_paper":
         enrichment_result = await resolved_enrichment_service.enrich_paper(
-            **TOOL_INPUT_MODELS[name]
-            .model_validate(arguments)
-            .model_dump(by_alias=False)
+            **TOOL_INPUT_MODELS[name].model_validate(arguments).model_dump(by_alias=False)
         )
         return _finalize_tool_result(
             name,
@@ -718,10 +777,7 @@ async def dispatch_tool(
             arxiv_client=arxiv_client,
             serpapi_client=serpapi_client,
             provider_registry=provider_registry,
-            allow_default_hedging=(
-                search_args.preferred_provider is None
-                and search_args.provider_order is None
-            ),
+            allow_default_hedging=(search_args.preferred_provider is None and search_args.provider_order is None),
         )
         elicited = await _maybe_elicit_and_retry(
             tool_name=name,
@@ -774,9 +830,17 @@ async def dispatch_tool(
             and isinstance(serialized, dict)
             and serialized.get("matchFound", True) is not False
         ):
-            serialized = await resolved_enrichment_service.enrich_paper_payload(
+            enrichment_source = await hydrate_paper_for_enrichment(
                 serialized,
-                query=match_args.query,
+                detail_client=client,
+            )
+            enriched_payload = await resolved_enrichment_service.enrich_paper_payload(
+                enrichment_source,
+                query=serialized.get("title") or match_args.query,
+            )
+            serialized = attach_enrichments_to_paper_payload(
+                serialized,
+                enriched_paper=enriched_payload,
             )
         elicited = await _maybe_elicit_and_retry(
             tool_name=name,
@@ -825,8 +889,17 @@ async def dispatch_tool(
             )
         )
         if paper_lookup_args.include_enrichment and isinstance(serialized, dict):
-            serialized = await resolved_enrichment_service.enrich_paper_payload(
-                serialized
+            enrichment_source = await hydrate_paper_for_enrichment(
+                serialized,
+                detail_client=client,
+            )
+            enriched_payload = await resolved_enrichment_service.enrich_paper_payload(
+                enrichment_source,
+                query=serialized.get("title"),
+            )
+            serialized = attach_enrichments_to_paper_payload(
+                serialized,
+                enriched_paper=enriched_payload,
             )
         return _finalize_tool_result(
             name,
@@ -1161,9 +1234,7 @@ async def dispatch_tool(
             year=provider_arguments.year,
             fields=getattr(provider_arguments, "fields", None),
             venue=getattr(provider_arguments, "venue", None),
-            publication_date_or_year=getattr(
-                provider_arguments, "publication_date_or_year", None
-            ),
+            publication_date_or_year=getattr(provider_arguments, "publication_date_or_year", None),
             fields_of_study=getattr(provider_arguments, "fields_of_study", None),
             publication_types=getattr(provider_arguments, "publication_types", None),
             open_access_pdf=getattr(provider_arguments, "open_access_pdf", None),
@@ -1201,8 +1272,7 @@ async def dispatch_tool(
             )
         if serpapi_client is None:
             raise ValueError(
-                "SerpApi client is not available. "
-                "Set SCHOLAR_SEARCH_ENABLE_SERPAPI=true and SERPAPI_API_KEY."
+                "SerpApi client is not available. Set SCHOLAR_SEARCH_ENABLE_SERPAPI=true and SERPAPI_API_KEY."
             )
         try:
             raw = await serpapi_client.get_citation_formats(
@@ -1292,8 +1362,7 @@ async def dispatch_tool(
 
     if not enable_openalex and name.endswith("_openalex"):
         raise ValueError(
-            f"{name} requires OpenAlex, which is disabled. "
-            "Set SCHOLAR_SEARCH_ENABLE_OPENALEX=true to use this tool."
+            f"{name} requires OpenAlex, which is disabled. Set SCHOLAR_SEARCH_ENABLE_OPENALEX=true to use this tool."
         )
 
     if name == "get_paper_details_openalex":
@@ -1443,6 +1512,12 @@ async def dispatch_tool(
     method = getattr(client, method_name)
     result = await method(**build_args(args_dict))
     serialized = dump_jsonable(result)
+    if name == "search_snippets" and isinstance(serialized, dict):
+        serialized = await _maybe_fallback_snippet_search(
+            serialized=serialized,
+            args_dict=args_dict,
+            client=client,
+        )
     if name in OFFSET_TOOLS:
         serialized = _encode_next_cursor(serialized, name, context_hash=ctx_hash)
     elicited = await _maybe_elicit_and_retry(
@@ -1570,8 +1645,17 @@ async def _maybe_elicit_and_retry(
         )
         resolved_result = dict(dump_jsonable(resolved))
         if arguments.get("includeEnrichment") and enrichment_service is not None:
-            resolved_result = await enrichment_service.enrich_paper_payload(
-                resolved_result
+            enrichment_source = await hydrate_paper_for_enrichment(
+                resolved_result,
+                detail_client=client,
+            )
+            enriched_payload = await enrichment_service.enrich_paper_payload(
+                enrichment_source,
+                query=resolved_result.get("title"),
+            )
+            resolved_result = attach_enrichments_to_paper_payload(
+                resolved_result,
+                enriched_paper=enriched_payload,
             )
         resolved_result["matchFound"] = True
         resolved_result["matchStrategy"] = "elicited_identifier"

@@ -30,9 +30,7 @@ def test_author_field_models_reject_unsupported_fields() -> None:
     with pytest.raises(ValidationError, match="Unsupported author fields: aliases"):
         AuthorInfoArgs(author_id="9191855", fields=["aliases"])
 
-    with pytest.raises(
-        ValidationError, match="Supported values: authorId, name, affiliations"
-    ):
+    with pytest.raises(ValidationError, match="Supported values: authorId, name, affiliations"):
         AuthorSearchArgs(query="Ryan L. Perroy", fields=["name", "aliases"])
 
 
@@ -328,9 +326,7 @@ def test_paper_scholar_result_id_is_first_class_field() -> None:
 
     assert "recommendedExpansionId" in props
     assert "expansionIdStatus" in props
-    assert "Semantic Scholar-compatible identifier" in props[
-        "recommendedExpansionId"
-    ].get("description", "")
+    assert "Semantic Scholar-compatible identifier" in props["recommendedExpansionId"].get("description", "")
     assert "'portable' means" in props["expansionIdStatus"].get("description", "")
 
 

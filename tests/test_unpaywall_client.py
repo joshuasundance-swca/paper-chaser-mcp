@@ -46,9 +46,7 @@ async def test_unpaywall_get_open_access_normalizes_payload(
         lambda timeout: CapturingAsyncClient(),
     )
 
-    result = await UnpaywallClient(email="oa@example.com").get_open_access(
-        "https://doi.org/10.1234/example"
-    )
+    result = await UnpaywallClient(email="oa@example.com").get_open_access("https://doi.org/10.1234/example")
 
     assert result is not None
     assert result["doi"] == "10.1234/example"
@@ -138,9 +136,7 @@ async def test_unpaywall_get_open_access_returns_none_on_404(
         lambda timeout: NotFoundAsyncClient(),
     )
 
-    result = await UnpaywallClient(email="oa@example.com").get_open_access(
-        "10.1234/missing"
-    )
+    result = await UnpaywallClient(email="oa@example.com").get_open_access("10.1234/missing")
 
     assert result is None
 

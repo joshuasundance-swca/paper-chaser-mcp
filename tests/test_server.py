@@ -193,25 +193,12 @@ async def test_fastmcp_resource_and_prompt_support_agent_onboarding() -> None:
             },
         )
 
+    assert any(str(resource.uri) == "guide://scholar-search/agent-workflows" for resource in resources)
+    assert any(str(template.uriTemplate) == "paper://{paper_id}" for template in resource_templates)
+    assert any(str(template.uriTemplate) == "author://{author_id}" for template in resource_templates)
+    assert any(str(template.uriTemplate) == "search://{search_session_id}" for template in resource_templates)
     assert any(
-        str(resource.uri) == "guide://scholar-search/agent-workflows"
-        for resource in resources
-    )
-    assert any(
-        str(template.uriTemplate) == "paper://{paper_id}"
-        for template in resource_templates
-    )
-    assert any(
-        str(template.uriTemplate) == "author://{author_id}"
-        for template in resource_templates
-    )
-    assert any(
-        str(template.uriTemplate) == "search://{search_session_id}"
-        for template in resource_templates
-    )
-    assert any(
-        str(template.uriTemplate) == "trail://paper/{paper_id}?direction={direction}"
-        for template in resource_templates
+        str(template.uriTemplate) == "trail://paper/{paper_id}?direction={direction}" for template in resource_templates
     )
     assert any(prompt.name == "plan_scholar_search" for prompt in prompts)
     assert any(prompt.name == "plan_smart_scholar_search" for prompt in prompts)
@@ -238,17 +225,11 @@ async def test_fastmcp_resource_and_prompt_support_agent_onboarding() -> None:
     assert "ask_result_set" in plan.messages[0].content.text
     assert "get_paper_citations for cited-by expansion" in plan.messages[0].content.text
     assert "paper.expansionIdStatus is not_portable" in plan.messages[0].content.text
-    assert "search_snippets only as a special-purpose recovery tool" in (
-        plan.messages[0].content.text
-    )
-    assert "empty degraded response rather than a raw 4xx/5xx" in (
-        plan.messages[0].content.text
-    )
+    assert "search_snippets only as a special-purpose recovery tool" in (plan.messages[0].content.text)
+    assert "empty degraded response rather than a raw 4xx/5xx" in (plan.messages[0].content.text)
     assert "Mode: feature_probe." in feature_plan.messages[0].content.text
     assert "short smoke baseline" in feature_plan.messages[0].content.text
-    assert "Probe the OpenAlex author workflow UX" in (
-        feature_plan.messages[0].content.text
-    )
+    assert "Probe the OpenAlex author workflow UX" in (feature_plan.messages[0].content.text)
     assert "GitHub Copilot coding agent" in feature_plan.messages[0].content.text
 
 
@@ -257,14 +238,9 @@ def test_tool_descriptions_include_workflow_guidance() -> None:
 
     assert "quick literature discovery" in TOOL_DESCRIPTIONS["search_papers"]
     assert "exhaustive retrieval" in TOOL_DESCRIPTIONS["search_papers_bulk"]
-    assert "prefer search_papers or search_papers_semantic_scholar" in (
-        TOOL_DESCRIPTIONS["search_papers_bulk"].lower()
-    )
+    assert "prefer search_papers or search_papers_semantic_scholar" in (TOOL_DESCRIPTIONS["search_papers_bulk"].lower())
     assert "Known-item lookup" in TOOL_DESCRIPTIONS["search_papers_match"]
-    assert (
-        "fuzzy Semantic Scholar title search"
-        in TOOL_DESCRIPTIONS["search_papers_match"]
-    )
+    assert "fuzzy Semantic Scholar title search" in TOOL_DESCRIPTIONS["search_papers_match"]
     assert "citation repair" in TOOL_DESCRIPTIONS["resolve_citation"].lower()
     assert "alternatives" in TOOL_DESCRIPTIONS["resolve_citation"]
     assert "Known-item lookup" in TOOL_DESCRIPTIONS["get_paper_details"]
@@ -275,32 +251,16 @@ def test_tool_descriptions_include_workflow_guidance() -> None:
     assert "expansionIdStatus is not_portable" in TOOL_DESCRIPTIONS["get_paper_authors"]
     assert "Semantic Scholar authorId" in TOOL_DESCRIPTIONS["get_author_info"]
     assert "affiliation, coauthor, venue, or" in TOOL_DESCRIPTIONS["search_authors"]
-    assert (
-        "special-purpose recovery tool" in TOOL_DESCRIPTIONS["search_snippets"].lower()
-    )
+    assert "special-purpose recovery tool" in TOOL_DESCRIPTIONS["search_snippets"].lower()
     assert "empty result with retry guidance" in TOOL_DESCRIPTIONS["search_snippets"]
-    assert (
-        "Supported inputs are query, limit, and year"
-        in TOOL_DESCRIPTIONS["search_papers_core"]
-    )
-    assert (
-        "Supported inputs are query, limit, and year"
-        in TOOL_DESCRIPTIONS["search_papers_arxiv"]
-    )
-    assert (
-        "fields, year, venue, publicationDateOrYear"
-        in TOOL_DESCRIPTIONS["search_papers_semantic_scholar"]
-    )
+    assert "Supported inputs are query, limit, and year" in TOOL_DESCRIPTIONS["search_papers_core"]
+    assert "Supported inputs are query, limit, and year" in TOOL_DESCRIPTIONS["search_papers_arxiv"]
+    assert "fields, year, venue, publicationDateOrYear" in TOOL_DESCRIPTIONS["search_papers_semantic_scholar"]
     assert "OpenAlex only" in TOOL_DESCRIPTIONS["search_papers_openalex"]
-    assert (
-        "OpenAlex cursor pagination" in TOOL_DESCRIPTIONS["search_papers_openalex_bulk"]
-    )
+    assert "OpenAlex cursor pagination" in TOOL_DESCRIPTIONS["search_papers_openalex_bulk"]
     assert "abstract_inverted_index" in TOOL_DESCRIPTIONS["get_paper_details_openalex"]
     assert "cited_by_api_url" in TOOL_DESCRIPTIONS["get_paper_citations_openalex"]
-    assert (
-        "batched OpenAlex ID lookups"
-        in TOOL_DESCRIPTIONS["get_paper_references_openalex"]
-    )
+    assert "batched OpenAlex ID lookups" in TOOL_DESCRIPTIONS["get_paper_references_openalex"]
     assert "OpenAlex author profile" in TOOL_DESCRIPTIONS["get_author_info_openalex"]
     assert "search_authors_openalex" in TOOL_DESCRIPTIONS["get_author_papers_openalex"]
 
@@ -493,16 +453,12 @@ async def test_plan_prompt_mentions_continuation_vs_pivot_and_schema_limits() ->
     assert "search_papers_smart" in prompt_text
     assert "resolve_citation" in prompt_text
     assert "searchSessionId" in prompt_text
-    assert "closest continuation path only when the workflow is already aligned" in (
-        prompt_text
-    )
+    assert "closest continuation path only when the workflow is already aligned" in (prompt_text)
     assert "NOT relevance-ranked" in prompt_text
     assert "retrievalNote" in prompt_text
     assert "citationCount:desc" in prompt_text
     assert "paper.expansionIdStatus is not_portable" in prompt_text
-    assert "Semantic Scholar pivot rather than another page from the same provider" in (
-        prompt_text
-    )
+    assert "Semantic Scholar pivot rather than another page from the same provider" in (prompt_text)
     assert "only support query, limit, and year" in prompt_text
     assert "prefer search_papers or search_papers_semantic_scholar" in prompt_text
     assert "outside the indexed paper surface" in prompt_text

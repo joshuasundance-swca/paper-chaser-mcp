@@ -23,9 +23,7 @@ def _sanitize_schema_node(node: Any) -> Any:
 
     if "anyOf" in node:
         non_null = [
-            option
-            for option in node["anyOf"]
-            if not (isinstance(option, dict) and option.get("type") == "null")
+            option for option in node["anyOf"] if not (isinstance(option, dict) and option.get("type") == "null")
         ]
         if len(non_null) == 1:
             merged = _sanitize_schema_node(non_null[0])

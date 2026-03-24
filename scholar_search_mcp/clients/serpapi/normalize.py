@@ -127,14 +127,10 @@ def normalize_organic_result(result: dict[str, Any]) -> Optional[dict[str, Any]]
     inline_links: dict[str, Any] = result.get("inline_links") or {}
 
     versions: dict[str, Any] = inline_links.get("versions") or {}
-    cluster_id: Optional[str] = (
-        str(versions["cluster_id"]) if versions.get("cluster_id") else None
-    )
+    cluster_id: Optional[str] = str(versions["cluster_id"]) if versions.get("cluster_id") else None
 
     cited_by: dict[str, Any] = inline_links.get("cited_by") or {}
-    cites_id: Optional[str] = (
-        str(cited_by["cites_id"]) if cited_by.get("cites_id") else None
-    )
+    cites_id: Optional[str] = str(cited_by["cites_id"]) if cited_by.get("cites_id") else None
 
     # sourceId priority: result_id > cluster_id > cites_id
     source_id: Optional[str] = result_id or cluster_id or cites_id

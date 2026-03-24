@@ -517,18 +517,10 @@ workspace_registry = WorkspaceRegistry(
     index_backend=settings.agentic_index_backend,
     similarity_fn=provider_bundle.similarity,
     async_batched_similarity_fn=provider_bundle.abatched_similarity,
-    async_embed_query_fn=(
-        None if settings.disable_embeddings else provider_bundle.aembed_query
-    ),
-    async_embed_texts_fn=(
-        None if settings.disable_embeddings else provider_bundle.aembed_texts
-    ),
-    embed_query_fn=(
-        None if settings.disable_embeddings else provider_bundle.embed_query
-    ),
-    embed_texts_fn=(
-        None if settings.disable_embeddings else provider_bundle.embed_texts
-    ),
+    async_embed_query_fn=(None if settings.disable_embeddings else provider_bundle.aembed_query),
+    async_embed_texts_fn=(None if settings.disable_embeddings else provider_bundle.aembed_texts),
+    embed_query_fn=(None if settings.disable_embeddings else provider_bundle.embed_query),
+    embed_texts_fn=(None if settings.disable_embeddings else provider_bundle.embed_texts),
 )
 agentic_runtime = AgenticRuntime(
     config=agentic_config,
@@ -620,9 +612,7 @@ async def paper_resource(paper_id: str) -> str:
         except Exception as exc:
             last_error = exc
             logger.debug("Paper resource fetch failed for %r: %s", paper_id, exc)
-    raise ValueError(
-        f"Could not resolve paper resource for {paper_id!r}."
-    ) from last_error
+    raise ValueError(f"Could not resolve paper resource for {paper_id!r}.") from last_error
 
 
 @app.resource(
@@ -646,9 +636,7 @@ async def author_resource(author_id: str) -> str:
         except Exception as exc:
             last_error = exc
             logger.debug("Author resource fetch failed for %r: %s", author_id, exc)
-    raise ValueError(
-        f"Could not resolve author resource for {author_id!r}."
-    ) from last_error
+    raise ValueError(f"Could not resolve author resource for {author_id!r}.") from last_error
 
 
 @app.resource(
@@ -664,10 +652,7 @@ def search_session_resource(search_session_id: str) -> str:
 @app.resource(
     "trail://paper/{paper_id}?direction={direction}",
     title="Paper trail resource",
-    description=(
-        "Citation or reference trail for a paper, preferably discovered "
-        "through tool outputs."
-    ),
+    description=("Citation or reference trail for a paper, preferably discovered through tool outputs."),
     mime_type="application/json",
 )
 async def paper_trail_resource(
@@ -676,13 +661,9 @@ async def paper_trail_resource(
 ) -> str:
     cached_trail = workspace_registry.find_trail(paper_id=paper_id, direction=direction)
     if cached_trail is not None:
-        return _resource_text(
-            workspace_registry.render_search_resource(cached_trail.search_session_id)
-        )
+        return _resource_text(workspace_registry.render_search_resource(cached_trail.search_session_id))
     payload = await (
-        client.get_paper_citations(
-            paper_id=paper_id, limit=25, fields=None, offset=None
-        )
+        client.get_paper_citations(paper_id=paper_id, limit=25, fields=None, offset=None)
         if direction == "citations"
         else client.get_paper_references(
             paper_id=paper_id,
@@ -732,11 +713,7 @@ def plan_scholar_search(
             "tool paths that exercise it."
         ),
     }
-    focus_text = (
-        f" Focus prompt: {focus_prompt}."
-        if focus_prompt
-        else " No extra focus prompt was supplied."
-    )
+    focus_text = f" Focus prompt: {focus_prompt}." if focus_prompt else " No extra focus prompt was supplied."
     return (
         f"You are planning a scholar-search workflow about '{topic}'. Goal: {goal}. "
         f"Mode: {mode}. {mode_guidance[mode]}{focus_text} "
@@ -804,19 +781,12 @@ def plan_scholar_search(
 @app.prompt(
     name="plan_smart_scholar_search",
     title="Plan Smart Scholar Search",
-    description=(
-        "Generate a smart-tool-first research plan for concept-level discovery."
-    ),
+    description=("Generate a smart-tool-first research plan for concept-level discovery."),
 )
 def plan_smart_scholar_search(
     topic: str,
-    goal: str = (
-        "map the literature, answer grounded follow-up questions, and "
-        "identify the best next actions"
-    ),
-    mode: Literal[
-        "discovery", "review", "known_item", "author", "citation"
-    ] = "discovery",
+    goal: str = ("map the literature, answer grounded follow-up questions, and identify the best next actions"),
+    mode: Literal["discovery", "review", "known_item", "author", "citation"] = "discovery",
 ) -> str:
     return (
         f"You are planning a smart scholar-search workflow about '{topic}'. "

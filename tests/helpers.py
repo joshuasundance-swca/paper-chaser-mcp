@@ -316,10 +316,7 @@ class RecordingEcosClient:
                     {
                         "documentKind": "recovery_plan",
                         "title": "Revised California Least Tern Recovery Plan",
-                        "url": (
-                            "https://ecos.fws.gov/docs/recovery_plan/"
-                            "850927_w signature.pdf"
-                        ),
+                        "url": ("https://ecos.fws.gov/docs/recovery_plan/850927_w signature.pdf"),
                         "documentDate": "09/27/1985",
                     }
                 ],
@@ -354,9 +351,7 @@ class RecordingEcosClient:
                 {
                     "documentKind": "recovery_plan",
                     "title": "Revised California Least Tern Recovery Plan",
-                    "url": (
-                        "https://ecos.fws.gov/docs/recovery_plan/850927_w signature.pdf"
-                    ),
+                    "url": ("https://ecos.fws.gov/docs/recovery_plan/850927_w signature.pdf"),
                     "documentDate": "09/27/1985",
                 },
             ],
@@ -369,9 +364,7 @@ class RecordingEcosClient:
                 "title": "California Least Tern 5YR 2025",
                 "url": kwargs["url"],
             },
-            "markdown": (
-                "# Five-Year Review\n\n## Recommendation\n\nRetain endangered status."
-            ),
+            "markdown": ("# Five-Year Review\n\n## Recommendation\n\nRetain endangered status."),
             "contentType": "application/pdf",
             "extractionStatus": "ok",
             "warnings": [],

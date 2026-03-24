@@ -45,31 +45,18 @@ def test_runtime_logs_remote_http_configuration_and_runs_app() -> None:
             "SCHOLAR_SEARCH_HTTP_PATH": "/custom-mcp",
             "SCHOLAR_SEARCH_HTTP_AUTH_TOKEN": "super-secret",
             "SCHOLAR_SEARCH_HTTP_AUTH_HEADER": "x-backend-auth",
-            "SCHOLAR_SEARCH_ALLOWED_ORIGINS": (
-                "https://allowed-one.example,https://allowed-two.example"
-            ),
+            "SCHOLAR_SEARCH_ALLOWED_ORIGINS": ("https://allowed-one.example,https://allowed-two.example"),
         }
     )
 
     run_server(app=app, logger=logger, settings=settings)
 
-    assert any(
-        "Semantic Scholar API key detected" in item for item in logger.info_messages
-    )
+    assert any("Semantic Scholar API key detected" in item for item in logger.info_messages)
     assert any("CORE API key set" in item for item in logger.info_messages)
-    assert any(
-        "SerpApi Google Scholar enabled with API key" in item
-        for item in logger.info_messages
-    )
+    assert any("SerpApi Google Scholar enabled with API key" in item for item in logger.info_messages)
     assert any("HTTP auth token configured" in item for item in logger.info_messages)
-    assert any(
-        "HTTP Origin allowlist configured for 2 entries" in item
-        for item in logger.info_messages
-    )
-    assert any(
-        "Binding HTTP transport to remote.example" in item
-        for item in logger.warning_messages
-    )
+    assert any("HTTP Origin allowlist configured for 2 entries" in item for item in logger.info_messages)
+    assert any("Binding HTTP transport to remote.example" in item for item in logger.warning_messages)
     assert app.calls == [
         {
             "transport": "streamable-http",
@@ -89,12 +76,8 @@ def test_deployment_runner_helpers_and_main_entrypoint(monkeypatch) -> None:
         lambda app, host, port: recorded.append((app, host, port)),
     )
 
-    assert deployment_runner.resolve_bind_host({"SCHOLAR_SEARCH_HTTP_HOST": "  "}) == (
-        deployment_runner.DEFAULT_HOST
-    )
-    assert deployment_runner.resolve_bind_port({"PORT": "  "}) == (
-        deployment_runner.DEFAULT_PORT
-    )
+    assert deployment_runner.resolve_bind_host({"SCHOLAR_SEARCH_HTTP_HOST": "  "}) == (deployment_runner.DEFAULT_HOST)
+    assert deployment_runner.resolve_bind_port({"PORT": "  "}) == (deployment_runner.DEFAULT_PORT)
 
     deployment_runner.main()
 

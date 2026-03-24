@@ -62,10 +62,7 @@ class DeploymentSecurityMiddleware(BaseHTTPMiddleware):
                 return JSONResponse(
                     {
                         "error": "unauthorized",
-                        "message": (
-                            "Valid deployment auth credentials are required for the "
-                            "MCP endpoint."
-                        ),
+                        "message": ("Valid deployment auth credentials are required for the MCP endpoint."),
                     },
                     status_code=401,
                     headers={"WWW-Authenticate": "Bearer"},
@@ -85,11 +82,7 @@ def create_deployment_app(settings: AppSettings | None = None) -> Starlette:
     deployment_settings = settings or AppSettings.from_env()
     mcp_app = build_http_app(
         path=deployment_settings.http_path,
-        transport=(
-            deployment_settings.transport
-            if deployment_settings.transport != "stdio"
-            else "streamable-http"
-        ),
+        transport=(deployment_settings.transport if deployment_settings.transport != "stdio" else "streamable-http"),
     )
 
     app = Starlette(

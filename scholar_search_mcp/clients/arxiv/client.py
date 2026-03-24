@@ -52,15 +52,13 @@ class ArxivClient:
                 year_end = year_end.strip()[:4]
                 if year_start.isdigit() and year_end.isdigit():
                     params["search_query"] = (
-                        f"{params['search_query']}+AND+submittedDate:"
-                        f"[{year_start}01010000+TO+{year_end}12312359]"
+                        f"{params['search_query']}+AND+submittedDate:[{year_start}01010000+TO+{year_end}12312359]"
                     )
             else:
                 single_year = year.strip()[:4]
                 if single_year.isdigit():
                     params["search_query"] = (
-                        f"{params['search_query']}+AND+submittedDate:"
-                        f"[{single_year}01010000+TO+{single_year}12312359]"
+                        f"{params['search_query']}+AND+submittedDate:[{single_year}01010000+TO+{single_year}12312359]"
                     )
 
         url = (
@@ -89,9 +87,7 @@ class ArxivClient:
             paper = self._entry_to_paper(entry)
             if paper:
                 entries.append(Paper.model_validate(paper))
-        return dump_jsonable(
-            ArxivSearchResponse(totalResults=total_results, entries=entries)
-        )
+        return dump_jsonable(ArxivSearchResponse(totalResults=total_results, entries=entries))
 
     async def aclose(self) -> None:
         """Close the shared HTTP client, if one has been created."""
@@ -110,11 +106,7 @@ class ArxivClient:
         title = _text(title_el).replace("\n", " ").strip()
 
         summary_el = entry.find(f"{{{ATOM_NS}}}summary")
-        abstract = (
-            _text(summary_el).replace("\n", " ").strip()
-            if summary_el is not None
-            else ""
-        )
+        abstract = _text(summary_el).replace("\n", " ").strip() if summary_el is not None else ""
 
         published_el = entry.find(f"{{{ATOM_NS}}}published")
         updated_el = entry.find(f"{{{ATOM_NS}}}updated")

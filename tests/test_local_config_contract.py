@@ -128,9 +128,7 @@ def test_compose_uses_only_documented_local_config_keys() -> None:
     compose_keys = _parse_compose_substitution_keys(DOCKER_COMPOSE)
 
     assert EXPECTED_LOCAL_CONFIG_KEYS <= compose_keys
-    undocumented = (
-        compose_keys - EXPECTED_LOCAL_CONFIG_KEYS - OPTIONAL_COMPOSE_ONLY_KEYS
-    )
+    undocumented = compose_keys - EXPECTED_LOCAL_CONFIG_KEYS - OPTIONAL_COMPOSE_ONLY_KEYS
     assert undocumented == set()
 
 

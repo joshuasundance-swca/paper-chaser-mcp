@@ -6,17 +6,13 @@ from scholar_search_mcp.settings import AppSettings
 
 
 def test_app_settings_reads_provider_order_from_env() -> None:
-    settings = AppSettings.from_env(
-        {"SCHOLAR_SEARCH_PROVIDER_ORDER": "semantic_scholar,arxiv"}
-    )
+    settings = AppSettings.from_env({"SCHOLAR_SEARCH_PROVIDER_ORDER": "semantic_scholar,arxiv"})
 
     assert settings.provider_order == ("semantic_scholar", "arxiv")
 
 
 def test_app_settings_accepts_serpapi_alias_in_provider_order() -> None:
-    settings = AppSettings.from_env(
-        {"SCHOLAR_SEARCH_PROVIDER_ORDER": "semantic_scholar,serpapi,arxiv"}
-    )
+    settings = AppSettings.from_env({"SCHOLAR_SEARCH_PROVIDER_ORDER": "semantic_scholar,serpapi,arxiv"})
 
     assert settings.provider_order == (
         "semantic_scholar",
@@ -27,9 +23,7 @@ def test_app_settings_accepts_serpapi_alias_in_provider_order() -> None:
 
 def test_app_settings_rejects_duplicate_provider_order_entries() -> None:
     with pytest.raises(ValueError, match="cannot repeat providers"):
-        AppSettings.from_env(
-            {"SCHOLAR_SEARCH_PROVIDER_ORDER": "core,core,semantic_scholar"}
-        )
+        AppSettings.from_env({"SCHOLAR_SEARCH_PROVIDER_ORDER": "core,core,semantic_scholar"})
 
 
 def test_search_papers_args_accept_serpapi_alias() -> None:
@@ -269,18 +263,14 @@ def test_app_settings_ignores_unrelated_azure_workflow_metadata() -> None:
 
 
 @pytest.mark.parametrize("value", ["false", "0", "no", "off"])
-def test_env_bool_parses_common_false_values(
-    monkeypatch: pytest.MonkeyPatch, value: str
-) -> None:
+def test_env_bool_parses_common_false_values(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
     monkeypatch.setenv("SCHOLAR_TEST_BOOL", value)
 
     assert server._env_bool("SCHOLAR_TEST_BOOL", True) is False
 
 
 @pytest.mark.parametrize("value", ["true", "1", "yes"])
-def test_env_bool_treats_other_common_values_as_true(
-    monkeypatch: pytest.MonkeyPatch, value: str
-) -> None:
+def test_env_bool_treats_other_common_values_as_true(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
     monkeypatch.setenv("SCHOLAR_TEST_BOOL", value)
 
     assert server._env_bool("SCHOLAR_TEST_BOOL", False) is True

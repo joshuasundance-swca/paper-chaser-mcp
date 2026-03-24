@@ -125,9 +125,7 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "limit",
         "year",
     }
-    assert set(
-        tool_map["search_papers_semantic_scholar"].inputSchema["properties"]
-    ) == {
+    assert set(tool_map["search_papers_semantic_scholar"].inputSchema["properties"]) == {
         "query",
         "limit",
         "fields",
@@ -170,9 +168,7 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "limit",
         "cursor",
     }
-    assert set(
-        tool_map["search_papers_openalex_by_entity"].inputSchema["properties"]
-    ) == {
+    assert set(tool_map["search_papers_openalex_by_entity"].inputSchema["properties"]) == {
         "entityType",
         "entityId",
         "limit",
@@ -199,9 +195,7 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "doi",
         "query",
     }
-    assert set(
-        tool_map["get_paper_open_access_unpaywall"].inputSchema["properties"]
-    ) == {
+    assert set(tool_map["get_paper_open_access_unpaywall"].inputSchema["properties"]) == {
         "paper_id",
         "doi",
     }
@@ -293,9 +287,7 @@ async def test_list_tools_returns_expected_public_contract() -> None:
     assert "positivePaperIds" in post_rec_schema["required"]
     citation_schema = tool_map["get_paper_citation_formats"].inputSchema
     assert citation_schema["required"] == ["result_id"]
-    assert set(tool_map["get_provider_diagnostics"].inputSchema["properties"]) == {
-        "includeRecentOutcomes"
-    }
+    assert set(tool_map["get_provider_diagnostics"].inputSchema["properties"]) == {"includeRecentOutcomes"}
 
 
 @pytest.mark.asyncio
@@ -392,8 +384,7 @@ async def test_call_tool_routes_non_search_tools(
         assert payload[key] == value
     _assert_additive_metadata(
         payload,
-        expect_search_session_id=tool_name
-        in {"get_paper_citations", "get_paper_references", "get_author_papers"},
+        expect_search_session_id=tool_name in {"get_paper_citations", "get_paper_references", "get_author_papers"},
     )
 
 
@@ -535,7 +526,50 @@ async def test_search_papers_match_include_enrichment_is_opt_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_client = RecordingSemanticClient()
-    crossref, unpaywall = _install_recording_enrichment(monkeypatch)
+
+    async def fake_match(**kwargs: dict) -> dict:
+        fake_client.calls.append(("search_papers_match", kwargs))
+        return {
+            "paperId": "match-1",
+            "title": "Best match",
+            "year": 2024,
+            "authors": [{"name": "Lead Author"}],
+            "venue": "Journal of Tests",
+            "matchFound": True,
+            "matchStrategy": "exact_title",
+        }
+
+    class MatchingCrossrefClient(RecordingCrossrefClient):
+        async def search_work(self, query: str) -> dict:
+            self.calls.append(("search_work", {"query": query}))
+            return {
+                "doi": "10.1234/crossref-query",
+                "title": "Best match",
+                "authors": [{"name": "Lead Author"}],
+                "venue": "Journal of Tests",
+                "publisher": "Crossref Publisher",
+                "publicationType": "journal-article",
+                "publicationDate": "2024-05-01",
+                "year": 2024,
+                "url": "https://doi.org/10.1234/crossref-query",
+                "citationCount": 7,
+            }
+
+    fake_client.search_papers_match = fake_match  # type: ignore[method-assign]
+    crossref = MatchingCrossrefClient()
+    unpaywall = RecordingUnpaywallClient()
+    service = PaperEnrichmentService(
+        crossref_client=crossref,
+        unpaywall_client=unpaywall,
+        enable_crossref=True,
+        enable_unpaywall=True,
+        provider_registry=server.provider_registry,
+    )
+    monkeypatch.setattr(server, "enable_crossref", True)
+    monkeypatch.setattr(server, "enable_unpaywall", True)
+    monkeypatch.setattr(server, "crossref_client", crossref)
+    monkeypatch.setattr(server, "unpaywall_client", unpaywall)
+    monkeypatch.setattr(server, "enrichment_service", service)
     monkeypatch.setattr(server, "client", fake_client)
 
     baseline = _payload(
@@ -555,12 +589,139 @@ async def test_search_papers_match_include_enrichment_is_opt_in(
     assert crossref.calls == [("search_work", {"query": "Best match"})]
     assert unpaywall.calls == [("get_open_access", {"doi": "10.1234/crossref-query"})]
     assert enriched["enrichments"]["crossref"]["doi"] == "10.1234/crossref-query"
-    assert enriched["enrichments"]["unpaywall"]["bestOaUrl"].endswith(
-        "10.1234/crossref-query"
-    )
+    assert enriched["enrichments"]["unpaywall"]["bestOaUrl"].endswith("10.1234/crossref-query")
     assert fake_client.calls == [
         ("search_papers_match", {"query": "Best match", "fields": None}),
         ("search_papers_match", {"query": "Best match", "fields": None}),
+        (
+            "get_paper_details",
+            {
+                "paper_id": "match-1",
+                "fields": [
+                    "paperId",
+                    "title",
+                    "year",
+                    "authors",
+                    "venue",
+                    "publicationDate",
+                    "url",
+                    "externalIds",
+                ],
+            },
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_search_papers_match_include_enrichment_skips_untrusted_crossref_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_client = RecordingSemanticClient()
+
+    async def fake_match(**kwargs: dict) -> dict:
+        fake_client.calls.append(("search_papers_match", kwargs))
+        return {
+            "paperId": "match-1",
+            "title": "Best match",
+            "year": 2024,
+            "authors": [{"name": "Lead Author"}],
+            "venue": "Journal of Tests",
+            "matchFound": True,
+            "matchStrategy": "exact_title",
+        }
+
+    fake_client.search_papers_match = fake_match  # type: ignore[method-assign]
+    crossref, unpaywall = _install_recording_enrichment(monkeypatch)
+    monkeypatch.setattr(server, "client", fake_client)
+
+    enriched = _payload(
+        await server.call_tool(
+            "search_papers_match",
+            {"query": "Best match", "includeEnrichment": True},
+        )
+    )
+
+    assert "enrichments" not in enriched
+    assert crossref.calls == [("search_work", {"query": "Best match"})]
+    assert unpaywall.calls == []
+
+
+@pytest.mark.asyncio
+async def test_search_snippets_uses_search_papers_fallback_when_degraded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FallbackSemanticClient(RecordingSemanticClient):
+        async def search_snippets(self, **kwargs) -> dict:
+            self.calls.append(("search_snippets", kwargs))
+            return {
+                "data": [],
+                "degraded": True,
+                "providerStatusCode": 400,
+                "message": "Semantic Scholar snippet search could not serve this query.",
+            }
+
+        async def search_papers(self, **kwargs) -> dict:
+            self.calls.append(("search_papers", kwargs))
+            return {
+                "total": 1,
+                "offset": 0,
+                "data": [
+                    {
+                        "paperId": "paper-1",
+                        "title": "Anthropogenic noise effects on wildlife",
+                        "year": 2015,
+                        "url": "https://example.org/paper-1",
+                        "abstract": (
+                            "A synthesis of two decades of research documenting the effects of noise on wildlife."
+                        ),
+                    }
+                ],
+            }
+
+    fake_client = FallbackSemanticClient()
+    monkeypatch.setattr(server, "client", fake_client)
+
+    payload = _payload(
+        await server.call_tool(
+            "search_snippets",
+            {"query": '"anthropogenic noise wildlife review"', "limit": 3},
+        )
+    )
+
+    assert payload["degraded"] is True
+    assert payload["fallbackUsed"] == "search_papers"
+    assert payload["providerStatusCode"] == 400
+    assert payload["data"][0]["paper"]["paperId"] == "paper-1"
+    assert payload["data"][0]["snippet"]["snippetKind"] == "fallback_paper_match"
+    assert payload["data"][0]["snippet"]["section"] == "abstract"
+    assert "two decades of research" in payload["data"][0]["snippet"]["text"]
+    assert fake_client.calls == [
+        (
+            "search_snippets",
+            {
+                "query": '"anthropogenic noise wildlife review"',
+                "limit": 3,
+                "fields": None,
+                "year": None,
+                "publication_date_or_year": None,
+                "fields_of_study": None,
+                "min_citation_count": None,
+                "venue": None,
+            },
+        ),
+        (
+            "search_papers",
+            {
+                "query": "anthropogenic noise wildlife review",
+                "limit": 3,
+                "fields": ["paperId", "title", "year", "url", "abstract"],
+                "year": None,
+                "publication_date_or_year": None,
+                "fields_of_study": None,
+                "min_citation_count": None,
+                "venue": None,
+            },
+        ),
     ]
 
 
@@ -714,12 +875,8 @@ async def test_openalex_detail_and_author_tools_route_to_openalex_client(
     monkeypatch.setattr(server, "openalex_client", openalex)
     monkeypatch.setattr(server, "enable_openalex", True)
 
-    paper = _payload(
-        await server.call_tool("get_paper_details_openalex", {"paper_id": "W42"})
-    )
-    author = _payload(
-        await server.call_tool("get_author_info_openalex", {"author_id": "A42"})
-    )
+    paper = _payload(await server.call_tool("get_paper_details_openalex", {"paper_id": "W42"}))
+    author = _payload(await server.call_tool("get_author_info_openalex", {"author_id": "A42"}))
     author_papers = _payload(
         await server.call_tool(
             "get_author_papers_openalex",
@@ -737,9 +894,7 @@ async def test_openalex_detail_and_author_tools_route_to_openalex_client(
             {"author_id": "A42", "limit": 100, "cursor": None, "year": "2023"},
         ),
     ]
-    assert decode_bulk_cursor(author_papers["pagination"]["nextCursor"]).provider == (
-        "openalex"
-    )
+    assert decode_bulk_cursor(author_papers["pagination"]["nextCursor"]).provider == ("openalex")
 
 
 @pytest.mark.asyncio
@@ -778,9 +933,7 @@ async def test_new_openalex_tools_route_and_wrap_bulk_cursors(
         "search_entities",
         {"entity_type": "source", "query": "neurips", "limit": 10, "cursor": None},
     )
-    assert decode_bulk_cursor(entities["pagination"]["nextCursor"]).provider == (
-        "openalex"
-    )
+    assert decode_bulk_cursor(entities["pagination"]["nextCursor"]).provider == ("openalex")
     assert openalex.calls[2] == (
         "search_works_by_entity",
         {
@@ -791,9 +944,7 @@ async def test_new_openalex_tools_route_and_wrap_bulk_cursors(
             "year": None,
         },
     )
-    assert decode_bulk_cursor(entity_papers["pagination"]["nextCursor"]).provider == (
-        "openalex"
-    )
+    assert decode_bulk_cursor(entity_papers["pagination"]["nextCursor"]).provider == ("openalex")
 
 
 @pytest.mark.asyncio
@@ -896,18 +1047,12 @@ async def test_new_serpapi_tools_and_provider_diagnostics_route(
     diagnostics = _payload(await server.call_tool("get_provider_diagnostics", {}))
 
     assert cited_by["data"][0]["paperId"] == "serp-cites-1"
-    assert decode_cursor(cited_by["pagination"]["nextCursor"]).provider == (
-        "serpapi_google_scholar"
-    )
+    assert decode_cursor(cited_by["pagination"]["nextCursor"]).provider == ("serpapi_google_scholar")
     assert versions["data"][0]["paperId"] == "serp-version-1"
-    assert decode_cursor(versions["pagination"]["nextCursor"]).provider == (
-        "serpapi_google_scholar"
-    )
+    assert decode_cursor(versions["pagination"]["nextCursor"]).provider == ("serpapi_google_scholar")
     assert author["authorId"] == "author-1"
     assert articles["authorId"] == "author-1"
-    assert decode_cursor(articles["pagination"]["nextCursor"]).provider == (
-        "serpapi_google_scholar"
-    )
+    assert decode_cursor(articles["pagination"]["nextCursor"]).provider == ("serpapi_google_scholar")
     assert account["provider"] == "serpapi_google_scholar"
     assert any(item["provider"] == "openai" for item in diagnostics["providers"])
 
@@ -924,11 +1069,7 @@ async def test_provider_diagnostics_surface_crossref_and_unpaywall(
         {"doi": "10.1234/diag"},
     )
     diagnostics = _payload(await server.call_tool("get_provider_diagnostics", {}))
-    provider_map = {
-        item["provider"]: item
-        for item in diagnostics["providers"]
-        if isinstance(item, dict)
-    }
+    provider_map = {item["provider"]: item for item in diagnostics["providers"] if isinstance(item, dict)}
 
     assert provider_map["crossref"]["enabled"] is True
     assert provider_map["unpaywall"]["enabled"] is True
@@ -1067,9 +1208,7 @@ async def test_call_tool_routes_new_tools(
 
 @pytest.mark.asyncio
 async def test_smart_tools_return_structured_feature_errors_when_disabled() -> None:
-    payload = _payload(
-        await server.call_tool("search_papers_smart", {"query": "transformers"})
-    )
+    payload = _payload(await server.call_tool("search_papers_smart", {"query": "transformers"}))
 
     assert payload["error"] == "FEATURE_NOT_CONFIGURED"
     assert "fallbackTools" in payload

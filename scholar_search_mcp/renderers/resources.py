@@ -18,9 +18,7 @@ def render_search_resource_payload(record: Any) -> dict[str, Any]:
     if record.papers:
         markdown_lines.extend(["", "## Top papers"])
         for paper in record.papers[:5]:
-            markdown_lines.append(
-                f"- {paper.get('title') or paper.get('paperId') or 'Untitled'}"
-            )
+            markdown_lines.append(f"- {paper.get('title') or paper.get('paperId') or 'Untitled'}")
     return {
         "markdown": "\n".join(markdown_lines),
         "data": record.payload,
@@ -39,9 +37,7 @@ def render_paper_resource_payload(
         for author in (paper.get("authors") or [])
         if isinstance(author, dict) and author.get("name")
     )
-    paper_identifier = (
-        paper.get("paperId") or paper.get("canonicalId") or fallback_paper_id or "unknown"
-    )
+    paper_identifier = paper.get("paperId") or paper.get("canonicalId") or fallback_paper_id or "unknown"
     markdown_lines = [
         f"# {paper.get('title') or paper.get('paperId') or fallback_paper_id or 'Paper'}",
         "",

@@ -42,9 +42,7 @@ logger = logging.getLogger("scholar-search-mcp")
 _SEARCH_EXECUTOR = SearchExecutor()
 
 BROKER_HEDGE_DELAY_SECONDS = 0.35
-HEDGE_ELIGIBLE_PROVIDERS: frozenset[SearchProvider] = frozenset(
-    {"semantic_scholar", "arxiv", "core"}
-)
+HEDGE_ELIGIBLE_PROVIDERS: frozenset[SearchProvider] = frozenset({"semantic_scholar", "arxiv", "core"})
 
 SEMANTIC_SCHOLAR_ONLY_FIELDS = (
     "publication_date_or_year",
@@ -157,9 +155,7 @@ def _has_unmatched_distinctive_tokens(query: str, papers: list[Paper]) -> bool:
     distinctive = _distinctive_query_tokens(query)
     if not distinctive:
         return False
-    result_text = " ".join(
-        " ".join(filter(None, [p.title, p.abstract])) for p in papers
-    ).lower()
+    result_text = " ".join(" ".join(filter(None, [p.title, p.abstract])) for p in papers).lower()
     return any(token not in result_text for token in distinctive)
 
 
@@ -173,10 +169,7 @@ def _dump_search_response(response: SearchResponse) -> dict[str, Any]:
     result: dict[str, Any] = {
         "total": response.total,
         "offset": response.offset,
-        "data": [
-            paper.model_dump(by_alias=True, exclude_none=True, exclude_defaults=True)
-            for paper in response.data
-        ],
+        "data": [paper.model_dump(by_alias=True, exclude_none=True, exclude_defaults=True) for paper in response.data],
     }
     if response.broker_metadata is not None:
         result["brokerMetadata"] = response.broker_metadata.model_dump(by_alias=True)
@@ -340,11 +333,7 @@ def _metadata(
         )
     elif provider_used == "none":
         if result_status == "provider_failed":
-            failed_labels = [
-                provider_labels.get(a.provider, a.provider)
-                for a in attempts
-                if a.status == "failed"
-            ]
+            failed_labels = [provider_labels.get(a.provider, a.provider) for a in attempts if a.status == "failed"]
             if len(failed_labels) == 1:
                 next_step_hint = (
                     f"{failed_labels[0]} returned an upstream error "
@@ -458,12 +447,8 @@ def _hedge_target_index(
     )
 
 
-def _skip_for_ss_only_filters(
-    provider: SearchProvider, ss_only_filters: list[str]
-) -> BrokerAttempt | None:
-    return _SEARCH_EXECUTOR.skip_for_semantic_scholar_only_filters(
-        provider, ss_only_filters
-    )
+def _skip_for_ss_only_filters(provider: SearchProvider, ss_only_filters: list[str]) -> BrokerAttempt | None:
+    return _SEARCH_EXECUTOR.skip_for_semantic_scholar_only_filters(provider, ss_only_filters)
 
 
 def _disabled_provider_attempt(provider: SearchProvider) -> BrokerAttempt:
@@ -548,9 +533,7 @@ def _merge_search_results(
     )
 
 
-def _core_response_to_merged(
-    core_response: dict[str, Any], limit: int
-) -> dict[str, Any]:
+def _core_response_to_merged(core_response: dict[str, Any], limit: int) -> dict[str, Any]:
     """Convert CORE search response to unified shape (total, offset, data)."""
     core_search = CoreSearchResponse.model_validate(core_response)
     return _dump_search_response(
@@ -730,14 +713,10 @@ async def search_papers_with_fallback(
     processed_providers = trace.processed_providers
 
     if provider_used != "none":
-        attempts.extend(
-            _earlier_result_attempt(provider)
-            for provider in effective_order[processed_providers:]
-        )
+        attempts.extend(_earlier_result_attempt(provider) for provider in effective_order[processed_providers:])
         if result is not None:
-            low_relevance = (
-                provider_used == "semantic_scholar"
-                and _has_unmatched_distinctive_tokens(query, result.data)
+            low_relevance = provider_used == "semantic_scholar" and _has_unmatched_distinctive_tokens(
+                query, result.data
             )
             result.broker_metadata = _metadata(
                 provider_used=provider_used,

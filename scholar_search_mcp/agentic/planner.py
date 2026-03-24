@@ -100,10 +100,7 @@ def query_facets(query: str) -> list[str]:
         tokens = [
             token
             for token in re.findall(r"[A-Za-z0-9]{3,}", segment)
-            if (
-                token not in GENERIC_EVIDENCE_WORDS
-                or token in QUERY_FACET_TOKEN_ALLOWLIST
-            )
+            if (token not in GENERIC_EVIDENCE_WORDS or token in QUERY_FACET_TOKEN_ALLOWLIST)
         ]
         if len(tokens) >= 2:
             facet = " ".join(tokens[:3])
@@ -114,9 +111,7 @@ def query_facets(query: str) -> list[str]:
         return facets[:3]
 
     fallback_tokens = [
-        token
-        for token in re.findall(r"[A-Za-z0-9]{3,}", normalized)
-        if token not in GENERIC_EVIDENCE_WORDS
+        token for token in re.findall(r"[A-Za-z0-9]{3,}", normalized) if token not in GENERIC_EVIDENCE_WORDS
     ]
     for token in fallback_tokens[:3]:
         if token not in seen:
@@ -157,16 +152,10 @@ def looks_like_exact_title(query: str) -> bool:
     words = re.findall(r"[A-Za-z][A-Za-z0-9'/-]*", stripped)
     if not 2 <= len(words) <= 14:
         return False
-    significant_words = [
-        word for word in words if len(word) > 2 and word.lower() not in TITLE_STOPWORDS
-    ]
+    significant_words = [word for word in words if len(word) > 2 and word.lower() not in TITLE_STOPWORDS]
     if len(significant_words) < 2:
         return False
-    title_like_words = [
-        word
-        for word in significant_words
-        if word[:1].isupper() or word.isupper() or "-" in word
-    ]
+    title_like_words = [word for word in significant_words if word[:1].isupper() or word.isupper() or "-" in word]
     return len(title_like_words) >= max(2, int(len(significant_words) * 0.6))
 
 
@@ -242,15 +231,11 @@ def grounded_expansion_candidates(
             ExpansionCandidate(
                 variant=" ".join([base_query, *suffixes]),
                 source="from_input",
-                rationale=(
-                    "Adds explicit user-provided constraints to the literal query."
-                ),
+                rationale=("Adds explicit user-provided constraints to the literal query."),
             )
         )
 
-    phrase_candidates = _top_evidence_phrases(
-        papers, limit=config.max_grounded_variants * 3
-    )
+    phrase_candidates = _top_evidence_phrases(papers, limit=config.max_grounded_variants * 3)
     query_tokens = set(re.findall(r"[A-Za-z0-9]{3,}", base_query.lower()))
     for phrase in phrase_candidates:
         lowered_query = base_query.lower()
@@ -263,10 +248,7 @@ def grounded_expansion_candidates(
             ExpansionCandidate(
                 variant=f"{base_query} {phrase}",
                 source="from_retrieved_evidence",
-                rationale=(
-                    "Evidence from the first-pass results repeatedly "
-                    f"mentioned '{phrase}'."
-                ),
+                rationale=(f"Evidence from the first-pass results repeatedly mentioned '{phrase}'."),
             )
         )
         if len(variants) >= config.max_grounded_variants:
@@ -280,10 +262,7 @@ def grounded_expansion_candidates(
         if lowered in seen:
             continue
         signature = _variant_signature(candidate.variant)
-        if any(
-            _signatures_are_near_duplicates(signature, prior)
-            for prior in seen_signatures
-        ):
+        if any(_signatures_are_near_duplicates(signature, prior) for prior in seen_signatures):
             continue
         seen.add(lowered)
         seen_signatures.append(signature)
@@ -349,10 +328,7 @@ def combine_variants(
         if lowered in seen:
             continue
         signature = _variant_signature(candidate.variant)
-        if any(
-            _signatures_are_near_duplicates(signature, prior)
-            for prior in seen_signatures
-        ):
+        if any(_signatures_are_near_duplicates(signature, prior) for prior in seen_signatures):
             continue
         seen.add(lowered)
         seen_signatures.append(signature)
@@ -377,10 +353,7 @@ def dedupe_variants(
         if lowered in seen:
             continue
         signature = _variant_signature(candidate.variant)
-        if any(
-            _signatures_are_near_duplicates(signature, prior)
-            for prior in seen_signatures
-        ):
+        if any(_signatures_are_near_duplicates(signature, prior) for prior in seen_signatures):
             continue
         seen.add(lowered)
         seen_signatures.append(signature)
@@ -430,12 +403,7 @@ def _top_evidence_phrases(
         for index in range(len(title_words) - 1):
             left = title_words[index]
             right = title_words[index + 1]
-            if (
-                left in GENERIC_EVIDENCE_WORDS
-                or right in GENERIC_EVIDENCE_WORDS
-                or len(left) < 3
-                or len(right) < 3
-            ):
+            if left in GENERIC_EVIDENCE_WORDS or right in GENERIC_EVIDENCE_WORDS or len(left) < 3 or len(right) < 3:
                 continue
             bigram = f"{left} {right}"
             if len(bigram) < 9:

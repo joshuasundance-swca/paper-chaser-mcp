@@ -51,14 +51,10 @@ def _parse_provider_order(
     if not providers:
         raise ValueError(f"{key} must list at least one provider when it is set.")
 
-    normalized_providers = [
-        _normalize_provider_name(provider) for provider in providers
-    ]
+    normalized_providers = [_normalize_provider_name(provider) for provider in providers]
 
     duplicates = [
-        provider
-        for index, provider in enumerate(normalized_providers)
-        if provider in normalized_providers[:index]
+        provider for index, provider in enumerate(normalized_providers) if provider in normalized_providers[:index]
     ]
     if duplicates:
         duplicate_text = ", ".join(duplicates)
@@ -166,8 +162,7 @@ class AppSettings(BaseModel):
             serpapi_api_key=_parse_optional_string(env, "SERPAPI_API_KEY"),
             crossref_mailto=_parse_optional_string(env, "CROSSREF_MAILTO"),
             unpaywall_email=_parse_optional_string(env, "UNPAYWALL_EMAIL"),
-            ecos_base_url=env.get("ECOS_BASE_URL", "https://ecos.fws.gov").strip()
-            or "https://ecos.fws.gov",
+            ecos_base_url=env.get("ECOS_BASE_URL", "https://ecos.fws.gov").strip() or "https://ecos.fws.gov",
             enable_core=_parse_env_bool(env, "SCHOLAR_SEARCH_ENABLE_CORE", False),
             enable_semantic_scholar=_parse_env_bool(
                 env,
@@ -205,9 +200,7 @@ class AppSettings(BaseModel):
             http_host=env.get("SCHOLAR_SEARCH_HTTP_HOST", "127.0.0.1"),
             http_port=int(env.get("SCHOLAR_SEARCH_HTTP_PORT", "8000")),
             http_path=env.get("SCHOLAR_SEARCH_HTTP_PATH", "/mcp"),
-            http_auth_token=_parse_optional_string(
-                env, "SCHOLAR_SEARCH_HTTP_AUTH_TOKEN"
-            ),
+            http_auth_token=_parse_optional_string(env, "SCHOLAR_SEARCH_HTTP_AUTH_TOKEN"),
             http_auth_header=env.get(
                 "SCHOLAR_SEARCH_HTTP_AUTH_HEADER",
                 "authorization",
@@ -220,9 +213,7 @@ class AppSettings(BaseModel):
                 "SCHOLAR_SEARCH_ENABLE_AGENTIC",
                 False,
             ),
-            agentic_provider=cast_agentic_provider(
-                env.get("SCHOLAR_SEARCH_AGENTIC_PROVIDER")
-            ),
+            agentic_provider=cast_agentic_provider(env.get("SCHOLAR_SEARCH_AGENTIC_PROVIDER")),
             planner_model=env.get("SCHOLAR_SEARCH_PLANNER_MODEL", "gpt-5.4-mini"),
             synthesis_model=env.get("SCHOLAR_SEARCH_SYNTHESIS_MODEL", "gpt-5.4"),
             embedding_model=env.get(
@@ -239,9 +230,7 @@ class AppSettings(BaseModel):
                 "SCHOLAR_SEARCH_AGENTIC_OPENAI_TIMEOUT_SECONDS",
                 30.0,
             ),
-            agentic_index_backend=cast_agentic_index_backend(
-                env.get("SCHOLAR_SEARCH_AGENTIC_INDEX_BACKEND")
-            ),
+            agentic_index_backend=cast_agentic_index_backend(env.get("SCHOLAR_SEARCH_AGENTIC_INDEX_BACKEND")),
             session_ttl_seconds=_parse_positive_int(
                 env,
                 "SCHOLAR_SEARCH_SESSION_TTL_SECONDS",
@@ -300,9 +289,7 @@ def cast_transport(
     normalized = value.strip().lower()
     if normalized in {"stdio", "http", "streamable-http", "sse"}:
         return cast(Literal["stdio", "http", "streamable-http", "sse"], normalized)
-    raise ValueError(
-        "SCHOLAR_SEARCH_TRANSPORT must be one of: stdio, http, streamable-http, sse"
-    )
+    raise ValueError("SCHOLAR_SEARCH_TRANSPORT must be one of: stdio, http, streamable-http, sse")
 
 
 def cast_agentic_provider(value: str | None) -> AgenticProvider:
@@ -312,9 +299,7 @@ def cast_agentic_provider(value: str | None) -> AgenticProvider:
     normalized = value.strip().lower()
     if normalized in {"openai", "deterministic"}:
         return cast(AgenticProvider, normalized)
-    raise ValueError(
-        "SCHOLAR_SEARCH_AGENTIC_PROVIDER must be one of: openai, deterministic"
-    )
+    raise ValueError("SCHOLAR_SEARCH_AGENTIC_PROVIDER must be one of: openai, deterministic")
 
 
 def cast_agentic_index_backend(value: str | None) -> AgenticIndexBackend:
@@ -324,6 +309,4 @@ def cast_agentic_index_backend(value: str | None) -> AgenticIndexBackend:
     normalized = value.strip().lower()
     if normalized in {"memory", "faiss"}:
         return cast(AgenticIndexBackend, normalized)
-    raise ValueError(
-        "SCHOLAR_SEARCH_AGENTIC_INDEX_BACKEND must be one of: memory, faiss"
-    )
+    raise ValueError("SCHOLAR_SEARCH_AGENTIC_INDEX_BACKEND must be one of: memory, faiss")

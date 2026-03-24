@@ -4,9 +4,7 @@ from scholar_search_mcp import server
 
 
 def test_arxiv_id_from_url_strips_version_suffix() -> None:
-    assert (
-        server._arxiv_id_from_url("https://arxiv.org/abs/2201.00978v1") == "2201.00978"
-    )
+    assert server._arxiv_id_from_url("https://arxiv.org/abs/2201.00978v1") == "2201.00978"
 
 
 def test_text_returns_empty_string_for_missing_element() -> None:

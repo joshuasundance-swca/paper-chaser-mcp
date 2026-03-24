@@ -10,9 +10,7 @@ DOCKERFILE = REPO_ROOT / "Dockerfile"
 SERVER_JSON = REPO_ROOT / "server.json"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 
-SEMVER_PATTERN = re.compile(
-    r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?(?:\+[0-9A-Za-z][0-9A-Za-z.-]*)?$"
-)
+SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?(?:\+[0-9A-Za-z][0-9A-Za-z.-]*)?$")
 
 
 def _read_server_json() -> dict[str, Any]:
@@ -49,13 +47,9 @@ def _expected_ghcr_identifier(payload: dict[str, Any]) -> str:
     repository = payload.get("repository")
     assert isinstance(repository, dict), "server.json must define repository metadata."
     repository_url = repository.get("url")
-    assert isinstance(repository_url, str) and repository_url, (
-        "server.json repository.url must be present."
-    )
+    assert isinstance(repository_url, str) and repository_url, "server.json repository.url must be present."
     match = re.match(r"^https://github\.com/([^/]+)/([^/]+?)/?$", repository_url)
-    assert match is not None, (
-        "server.json repository.url must point at a GitHub owner/repo."
-    )
+    assert match is not None, "server.json repository.url must point at a GitHub owner/repo."
     owner, repo = match.groups()
     version = payload.get("version")
     assert isinstance(version, str) and version
@@ -72,9 +66,7 @@ def test_server_json_declares_public_name_and_semver_version() -> None:
 
     version = payload.get("version")
     assert isinstance(version, str) and version
-    assert SEMVER_PATTERN.match(version), (
-        f"server.json version should use semantic versioning (got {version!r})."
-    )
+    assert SEMVER_PATTERN.match(version), f"server.json version should use semantic versioning (got {version!r})."
 
 
 def test_server_json_declares_at_least_one_oci_package() -> None:
@@ -83,18 +75,13 @@ def test_server_json_declares_at_least_one_oci_package() -> None:
 
     has_oci_package = False
     for candidate in package_dicts:
-        package_type = (
-            candidate.get("registryType")
-            or candidate.get("registry_type")
-            or candidate.get("type")
-        )
+        package_type = candidate.get("registryType") or candidate.get("registry_type") or candidate.get("type")
         if isinstance(package_type, str) and package_type.lower() == "oci":
             has_oci_package = True
             break
 
     assert has_oci_package, (
-        "server.json must include at least one OCI package declaration "
-        "(registryType/registry_type/type == 'oci')."
+        "server.json must include at least one OCI package declaration (registryType/registry_type/type == 'oci')."
     )
 
 
@@ -106,17 +93,13 @@ def test_server_json_version_matches_pyproject_version() -> None:
 def test_server_json_primary_package_matches_repo_backed_ghcr_identifier() -> None:
     payload = _read_server_json()
     packages = payload.get("packages")
-    assert isinstance(packages, list) and packages, (
-        "server.json must define at least one package entry."
-    )
+    assert isinstance(packages, list) and packages, "server.json must define at least one package entry."
     package = packages[0]
     assert isinstance(package, dict), "server.json package entries must be objects."
     assert package.get("registryType") == "oci"
     assert package.get("identifier") == _expected_ghcr_identifier(payload)
     transport = package.get("transport")
-    assert isinstance(transport, dict), (
-        "server.json OCI package should declare transport metadata."
-    )
+    assert isinstance(transport, dict), "server.json OCI package should declare transport metadata."
     assert transport.get("type") == "stdio"
 
 
@@ -129,9 +112,7 @@ def test_dockerfile_declares_mcp_server_label_matching_server_json() -> None:
         r'io\.modelcontextprotocol\.server\.name\s*=\s*"?(?P<name>[^\s"\\]+)"?',
         text,
     )
-    assert label_match is not None, (
-        "Dockerfile must set io.modelcontextprotocol.server.name label."
-    )
+    assert label_match is not None, "Dockerfile must set io.modelcontextprotocol.server.name label."
     assert label_match.group("name") == expected_name
 
 

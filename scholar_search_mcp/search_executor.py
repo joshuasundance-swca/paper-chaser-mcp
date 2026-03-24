@@ -71,13 +71,9 @@ class SearchProviderSpec:
     endpoint: str
     client_attr: str
     capabilities: ProviderCapabilities
-    build_operation: Callable[
-        [SearchClientBundle, ProviderSearchRequest], Callable[[], Awaitable[Any]]
-    ]
+    build_operation: Callable[[SearchClientBundle, ProviderSearchRequest], Callable[[], Awaitable[Any]]]
     parse_response: Callable[[Any, int], SearchResponse]
-    propagate_exceptions: (
-        tuple[type[Exception], ...] | Callable[[], tuple[type[Exception], ...]]
-    ) = ()
+    propagate_exceptions: tuple[type[Exception], ...] | Callable[[], tuple[type[Exception], ...]] = ()
 
 
 @dataclass(frozen=True)
@@ -136,10 +132,7 @@ def semantic_result(s2_response: dict[str, Any], limit: int) -> SearchResponse:
     return SearchResponse(
         total=semantic_search.total or len(semantic_search.data),
         offset=semantic_search.offset,
-        data=[
-            enrich_semantic_scholar_paper(paper)
-            for paper in semantic_search.data[:limit]
-        ],
+        data=[enrich_semantic_scholar_paper(paper) for paper in semantic_search.data[:limit]],
     )
 
 
@@ -204,9 +197,7 @@ def provider_attempt_from_outcome(
     )
 
 
-def _core_operation(
-    clients: SearchClientBundle, request: ProviderSearchRequest
-) -> Callable[[], Awaitable[Any]]:
+def _core_operation(clients: SearchClientBundle, request: ProviderSearchRequest) -> Callable[[], Awaitable[Any]]:
     return lambda: clients.core_client.search(
         query=request.query,
         limit=request.limit,
@@ -215,9 +206,7 @@ def _core_operation(
     )
 
 
-def _semantic_operation(
-    clients: SearchClientBundle, request: ProviderSearchRequest
-) -> Callable[[], Awaitable[Any]]:
+def _semantic_operation(clients: SearchClientBundle, request: ProviderSearchRequest) -> Callable[[], Awaitable[Any]]:
     return lambda: clients.semantic_client.search_papers(
         query=request.query,
         limit=request.limit,
@@ -232,9 +221,7 @@ def _semantic_operation(
     )
 
 
-def _openalex_operation(
-    clients: SearchClientBundle, request: ProviderSearchRequest
-) -> Callable[[], Awaitable[Any]]:
+def _openalex_operation(clients: SearchClientBundle, request: ProviderSearchRequest) -> Callable[[], Awaitable[Any]]:
     return lambda: clients.openalex_client.search(
         query=request.query,
         limit=request.limit,
@@ -242,9 +229,7 @@ def _openalex_operation(
     )
 
 
-def _arxiv_operation(
-    clients: SearchClientBundle, request: ProviderSearchRequest
-) -> Callable[[], Awaitable[Any]]:
+def _arxiv_operation(clients: SearchClientBundle, request: ProviderSearchRequest) -> Callable[[], Awaitable[Any]]:
     return lambda: clients.arxiv_client.search(
         query=request.query,
         limit=request.limit,
@@ -252,9 +237,7 @@ def _arxiv_operation(
     )
 
 
-def _serpapi_operation(
-    clients: SearchClientBundle, request: ProviderSearchRequest
-) -> Callable[[], Awaitable[Any]]:
+def _serpapi_operation(clients: SearchClientBundle, request: ProviderSearchRequest) -> Callable[[], Awaitable[Any]]:
     return lambda: clients.serpapi_client.search(
         query=request.query,
         limit=request.limit,
@@ -303,10 +286,7 @@ SEARCH_PROVIDER_SPECS: dict[ProviderExecutorName, SearchProviderSpec] = {
         parse_response=lambda payload, limit: SearchResponse(
             total=len(list((payload or {}).get("data") or [])),
             offset=0,
-            data=[
-                Paper.model_validate(paper)
-                for paper in list((payload or {}).get("data") or [])[:limit]
-            ],
+            data=[Paper.model_validate(paper) for paper in list((payload or {}).get("data") or [])[:limit]],
         ),
     ),
     "arxiv": SearchProviderSpec(
@@ -355,9 +335,7 @@ class SearchExecutor:
         order = list(provider_order or default_order)
         if preferred_provider is None:
             return order
-        return [preferred_provider] + [
-            provider for provider in order if provider != preferred_provider
-        ]
+        return [preferred_provider] + [provider for provider in order if provider != preferred_provider]
 
     def skip_for_semantic_scholar_only_filters(
         self,
@@ -372,10 +350,7 @@ class SearchExecutor:
         return BrokerAttempt(
             provider=provider,
             status="skipped",
-            reason=(
-                "Skipped because Semantic Scholar-only filters were requested: "
-                + ", ".join(ss_only_filters)
-            ),
+            reason=("Skipped because Semantic Scholar-only filters were requested: " + ", ".join(ss_only_filters)),
         )
 
     def provider_enabled(
@@ -396,9 +371,7 @@ class SearchExecutor:
         enabled: Mapping[ProviderExecutorName, bool],
         clients: SearchClientBundle,
     ) -> BrokerAttempt:
-        if enabled.get(provider, False) and getattr(
-            clients, self._specs[provider].client_attr
-        ) is None:
+        if enabled.get(provider, False) and getattr(clients, self._specs[provider].client_attr) is None:
             return BrokerAttempt(
                 provider=provider,
                 status="skipped",
@@ -445,9 +418,7 @@ class SearchExecutor:
     ) -> ProviderSearchResult:
         spec = self._specs[provider]
         propagate_exceptions = (
-            spec.propagate_exceptions()
-            if callable(spec.propagate_exceptions)
-            else spec.propagate_exceptions
+            spec.propagate_exceptions() if callable(spec.propagate_exceptions) else spec.propagate_exceptions
         )
         call_result: ProviderCallResult = await execute_provider_call(
             provider=provider,
@@ -460,11 +431,7 @@ class SearchExecutor:
             is_empty=lambda payload: not spec.parse_response(payload, request.limit).data,
             propagate_exceptions=propagate_exceptions,
         )
-        response = (
-            spec.parse_response(call_result.payload, request.limit)
-            if call_result.payload is not None
-            else None
-        )
+        response = spec.parse_response(call_result.payload, request.limit) if call_result.payload is not None else None
         return ProviderSearchResult(
             provider=provider,
             attempt=provider_attempt_from_outcome(
@@ -549,17 +516,13 @@ class SearchExecutor:
         while index < len(effective_order):
             provider = effective_order[index]
             processed_providers = index + 1
-            skip_for_filters = self.skip_for_semantic_scholar_only_filters(
-                provider, ss_only_filters
-            )
+            skip_for_filters = self.skip_for_semantic_scholar_only_filters(provider, ss_only_filters)
             if skip_for_filters is not None:
                 attempts.append(skip_for_filters)
                 index += 1
                 continue
             if not self.provider_enabled(provider, enabled=enabled, clients=clients):
-                attempts.append(
-                    self.disabled_attempt(provider, enabled=enabled, clients=clients)
-                )
+                attempts.append(self.disabled_attempt(provider, enabled=enabled, clients=clients))
                 index += 1
                 continue
             hedge_index = (

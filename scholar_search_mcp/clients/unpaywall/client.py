@@ -39,9 +39,7 @@ class UnpaywallClient:
 
     async def _request(self, doi: str) -> dict[str, Any] | None:
         if not self.email:
-            raise ValueError(
-                "UNPAYWALL_EMAIL must be configured to use Unpaywall enrichment."
-            )
+            raise ValueError("UNPAYWALL_EMAIL must be configured to use Unpaywall enrichment.")
         normalized_doi = normalize_doi(doi)
         if not normalized_doi:
             raise ValueError("Unpaywall lookups require a valid DOI or DOI URL.")
@@ -56,10 +54,7 @@ class UnpaywallClient:
             )
             if response.status_code == 404:
                 return None
-            if (
-                response.status_code in {429, 500, 502, 503, 504}
-                and attempt < self.max_retries
-            ):
+            if response.status_code in {429, 500, 502, 503, 504} and attempt < self.max_retries:
                 delay = self.base_delay * (2**attempt)
                 retry_after = response.headers.get("Retry-After")
                 if retry_after and retry_after.isdigit():
@@ -109,11 +104,7 @@ class UnpaywallClient:
             oaStatus=payload.get("oa_status"),
             bestOaUrl=self._best_oa_url(best_oa_location),
             pdfUrl=self._pdf_url(payload),
-            license=(
-                best_oa_location.get("license")
-                if isinstance(best_oa_location, dict)
-                else payload.get("license")
-            ),
+            license=(best_oa_location.get("license") if isinstance(best_oa_location, dict) else payload.get("license")),
             journalIsInDoaj=payload.get("journal_is_in_doaj"),
         )
 

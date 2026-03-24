@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import statistics
 import time
 from typing import Any
@@ -13,7 +14,11 @@ from fastmcp import Context
 
 from ..citation_repair import resolve_citation
 from ..compat import build_agent_hints, build_resource_uris
-from ..enrichment import PaperEnrichmentService
+from ..enrichment import (
+    PaperEnrichmentService,
+    attach_enrichments_to_paper_payload,
+    hydrate_paper_for_enrichment,
+)
 from ..models import Paper, dump_jsonable
 from ..provider_runtime import (
     ProviderBudgetState,
@@ -42,9 +47,15 @@ from .planner import (
     combine_variants,
     dedupe_variants,
     grounded_expansion_candidates,
+    query_facets,
+    query_terms,
     speculative_expansion_candidates,
 )
-from .providers import DeterministicProviderBundle, ModelProviderBundle
+from .providers import (
+    COMMON_QUERY_WORDS,
+    DeterministicProviderBundle,
+    ModelProviderBundle,
+)
 from .ranking import evaluate_speculative_variants, merge_candidates, rerank_candidates
 from .retrieval import (
     SMART_RETRIEVAL_FIELDS,
@@ -60,6 +71,17 @@ from .workspace import (
 
 logger = logging.getLogger("scholar-search-mcp")
 SMART_SEARCH_PROGRESS_TOTAL = 100.0
+_GRAPH_GENERIC_TERMS = COMMON_QUERY_WORDS | {
+    "effect",
+    "effects",
+    "environmental",
+    "impact",
+    "impacts",
+    "response",
+    "responses",
+    "review",
+    "wildlife",
+}
 
 InMemorySaver: Any = None
 StateGraph: Any = None
@@ -132,11 +154,7 @@ class AgenticRuntime:
 
     async def aclose(self) -> None:
         """Cancel best-effort background work and close owned async resources."""
-        background_tasks = [
-            task
-            for task in self._background_tasks
-            if task is not None and not task.done()
-        ]
+        background_tasks = [task for task in self._background_tasks if task is not None and not task.done()]
         for task in background_tasks:
             task.cancel()
         if background_tasks:
@@ -218,9 +236,7 @@ class AgenticRuntime:
 
     @staticmethod
     def _describe_retrieval_batch(batch: RetrievalBatch) -> str:
-        providers_text = (
-            ", ".join(batch.providers_used) if batch.providers_used else "none"
-        )
+        providers_text = ", ".join(batch.providers_used) if batch.providers_used else "none"
         message = (
             f"Variant '{_truncate_text(batch.variant)}' finished with "
             f"{len(batch.candidates)} candidate(s) from {providers_text}."
@@ -251,9 +267,7 @@ class AgenticRuntime:
         """Smart concept-level discovery with grounded expansion and fusion."""
         if not self._config.enabled:
             return self._feature_not_configured(
-                "Smart workflows are disabled. Set "
-                "SCHOLAR_SEARCH_ENABLE_AGENTIC=true to use "
-                "search_papers_smart.",
+                "Smart workflows are disabled. Set SCHOLAR_SEARCH_ENABLE_AGENTIC=true to use search_papers_smart.",
                 fallback_tools=[
                     "search_papers",
                     "search_papers_bulk",
@@ -269,9 +283,7 @@ class AgenticRuntime:
         stage_timings_ms: dict[str, int] = {}
 
         def _finish_stage(stage_name: str, started_at: float) -> None:
-            stage_timings_ms[stage_name] = int(
-                (time.perf_counter() - started_at) * 1000
-            )
+            stage_timings_ms[stage_name] = int((time.perf_counter() - started_at) * 1000)
 
         planning_started = time.perf_counter()
         normalized_query, planner = await classify_query(
@@ -340,9 +352,7 @@ class AgenticRuntime:
             serpapi_client=self._serpapi_client,
             widened=planner.intent == "review",
             is_expansion=False,
-            allow_serpapi=(
-                self._enable_serpapi and profile_settings.allow_serpapi_on_input
-            ),
+            allow_serpapi=(self._enable_serpapi and profile_settings.allow_serpapi_on_input),
             latency_profile=latency_profile,
             provider_registry=self._provider_registry,
             provider_budget=budget_state,
@@ -389,9 +399,7 @@ class AgenticRuntime:
             )
 
         grounded_variants = [
-            candidate
-            for candidate in grounded
-            if candidate.variant.strip().lower() != normalized_query.lower()
+            candidate for candidate in grounded if candidate.variant.strip().lower() != normalized_query.lower()
         ]
         grounded_tasks: list[asyncio.Task[RetrievalBatch]] = []
         grounded_retrieval_started: float | None = None
@@ -414,9 +422,7 @@ class AgenticRuntime:
             speculative_generation_started,
         )
 
-        grounded_variants_by_query = {
-            candidate.variant.strip().lower() for candidate in grounded_variants
-        }
+        grounded_variants_by_query = {candidate.variant.strip().lower() for candidate in grounded_variants}
         speculative_variants = [
             candidate
             for candidate in speculative
@@ -437,20 +443,12 @@ class AgenticRuntime:
                 grounded_variants,
                 config=profile_settings.search_config,
             )
-            if candidate.variant.strip().lower()
-            in {variant.variant.strip().lower() for variant in expansion_variants}
+            if candidate.variant.strip().lower() in {variant.variant.strip().lower() for variant in expansion_variants}
         ]
-        grounded_count = len(
-            [
-                candidate
-                for candidate in expansion_variants
-                if candidate.source != "speculative"
-            ]
-        )
+        grounded_count = len([candidate for candidate in expansion_variants if candidate.source != "speculative"])
         speculative_count = len(expansion_variants) - grounded_count
         expansion_preview = ", ".join(
-            f"'{_truncate_text(candidate.variant, limit=48)}'"
-            for candidate in expansion_variants[:3]
+            f"'{_truncate_text(candidate.variant, limit=48)}'" for candidate in expansion_variants[:3]
         )
         if expansion_variants:
             await self._emit_smart_search_status(
@@ -486,10 +484,7 @@ class AgenticRuntime:
                             serpapi_client=self._serpapi_client,
                             widened=planner.intent == "review",
                             is_expansion=True,
-                            allow_serpapi=(
-                                self._enable_serpapi
-                                and profile_settings.allow_serpapi_on_expansions
-                            ),
+                            allow_serpapi=(self._enable_serpapi and profile_settings.allow_serpapi_on_expansions),
                             latency_profile=latency_profile,
                             provider_registry=self._provider_registry,
                             provider_budget=budget_state,
@@ -546,10 +541,7 @@ class AgenticRuntime:
                         serpapi_client=self._serpapi_client,
                         widened=planner.intent == "review",
                         is_expansion=True,
-                        allow_serpapi=(
-                            self._enable_serpapi
-                            and profile_settings.allow_serpapi_on_expansions
-                        ),
+                        allow_serpapi=(self._enable_serpapi and profile_settings.allow_serpapi_on_expansions),
                         latency_profile=latency_profile,
                         provider_registry=self._provider_registry,
                         provider_budget=budget_state,
@@ -570,17 +562,12 @@ class AgenticRuntime:
                 ):
                     batch = await task
                     remaining_batches.append(batch)
-                    expansion_progress = 45 + (
-                        (completed_index / len(expansion_tasks)) * 25
-                    )
+                    expansion_progress = 45 + ((completed_index / len(expansion_tasks)) * 25)
                     await self._emit_smart_search_status(
                         ctx=ctx,
                         request_id=request_id,
                         progress=expansion_progress,
-                        message=(
-                            f"Expansion {completed_index}/{len(expansion_tasks)} "
-                            "complete"
-                        ),
+                        message=(f"Expansion {completed_index}/{len(expansion_tasks)} complete"),
                         detail=self._describe_retrieval_batch(batch),
                     )
             except Exception:
@@ -610,8 +597,7 @@ class AgenticRuntime:
                 progress=78,
                 message="Recommendation fetch complete",
                 detail=(
-                    "Semantic Scholar recommendation expansion returned "
-                    f"{len(recommendation_candidates)} candidate(s)."
+                    f"Semantic Scholar recommendation expansion returned {len(recommendation_candidates)} candidate(s)."
                 ),
             )
 
@@ -622,11 +608,7 @@ class AgenticRuntime:
 
         merged = merge_candidates(all_candidates)
         rerank_started = time.perf_counter()
-        rerank_bundle = (
-            provider_bundle
-            if profile_settings.use_embedding_rerank
-            else self._deterministic_bundle
-        )
+        rerank_bundle = provider_bundle if profile_settings.use_embedding_rerank else self._deterministic_bundle
         reranked = await rerank_candidates(
             query=normalized_query,
             merged_candidates=merged,
@@ -659,10 +641,7 @@ class AgenticRuntime:
             request_id=request_id,
             progress=80,
             message="Reranking and deduplicating papers",
-            detail=(
-                f"Fusing {len(all_candidates)} candidate(s) into "
-                f"{len(filtered_ranked)} unique ranked paper(s)."
-            ),
+            detail=(f"Fusing {len(all_candidates)} candidate(s) into {len(filtered_ranked)} unique ranked paper(s)."),
         )
 
         strategy_metadata = SearchStrategyMetadata(
@@ -671,29 +650,13 @@ class AgenticRuntime:
             normalizedQuery=normalized_query,
             queryVariantsTried=[candidate.variant for candidate in variants],
             acceptedExpansions=_dedupe_variants(
-                [
-                    candidate.variant
-                    for candidate in grounded
-                    if candidate.variant != normalized_query
-                ]
-                + [
-                    variant
-                    for variant in accepted_speculative
-                    if variant != normalized_query
-                ]
+                [candidate.variant for candidate in grounded if candidate.variant != normalized_query]
+                + [variant for variant in accepted_speculative if variant != normalized_query]
             ),
             rejectedExpansions=rejected_speculative,
-            speculativeExpansions=[
-                candidate.variant
-                for candidate in variants
-                if candidate.source == "speculative"
-            ],
+            speculativeExpansions=[candidate.variant for candidate in variants if candidate.source == "speculative"],
             providersUsed=sorted(
-                {
-                    provider
-                    for batch in [first_batch, *remaining_batches]
-                    for provider in batch.providers_used
-                }
+                {provider for batch in [first_batch, *remaining_batches] for provider in batch.providers_used}
                 | {candidate.provider for candidate in recommendation_candidates}
             ),
             resultCoverage=_result_coverage_label(filtered_ranked),
@@ -715,9 +678,7 @@ class AgenticRuntime:
                 ),
                 matchedConcepts=candidate.get("matchedConcepts") or [],
                 retrievedBy=candidate["providers"],
-                scoreBreakdown=ScoreBreakdown.model_validate(
-                    candidate["scoreBreakdown"]
-                ),
+                scoreBreakdown=ScoreBreakdown.model_validate(candidate["scoreBreakdown"]),
             )
             for index, candidate in enumerate(top_candidates, start=1)
         ]
@@ -727,10 +688,7 @@ class AgenticRuntime:
                 request_id=request_id,
                 progress=85,
                 message="Applying paper enrichment",
-                detail=(
-                    "Enriching the final smart-ranked hits with Crossref and "
-                    "Unpaywall metadata."
-                ),
+                detail=("Enriching the final smart-ranked hits with Crossref and Unpaywall metadata."),
             )
             enrichment_started = time.perf_counter()
             smart_hits = await self._enrich_smart_hits(
@@ -763,9 +721,7 @@ class AgenticRuntime:
             request_id=request_id,
             progress=90,
             message="Saving reusable result set",
-            detail=(
-                f"Saving {len(smart_hits)} ranked result(s) to the workspace registry."
-            ),
+            detail=(f"Saving {len(smart_hits)} ranked result(s) to the workspace registry."),
         )
         response_dict = dump_jsonable(response)
         save_started = time.perf_counter()
@@ -797,9 +753,7 @@ class AgenticRuntime:
                     "acceptedExpansions": strategy_metadata.accepted_expansions,
                     "rejectedExpansions": strategy_metadata.rejected_expansions,
                     "latencyProfile": latency_profile,
-                    "providerBudgetApplied": (
-                        budget_state.to_dict() if budget_state else {}
-                    ),
+                    "providerBudgetApplied": (budget_state.to_dict() if budget_state else {}),
                 },
             )
         await self._emit_smart_search_status(
@@ -827,8 +781,7 @@ class AgenticRuntime:
         """Answer grounded follow-up questions against a saved result set."""
         if not self._config.enabled:
             return self._feature_not_configured(
-                "Smart workflows are disabled. Set "
-                "SCHOLAR_SEARCH_ENABLE_AGENTIC=true to use ask_result_set.",
+                "Smart workflows are disabled. Set SCHOLAR_SEARCH_ENABLE_AGENTIC=true to use ask_result_set.",
                 fallback_tools=[
                     "search_papers",
                     "get_paper_details",
@@ -845,11 +798,7 @@ class AgenticRuntime:
 
         profile_settings = self._config.latency_profile_settings(latency_profile)
         provider_bundle = self._provider_bundle_for_profile(latency_profile)
-        similarity_bundle = (
-            provider_bundle
-            if profile_settings.use_embedding_rerank
-            else self._deterministic_bundle
-        )
+        similarity_bundle = provider_bundle if profile_settings.use_embedding_rerank else self._deterministic_bundle
 
         await self._emit_tool_progress(
             ctx=ctx,
@@ -901,19 +850,12 @@ class AgenticRuntime:
             evidence=evidence,
             unsupportedAsks=list(synthesis.get("unsupportedAsks") or []),
             followUpQuestions=list(synthesis.get("followUpQuestions") or []),
-            confidence=provider_bundle.normalize_confidence(
-                synthesis.get("confidence")
-            ),
+            confidence=provider_bundle.normalize_confidence(synthesis.get("confidence")),
             searchSessionId=search_session_id,
             agentHints=build_agent_hints("ask_result_set", {}),
             resourceUris=build_resource_uris(
                 "ask_result_set",
-                {
-                    "results": [
-                        {"paper": item.paper.model_dump(by_alias=True)}
-                        for item in evidence
-                    ]
-                },
+                {"results": [{"paper": item.paper.model_dump(by_alias=True)} for item in evidence]},
                 search_session_id,
             ),
         )
@@ -946,9 +888,7 @@ class AgenticRuntime:
         """Cluster a saved result set into themes, gaps, and disagreements."""
         if not self._config.enabled:
             return self._feature_not_configured(
-                "Smart workflows are disabled. Set "
-                "SCHOLAR_SEARCH_ENABLE_AGENTIC=true to use "
-                "map_research_landscape.",
+                "Smart workflows are disabled. Set SCHOLAR_SEARCH_ENABLE_AGENTIC=true to use map_research_landscape.",
                 fallback_tools=[
                     "search_papers",
                     "search_papers_bulk",
@@ -964,11 +904,7 @@ class AgenticRuntime:
 
         profile_settings = self._config.latency_profile_settings(latency_profile)
         provider_bundle = self._provider_bundle_for_profile(latency_profile)
-        clustering_bundle = (
-            provider_bundle
-            if profile_settings.use_embedding_rerank
-            else self._deterministic_bundle
-        )
+        clustering_bundle = provider_bundle if profile_settings.use_embedding_rerank else self._deterministic_bundle
 
         await self._emit_tool_progress(
             ctx=ctx,
@@ -1013,9 +949,7 @@ class AgenticRuntime:
             )
             return theme, reps[:1]
 
-        built_themes = await asyncio.gather(
-            *[_build_theme(cluster) for cluster in clusters]
-        )
+        built_themes = await asyncio.gather(*[_build_theme(cluster) for cluster in clusters])
         for theme, reps in built_themes:
             themes.append(theme)
             representative_papers.extend(reps)
@@ -1040,8 +974,7 @@ class AgenticRuntime:
                 "map_research_landscape",
                 {
                     "representativePapers": [
-                        paper.model_dump(by_alias=True)
-                        for paper in representative_papers[:max_themes]
+                        paper.model_dump(by_alias=True) for paper in representative_papers[:max_themes]
                     ]
                 },
                 search_session_id,
@@ -1079,9 +1012,7 @@ class AgenticRuntime:
         """Expand citation/reference/author relationships into a compact graph."""
         if not self._config.enabled:
             return self._feature_not_configured(
-                "Smart workflows are disabled. Set "
-                "SCHOLAR_SEARCH_ENABLE_AGENTIC=true to use "
-                "expand_research_graph.",
+                "Smart workflows are disabled. Set SCHOLAR_SEARCH_ENABLE_AGENTIC=true to use expand_research_graph.",
                 fallback_tools=[
                     "get_paper_citations",
                     "get_paper_references",
@@ -1094,8 +1025,7 @@ class AgenticRuntime:
         )
         if not resolved_seeds:
             return self._feature_not_configured(
-                "expand_research_graph needs either seedPaperIds or "
-                "seedSearchSessionId.",
+                "expand_research_graph needs either seedPaperIds or seedSearchSessionId.",
                 fallback_tools=[
                     "get_paper_details",
                     "get_paper_citations",
@@ -1138,17 +1068,11 @@ class AgenticRuntime:
                             offset=None,
                         )
                     except Exception as error:
-                        return {
-                            "error": f"Could not expand authors for {label!r}: {error}"
-                        }
+                        return {"error": f"Could not expand authors for {label!r}: {error}"}
                     return {
                         "seed_id": seed_id,
                         "label": label,
-                        "authors": [
-                            author
-                            for author in payload.get("data") or []
-                            if isinstance(author, dict)
-                        ],
+                        "authors": [author for author in payload.get("data") or [] if isinstance(author, dict)],
                     }
 
                 try:
@@ -1168,14 +1092,8 @@ class AgenticRuntime:
                         )
                     )
                 except Exception as error:
-                    return {
-                        "error": f"Could not expand {direction} for {label!r}: {error}"
-                    }
-                related_papers = [
-                    candidate
-                    for candidate in payload.get("data") or []
-                    if isinstance(candidate, dict)
-                ]
+                    return {"error": f"Could not expand {direction} for {label!r}: {error}"}
+                related_papers = [candidate for candidate in payload.get("data") or [] if isinstance(candidate, dict)]
                 scores = await _graph_frontier_scores(
                     seed=seed,
                     related_papers=related_papers,
@@ -1245,14 +1163,9 @@ class AgenticRuntime:
 
                 related_papers = list(result.get("related_papers") or [])
                 scores = list(result.get("scores") or [])
-                ranked_related = [
-                    (paper, score)
-                    for paper, score in zip(related_papers, scores, strict=False)
-                ]
+                ranked_related = [(paper, score) for paper, score in zip(related_papers, scores, strict=False)]
                 if len(ranked_related) < len(related_papers):
-                    ranked_related.extend(
-                        (paper, 0.0) for paper in related_papers[len(ranked_related) :]
-                    )
+                    ranked_related.extend((paper, 0.0) for paper in related_papers[len(ranked_related) :])
                 ranked_related.sort(key=lambda item: item[1], reverse=True)
                 for paper, score in ranked_related:
                     try:
@@ -1278,29 +1191,18 @@ class AgenticRuntime:
                         GraphEdge(
                             source=seed_id if direction == "citations" else related_id,
                             target=related_id if direction == "citations" else seed_id,
-                            relation=(
-                                "cites" if direction == "citations" else "references"
-                            ),
+                            relation=("cites" if direction == "citations" else "references"),
                         )
                     )
                 frontier_papers.extend([paper for paper, _ in ranked_related])
-                next_queue.extend(
-                    [
-                        paper
-                        for paper, _ in ranked_related[: min(5, len(ranked_related))]
-                    ]
-                )
+                next_queue.extend([paper for paper, _ in ranked_related[: min(5, len(ranked_related))]])
             queue = next_queue
 
         if not nodes:
             return self._non_portable_seed_error(graph_warnings)
 
         ranked_frontier = sorted(
-            [
-                node
-                for node in nodes.values()
-                if node.kind == ("author" if direction == "authors" else "paper")
-            ],
+            [node for node in nodes.values() if node.kind == ("author" if direction == "authors" else "paper")],
             key=lambda node: node.score,
             reverse=True,
         )
@@ -1309,8 +1211,7 @@ class AgenticRuntime:
             graph_record = await self._workspace_registry.asave_result_set(
                 source_tool="expand_research_graph",
                 payload={"data": frontier_papers},
-                query=resolved_seeds[0].get("title")
-                or resolved_seeds[0].get("paperId"),
+                query=resolved_seeds[0].get("title") or resolved_seeds[0].get("paperId"),
                 metadata={
                     "trailParentPaperId": resolved_seeds[0].get("paperId"),
                     "trailDirection": direction,
@@ -1444,15 +1345,21 @@ class AgenticRuntime:
 
         async def _enrich_hit(hit: SmartPaperHit) -> SmartPaperHit:
             async with enrichment_semaphore:
-                enriched_paper = await enrichment_service.enrich_paper_payload(
+                enrichment_source = await hydrate_paper_for_enrichment(
                     hit.paper,
-                    query=query,
+                    detail_client=self._client,
+                )
+                enriched_payload = await enrichment_service.enrich_paper_payload(
+                    enrichment_source,
+                    query=hit.paper.title or query,
                     request_id=request_id,
                     request_outcomes=provider_outcomes,
                 )
-            return hit.model_copy(
-                update={"paper": Paper.model_validate(enriched_paper)}
+            enriched_paper = attach_enrichments_to_paper_payload(
+                hit.paper,
+                enriched_paper=enriched_payload,
             )
+            return hit.model_copy(update={"paper": Paper.model_validate(enriched_paper)})
 
         return list(await asyncio.gather(*[_enrich_hit(hit) for hit in smart_hits]))
 
@@ -1475,20 +1382,14 @@ class AgenticRuntime:
             request_id=request_id,
             progress=20,
             message="Resolving known item",
-            detail=(
-                f"Attempting direct known-item resolution for "
-                f"'{_truncate_text(query, limit=96)}'."
-            ),
+            detail=(f"Attempting direct known-item resolution for '{_truncate_text(query, limit=96)}'."),
         )
         known_item_started = time.perf_counter()
         known_item = await self._resolve_known_item(query)
-        stage_timings_ms["knownItemResolution"] = int(
-            (time.perf_counter() - known_item_started) * 1000
-        )
+        stage_timings_ms["knownItemResolution"] = int((time.perf_counter() - known_item_started) * 1000)
         if known_item is None:
             return self._feature_not_configured(
-                "The known-item route could not resolve that identifier; try "
-                "search_papers_match or search_papers.",
+                "The known-item route could not resolve that identifier; try search_papers_match or search_papers.",
                 fallback_tools=[
                     "search_papers_match",
                     "get_paper_details",
@@ -1501,21 +1402,24 @@ class AgenticRuntime:
                 request_id=request_id,
                 progress=70,
                 message="Applying paper enrichment",
-                detail=(
-                    "Enriching the resolved known item with Crossref and "
-                    "Unpaywall metadata."
-                ),
+                detail=("Enriching the resolved known item with Crossref and Unpaywall metadata."),
             )
             enrichment_started = time.perf_counter()
-            known_item = await self._enrichment_service.enrich_paper_payload(
+            enrichment_source = await hydrate_paper_for_enrichment(
                 known_item,
-                query=query,
+                detail_client=self._client,
+            )
+            enriched_payload = await self._enrichment_service.enrich_paper_payload(
+                enrichment_source,
+                query=known_item.get("title") or query,
                 request_id=request_id,
                 request_outcomes=provider_outcomes,
             )
-            stage_timings_ms["enrichment"] = int(
-                (time.perf_counter() - enrichment_started) * 1000
+            known_item = attach_enrichments_to_paper_payload(
+                known_item,
+                enriched_paper=enriched_payload,
             )
+            stage_timings_ms["enrichment"] = int((time.perf_counter() - enrichment_started) * 1000)
         hit = SmartPaperHit(
             paper=Paper.model_validate(known_item),
             rank=1,
@@ -1543,8 +1447,7 @@ class AgenticRuntime:
             searchSessionId=search_session_id or "pending",
             strategyMetadata=strategy_metadata,
             nextStepHint=(
-                "Inspect the resolved paper, then expand citations, "
-                "references, or authors from this anchor."
+                "Inspect the resolved paper, then expand citations, references, or authors from this anchor."
             ),
             agentHints=build_agent_hints(
                 "get_paper_details",
@@ -1567,9 +1470,7 @@ class AgenticRuntime:
             metadata={"strategyMetadata": dump_jsonable(strategy_metadata)},
             search_session_id=search_session_id,
         )
-        stage_timings_ms["saveResultSet"] = int(
-            (time.perf_counter() - save_started) * 1000
-        )
+        stage_timings_ms["saveResultSet"] = int((time.perf_counter() - save_started) * 1000)
         response.search_session_id = record.search_session_id
         response.strategy_metadata.stage_timings_ms = stage_timings_ms
         response.resource_uris = build_resource_uris(
@@ -1585,10 +1486,7 @@ class AgenticRuntime:
             request_id=request_id,
             progress=100,
             message="Known-item resolution complete",
-            detail=(
-                "Known-item resolution complete. "
-                f"searchSessionId={record.search_session_id}."
-            ),
+            detail=(f"Known-item resolution complete. searchSessionId={record.search_session_id}."),
         )
         return final_response_dict
 
@@ -1619,9 +1517,7 @@ class AgenticRuntime:
         seed_search_session_id: str | None,
     ) -> tuple[list[dict[str, Any]], str | None]:
         if seed_paper_ids:
-            return [{"paperId": paper_id} for paper_id in seed_paper_ids], (
-                seed_search_session_id
-            )
+            return [{"paperId": paper_id} for paper_id in seed_paper_ids], (seed_search_session_id)
         if not seed_search_session_id:
             return [], seed_search_session_id
         record = self._workspace_registry.get(seed_search_session_id)
@@ -1630,11 +1526,7 @@ class AgenticRuntime:
     def _portable_seed_id(self, paper: dict[str, Any]) -> str:
         status = str(paper.get("expansionIdStatus") or "").strip().lower()
         recommended = paper.get("recommendedExpansionId")
-        if (
-            status == "portable"
-            and isinstance(recommended, str)
-            and recommended.strip()
-        ):
+        if status == "portable" and isinstance(recommended, str) and recommended.strip():
             return recommended.strip()
         if status == "not_portable":
             raise ValueError(
@@ -1691,13 +1583,8 @@ class AgenticRuntime:
                 fallbackTools=fallback_tools,
                 agentHints=AgentHints(
                     nextToolCandidates=fallback_tools,
-                    whyThisNextStep=(
-                        "Use the closest raw retrieval path until the smart "
-                        "layer is enabled."
-                    ),
-                    safeRetry=(
-                        "Enable the agentic config and retry the same smart tool."
-                    ),
+                    whyThisNextStep=("Use the closest raw retrieval path until the smart layer is enabled."),
+                    safeRetry=("Enable the agentic config and retry the same smart tool."),
                     warnings=[],
                 ),
             )
@@ -1718,14 +1605,8 @@ class AgenticRuntime:
                 ],
                 agentHints=AgentHints(
                     nextToolCandidates=["search_papers_smart", "search_papers"],
-                    whyThisNextStep=(
-                        "Create a fresh reusable result set, then retry the "
-                        "grounded follow-up."
-                    ),
-                    safeRetry=(
-                        "Do not invent searchSessionId values; reuse the one "
-                        "returned by the tool."
-                    ),
+                    whyThisNextStep=("Create a fresh reusable result set, then retry the grounded follow-up."),
+                    safeRetry=("Do not invent searchSessionId values; reuse the one returned by the tool."),
                     warnings=[],
                 ),
             )
@@ -1753,14 +1634,8 @@ class AgenticRuntime:
                         "get_paper_details",
                         "search_papers",
                     ],
-                    whyThisNextStep=(
-                        "Resolve the paper to a portable identifier first, "
-                        "then retry graph expansion."
-                    ),
-                    safeRetry=(
-                        "Avoid brokered paperId/sourceId values when "
-                        "expansionIdStatus is not_portable."
-                    ),
+                    whyThisNextStep=("Resolve the paper to a portable identifier first, then retry graph expansion."),
+                    safeRetry=("Avoid brokered paperId/sourceId values when expansionIdStatus is not_portable."),
                     warnings=warnings[:3],
                 ),
             )
@@ -1781,14 +1656,8 @@ class AgenticRuntime:
                 ],
                 agentHints=AgentHints(
                     nextToolCandidates=["search_papers_smart", "search_papers"],
-                    whyThisNextStep=(
-                        "Refresh the result set first, then continue with "
-                        "grounded QA or clustering."
-                    ),
-                    safeRetry=(
-                        "Session TTL is finite by design; rebuild from the "
-                        "latest search results."
-                    ),
+                    whyThisNextStep=("Refresh the result set first, then continue with grounded QA or clustering."),
+                    safeRetry=("Session TTL is finite by design; rebuild from the latest search results."),
                     warnings=[],
                 ),
             )
@@ -1822,22 +1691,12 @@ def _why_matched(
     if matched_concepts:
         return f"{title} matched concepts {', '.join(matched_concepts[:3])}."
     if paper.get("venue"):
-        return (
-            f"{title} matched the query and carries useful venue context from "
-            f"{paper['venue']}."
-        )
-    return (
-        f"{title} was retained because it stayed close to the original query "
-        "after fusion and deduplication."
-    )
+        return f"{title} matched the query and carries useful venue context from {paper['venue']}."
+    return f"{title} was retained because it stayed close to the original query after fusion and deduplication."
 
 
 def _paper_text(paper: dict[str, Any]) -> str:
-    authors = ", ".join(
-        author.get("name", "")
-        for author in (paper.get("authors") or [])
-        if isinstance(author, dict)
-    )
+    authors = ", ".join(author.get("name", "") for author in (paper.get("authors") or []) if isinstance(author, dict))
     return " ".join(
         part
         for part in [
@@ -1912,25 +1771,17 @@ async def _cluster_papers(
 def _compute_gaps(papers: list[dict[str, Any]]) -> list[str]:
     if not papers:
         return ["No papers were available to analyze for gaps."]
-    years: list[int] = [
-        paper["year"] for paper in papers if isinstance(paper.get("year"), int)
-    ]
+    years: list[int] = [paper["year"] for paper in papers if isinstance(paper.get("year"), int)]
     venues: set[str] = {
-        str(paper["venue"])
-        for paper in papers
-        if isinstance(paper.get("venue"), str) and paper.get("venue")
+        str(paper["venue"]) for paper in papers if isinstance(paper.get("venue"), str) and paper.get("venue")
     }
     gaps: list[str] = []
     if years and max(years) - min(years) <= 1:
         gaps.append(
-            "The current result set is concentrated in a narrow time window; "
-            "earlier foundational work may be missing."
+            "The current result set is concentrated in a narrow time window; earlier foundational work may be missing."
         )
     if len(venues) <= 1:
-        gaps.append(
-            "Most papers cluster around one venue or source, so cross-community "
-            "coverage may still be thin."
-        )
+        gaps.append("Most papers cluster around one venue or source, so cross-community coverage may still be thin.")
     if not gaps:
         gaps.append(
             "Methodological diversity looks reasonable, but targeted "
@@ -1942,9 +1793,7 @@ def _compute_gaps(papers: list[dict[str, Any]]) -> list[str]:
 def _compute_disagreements(papers: list[dict[str, Any]]) -> list[str]:
     if len(papers) < 3:
         return ["The result set is still small, so disagreements are not yet obvious."]
-    years: list[int] = [
-        paper["year"] for paper in papers if isinstance(paper.get("year"), int)
-    ]
+    years: list[int] = [paper["year"] for paper in papers if isinstance(paper.get("year"), int)]
     if years and statistics.pstdev(years) >= 2.5:
         return [
             "The papers span different periods, so assumptions and evaluation "
@@ -1987,6 +1836,10 @@ async def _graph_frontier_scores(
 ) -> list[float]:
     if not related_papers:
         return []
+    seed_title = str(seed.get("title") or "")
+    seed_terms = [term for term in query_terms(seed_title or _paper_text(seed)) if term not in _GRAPH_GENERIC_TERMS]
+    seed_facets = query_facets(seed_title or _paper_text(seed))
+    seed_term_set = _graph_topic_tokens(seed_title or _paper_text(seed))
     query_similarities = await provider_bundle.abatched_similarity(
         _paper_text(seed),
         [_paper_text(related) for related in related_papers],
@@ -1997,16 +1850,63 @@ async def _graph_frontier_scores(
         query_similarities,
         strict=False,
     ):
+        related_title = str(related.get("title") or "")
+        related_text = _paper_text(related).lower()
+        related_tokens = _graph_topic_tokens(related_text)
+        related_title_tokens = _graph_topic_tokens(related_title.lower())
+        anchor_overlap = sum(term in related_tokens for term in seed_terms) / len(seed_terms) if seed_terms else 0.0
+        facet_overlap = 0.0
+        if seed_facets:
+            matched_facets = 0
+            for facet in seed_facets:
+                facet_tokens = re.findall(r"[a-z0-9]{3,}", facet.lower())
+                if not facet_tokens:
+                    continue
+                required = len(facet_tokens) if len(facet_tokens) <= 2 else 2
+                if sum(token in related_tokens for token in facet_tokens) >= required:
+                    matched_facets += 1
+            facet_overlap = matched_facets / len(seed_facets)
+        title_overlap = 0.0
+        if seed_term_set and related_title_tokens:
+            title_overlap = len(seed_term_set & related_title_tokens) / len(seed_term_set)
+
         citation_count = related.get("citationCount")
         citation_bonus = 0.0
         if isinstance(citation_count, int) and citation_count > 0:
-            citation_bonus = min(citation_count / 2000.0, 0.25)
+            citation_bonus = min(citation_count / 5000.0, 0.08)
         year = related.get("year")
         recency_bonus = 0.0
         if isinstance(year, int):
-            recency_bonus = max(0.0, 0.08 - max(0, 2026 - year) * 0.01)
-        scores.append(round(query_similarity + citation_bonus + recency_bonus, 6))
+            current_year = time.gmtime().tm_year
+            recency_bonus = max(0.0, 0.03 - max(0, current_year - year) * 0.005)
+        topic_penalty = 0.0
+        if seed_terms and anchor_overlap == 0.0:
+            topic_penalty += 0.26
+        elif seed_terms and anchor_overlap < 0.25:
+            topic_penalty += 0.1
+        if seed_facets and facet_overlap == 0.0:
+            topic_penalty += 0.2
+        elif seed_facets and facet_overlap < 0.5:
+            topic_penalty += 0.08
+        if title_overlap == 0.0:
+            topic_penalty += 0.12
+        elif title_overlap < 0.2:
+            topic_penalty += 0.05
+        score = (
+            (query_similarity * 0.5)
+            + (anchor_overlap * 0.2)
+            + (facet_overlap * 0.18)
+            + (title_overlap * 0.14)
+            + citation_bonus
+            + recency_bonus
+            - topic_penalty
+        )
+        scores.append(round(max(score, 0.0), 6))
     return scores
+
+
+def _graph_topic_tokens(text: str) -> set[str]:
+    return {token for token in re.findall(r"[a-z0-9]{3,}", text.lower()) if token not in _GRAPH_GENERIC_TERMS}
 
 
 def _result_coverage_label(candidates: list[dict[str, Any]]) -> str:

@@ -47,9 +47,7 @@ CALIFORNIA_LEAST_TERN_PROFILE = {
                 {
                     "final_date": "06/12/2012",
                     "lead_offices_csv": "Sacramento Fish and Wildlife Office",
-                    "activity_titles_csv": (
-                        "Cargill Salt Ponds Operation and Maintenance"
-                    ),
+                    "activity_titles_csv": ("Cargill Salt Ponds Operation and Maintenance"),
                     "activity_codes_csv": "81420-2010-F-0519",
                     "work_types_csv": "DREDGE / EXCAVATION",
                     "locations_csv": "Alameda (CA), San Mateo (CA)",
@@ -57,9 +55,7 @@ CALIFORNIA_LEAST_TERN_PROFILE = {
                     "category": "Biological Opinion Rendered (Final)",
                     "event_code": "08ESMF00-2012-E-02227",
                     "file_name": {
-                        "value": (
-                            "Biological Opinion Rendered (Final) 08ESMF00-2012-E-02227"
-                        ),
+                        "value": ("Biological Opinion Rendered (Final) 08ESMF00-2012-E-02227"),
                         "url": "/tails/pub/document/527831",
                     },
                 }
@@ -113,10 +109,7 @@ CALIFORNIA_LEAST_TERN_PROFILE = {
             "publication_date": "10/16/2024",
             "publication_page": "89 FR 83510 83514",
             "publication_title": {
-                "value": (
-                    "Initiation of 5-Year Status Reviews for 59 Pacific "
-                    "Southwest Species"
-                ),
+                "value": ("Initiation of 5-Year Status Reviews for 59 Pacific Southwest Species"),
                 "url": "https://www.govinfo.gov/link/fr/89/83510",
             },
             "associated_document": [],
@@ -224,21 +217,15 @@ async def test_ecos_species_profile_normalizes_grouped_documents(
 
     monkeypatch.setattr(client, "_fetch_species_payload", fake_fetch_species_payload)
 
-    payload = await client.get_species_profile(
-        species_id="https://ecos.fws.gov/ecp/species/8104"
-    )
+    payload = await client.get_species_profile(species_id="https://ecos.fws.gov/ecp/species/8104")
 
     assert payload["species"]["speciesId"] == "8104"
     assert payload["species"]["group"] == "Birds"
     assert payload["speciesEntities"][0]["entityId"] == 96
     assert payload["range"]["currentRangeStates"] == ["CA"]
     assert payload["documents"]["recoveryPlans"][0]["url"].startswith("https://")
-    assert payload["documents"]["biologicalOpinions"][0]["url"].endswith(
-        "/tails/pub/document/527831"
-    )
-    assert payload["conservationPlanLinks"][0]["url"].startswith(
-        "https://ecos.fws.gov/ecp/report/conservation-plan"
-    )
+    assert payload["documents"]["biologicalOpinions"][0]["url"].endswith("/tails/pub/document/527831")
+    assert payload["conservationPlanLinks"][0]["url"].startswith("https://ecos.fws.gov/ecp/report/conservation-plan")
 
 
 @pytest.mark.asyncio
@@ -306,17 +293,13 @@ def test_ecos_markdown_converter_uses_markitdown_stream_api(
 
 
 @pytest.mark.asyncio
-async def test_ecos_get_document_text_follows_redirect_and_records_diagnostics() -> (
-    None
-):
+async def test_ecos_get_document_text_follows_redirect_and_records_diagnostics() -> None:
     registry = ProviderDiagnosticsRegistry()
     client = EcosClient(provider_registry=registry)
     client._markdown_converter = cast(
         Any,
         types.SimpleNamespace(
-            convert=lambda **kwargs: (
-                "# Five-Year Review\n\n## Recommendation\n\nRetain endangered status."
-            )
+            convert=lambda **kwargs: "# Five-Year Review\n\n## Recommendation\n\nRetain endangered status."
         ),
     )
 
@@ -333,9 +316,7 @@ async def test_ecos_get_document_text_follows_redirect_and_records_diagnostics()
                 content=b"%PDF-1.4 test",
                 headers={
                     "content-type": "application/pdf; charset=ISO-8859-1",
-                    "content-disposition": (
-                        'attachment; filename="california_least_tern_2025.pdf"'
-                    ),
+                    "content-disposition": ('attachment; filename="california_least_tern_2025.pdf"'),
                 },
                 request=request,
             )
@@ -365,11 +346,7 @@ async def test_ecos_get_document_text_logs_fetch_and_conversion_steps(
     client = EcosClient()
     client._markdown_converter = cast(
         Any,
-        types.SimpleNamespace(
-            convert=lambda **kwargs: (
-                "# Review\n\nRetain listed status with updated monitoring."
-            )
-        ),
+        types.SimpleNamespace(convert=lambda **kwargs: "# Review\n\nRetain listed status with updated monitoring."),
     )
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -386,9 +363,7 @@ async def test_ecos_get_document_text_logs_fetch_and_conversion_steps(
     )
 
     with caplog.at_level("INFO", logger="scholar-search-mcp"):
-        payload = await client.get_document_text(
-            url="https://ecos.fws.gov/docs/example.pdf"
-        )
+        payload = await client.get_document_text(url="https://ecos.fws.gov/docs/example.pdf")
 
     assert payload["extractionStatus"] == "ok"
     assert "ECOS document fetch started" in caplog.text
@@ -503,9 +478,7 @@ async def test_ecos_api_retries_with_system_trust_store_on_tls_verify_failure(
             )
             self.verify = verify
 
-        async def get(
-            self, url: str, params: dict[str, Any] | None = None
-        ) -> httpx.Response:
+        async def get(self, url: str, params: dict[str, Any] | None = None) -> httpx.Response:
             request = httpx.Request("GET", url, params=params)
             if self.verify is True:
                 raise httpx.ConnectError(

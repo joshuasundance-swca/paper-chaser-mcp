@@ -69,9 +69,7 @@ def paper_search_text(paper: dict[str, Any]) -> str:
     """Flatten a paper payload into one indexable string."""
     authors = paper.get("authors") or []
     author_names = ", ".join(
-        author.get("name", "")
-        for author in authors
-        if isinstance(author, dict) and author.get("name")
+        author.get("name", "") for author in authors if isinstance(author, dict) and author.get("name")
     )
     return " ".join(
         part
@@ -153,18 +151,15 @@ class WorkspaceRegistry:
         enable_trace_log: bool = False,
         index_backend: str = "memory",
         similarity_fn: Callable[[str, str], float] | None = None,
-        async_batched_similarity_fn: Callable[[str, list[str]], Awaitable[list[float]]]
-        | None = None,
-        async_embed_query_fn: Callable[[str], Awaitable[tuple[float, ...] | None]]
-        | None = None,
+        async_batched_similarity_fn: Callable[[str, list[str]], Awaitable[list[float]]] | None = None,
+        async_embed_query_fn: Callable[[str], Awaitable[tuple[float, ...] | None]] | None = None,
         async_embed_texts_fn: Callable[
             [list[str]],
             Awaitable[list[tuple[float, ...] | None]],
         ]
         | None = None,
         embed_query_fn: Callable[[str], tuple[float, ...] | None] | None = None,
-        embed_texts_fn: Callable[[list[str]], list[tuple[float, ...] | None]]
-        | None = None,
+        embed_texts_fn: Callable[[list[str]], list[tuple[float, ...] | None]] | None = None,
     ) -> None:
         self._ttl_seconds = ttl_seconds
         self._enable_trace_log = enable_trace_log
@@ -180,11 +175,7 @@ class WorkspaceRegistry:
 
     def _cleanup(self) -> None:
         now = _now()
-        expired = [
-            search_session_id
-            for search_session_id, record in self._records.items()
-            if record.is_expired(now)
-        ]
+        expired = [search_session_id for search_session_id, record in self._records.items() if record.is_expired(now)]
         for search_session_id in expired:
             record = self._records.pop(search_session_id, None)
             if record is not None:
@@ -214,9 +205,7 @@ class WorkspaceRegistry:
                 record.vector_store_status = "ready"
             else:
                 record.vector_store_status = "failed"
-                record.vector_store_error = (
-                    "FAISS index creation failed; using in-memory similarity scoring."
-                )
+                record.vector_store_error = "FAISS index creation failed; using in-memory similarity scoring."
         elif record.vector_store_status == "pending":
             record.vector_store_status = "unavailable"
         self._store_record(record)
@@ -256,14 +245,10 @@ class WorkspaceRegistry:
         self._cleanup()
         record = self._records.get(search_session_id)
         if record is None:
-            raise SearchSessionNotFoundError(
-                f"Unknown searchSessionId {search_session_id!r}."
-            )
+            raise SearchSessionNotFoundError(f"Unknown searchSessionId {search_session_id!r}.")
         if record.is_expired():
             self._records.pop(search_session_id, None)
-            raise ExpiredSearchSessionError(
-                f"searchSessionId {search_session_id!r} has expired."
-            )
+            raise ExpiredSearchSessionError(f"searchSessionId {search_session_id!r} has expired.")
         return record
 
     def search_papers(
@@ -280,20 +265,14 @@ class WorkspaceRegistry:
                 return papers
         if self._similarity_fn is not None:
             ranked = sorted(
-                (
-                    (self._similarity_fn(query, item.text), item.paper)
-                    for item in record.indexed_papers
-                ),
+                ((self._similarity_fn(query, item.text), item.paper) for item in record.indexed_papers),
                 key=lambda item: item[0],
                 reverse=True,
             )
         else:
             query_vector = _vectorize(query)
             ranked = sorted(
-                (
-                    (_cosine_similarity(query_vector, item.vector), item.paper)
-                    for item in record.indexed_papers
-                ),
+                ((_cosine_similarity(query_vector, item.vector), item.paper) for item in record.indexed_papers),
                 key=lambda item: item[0],
                 reverse=True,
             )
@@ -315,9 +294,7 @@ class WorkspaceRegistry:
             texts = [item.text for item in record.indexed_papers]
             scores = await self._async_batched_similarity_fn(query, texts)
             ranked = sorted(
-                zip(
-                    scores, (item.paper for item in record.indexed_papers), strict=False
-                ),
+                zip(scores, (item.paper for item in record.indexed_papers), strict=False),
                 key=lambda item: item[0],
                 reverse=True,
             )
@@ -329,10 +306,7 @@ class WorkspaceRegistry:
         tasks = [
             record.vector_index_task
             for record in self._records.values()
-            if (
-                record.vector_index_task is not None
-                and not record.vector_index_task.done()
-            )
+            if (record.vector_index_task is not None and not record.vector_index_task.done())
         ]
         for task in tasks:
             task.cancel()
@@ -474,18 +448,11 @@ class WorkspaceRegistry:
             logger.debug("Background vector index build failed.", exc_info=True)
 
     def _can_build_vector_store_sync(self) -> bool:
-        return (
-            self._index_backend == "faiss"
-            and self._embed_query_fn is not None
-            and self._embed_texts_fn is not None
-        )
+        return self._index_backend == "faiss" and self._embed_query_fn is not None and self._embed_texts_fn is not None
 
     def _can_build_vector_store_async(self) -> bool:
         return self._index_backend == "faiss" and (
-            (
-                self._async_embed_query_fn is not None
-                and self._async_embed_texts_fn is not None
-            )
+            (self._async_embed_query_fn is not None and self._async_embed_texts_fn is not None)
             or self._can_build_vector_store_sync()
         )
 
@@ -500,10 +467,7 @@ class WorkspaceRegistry:
             record.vector_store_status = "failed"
             record.vector_store_error = str(error)
             record.vector_index_task = None
-            logger.exception(
-                "Async FAISS index creation failed; falling back to in-memory "
-                "similarity scoring."
-            )
+            logger.exception("Async FAISS index creation failed; falling back to in-memory similarity scoring.")
             return
 
         record.vector_store = vector_store
@@ -513,16 +477,10 @@ class WorkspaceRegistry:
             record.vector_store_error = None
             return
         record.vector_store_status = "failed"
-        record.vector_store_error = (
-            "FAISS index creation failed; using in-memory similarity scoring."
-        )
+        record.vector_store_error = "FAISS index creation failed; using in-memory similarity scoring."
 
     def _build_vector_store(self, indexed_papers: list[IndexedPaper]) -> Any | None:
-        if (
-            self._index_backend != "faiss"
-            or self._embed_query_fn is None
-            or self._embed_texts_fn is None
-        ):
+        if self._index_backend != "faiss" or self._embed_query_fn is None or self._embed_texts_fn is None:
             return None
         try:
             from langchain_community.vectorstores import FAISS
@@ -562,18 +520,14 @@ class WorkspaceRegistry:
                 normalized_vectors: list[list[float]] = []
                 for text, vector in zip(texts, vectors):
                     if vector is None:
-                        raise ValueError(
-                            f"No embedding vector was generated for {text!r}."
-                        )
+                        raise ValueError(f"No embedding vector was generated for {text!r}.")
                     normalized_vectors.append(list(vector))
                 return normalized_vectors
 
             def embed_query(self, text: str) -> list[float]:
                 vector = self._embed_query_fn(text)
                 if vector is None:
-                    raise ValueError(
-                        "No embedding vector was generated for the query text."
-                    )
+                    raise ValueError("No embedding vector was generated for the query text.")
                 return list(vector)
 
             async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
@@ -582,9 +536,7 @@ class WorkspaceRegistry:
                     normalized_vectors: list[list[float]] = []
                     for text, vector in zip(texts, vectors, strict=False):
                         if vector is None:
-                            raise ValueError(
-                                f"No embedding vector was generated for {text!r}."
-                            )
+                            raise ValueError(f"No embedding vector was generated for {text!r}.")
                         normalized_vectors.append(list(vector))
                     return normalized_vectors
                 return self.embed_documents(texts)
@@ -593,16 +545,11 @@ class WorkspaceRegistry:
                 if self._async_embed_query_fn is not None:
                     vector = await self._async_embed_query_fn(text)
                     if vector is None:
-                        raise ValueError(
-                            "No embedding vector was generated for the query text."
-                        )
+                        raise ValueError("No embedding vector was generated for the query text.")
                     return list(vector)
                 return self.embed_query(text)
 
-        documents = [
-            Document(page_content=item.text, metadata={"paper": item.paper})
-            for item in indexed_papers
-        ]
+        documents = [Document(page_content=item.text, metadata={"paper": item.paper}) for item in indexed_papers]
         try:
             return FAISS.from_documents(
                 documents,
@@ -614,15 +561,10 @@ class WorkspaceRegistry:
                 ),
             )
         except Exception:
-            logger.exception(
-                "FAISS index creation failed; falling back to in-memory similarity "
-                "scoring."
-            )
+            logger.exception("FAISS index creation failed; falling back to in-memory similarity scoring.")
             return None
 
-    async def _abuild_vector_store(
-        self, indexed_papers: list[IndexedPaper]
-    ) -> Any | None:
+    async def _abuild_vector_store(self, indexed_papers: list[IndexedPaper]) -> Any | None:
         if self._index_backend != "faiss":
             return None
         if (
@@ -673,9 +615,7 @@ class WorkspaceRegistry:
                 normalized_vectors: list[list[float]] = []
                 for text, vector in zip(texts, vectors, strict=False):
                     if vector is None:
-                        raise ValueError(
-                            f"No embedding vector was generated for {text!r}."
-                        )
+                        raise ValueError(f"No embedding vector was generated for {text!r}.")
                     normalized_vectors.append(list(vector))
                 return normalized_vectors
 
@@ -684,9 +624,7 @@ class WorkspaceRegistry:
                     raise ValueError("No sync query embedding hook is configured.")
                 vector = self._embed_query_fn(text)
                 if vector is None:
-                    raise ValueError(
-                        "No embedding vector was generated for the query text."
-                    )
+                    raise ValueError("No embedding vector was generated for the query text.")
                 return list(vector)
 
             async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
@@ -695,9 +633,7 @@ class WorkspaceRegistry:
                     normalized_vectors: list[list[float]] = []
                     for text, vector in zip(texts, vectors, strict=False):
                         if vector is None:
-                            raise ValueError(
-                                f"No embedding vector was generated for {text!r}."
-                            )
+                            raise ValueError(f"No embedding vector was generated for {text!r}.")
                         normalized_vectors.append(list(vector))
                     return normalized_vectors
                 return self.embed_documents(texts)
@@ -706,16 +642,11 @@ class WorkspaceRegistry:
                 if self._async_embed_query_fn is not None:
                     vector = await self._async_embed_query_fn(text)
                     if vector is None:
-                        raise ValueError(
-                            "No embedding vector was generated for the query text."
-                        )
+                        raise ValueError("No embedding vector was generated for the query text.")
                     return list(vector)
                 return self.embed_query(text)
 
-        documents = [
-            Document(page_content=item.text, metadata={"paper": item.paper})
-            for item in indexed_papers
-        ]
+        documents = [Document(page_content=item.text, metadata={"paper": item.paper}) for item in indexed_papers]
         try:
             return await FAISS.afrom_documents(
                 documents,
@@ -727,10 +658,7 @@ class WorkspaceRegistry:
                 ),
             )
         except Exception:
-            logger.exception(
-                "Async FAISS index creation failed; falling back to in-memory "
-                "similarity scoring."
-            )
+            logger.exception("Async FAISS index creation failed; falling back to in-memory similarity scoring.")
             return None
 
     def _search_vector_store(
@@ -746,10 +674,7 @@ class WorkspaceRegistry:
         try:
             documents = vector_store.similarity_search(query, k=top_k)
         except Exception:
-            logger.exception(
-                "FAISS similarity search failed; falling back to in-memory "
-                "similarity scoring."
-            )
+            logger.exception("FAISS similarity search failed; falling back to in-memory similarity scoring.")
             return []
 
         papers: list[dict[str, Any]] = []
@@ -773,10 +698,7 @@ class WorkspaceRegistry:
         try:
             documents = await vector_store.asimilarity_search(query, k=top_k)
         except Exception:
-            logger.exception(
-                "Async FAISS similarity search failed; falling back to in-memory "
-                "similarity scoring."
-            )
+            logger.exception("Async FAISS similarity search failed; falling back to in-memory similarity scoring.")
             return []
 
         papers: list[dict[str, Any]] = []
@@ -790,17 +712,13 @@ class WorkspaceRegistry:
     def _extract_papers(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         papers: list[dict[str, Any]] = []
         for candidate in payload.get("data") or []:
-            if isinstance(candidate, dict) and (
-                "paperId" in candidate or "title" in candidate
-            ):
+            if isinstance(candidate, dict) and ("paperId" in candidate or "title" in candidate):
                 papers.append(candidate)
         for candidate in payload.get("results") or []:
             if isinstance(candidate, dict) and isinstance(candidate.get("paper"), dict):
                 papers.append(candidate["paper"])
         for candidate in payload.get("representativePapers") or []:
-            if isinstance(candidate, dict) and (
-                "paperId" in candidate or "title" in candidate
-            ):
+            if isinstance(candidate, dict) and ("paperId" in candidate or "title" in candidate):
                 papers.append(candidate)
         citation_candidates = [
             payload.get("bestMatch"),
@@ -814,8 +732,6 @@ class WorkspaceRegistry:
     def _extract_authors(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         authors: list[dict[str, Any]] = []
         for candidate in payload.get("data") or []:
-            if isinstance(candidate, dict) and (
-                "authorId" in candidate or "affiliations" in candidate
-            ):
+            if isinstance(candidate, dict) and ("authorId" in candidate or "affiliations" in candidate):
                 authors.append(candidate)
         return authors

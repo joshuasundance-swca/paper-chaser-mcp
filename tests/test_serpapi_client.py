@@ -172,9 +172,7 @@ async def test_serpapi_client_raises_quota_error_on_429(
         SerpApiScholarClient,
     )
 
-    dummy = DummySerpApiAsyncClient(
-        DummyResponse(status_code=429, headers={"Retry-After": "60"})
-    )
+    dummy = DummySerpApiAsyncClient(DummyResponse(status_code=429, headers={"Retry-After": "60"}))
     monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: dummy)
 
     client = SerpApiScholarClient(api_key="test-key")
@@ -210,9 +208,7 @@ async def test_serpapi_client_raises_key_error_for_application_auth_error(
         SerpApiScholarClient,
     )
 
-    dummy = DummySerpApiAsyncClient(
-        DummyResponse(status_code=200, payload={"error": "Invalid API key"})
-    )
+    dummy = DummySerpApiAsyncClient(DummyResponse(status_code=200, payload={"error": "Invalid API key"}))
     monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: dummy)
 
     client = SerpApiScholarClient(api_key="bad-key")
@@ -245,9 +241,7 @@ async def test_serpapi_client_search_returns_normalized_papers(
             }
         ]
     }
-    dummy = DummySerpApiAsyncClient(
-        DummyResponse(status_code=200, payload=serpapi_payload)
-    )
+    dummy = DummySerpApiAsyncClient(DummyResponse(status_code=200, payload=serpapi_payload))
     monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: dummy)
 
     client = SerpApiScholarClient(api_key="test-key")
@@ -282,9 +276,7 @@ async def test_serpapi_client_search_with_year_range(
             captured_params.append(dict(params))
             return DummyResponse(status_code=200, payload={"organic_results": []})
 
-    monkeypatch.setattr(
-        server.httpx, "AsyncClient", lambda timeout: CapturingAsyncClient()
-    )
+    monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: CapturingAsyncClient())
 
     client = SerpApiScholarClient(api_key="test-key")
     await client.search("transformers", year="2020-2023")
@@ -312,9 +304,7 @@ async def test_serpapi_client_get_citation_formats_returns_structured_response(
             {"name": "BibTeX", "link": "https://scholar.google.com/bibtex/r-001"},
         ],
     }
-    dummy = DummySerpApiAsyncClient(
-        DummyResponse(status_code=200, payload=cite_payload)
-    )
+    dummy = DummySerpApiAsyncClient(DummyResponse(status_code=200, payload=cite_payload))
     monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: dummy)
 
     client = SerpApiScholarClient(api_key="test-key")
@@ -410,9 +400,7 @@ async def test_search_papers_skips_serpapi_when_disabled(
         async def search(self, **kwargs) -> dict:
             return {
                 "totalResults": 1,
-                "entries": [
-                    {"paperId": "ax-1", "title": "arXiv paper", "source": "arxiv"}
-                ],
+                "entries": [{"paperId": "ax-1", "title": "arXiv paper", "source": "arxiv"}],
             }
 
     serpapi_spy = SerpApiClientSpy()
@@ -621,9 +609,7 @@ async def test_call_tool_get_citation_formats_returns_normalized_response(
     monkeypatch.setattr(server, "enable_serpapi", True)
     monkeypatch.setattr(server, "serpapi_client", FakeSerpApiClient())
 
-    response = await server.call_tool(
-        "get_paper_citation_formats", {"result_id": "attn-001"}
-    )
+    response = await server.call_tool("get_paper_citation_formats", {"result_id": "attn-001"})
     payload = json.loads(response[0].text)
 
     assert payload["resultId"] == "attn-001"
@@ -820,9 +806,7 @@ async def test_call_tool_get_citation_formats_routes_to_serpapi_client_method(
             self.calls.append(("get_citation_formats", {"result_id": result_id}))
             return {
                 "citations": [{"title": "MLA", "snippet": "Smith, A. 2023."}],
-                "links": [
-                    {"name": "BibTeX", "link": "https://scholar.google.com/bib/x"}
-                ],
+                "links": [{"name": "BibTeX", "link": "https://scholar.google.com/bib/x"}],
             }
 
     spy = RecordingSerpApiClient()
@@ -831,9 +815,7 @@ async def test_call_tool_get_citation_formats_routes_to_serpapi_client_method(
 
     await server.call_tool("get_paper_citation_formats", {"result_id": "route-spy-001"})
 
-    assert spy.calls == [("get_citation_formats", {"result_id": "route-spy-001"})], (
-        f"Unexpected calls: {spy.calls}"
-    )
+    assert spy.calls == [("get_citation_formats", {"result_id": "route-spy-001"})], f"Unexpected calls: {spy.calls}"
 
 
 @pytest.mark.asyncio

@@ -30,9 +30,7 @@ class CrossrefClient:
         max_retries: int = 1,
         base_delay: float = 0.5,
     ) -> None:
-        self.mailto = (
-            mailto.strip() if isinstance(mailto, str) and mailto.strip() else None
-        )
+        self.mailto = mailto.strip() if isinstance(mailto, str) and mailto.strip() else None
         self.timeout = timeout
         self.max_retries = max_retries
         self.base_delay = base_delay
@@ -73,10 +71,7 @@ class CrossrefClient:
             )
             if response.status_code == 404:
                 return None
-            if (
-                response.status_code in {429, 500, 502, 503, 504}
-                and attempt < self.max_retries
-            ):
+            if response.status_code in {429, 500, 502, 503, 504} and attempt < self.max_retries:
                 delay = self.base_delay * (2**attempt)
                 retry_after = response.headers.get("Retry-After")
                 if retry_after and retry_after.isdigit():
@@ -180,8 +175,7 @@ class CrossrefClient:
             publicationType=cls._first_text(message.get("type")),
             publicationDate=publication_date,
             year=year,
-            url=cls._first_text(message.get("URL"))
-            or (f"https://doi.org/{doi}" if doi else None),
+            url=cls._first_text(message.get("URL")) or (f"https://doi.org/{doi}" if doi else None),
             citationCount=message.get("is-referenced-by-count"),
         )
 

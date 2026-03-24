@@ -144,12 +144,8 @@ def _install_fake_langchain_modules(
             captured["sync_documents"] = texts
             captured["sync_vectors"] = embeddings.embed_documents(texts)
             captured["sync_query"] = embeddings.embed_query("retrieval probe")
-            captured["sync_async_vectors"] = asyncio.run(
-                embeddings.aembed_documents(texts)
-            )
-            captured["sync_async_query"] = asyncio.run(
-                embeddings.aembed_query("retrieval probe")
-            )
+            captured["sync_async_vectors"] = asyncio.run(embeddings.aembed_documents(texts))
+            captured["sync_async_query"] = asyncio.run(embeddings.aembed_query("retrieval probe"))
             if fail_sync:
                 raise RuntimeError("sync faiss failed")
             return _FakeVectorStore(documents)
@@ -271,9 +267,7 @@ def test_workspace_helpers_cleanup_and_search_behaviors(
     ]
     assert _vectorize("") == {}
     assert _cosine_similarity({}, {"token": 1.0}) == 0.0
-    assert (
-        _cosine_similarity(_vectorize("graph retrieval"), _vectorize("retrieval")) > 0
-    )
+    assert _cosine_similarity(_vectorize("graph retrieval"), _vectorize("retrieval")) > 0
     assert "Ada Lovelace" in paper_search_text(_sample_payload()["data"][0])
     assert paper_identity_keys(_sample_payload()["data"][0]) == {
         "paper-1",
@@ -289,9 +283,9 @@ def test_workspace_helpers_cleanup_and_search_behaviors(
     registry = WorkspaceRegistry(
         ttl_seconds=1800,
         enable_trace_log=False,
-        similarity_fn=lambda query, text: 1.0
-        if "citation graph" in text.lower() and "citation" in query.lower()
-        else 0.0,
+        similarity_fn=lambda query, text: (
+            1.0 if "citation graph" in text.lower() and "citation" in query.lower() else 0.0
+        ),
     )
     record = registry.save_result_set(
         source_tool="search_papers_smart",
@@ -300,12 +294,7 @@ def test_workspace_helpers_cleanup_and_search_behaviors(
     )
 
     assert record.is_expired(now=record.expires_at)
-    assert (
-        registry.search_papers(record.search_session_id, "citation graph", top_k=1)[0][
-            "paperId"
-        ]
-        == "paper-2"
-    )
+    assert registry.search_papers(record.search_session_id, "citation graph", top_k=1)[0]["paperId"] == "paper-2"
 
     with pytest.raises(SearchSessionNotFoundError):
         registry.get("missing-session")
@@ -379,12 +368,7 @@ def test_workspace_builds_sync_vector_store_and_handles_failures(
     assert captured["sync_documents"]
     assert captured["sync_vectors"]
     assert captured["sync_query"] == [1.0, 0.0]
-    assert (
-        registry.search_papers(record.search_session_id, "retrieval", top_k=1)[0][
-            "paperId"
-        ]
-        == "paper-1"
-    )
+    assert registry.search_papers(record.search_session_id, "retrieval", top_k=1)[0]["paperId"] == "paper-1"
 
     failing_registry = WorkspaceRegistry(
         ttl_seconds=1800,
@@ -423,9 +407,7 @@ def test_workspace_builds_sync_vector_store_and_handles_failures(
             ]
 
     record.vector_store = _MixedStore()
-    assert registry._search_vector_store(record, query="retrieval", top_k=2) == [
-        {"paperId": "paper-9"}
-    ]
+    assert registry._search_vector_store(record, query="retrieval", top_k=2) == [{"paperId": "paper-9"}]
 
     record.vector_store = _BrokenStore()
     assert registry._search_vector_store(record, query="retrieval", top_k=2) == []
@@ -498,9 +480,7 @@ async def test_workspace_async_vector_store_paths_and_cleanup(
     no_hook_registry._abuild_vector_store = _return_none  # type: ignore[assignment,method-assign]
     await no_hook_registry._populate_vector_store(record_for_population)
     assert record_for_population.vector_store_status == "failed"
-    assert "FAISS index creation failed" in (
-        record_for_population.vector_store_error or ""
-    )
+    assert "FAISS index creation failed" in (record_for_population.vector_store_error or "")
 
     async def _raise_cancelled(_: list[IndexedPaper]) -> Any:
         raise asyncio.CancelledError
