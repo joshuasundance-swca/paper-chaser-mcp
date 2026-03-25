@@ -76,7 +76,7 @@ Before changing code, read these files in order:
 Install development extras first:
 
 ```bash
-pip install -e .[dev]
+pip install -e ".[all]"
 ```
 
 Then run:

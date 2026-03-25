@@ -215,7 +215,7 @@ This document is the current working handoff for the fork. It is intended to giv
 From the project root, install the package with development extras and then run the validation commands inside the repository virtual environment:
 
 ```bash
-pip install -e .[dev]
+pip install -e ".[all]"
 ```
 
 Then run:

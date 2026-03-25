@@ -822,7 +822,7 @@ mcp-inspector python -m scholar_search_mcp
 Install the package with development extras:
 
 ```bash
-pip install -e .[dev]
+pip install -e ".[all]"
 ```
 
 Project dependencies are declared in `pyproject.toml`; there is no separate runtime `requirements.txt` to keep in sync.
