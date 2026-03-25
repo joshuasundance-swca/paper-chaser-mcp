@@ -61,7 +61,7 @@ def test_app_settings_serpapi_disabled_by_default() -> None:
     assert settings.ecos_base_url == "https://ecos.fws.gov"
     assert settings.crossref_mailto is None
     assert settings.unpaywall_email is None
-    assert settings.disable_embeddings is False
+    assert settings.disable_embeddings is True
     assert settings.agentic_openai_timeout_seconds == 30.0
     assert settings.crossref_timeout_seconds == 30.0
     assert settings.unpaywall_timeout_seconds == 30.0

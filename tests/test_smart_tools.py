@@ -84,6 +84,7 @@ def _deterministic_runtime(
     *,
     semantic: RecordingSemanticClient,
     openalex: RecordingOpenAlexClient,
+    disable_embeddings: bool = True,
 ) -> tuple[WorkspaceRegistry, AgenticRuntime]:
     config = AgenticConfig(
         enabled=True,
@@ -94,6 +95,7 @@ def _deterministic_runtime(
         index_backend="memory",
         session_ttl_seconds=1800,
         enable_trace_log=False,
+        disable_embeddings=disable_embeddings,
     )
     registry = WorkspaceRegistry(ttl_seconds=1800, enable_trace_log=False)
     runtime = AgenticRuntime(
@@ -366,7 +368,9 @@ async def test_ask_result_set_runs_synthesis_and_scoring_concurrently(
 ) -> None:
     semantic = RecordingSemanticClient()
     openalex = RecordingOpenAlexClient()
-    registry, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
+    registry, runtime = _deterministic_runtime(
+        semantic=semantic, openalex=openalex, disable_embeddings=False,
+    )
     record = registry.save_result_set(
         source_tool="search_papers_smart",
         payload={
@@ -828,6 +832,7 @@ async def test_search_papers_smart_records_embedding_timeout_provider_outcome(
         index_backend="memory",
         session_ttl_seconds=1800,
         enable_trace_log=False,
+        disable_embeddings=False,
         openai_timeout_seconds=3.0,
     )
     provider_registry = ProviderDiagnosticsRegistry()

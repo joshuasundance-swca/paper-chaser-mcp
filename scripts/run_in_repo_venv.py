@@ -20,7 +20,16 @@ def _repo_venv_python() -> Path:
     for candidate in candidates:
         if candidate.exists():
             return candidate
-    raise SystemExit(f"Could not find a repo-local virtualenv Python at {candidates[0]} or {candidates[1]}.")
+    # Fall back to the current interpreter so the script works in CI
+    # environments that install dependencies into the system Python
+    # rather than a repo-local virtualenv.
+    import warnings
+
+    warnings.warn(
+        "No repo-local virtualenv found; falling back to the current Python interpreter.",
+        stacklevel=1,
+    )
+    return Path(sys.executable)
 
 
 def main() -> int:

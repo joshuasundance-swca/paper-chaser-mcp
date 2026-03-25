@@ -136,7 +136,7 @@ class AppSettings(BaseModel):
     planner_model: str = "gpt-5.4-mini"
     synthesis_model: str = "gpt-5.4"
     embedding_model: str = "text-embedding-3-large"
-    disable_embeddings: bool = False
+    disable_embeddings: bool = True
     agentic_openai_timeout_seconds: float = 30.0
     agentic_index_backend: AgenticIndexBackend = "memory"
     session_ttl_seconds: int = 1800
@@ -241,7 +241,7 @@ class AppSettings(BaseModel):
             disable_embeddings=_parse_env_bool(
                 env,
                 "SCHOLAR_SEARCH_DISABLE_EMBEDDINGS",
-                False,
+                True,
             ),
             agentic_openai_timeout_seconds=_parse_positive_float(
                 env,

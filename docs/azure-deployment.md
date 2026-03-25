@@ -161,7 +161,7 @@ Key Vault before you run a `full` deployment with CORE enabled.
 | `plannerModel` | `gpt-5.4-mini` | `SCHOLAR_SEARCH_PLANNER_MODEL` |
 | `synthesisModel` | `gpt-5.4` | `SCHOLAR_SEARCH_SYNTHESIS_MODEL` |
 | `embeddingModel` | `text-embedding-3-large` | `SCHOLAR_SEARCH_EMBEDDING_MODEL` |
-| `disableEmbeddings` | `false` | `SCHOLAR_SEARCH_DISABLE_EMBEDDINGS` |
+| `disableEmbeddings` | `true` | `SCHOLAR_SEARCH_DISABLE_EMBEDDINGS` |
 | `agenticOpenAiTimeoutSeconds` | `30` | `SCHOLAR_SEARCH_AGENTIC_OPENAI_TIMEOUT_SECONDS` |
 | `agenticIndexBackend` | `memory` | `SCHOLAR_SEARCH_AGENTIC_INDEX_BACKEND` |
 | `sessionTtlSeconds` | `1800` | `SCHOLAR_SEARCH_SESSION_TTL_SECONDS` |
@@ -285,17 +285,20 @@ and behavior, and keep secrets in systems built for secrets.
 
 ## Smart workflow deployment notes
 
-The Azure scaffold keeps the smart layer off by default. Turn it on only when
-you intend to pay for server-side planning, embeddings, and grounded synthesis.
+The Azure scaffold keeps the smart layer off by default and embeddings disabled
+by default. Turn on the smart layer only when you intend to pay for server-side
+planning and grounded synthesis. Opt in to embeddings only when you need
+embedding-based similarity ranking and have budgeted for the additional API
+calls.
 
 - Set `enableAgentic=true` to expose the additive smart tools.
 - Leave `agenticProvider=deterministic` if you want the smart-tool surface
   without paid model calls.
 - Use `agenticProvider=openai` and seed the `openai-api-key` Key Vault secret
   when you want the LangChain-backed OpenAI path.
-- Use `disableEmbeddings=true` when you want to keep OpenAI planning/synthesis
-  enabled but force all ranking, frontier scoring, and workspace indexing paths
-  to fall back to lexical similarity.
+- Set `disableEmbeddings=false` to opt in to embedding-based ranking, frontier
+  scoring, and workspace indexing. Without this, smart workflows use lexical
+  similarity as the default scoring path.
 - Use `agenticOpenAiTimeoutSeconds` to cap OpenAI-backed planner, synthesis,
   and embedding requests so smart calls degrade instead of hanging on the
   request critical path.

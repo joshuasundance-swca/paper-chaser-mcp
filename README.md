@@ -451,7 +451,7 @@ additive and opt-in.
 | `SCHOLAR_SEARCH_PLANNER_MODEL` | `gpt-5.4-mini` | Planning / routing model for smart discovery. Lower-latency GPT-5.4 tier for query analysis and routing. |
 | `SCHOLAR_SEARCH_SYNTHESIS_MODEL` | `gpt-5.4` | Synthesis model for grounded answers and theme labeling. |
 | `SCHOLAR_SEARCH_EMBEDDING_MODEL` | `text-embedding-3-large` | Embedding model name for smart ranking/indexing metadata. |
-| `SCHOLAR_SEARCH_DISABLE_EMBEDDINGS` | `false` | Disable all embedding generation and embedding-based similarity paths. Smart workflows fall back to lexical scoring, and FAISS-backed workspace indexing is effectively disabled even if selected. |
+| `SCHOLAR_SEARCH_DISABLE_EMBEDDINGS` | `true` | Disable all embedding generation and embedding-based similarity paths. Smart workflows fall back to lexical scoring, and FAISS-backed workspace indexing is effectively disabled even if selected. |
 | `SCHOLAR_SEARCH_AGENTIC_OPENAI_TIMEOUT_SECONDS` | `30` | Client-side timeout for OpenAI-backed smart-layer requests. Keeps planner, synthesis, and embedding calls from hanging on the critical path for minutes before degrading to deterministic or lexical fallbacks. |
 | `SCHOLAR_SEARCH_AGENTIC_INDEX_BACKEND` | `memory` | Workspace index backend. `memory` is the recommended default for the current small saved result sets; `faiss` is an optional upgrade when the `ai-faiss` extra is installed and the deployment image includes it. |
 | `SCHOLAR_SEARCH_SESSION_TTL_SECONDS` | `1800` | TTL for cached reusable `searchSessionId` result sets. |

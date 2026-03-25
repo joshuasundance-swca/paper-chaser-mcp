@@ -36,7 +36,7 @@ class AgenticConfig:
     index_backend: str
     session_ttl_seconds: int
     enable_trace_log: bool
-    disable_embeddings: bool = False
+    disable_embeddings: bool = True
     openai_timeout_seconds: float = 30.0
     max_grounded_variants: int = 3
     max_speculative_variants: int = 3

@@ -57,7 +57,7 @@ param synthesisModel string = 'gpt-5.4'
 param embeddingModel string = 'text-embedding-3-large'
 
 @description('Disable all embedding generation and embedding-based similarity paths.')
-param disableEmbeddings bool = false
+param disableEmbeddings bool = true
 
 @description('Timeout in seconds for OpenAI-backed smart-layer requests.')
 @minValue(1)
