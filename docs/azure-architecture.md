@@ -40,7 +40,7 @@ GitHub Actions bootstrap runner
   - creates private networking and shared infrastructure
 
 GitHub Actions private runner
-  - Docker build and Trivy scan
+  - Docker build
   - private DNS resolution
   - push to private ACR
   - private smoke tests
