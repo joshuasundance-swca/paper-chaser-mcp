@@ -120,6 +120,108 @@ async def test_get_recommendations_uses_recommendations_base_url(
 
 
 @pytest.mark.asyncio
+async def test_semantic_scholar_nested_paper_lists_skip_empty_wrappers_and_normalize_null_authors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    class NestedPaperAsyncClient:
+        async def request(self, **kwargs):
+            return DummyResponse(
+                status_code=200,
+                payload={
+                    "data": [
+                        {"citingPaper": {"paperId": "child-1", "title": "Child paper", "authors": None}},
+                        {"citingPaper": None},
+                    ]
+                },
+            )
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: NestedPaperAsyncClient())
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    client = server.SemanticScholarClient()
+    payload = await client.get_paper_citations("seed-paper")
+
+    assert len(payload["data"]) == 1
+    assert payload["data"][0]["paperId"] == "child-1"
+    assert payload["data"][0]["title"] == "Child paper"
+    assert payload["data"][0]["authors"] == []
+
+
+@pytest.mark.asyncio
+async def test_semantic_scholar_nested_paper_lists_treat_none_data_as_empty_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    class EmptyNestedPaperAsyncClient:
+        async def request(self, **kwargs):
+            return DummyResponse(status_code=200, payload={"data": None})
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: EmptyNestedPaperAsyncClient())
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    client = server.SemanticScholarClient()
+    payload = await client.get_paper_references("seed-paper")
+
+    assert payload["data"] == []
+
+
+@pytest.mark.asyncio
+async def test_semantic_scholar_client_reuses_lazy_async_client_and_closes_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created_clients: list["ReusableAsyncClient"] = []
+
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    class ReusableAsyncClient:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+            self.closed = False
+
+        async def request(self, **kwargs):
+            self.calls.append(kwargs)
+            return DummyResponse(
+                status_code=200,
+                payload={"data": [{"paperId": f"ok-{len(self.calls)}"}]},
+            )
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    def _factory(timeout: float) -> ReusableAsyncClient:
+        del timeout
+        client = ReusableAsyncClient()
+        created_clients.append(client)
+        return client
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", _factory)
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    client = server.SemanticScholarClient(api_key="test-key")
+    await client._request("GET", "paper/search", params={"query": "alpha"})
+    await client._request("GET", "paper/search", params={"query": "beta"})
+
+    assert len(created_clients) == 1
+    assert len(created_clients[0].calls) == 2
+
+    await client.aclose()
+
+    assert created_clients[0].closed is True
+
+
+@pytest.mark.asyncio
 async def test_search_papers_bulk_truncates_provider_oversized_batch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -128,9 +230,7 @@ async def test_search_papers_bulk_truncates_provider_oversized_batch(
     async def fake_sleep(_: float) -> None:
         pass
 
-    oversized_batch = [
-        {"paperId": f"bulk-{index}", "title": f"Paper {index}"} for index in range(10)
-    ]
+    oversized_batch = [{"paperId": f"bulk-{index}", "title": f"Paper {index}"} for index in range(10)]
 
     class BulkAsyncClient:
         async def __aenter__(self):
@@ -259,16 +359,12 @@ async def test_search_papers_bulk_400_with_custom_fields_retries_with_defaults(
         # First attempt (with custom fields) returns 400.
         httpx.Response(
             status_code=400,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/bulk"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search/bulk"),
         ),
         # Retry (with default fields) succeeds.
         httpx.Response(
             status_code=200,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/bulk"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search/bulk"),
             json={
                 "total": 1,
                 "data": [{"paperId": "bulk-fallback", "title": "Fallback Paper"}],
@@ -295,9 +391,7 @@ async def test_search_papers_bulk_400_with_custom_fields_retries_with_defaults(
     monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
 
     sc = server.SemanticScholarClient()
-    result = await sc.search_papers_bulk(
-        "attention mechanism", fields=["paperId", "title", "tldr"]
-    )
+    result = await sc.search_papers_bulk("attention mechanism", fields=["paperId", "title", "tldr"])
 
     # The result must contain the fallback paper, not raise.
     assert len(result["data"]) == 1
@@ -343,14 +437,10 @@ async def test_semantic_scholar_request_retries_with_pacing_on_429(
 
     assert result == {"data": [{"paperId": "ok"}]}
     # _pace must be called once for the initial attempt and once for the retry.
-    assert len(pace_calls) == 2, (
-        f"Expected 2 _pace calls (initial + retry), got {len(pace_calls)}"
-    )
+    assert len(pace_calls) == 2, f"Expected 2 _pace calls (initial + retry), got {len(pace_calls)}"
     # The 429 back-off sleep and the pacing sleep for the retry must both fire.
     assert 1.0 in sleep_calls, "429 back-off sleep was not honoured"
-    assert len(sleep_calls) == 2, (
-        f"Expected 2 sleep calls (429 back-off + pacing), got {len(sleep_calls)}"
-    )
+    assert len(sleep_calls) == 2, f"Expected 2 sleep calls (429 back-off + pacing), got {len(sleep_calls)}"
 
 
 @pytest.mark.asyncio
@@ -379,9 +469,7 @@ async def test_get_paper_citations_response_includes_pagination(
                 },
             )
 
-    monkeypatch.setattr(
-        server.httpx, "AsyncClient", lambda timeout: PaginatingAsyncClient()
-    )
+    monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: PaginatingAsyncClient())
     monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
 
     sc = server.SemanticScholarClient()
@@ -427,9 +515,7 @@ async def test_get_paper_citations_unwraps_nested_citing_paper(
                 },
             )
 
-    monkeypatch.setattr(
-        server.httpx, "AsyncClient", lambda timeout: NestedCitationsAsyncClient()
-    )
+    monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: NestedCitationsAsyncClient())
     monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
 
     sc = server.SemanticScholarClient()
@@ -472,9 +558,7 @@ async def test_get_paper_references_unwraps_nested_cited_paper(
                 },
             )
 
-    monkeypatch.setattr(
-        server.httpx, "AsyncClient", lambda timeout: NestedReferencesAsyncClient()
-    )
+    monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: NestedReferencesAsyncClient())
     monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
 
     sc = server.SemanticScholarClient()
@@ -511,9 +595,7 @@ async def test_get_author_papers_response_includes_pagination(
                 },
             )
 
-    monkeypatch.setattr(
-        server.httpx, "AsyncClient", lambda timeout: PaginatingAsyncClient()
-    )
+    monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: PaginatingAsyncClient())
     monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
 
     sc = server.SemanticScholarClient()
@@ -562,15 +644,11 @@ async def test_get_author_papers_normalizes_trailing_hyphen_in_date_filter(
                 },
             )
 
-    monkeypatch.setattr(
-        server.httpx, "AsyncClient", lambda timeout: CapturingAsyncClient()
-    )
+    monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: CapturingAsyncClient())
     monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
 
     sc = server.SemanticScholarClient()
-    result = await sc.get_author_papers(
-        "1751762", limit=5, publication_date_or_year="2022-"
-    )
+    result = await sc.get_author_papers("1751762", limit=5, publication_date_or_year="2022-")
 
     # The request should have succeeded and returned paper data.
     assert result["data"][0]["paperId"] == "paper-x"
@@ -606,16 +684,12 @@ async def test_get_author_papers_400_with_date_filter_mentions_filter(
         async def request(self, **kwargs):
             return bad_response
 
-    monkeypatch.setattr(
-        server.httpx, "AsyncClient", lambda timeout: RejectingFilterClient()
-    )
+    monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: RejectingFilterClient())
     monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
 
     sc = server.SemanticScholarClient()
     with pytest.raises(ValueError, match="publicationDateOrYear"):
-        await sc.get_author_papers(
-            "1751762", limit=5, publication_date_or_year="bad-filter-value"
-        )
+        await sc.get_author_papers("1751762", limit=5, publication_date_or_year="bad-filter-value")
 
 
 @pytest.mark.asyncio
@@ -645,9 +719,7 @@ async def test_get_author_papers_400_without_date_filter_mentions_author_id(
         async def request(self, **kwargs):
             return bad_response
 
-    monkeypatch.setattr(
-        server.httpx, "AsyncClient", lambda timeout: RejectingAuthorClient()
-    )
+    monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: RejectingAuthorClient())
     monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
 
     sc = server.SemanticScholarClient()
@@ -682,9 +754,7 @@ async def test_search_papers_response_includes_next(
                 },
             )
 
-    monkeypatch.setattr(
-        server.httpx, "AsyncClient", lambda timeout: NextPageAsyncClient()
-    )
+    monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: NextPageAsyncClient())
     monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
 
     sc = server.SemanticScholarClient()
@@ -734,33 +804,23 @@ async def test_search_papers_match_falls_back_to_fuzzy_search_on_404(
     responses = [
         httpx.Response(
             status_code=404,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"),
         ),
         httpx.Response(
             status_code=404,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"),
         ),
         httpx.Response(
             status_code=404,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"),
         ),
         httpx.Response(
             status_code=404,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"),
         ),
         httpx.Response(
             status_code=200,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search"),
             json={
                 "total": 1,
                 "offset": 0,
@@ -801,8 +861,7 @@ async def test_search_papers_match_falls_back_to_fuzzy_search_on_404(
 
     sc = server.SemanticScholarClient()
     result = await sc.search_papers_match(
-        "Oyster Cultch-Recruit Patterns Provide New Insight Into the "
-        "Restoration and Management of a Critical Resource"
+        "Oyster Cultch-Recruit Patterns Provide New Insight Into the Restoration and Management of a Critical Resource"
     )
 
     assert result["paperId"] == "paper-1"
@@ -829,113 +888,81 @@ async def test_search_papers_match_returns_structured_no_match_payload_after_fal
     responses = [
         httpx.Response(
             status_code=404,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"),
         ),
         httpx.Response(
             status_code=404,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"),
         ),
         httpx.Response(
             status_code=404,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"),
         ),
         httpx.Response(
             status_code=404,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"),
         ),
         # Unquoted fallback searches (4 variants) — no match
         httpx.Response(
             status_code=200,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search"),
             json={"total": 1, "offset": 0, "data": [{"title": "Unrelated result"}]},
         ),
         httpx.Response(
             status_code=200,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search"),
             json={"total": 0, "offset": 0, "data": []},
         ),
         httpx.Response(
             status_code=200,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search"),
             json={"total": 0, "offset": 0, "data": []},
         ),
         httpx.Response(
             status_code=200,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search"),
             json={"total": 0, "offset": 0, "data": []},
         ),
         # Quoted-phrase fallback searches (4 variants) — still no match
         httpx.Response(
             status_code=200,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search"),
             json={"total": 0, "offset": 0, "data": []},
         ),
         httpx.Response(
             status_code=200,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search"),
             json={"total": 0, "offset": 0, "data": []},
         ),
         httpx.Response(
             status_code=200,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search"),
             json={"total": 0, "offset": 0, "data": []},
         ),
         httpx.Response(
             status_code=200,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search"),
             json={"total": 0, "offset": 0, "data": []},
         ),
         # Citation-ranked bulk fallback (4 variants) — no title match either
         httpx.Response(
             status_code=200,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/bulk"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search/bulk"),
             json={"total": 0, "data": []},
         ),
         httpx.Response(
             status_code=200,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/bulk"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search/bulk"),
             json={"total": 0, "data": []},
         ),
         httpx.Response(
             status_code=200,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/bulk"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search/bulk"),
             json={"total": 0, "data": []},
         ),
         httpx.Response(
             status_code=200,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/bulk"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search/bulk"),
             json={"total": 0, "data": []},
         ),
     ]
@@ -1045,22 +1072,16 @@ async def test_search_papers_match_200_null_paper_triggers_fallback(
     responses = [
         httpx.Response(
             status_code=200,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"),
             json={"paperId": None, "title": None, "data": []},
         ),
         httpx.Response(
             status_code=404,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"),
         ),
         httpx.Response(
             status_code=200,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search"),
             json={
                 "total": 1,
                 "offset": 0,
@@ -1119,21 +1140,15 @@ async def test_search_papers_match_fallback_finds_famous_paper_by_exact_title(
     responses = [
         httpx.Response(
             status_code=404,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"),
         ),
         httpx.Response(
             status_code=404,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"),
         ),
         httpx.Response(
             status_code=200,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search"),
             json={
                 "total": 5,
                 "offset": 0,
@@ -1216,22 +1231,16 @@ async def test_search_papers_match_fallback_uses_quoted_phrase_when_unquoted_fai
     responses = [
         httpx.Response(
             status_code=404,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"),
         ),
         httpx.Response(
             status_code=404,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"),
         ),
         # Unquoted search — returns attention papers but not the specific one
         httpx.Response(
             status_code=200,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search"),
             json={
                 "total": 3,
                 "offset": 0,
@@ -1245,9 +1254,7 @@ async def test_search_papers_match_fallback_uses_quoted_phrase_when_unquoted_fai
         # Lowercase unquoted search — still no match
         httpx.Response(
             status_code=200,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search"),
             json={
                 "total": 3,
                 "offset": 0,
@@ -1260,9 +1267,7 @@ async def test_search_papers_match_fallback_uses_quoted_phrase_when_unquoted_fai
         # Quoted phrase search — returns the canonical paper
         httpx.Response(
             status_code=200,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search"),
             json={
                 "total": 1,
                 "offset": 0,
@@ -1356,21 +1361,15 @@ async def test_search_papers_match_fallback_citation_ranked_bulk_last_resort(
     #   [6]  search_papers_bulk "Attention Is All You Need" citationCount:desc → hit
     match_404 = httpx.Response(
         status_code=404,
-        request=httpx.Request(
-            "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
-        ),
+        request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"),
     )
     search_400 = httpx.Response(
         status_code=400,
-        request=httpx.Request(
-            "GET", "https://api.semanticscholar.org/graph/v1/paper/search"
-        ),
+        request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search"),
     )
     bulk_hit = httpx.Response(
         status_code=200,
-        request=httpx.Request(
-            "GET", "https://api.semanticscholar.org/graph/v1/paper/search/bulk"
-        ),
+        request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search/bulk"),
         json={
             "total": 1,
             "data": [
@@ -1436,6 +1435,85 @@ async def test_search_papers_match_fallback_citation_ranked_bulk_last_resort(
 
 
 @pytest.mark.asyncio
+async def test_search_papers_match_recovers_exact_title_from_openalex_after_semantic_miss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    class SequencedAsyncClient:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def request(self, *, url: str, **kwargs):
+            self.calls.append(url)
+            if url.endswith("/paper/search/match"):
+                return httpx.Response(
+                    status_code=404,
+                    request=httpx.Request("GET", url),
+                )
+            if url.endswith("/paper/search"):
+                return httpx.Response(
+                    status_code=200,
+                    request=httpx.Request("GET", url),
+                    json={"total": 0, "offset": 0, "data": []},
+                )
+            raise AssertionError(f"unexpected url: {url}")
+
+    class RecordingOpenAlex:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        async def search(self, **kwargs: object) -> dict[str, object]:
+            self.calls.append(dict(kwargs))
+            return {
+                "total": 2,
+                "offset": 0,
+                "data": [
+                    {
+                        "paperId": "W123",
+                        "title": "Florida Scrub-Jay Demography and Dispersal in a Fragmented Landscape",
+                        "source": "openalex",
+                        "sourceId": "W123",
+                        "canonicalId": "https://openalex.org/W123",
+                    },
+                    {"paperId": "other", "title": "Florida Scrub-Jay Habitat Patterns"},
+                ],
+            }
+
+    sequenced_client = SequencedAsyncClient()
+    monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: sequenced_client)
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    sc = server.SemanticScholarClient()
+    openalex = RecordingOpenAlex()
+    result = await sc.search_papers_match(
+        "Florida Scrub-Jay Demography and Dispersal in a Fragmented Landscape",
+        openalex_client=openalex,
+        enable_openalex=True,
+    )
+
+    assert result["matchFound"] is True
+    assert result["matchStrategy"] == "openalex_exact_title"
+    assert result["matchProvider"] == "openalex"
+    assert result["paperId"] == "W123"
+    assert any(url.endswith("/paper/search/match") for url in sequenced_client.calls)
+    assert any(url.endswith("/paper/search") for url in sequenced_client.calls)
+    assert openalex.calls == [
+        {
+            "query": "Florida Scrub-Jay Demography and Dispersal in a Fragmented Landscape",
+            "limit": 10,
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_search_papers_match_title_case_variant_succeeds_via_lowercase_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1459,15 +1537,11 @@ async def test_search_papers_match_title_case_variant_succeeds_via_lowercase_ret
     responses = [
         httpx.Response(
             status_code=404,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"),
         ),
         httpx.Response(
             status_code=200,
-            request=httpx.Request(
-                "GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"
-            ),
+            request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search/match"),
             json={
                 "paperId": "204e3073870fae3d05bcbc2f6a8e263d9b72e776",
                 "title": "Attention Is All You Need",
@@ -1586,9 +1660,7 @@ async def test_search_authors_normalizes_exact_name_punctuation(
                 payload={"total": 1, "offset": 0, "data": [{"authorId": "9191855"}]},
             )
 
-    monkeypatch.setattr(
-        server.httpx, "AsyncClient", lambda timeout: CapturingAsyncClient()
-    )
+    monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: CapturingAsyncClient())
     monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
 
     sc = server.SemanticScholarClient()
@@ -1607,9 +1679,7 @@ async def test_search_authors_400_error_mentions_common_name_disambiguation(
 
     response = httpx.Response(
         status_code=400,
-        request=httpx.Request(
-            "GET", "https://api.semanticscholar.org/graph/v1/author/search"
-        ),
+        request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/author/search"),
     )
 
     class RejectingAuthorSearchAsyncClient:
@@ -1641,9 +1711,7 @@ async def test_get_author_info_surfaces_actionable_404_error(
     async def fake_sleep(_: float) -> None:
         pass
 
-    request = httpx.Request(
-        "GET", "https://api.semanticscholar.org/graph/v1/author/9191855"
-    )
+    request = httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/author/9191855")
     response = httpx.Response(status_code=404, request=request)
 
     class MissingAuthorAsyncClient:
@@ -1656,9 +1724,7 @@ async def test_get_author_info_surfaces_actionable_404_error(
         async def request(self, **kwargs):
             return response
 
-    monkeypatch.setattr(
-        server.httpx, "AsyncClient", lambda timeout: MissingAuthorAsyncClient()
-    )
+    monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: MissingAuthorAsyncClient())
     monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
 
     sc = server.SemanticScholarClient()
@@ -1673,9 +1739,7 @@ async def test_get_paper_authors_surfaces_portability_hint_for_404(
     async def fake_sleep(_: float) -> None:
         pass
 
-    request = httpx.Request(
-        "GET", "https://api.semanticscholar.org/graph/v1/paper/170189535/authors"
-    )
+    request = httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/170189535/authors")
     response = httpx.Response(status_code=404, request=request)
 
     class MissingPaperAsyncClient:
@@ -1688,9 +1752,7 @@ async def test_get_paper_authors_surfaces_portability_hint_for_404(
         async def request(self, **kwargs):
             return response
 
-    monkeypatch.setattr(
-        server.httpx, "AsyncClient", lambda timeout: MissingPaperAsyncClient()
-    )
+    monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: MissingPaperAsyncClient())
     monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
 
     sc = server.SemanticScholarClient()
@@ -1707,9 +1769,7 @@ async def test_search_snippets_degrades_provider_400_to_empty_payload(
 
     response = httpx.Response(
         status_code=400,
-        request=httpx.Request(
-            "GET", "https://api.semanticscholar.org/graph/v1/snippet/search"
-        ),
+        request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/snippet/search"),
     )
 
     class RejectingSnippetAsyncClient:
@@ -1736,6 +1796,46 @@ async def test_search_snippets_degrades_provider_400_to_empty_payload(
     assert result["degraded"] is True
     assert result["providerStatusCode"] == 400
     assert "search_papers_match/search_papers" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_search_snippets_degrades_provider_429_without_backoff_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleep_calls.append(delay)
+
+    response = httpx.Response(
+        status_code=429,
+        request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/snippet/search"),
+    )
+
+    class RateLimitedSnippetAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def request(self, **kwargs):
+            return response
+
+    monkeypatch.setattr(
+        server.httpx,
+        "AsyncClient",
+        lambda timeout: RateLimitedSnippetAsyncClient(),
+    )
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+
+    sc = server.SemanticScholarClient()
+    result = await sc.search_snippets("attention")
+
+    assert result["data"] == []
+    assert result["degraded"] is True
+    assert result["providerStatusCode"] == 429
+    assert sleep_calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -1769,12 +1869,8 @@ def test_normalize_paper_id_bare_old_style_arxiv() -> None:
 def test_normalize_paper_id_arxiv_url() -> None:
     """arxiv.org abs and pdf URLs should be normalized to ARXIV:<id>."""
     sc = server.SemanticScholarClient()
-    assert (
-        sc._normalize_paper_id("https://arxiv.org/abs/1706.03762") == "ARXIV:1706.03762"
-    )
-    assert (
-        sc._normalize_paper_id("https://arxiv.org/pdf/1706.03762") == "ARXIV:1706.03762"
-    )
+    assert sc._normalize_paper_id("https://arxiv.org/abs/1706.03762") == "ARXIV:1706.03762"
+    assert sc._normalize_paper_id("https://arxiv.org/pdf/1706.03762") == "ARXIV:1706.03762"
 
 
 def test_normalize_paper_id_passthrough() -> None:
@@ -1782,14 +1878,10 @@ def test_normalize_paper_id_passthrough() -> None:
     sc = server.SemanticScholarClient()
     # Raw Semantic Scholar paperId hash
     assert (
-        sc._normalize_paper_id("649def34f8be52c8b66281af98ae884c09aef38b")
-        == "649def34f8be52c8b66281af98ae884c09aef38b"
+        sc._normalize_paper_id("649def34f8be52c8b66281af98ae884c09aef38b") == "649def34f8be52c8b66281af98ae884c09aef38b"
     )
     # DOI prefix already in correct form
-    assert (
-        sc._normalize_paper_id("DOI:10.48550/arXiv.1706.03762")
-        == "DOI:10.48550/arXiv.1706.03762"
-    )
+    assert sc._normalize_paper_id("DOI:10.48550/arXiv.1706.03762") == "DOI:10.48550/arXiv.1706.03762"
     # CorpusId
     assert sc._normalize_paper_id("CorpusId:215416146") == "CorpusId:215416146"
 
@@ -1809,9 +1901,7 @@ async def test_get_paper_details_surfaces_actionable_404_error(
     async def fake_sleep(_: float) -> None:
         pass
 
-    request = httpx.Request(
-        "GET", "https://api.semanticscholar.org/graph/v1/paper/ARXIV:1706.03762"
-    )
+    request = httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/ARXIV:1706.03762")
     response = httpx.Response(status_code=404, request=request)
 
     class MissingPaperClient:
@@ -1824,9 +1914,7 @@ async def test_get_paper_details_surfaces_actionable_404_error(
         async def request(self, **kwargs):
             return response
 
-    monkeypatch.setattr(
-        server.httpx, "AsyncClient", lambda timeout: MissingPaperClient()
-    )
+    monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: MissingPaperClient())
     monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
 
     sc = server.SemanticScholarClient()
@@ -1844,9 +1932,7 @@ async def test_get_paper_details_surfaces_actionable_400_error(
     async def fake_sleep(_: float) -> None:
         pass
 
-    request = httpx.Request(
-        "GET", "https://api.semanticscholar.org/graph/v1/paper/bad-id"
-    )
+    request = httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/bad-id")
     response = httpx.Response(status_code=400, request=request)
 
     class RejectingPaperClient:
@@ -1859,9 +1945,7 @@ async def test_get_paper_details_surfaces_actionable_400_error(
         async def request(self, **kwargs):
             return response
 
-    monkeypatch.setattr(
-        server.httpx, "AsyncClient", lambda timeout: RejectingPaperClient()
-    )
+    monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: RejectingPaperClient())
     monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
 
     sc = server.SemanticScholarClient()

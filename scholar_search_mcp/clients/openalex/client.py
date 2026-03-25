@@ -6,7 +6,7 @@ import time
 from typing import Any, Optional
 
 from ...models import Author, AuthorProfile, Paper, dump_jsonable
-from ...transport import asyncio, httpx
+from ...transport import asyncio, httpx, maybe_close_async_resource
 
 logger = logging.getLogger("scholar-search-mcp")
 
@@ -23,9 +23,11 @@ OPENALEX_DETAIL_SELECT = (
     "abstract_inverted_index,related_works"
 )
 OPENALEX_AUTHOR_SELECT = (
-    "id,display_name,works_count,cited_by_count,summary_stats,"
-    "last_known_institutions,orcid,works_api_url"
+    "id,display_name,works_count,cited_by_count,summary_stats,last_known_institutions,orcid,works_api_url"
 )
+OPENALEX_SOURCE_SELECT = "id,display_name,works_count,cited_by_count,type,summary_stats"
+OPENALEX_INSTITUTION_SELECT = "id,display_name,works_count,cited_by_count,country_code,type,summary_stats"
+OPENALEX_TOPIC_SELECT = "id,display_name,works_count,cited_by_count,description,subfield,field,domain"
 _MAILTO_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
@@ -49,6 +51,7 @@ class OpenAlexClient:
         self.base_delay = base_delay
         self._rate_lock: Optional[asyncio.Lock] = None
         self._last_request_time: float = 0.0
+        self._http_client: Any | None = None
 
     @staticmethod
     def _normalize_mailto(value: str | None) -> str | None:
@@ -57,20 +60,20 @@ class OpenAlexClient:
             return None
         normalized = value.strip()
         if not normalized:
-            raise ValueError(
-                "OPENALEX_MAILTO must be a non-empty email address when it is set."
-            )
+            raise ValueError("OPENALEX_MAILTO must be a non-empty email address when it is set.")
         if not _MAILTO_PATTERN.match(normalized):
-            raise ValueError(
-                "OPENALEX_MAILTO must look like a valid email address, e.g. "
-                "'team@example.com'."
-            )
+            raise ValueError("OPENALEX_MAILTO must look like a valid email address, e.g. 'team@example.com'.")
         return normalized
 
     def _get_rate_lock(self) -> asyncio.Lock:
         if self._rate_lock is None:
             self._rate_lock = asyncio.Lock()
         return self._rate_lock
+
+    def _get_http_client(self) -> Any:
+        if self._http_client is None:
+            self._http_client = httpx.AsyncClient(timeout=self.timeout)
+        return self._http_client
 
     async def _pace(self) -> None:
         lock = self._get_rate_lock()
@@ -96,41 +99,39 @@ class OpenAlexClient:
         params: Optional[dict[str, Any]] = None,
     ) -> Any:
         """Send one OpenAlex request with light pacing and bounded retries."""
-        url = (
-            endpoint
-            if endpoint.startswith("http")
-            else f"{OPENALEX_API_BASE}{endpoint}"
-        )
+        url = endpoint if endpoint.startswith("http") else f"{OPENALEX_API_BASE}{endpoint}"
         request_params = {**self._default_params(), **(params or {})}
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            for attempt in range(self.max_retries + 1):
-                await self._pace()
-                response = await client.get(
+        client = self._get_http_client()
+        for attempt in range(self.max_retries + 1):
+            await self._pace()
+            response = await client.get(
+                url,
+                params=request_params,
+                follow_redirects=True,
+            )
+            if response.status_code in {429, 500, 502, 503, 504} and attempt < self.max_retries:
+                delay = self.base_delay * (2**attempt)
+                retry_after = response.headers.get("Retry-After")
+                if retry_after and retry_after.isdigit():
+                    delay = max(delay, float(retry_after))
+                logger.warning(
+                    "OpenAlex request to %s returned %s, retrying in %.1fs (%s/%s)",
                     url,
-                    params=request_params,
-                    follow_redirects=True,
+                    response.status_code,
+                    delay,
+                    attempt + 1,
+                    self.max_retries,
                 )
-                if (
-                    response.status_code in {429, 500, 502, 503, 504}
-                    and attempt < self.max_retries
-                ):
-                    delay = self.base_delay * (2**attempt)
-                    retry_after = response.headers.get("Retry-After")
-                    if retry_after and retry_after.isdigit():
-                        delay = max(delay, float(retry_after))
-                    logger.warning(
-                        "OpenAlex request to %s returned %s, retrying in %.1fs (%s/%s)",
-                        url,
-                        response.status_code,
-                        delay,
-                        attempt + 1,
-                        self.max_retries,
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-                response.raise_for_status()
-                return response.json()
+                await asyncio.sleep(delay)
+                continue
+            response.raise_for_status()
+            return response.json()
         raise RuntimeError("OpenAlex request retry loop exited unexpectedly")
+
+    async def aclose(self) -> None:
+        """Close the shared HTTP client, if one has been created."""
+        client, self._http_client = self._http_client, None
+        await maybe_close_async_resource(client)
 
     @staticmethod
     def _normalize_doi(value: Any) -> str | None:
@@ -180,9 +181,7 @@ class OpenAlexClient:
     def _normalize_author_id(cls, value: str) -> str:
         author_id = cls._extract_openalex_id(value, "A")
         if author_id is None:
-            raise ValueError(
-                "OpenAlex author_id must be an OpenAlex A-id or OpenAlex author URL."
-            )
+            raise ValueError("OpenAlex author_id must be an OpenAlex A-id or OpenAlex author URL.")
         return author_id
 
     @staticmethod
@@ -246,6 +245,63 @@ class OpenAlexClient:
         return ",".join(values) if values else None
 
     @staticmethod
+    def _entity_metadata(entity_type: str) -> tuple[str, str, str]:
+        metadata = {
+            "source": ("/sources", OPENALEX_SOURCE_SELECT, "S"),
+            "institution": ("/institutions", OPENALEX_INSTITUTION_SELECT, "I"),
+            "topic": ("/topics", OPENALEX_TOPIC_SELECT, "T"),
+        }
+        try:
+            return metadata[entity_type]
+        except KeyError as exc:
+            raise ValueError("OpenAlex entity_type must be one of: source, institution, topic.") from exc
+
+    @classmethod
+    def _normalize_entity_id(cls, entity_type: str, value: str) -> str:
+        _, _, prefix = cls._entity_metadata(entity_type)
+        entity_id = cls._extract_openalex_id(value, prefix)
+        if entity_id is None:
+            raise ValueError(
+                f"OpenAlex {entity_type} IDs must be OpenAlex {prefix}-ids or OpenAlex {entity_type} URLs."
+            )
+        return entity_id
+
+    @staticmethod
+    def _normalize_entity_result(
+        entity_type: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        summary_stats = payload.get("summary_stats")
+        summary = summary_stats if isinstance(summary_stats, dict) else {}
+        result = {
+            "entityType": entity_type,
+            "entityId": payload.get("id"),
+            "displayName": payload.get("display_name"),
+            "worksCount": payload.get("works_count"),
+            "citedByCount": payload.get("cited_by_count"),
+            "source": "openalex",
+        }
+        if entity_type == "source":
+            result["type"] = payload.get("type")
+            result["hIndex"] = summary.get("h_index")
+        elif entity_type == "institution":
+            result["type"] = payload.get("type")
+            result["countryCode"] = payload.get("country_code")
+            result["hIndex"] = summary.get("h_index")
+        else:
+            result["description"] = payload.get("description")
+            subfield = payload.get("subfield")
+            field = payload.get("field")
+            domain = payload.get("domain")
+            if isinstance(subfield, dict):
+                result["subfield"] = subfield.get("display_name")
+            if isinstance(field, dict):
+                result["field"] = field.get("display_name")
+            if isinstance(domain, dict):
+                result["domain"] = domain.get("display_name")
+        return dump_jsonable(result)
+
+    @staticmethod
     def _year_filters(year: str | None) -> tuple[str | None, str | None]:
         """Translate supported year syntaxes to OpenAlex date filters.
 
@@ -274,9 +330,7 @@ class OpenAlexClient:
         start_year = start_raw.strip()[:4]
         end_year = end_raw.strip()[:4]
         return (
-            f"from_publication_date:{start_year}-01-01"
-            if start_year.isdigit()
-            else None,
+            f"from_publication_date:{start_year}-01-01" if start_year.isdigit() else None,
             f"to_publication_date:{end_year}-12-31" if end_year.isdigit() else None,
         )
 
@@ -289,14 +343,8 @@ class OpenAlexClient:
         source_id = self._extract_openalex_id(work.get("id"), "W")
         doi = self._normalize_doi(work.get("doi"))
         doi_url = f"https://doi.org/{doi}" if doi else None
-        authors, author_list_truncated = self._authors_from_authorships(
-            work.get("authorships")
-        )
-        abstract = (
-            self._reconstruct_abstract(work.get("abstract_inverted_index"))
-            if include_abstract
-            else None
-        )
+        authors, author_list_truncated = self._authors_from_authorships(work.get("authorships"))
+        abstract = self._reconstruct_abstract(work.get("abstract_inverted_index")) if include_abstract else None
         paper = dump_jsonable(
             Paper(
                 paperId=source_id,
@@ -343,9 +391,7 @@ class OpenAlexClient:
             if isinstance(name, str) and name.strip():
                 institutions.append(name.strip())
         raw_summary_stats = author.get("summary_stats")
-        summary_stats: dict[str, Any] = (
-            raw_summary_stats if isinstance(raw_summary_stats, dict) else {}
-        )
+        summary_stats: dict[str, Any] = raw_summary_stats if isinstance(raw_summary_stats, dict) else {}
         return AuthorProfile(
             authorId=OpenAlexClient._extract_openalex_id(author.get("id"), "A"),
             name=author.get("display_name"),
@@ -375,9 +421,7 @@ class OpenAlexClient:
                 raise ValueError(f"No OpenAlex work found for {paper_id!r}.")
             return first
         if work_id is None:
-            raise ValueError(
-                "OpenAlex paper_id must be an OpenAlex W-id, OpenAlex work URL, or DOI."
-            )
+            raise ValueError("OpenAlex paper_id must be an OpenAlex W-id, OpenAlex work URL, or DOI.")
         response = await self._request(
             f"/works/{work_id}",
             params={"select": OPENALEX_DETAIL_SELECT},
@@ -405,20 +449,12 @@ class OpenAlexClient:
         )
         results = response.get("results") or []
         normalized_papers = [
-            self._work_to_paper(work, include_abstract=False)
-            for work in results
-            if isinstance(work, dict)
+            self._work_to_paper(work, include_abstract=False) for work in results if isinstance(work, dict)
         ]
         papers_by_id = {
-            str(paper["sourceId"]): paper
-            for paper in normalized_papers
-            if paper.get("sourceId") is not None
+            str(paper["sourceId"]): paper for paper in normalized_papers if paper.get("sourceId") is not None
         }
-        return [
-            papers_by_id[work_id]
-            for work_id in normalized_ids
-            if work_id in papers_by_id
-        ]
+        return [papers_by_id[work_id] for work_id in normalized_ids if work_id in papers_by_id]
 
     async def search(
         self,
@@ -438,11 +474,7 @@ class OpenAlexClient:
             },
         )
         results = response.get("results") or []
-        data = [
-            self._work_to_paper(work, include_abstract=False)
-            for work in results
-            if isinstance(work, dict)
-        ]
+        data = [self._work_to_paper(work, include_abstract=False) for work in results if isinstance(work, dict)]
         meta = response.get("meta") if isinstance(response.get("meta"), dict) else {}
         return dump_jsonable(
             {
@@ -451,6 +483,34 @@ class OpenAlexClient:
                 "data": data,
             }
         )
+
+    async def paper_autocomplete(
+        self,
+        query: str,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        """Return lightweight OpenAlex work autocomplete matches."""
+
+        response = await self._request(
+            "/autocomplete/works",
+            params={"q": query.strip()},
+        )
+        raw_results = response.get("results") or []
+        matches: list[dict[str, Any]] = []
+        for item in raw_results[: min(limit, 20)]:
+            if not isinstance(item, dict):
+                continue
+            matches.append(
+                {
+                    "id": item.get("id"),
+                    "displayName": item.get("display_name"),
+                    "hint": item.get("hint"),
+                    "citedByCount": item.get("cited_by_count"),
+                    "worksCount": item.get("works_count"),
+                    "source": "openalex",
+                }
+            )
+        return dump_jsonable({"matches": matches, "provider": "openalex"})
 
     async def search_bulk(
         self,
@@ -474,14 +534,93 @@ class OpenAlexClient:
         results = response.get("results") or []
         meta = response.get("meta") if isinstance(response.get("meta"), dict) else {}
         next_cursor = meta.get("next_cursor")
-        data = [
-            self._work_to_paper(work, include_abstract=False)
-            for work in results
-            if isinstance(work, dict)
-        ]
+        data = [self._work_to_paper(work, include_abstract=False) for work in results if isinstance(work, dict)]
         return dump_jsonable(
             {
                 "total": meta.get("count", len(data)),
+                "data": data,
+                "pagination": {
+                    "hasMore": next_cursor is not None,
+                    "nextCursor": next_cursor,
+                },
+            }
+        )
+
+    async def search_entities(
+        self,
+        entity_type: str,
+        query: str,
+        limit: int = 10,
+        cursor: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Search OpenAlex sources, institutions, or topics."""
+
+        endpoint, select, _ = self._entity_metadata(entity_type)
+        response = await self._request(
+            endpoint,
+            params={
+                "search": query.strip(),
+                "cursor": cursor or "*",
+                "per-page": min(limit, 200),
+                "select": select,
+            },
+        )
+        meta = response.get("meta") if isinstance(response.get("meta"), dict) else {}
+        next_cursor = meta.get("next_cursor")
+        results = response.get("results") or []
+        data = [self._normalize_entity_result(entity_type, item) for item in results if isinstance(item, dict)]
+        return dump_jsonable(
+            {
+                "entityType": entity_type,
+                "total": meta.get("count", len(data)),
+                "offset": 0,
+                "data": data,
+                "pagination": {
+                    "hasMore": next_cursor is not None,
+                    "nextCursor": next_cursor,
+                },
+            }
+        )
+
+    async def search_works_by_entity(
+        self,
+        entity_type: str,
+        entity_id: str,
+        limit: int = 100,
+        cursor: Optional[str] = None,
+        year: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Return OpenAlex works filtered by source, institution, or topic."""
+
+        normalized_entity_id = self._normalize_entity_id(entity_type, entity_id)
+        entity_filters = {
+            "source": f"primary_location.source.id:{normalized_entity_id}",
+            "institution": f"authorships.institutions.id:{normalized_entity_id}",
+            "topic": f"topics.id:{normalized_entity_id}",
+        }
+        filters = self._combine_filters(
+            entity_filters[entity_type],
+            *self._year_filters(year),
+        )
+        response = await self._request(
+            "/works",
+            params={
+                "filter": filters,
+                "cursor": cursor or "*",
+                "per-page": min(limit, 200),
+                "select": OPENALEX_LIST_SELECT,
+            },
+        )
+        meta = response.get("meta") if isinstance(response.get("meta"), dict) else {}
+        next_cursor = meta.get("next_cursor")
+        results = response.get("results") or []
+        data = [self._work_to_paper(work, include_abstract=False) for work in results if isinstance(work, dict)]
+        return dump_jsonable(
+            {
+                "entityType": entity_type,
+                "entityId": normalized_entity_id,
+                "total": meta.get("count", len(data)),
+                "offset": 0,
                 "data": data,
                 "pagination": {
                     "hasMore": next_cursor is not None,
@@ -529,11 +668,7 @@ class OpenAlexClient:
         meta = response.get("meta") if isinstance(response.get("meta"), dict) else {}
         next_cursor = meta.get("next_cursor")
         results = response.get("results") or []
-        data = [
-            self._work_to_paper(item, include_abstract=False)
-            for item in results
-            if isinstance(item, dict)
-        ]
+        data = [self._work_to_paper(item, include_abstract=False) for item in results if isinstance(item, dict)]
         return dump_jsonable(
             {
                 "total": meta.get("count", len(data)),
@@ -555,9 +690,7 @@ class OpenAlexClient:
         """Return referenced OpenAlex works using batched ID hydration."""
         work = await self._lookup_work_raw(paper_id)
         raw_referenced_works = work.get("referenced_works")
-        referenced_works: list[Any] = (
-            raw_referenced_works if isinstance(raw_referenced_works, list) else []
-        )
+        referenced_works: list[Any] = raw_referenced_works if isinstance(raw_referenced_works, list) else []
         total = len(referenced_works)
         start = max(offset, 0)
         end = min(start + min(limit, 100), total)
@@ -595,11 +728,7 @@ class OpenAlexClient:
         meta = response.get("meta") if isinstance(response.get("meta"), dict) else {}
         next_cursor = meta.get("next_cursor")
         results = response.get("results") or []
-        data = [
-            self._author_profile(author)
-            for author in results
-            if isinstance(author, dict)
-        ]
+        data = [self._author_profile(author) for author in results if isinstance(author, dict)]
         return dump_jsonable(
             {
                 "total": meta.get("count", len(data)),
@@ -651,11 +780,7 @@ class OpenAlexClient:
         meta = response.get("meta") if isinstance(response.get("meta"), dict) else {}
         next_cursor = meta.get("next_cursor")
         results = response.get("results") or []
-        data = [
-            self._work_to_paper(work, include_abstract=False)
-            for work in results
-            if isinstance(work, dict)
-        ]
+        data = [self._work_to_paper(work, include_abstract=False) for work in results if isinstance(work, dict)]
         return dump_jsonable(
             {
                 "total": meta.get("count", len(data)),

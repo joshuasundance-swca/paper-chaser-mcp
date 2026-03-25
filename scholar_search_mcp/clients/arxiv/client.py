@@ -9,7 +9,7 @@ from defusedxml import ElementTree as ET
 from ...constants import ARXIV_API_BASE, ARXIV_NS, ATOM_NS, OPENSEARCH_NS
 from ...models import ArxivSearchResponse, Author, Paper, dump_jsonable
 from ...parsing import _arxiv_id_from_url, _text
-from ...transport import httpx
+from ...transport import httpx, maybe_close_async_resource
 
 logger = logging.getLogger("scholar-search-mcp")
 
@@ -19,6 +19,12 @@ class ArxivClient:
 
     def __init__(self, timeout: float = 30.0):
         self.timeout = timeout
+        self._http_client: Any | None = None
+
+    def _get_http_client(self) -> Any:
+        if self._http_client is None:
+            self._http_client = httpx.AsyncClient(timeout=self.timeout)
+        return self._http_client
 
     async def search(
         self,
@@ -46,15 +52,13 @@ class ArxivClient:
                 year_end = year_end.strip()[:4]
                 if year_start.isdigit() and year_end.isdigit():
                     params["search_query"] = (
-                        f"{params['search_query']}+AND+submittedDate:"
-                        f"[{year_start}01010000+TO+{year_end}12312359]"
+                        f"{params['search_query']}+AND+submittedDate:[{year_start}01010000+TO+{year_end}12312359]"
                     )
             else:
                 single_year = year.strip()[:4]
                 if single_year.isdigit():
                     params["search_query"] = (
-                        f"{params['search_query']}+AND+submittedDate:"
-                        f"[{single_year}01010000+TO+{single_year}12312359]"
+                        f"{params['search_query']}+AND+submittedDate:[{single_year}01010000+TO+{single_year}12312359]"
                     )
 
         url = (
@@ -63,9 +67,9 @@ class ArxivClient:
             f"&sortBy={params['sortBy']}&sortOrder={params['sortOrder']}"
         )
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.get(url)
-                response.raise_for_status()
+            client = self._get_http_client()
+            response = await client.get(url)
+            response.raise_for_status()
         except Exception as exc:
             logger.warning("arXiv search failed: %s", exc)
             return dump_jsonable(ArxivSearchResponse())
@@ -83,9 +87,12 @@ class ArxivClient:
             paper = self._entry_to_paper(entry)
             if paper:
                 entries.append(Paper.model_validate(paper))
-        return dump_jsonable(
-            ArxivSearchResponse(totalResults=total_results, entries=entries)
-        )
+        return dump_jsonable(ArxivSearchResponse(totalResults=total_results, entries=entries))
+
+    async def aclose(self) -> None:
+        """Close the shared HTTP client, if one has been created."""
+        client, self._http_client = self._http_client, None
+        await maybe_close_async_resource(client)
 
     def _entry_to_paper(self, entry: Any) -> Optional[dict[str, Any]]:
         """Convert one Atom entry to an S2-compatible paper dict."""
@@ -99,11 +106,7 @@ class ArxivClient:
         title = _text(title_el).replace("\n", " ").strip()
 
         summary_el = entry.find(f"{{{ATOM_NS}}}summary")
-        abstract = (
-            _text(summary_el).replace("\n", " ").strip()
-            if summary_el is not None
-            else ""
-        )
+        abstract = _text(summary_el).replace("\n", " ").strip() if summary_el is not None else ""
 
         published_el = entry.find(f"{{{ATOM_NS}}}published")
         updated_el = entry.find(f"{{{ATOM_NS}}}updated")

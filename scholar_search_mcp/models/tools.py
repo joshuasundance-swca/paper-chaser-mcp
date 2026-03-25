@@ -2,9 +2,10 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..constants import SUPPORTED_AUTHOR_FIELDS, SUPPORTED_PAPER_FIELDS
+from .ecos import EcosDocumentKind
 
 
 class ToolArgsModel(BaseModel):
@@ -22,26 +23,18 @@ OPAQUE_CURSOR_FIELD_DESCRIPTION = (
 
 SUPPORTED_AUTHOR_FIELDS_TEXT = ", ".join(SUPPORTED_AUTHOR_FIELDS)
 SUPPORTED_PAPER_FIELDS_TEXT = ", ".join(SUPPORTED_PAPER_FIELDS)
-AUTHOR_FIELDS_DESCRIPTION = (
-    "Fields to return. Supported values: " + SUPPORTED_AUTHOR_FIELDS_TEXT
-)
-PAPER_FIELDS_DESCRIPTION = (
-    "Paper fields to return. Supported values: " + SUPPORTED_PAPER_FIELDS_TEXT
-)
-AUTHOR_ID_DESCRIPTION = (
-    "Semantic Scholar author ID from search_authors or get_paper_authors"
-)
+AUTHOR_FIELDS_DESCRIPTION = "Fields to return. Supported values: " + SUPPORTED_AUTHOR_FIELDS_TEXT
+PAPER_FIELDS_DESCRIPTION = "Paper fields to return. Supported values: " + SUPPORTED_PAPER_FIELDS_TEXT
+AUTHOR_ID_DESCRIPTION = "Semantic Scholar author ID from search_authors or get_paper_authors"
 AUTHOR_SEARCH_QUERY_DESCRIPTION = (
     "Author name to search for. Plain-text only; initials and exact-name "
     "punctuation may be normalized before the upstream request."
 )
 OPENALEX_WORK_ID_DESCRIPTION = (
-    "OpenAlex work identifier for OpenAlex-specific tools. Accepts an OpenAlex "
-    "W-id, OpenAlex work URL, or DOI."
+    "OpenAlex work identifier for OpenAlex-specific tools. Accepts an OpenAlex W-id, OpenAlex work URL, or DOI."
 )
 OPENALEX_AUTHOR_ID_DESCRIPTION = (
-    "OpenAlex author identifier for OpenAlex-specific tools. Accepts an OpenAlex "
-    "A-id or OpenAlex author URL."
+    "OpenAlex author identifier for OpenAlex-specific tools. Accepts an OpenAlex A-id or OpenAlex author URL."
 )
 SEMANTIC_SCHOLAR_EXPANSION_PAPER_ID_DESCRIPTION = (
     "Paper identifier for Semantic Scholar expansion tools. Prefer "
@@ -49,6 +42,15 @@ SEMANTIC_SCHOLAR_EXPANSION_PAPER_ID_DESCRIPTION = (
     "paper.expansionIdStatus is not_portable, do not reuse brokered "
     "paperId/sourceId/canonicalId values directly; resolve the paper through a "
     "DOI or Semantic Scholar-native lookup first."
+)
+ENRICHMENT_PAPER_ID_DESCRIPTION = (
+    "Existing paper identifier for enrichment tools. Accepts a bare DOI, DOI URL, "
+    "canonicalId, recommendedExpansionId, or any paperId that already embeds a DOI."
+)
+DOI_INPUT_DESCRIPTION = "Bare DOI or DOI URL. When both doi and paper_id are supplied, the explicit doi wins."
+INCLUDE_ENRICHMENT_DESCRIPTION = (
+    "When true, add post-resolution Crossref and Unpaywall enrichment to the final "
+    "resolved paper output. Matching, ranking, and retrieval behavior stay unchanged."
 )
 
 
@@ -94,6 +96,8 @@ SearchProvider = Literal[
     "serpapi_google_scholar",
     "arxiv",
 ]
+OpenAlexEntityType = Literal["source", "institution", "topic"]
+LatencyProfile = Literal["fast", "balanced", "deep"]
 
 SEARCH_PROVIDER_ALIASES: dict[str, SearchProvider] = {
     "core": "core",
@@ -104,10 +108,10 @@ SEARCH_PROVIDER_ALIASES: dict[str, SearchProvider] = {
 }
 
 DEFAULT_SEARCH_PROVIDER_ORDER: tuple[SearchProvider, ...] = (
-    "core",
     "semantic_scholar",
-    "serpapi_google_scholar",
     "arxiv",
+    "core",
+    "serpapi_google_scholar",
 )
 
 
@@ -117,18 +121,12 @@ def _supported_provider_names() -> str:
 
 def _normalize_provider_name(value: object) -> SearchProvider:
     if not isinstance(value, str):
-        raise ValueError(
-            "Provider names must be strings. Supported values: "
-            + _supported_provider_names()
-        )
+        raise ValueError("Provider names must be strings. Supported values: " + _supported_provider_names())
     normalized = value.strip().lower()
     try:
         return SEARCH_PROVIDER_ALIASES[normalized]
     except KeyError as exc:
-        raise ValueError(
-            f"Unsupported provider {value!r}. Supported values: "
-            f"{_supported_provider_names()}."
-        ) from exc
+        raise ValueError(f"Unsupported provider {value!r}. Supported values: {_supported_provider_names()}.") from exc
 
 
 def _validate_provider_order(
@@ -174,9 +172,7 @@ class SearchPapersBaseArgs(BasicSearchPapersArgs):
     publication_date_or_year: str | None = Field(
         default=None,
         alias="publicationDateOrYear",
-        description=(
-            "Date or date-range filter, e.g. '2019-03-05', '2016:2020', '2010-'"
-        ),
+        description=("Date or date-range filter, e.g. '2019-03-05', '2016:2020', '2010-'"),
     )
     fields_of_study: str | None = Field(
         default=None,
@@ -230,9 +226,7 @@ class SearchPapersArgs(SearchPapersBaseArgs):
 
     @field_validator("provider_order", mode="before")
     @classmethod
-    def validate_provider_order(
-        cls, value: list[object] | None
-    ) -> list[SearchProvider] | None:
+    def validate_provider_order(cls, value: list[object] | None) -> list[SearchProvider] | None:
         return _validate_provider_order(value)
 
 
@@ -281,10 +275,7 @@ class BulkSearchPapersArgs(ToolArgsModel):
     )
     sort: str | None = Field(
         default=None,
-        description=(
-            "Sort order, e.g. 'paperId:asc', 'citationCount:desc', "
-            "'publicationDate:desc'"
-        ),
+        description=("Sort order, e.g. 'paperId:asc', 'citationCount:desc', 'publicationDate:desc'"),
     )
     year: str | None = Field(
         default=None,
@@ -334,15 +325,126 @@ class BulkSearchPapersArgs(ToolArgsModel):
 class PaperMatchArgs(ToolArgsModel):
     query: str = Field(description="Paper title to find the best match for")
     fields: list[str] | None = Field(default=None, description="Fields to return")
+    include_enrichment: bool = Field(
+        default=False,
+        alias="includeEnrichment",
+        description=INCLUDE_ENRICHMENT_DESCRIPTION,
+    )
+
+
+class ResolveCitationArgs(ToolArgsModel):
+    citation: str = Field(
+        description=(
+            "Partial, malformed, or almost-right citation text to repair. "
+            "Can include DOI/arXiv/URL fragments, author names, venue hints, "
+            "quote fragments, or approximate years."
+        )
+    )
+    max_candidates: int = Field(
+        default=5,
+        alias="maxCandidates",
+        description="Maximum ranked candidates to return (default 5, max 5).",
+    )
+    title_hint: str | None = Field(
+        default=None,
+        alias="titleHint",
+        description="Optional title fragment hint when the citation text is sparse.",
+    )
+    author_hint: str | None = Field(
+        default=None,
+        alias="authorHint",
+        description="Optional author surname or author-name hint.",
+    )
+    year_hint: str | None = Field(
+        default=None,
+        alias="yearHint",
+        description="Optional approximate year hint, e.g. '2009' or 'around 2001'.",
+    )
+    venue_hint: str | None = Field(
+        default=None,
+        alias="venueHint",
+        description="Optional venue or journal hint.",
+    )
+    doi_hint: str | None = Field(
+        default=None,
+        alias="doiHint",
+        description="Optional DOI or DOI fragment hint.",
+    )
+    include_enrichment: bool = Field(
+        default=False,
+        alias="includeEnrichment",
+        description=INCLUDE_ENRICHMENT_DESCRIPTION,
+    )
+
+    @field_validator("max_candidates", mode="before")
+    @classmethod
+    def clamp_max_candidates(cls, value: int | None) -> int:
+        return _clamp_limit(value, 5, 5)
 
 
 class PaperAutocompleteArgs(ToolArgsModel):
     query: str = Field(description="Partial paper title for typeahead completion")
 
 
+class OpenAlexPaperAutocompleteArgs(ToolArgsModel):
+    query: str = Field(description="Partial paper title for OpenAlex typeahead.")
+    limit: int = Field(
+        default=10,
+        description="Max matches (default 10, max 20).",
+    )
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def clamp_limit(cls, value: int | None) -> int:
+        return _clamp_limit(value, 10, 20)
+
+
 class PaperLookupArgs(ToolArgsModel):
     paper_id: str = Field(description="Paper ID (DOI, ArXiv ID, S2 ID, etc.)")
     fields: list[str] | None = Field(default=None, description="Fields to return")
+    include_enrichment: bool = Field(
+        default=False,
+        alias="includeEnrichment",
+        description=INCLUDE_ENRICHMENT_DESCRIPTION,
+    )
+
+
+class PaperEnrichmentLookupArgs(ToolArgsModel):
+    paper_id: str | None = Field(
+        default=None,
+        description=ENRICHMENT_PAPER_ID_DESCRIPTION,
+    )
+    doi: str | None = Field(
+        default=None,
+        description=DOI_INPUT_DESCRIPTION,
+    )
+
+
+class CrossrefEnrichmentArgs(PaperEnrichmentLookupArgs):
+    query: str | None = Field(
+        default=None,
+        description=(
+            "Optional title or bibliographic query fallback used only when no DOI can be resolved from the inputs."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def require_lookup_material(self) -> "CrossrefEnrichmentArgs":
+        if self.paper_id or self.doi or self.query:
+            return self
+        raise ValueError("Provide at least one of paper_id, doi, or query.")
+
+
+class UnpaywallEnrichmentArgs(PaperEnrichmentLookupArgs):
+    @model_validator(mode="after")
+    def require_identifier(self) -> "UnpaywallEnrichmentArgs":
+        if self.paper_id or self.doi:
+            return self
+        raise ValueError("Provide paper_id or doi for Unpaywall lookups.")
+
+
+class EnrichPaperArgs(CrossrefEnrichmentArgs):
+    """Run Crossref and Unpaywall enrichment for one known paper or DOI."""
 
 
 class OpenAlexPaperLookupArgs(ToolArgsModel):
@@ -527,6 +629,55 @@ class OpenAlexAuthorSearchArgs(ToolArgsModel):
         return _clamp_limit(value, 10, 200)
 
 
+class OpenAlexEntitySearchArgs(ToolArgsModel):
+    query: str = Field(description="Entity search query for OpenAlex.")
+    entity_type: OpenAlexEntityType = Field(
+        alias="entityType",
+        description="Entity family to search: source, institution, or topic.",
+    )
+    limit: int = Field(
+        default=10,
+        description="Max results (default 10, max 50).",
+    )
+    cursor: str | None = Field(
+        default=None,
+        description=OPAQUE_CURSOR_FIELD_DESCRIPTION,
+    )
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def clamp_limit(cls, value: int | None) -> int:
+        return _clamp_limit(value, 10, 50)
+
+
+class OpenAlexEntityPaperSearchArgs(ToolArgsModel):
+    entity_type: OpenAlexEntityType = Field(
+        alias="entityType",
+        description="Entity family to pivot from: source, institution, or topic.",
+    )
+    entity_id: str = Field(
+        alias="entityId",
+        description="OpenAlex entity identifier to pivot from.",
+    )
+    limit: int = Field(
+        default=100,
+        description="Max papers (default 100, max 200).",
+    )
+    cursor: str | None = Field(
+        default=None,
+        description=OPAQUE_CURSOR_FIELD_DESCRIPTION,
+    )
+    year: str | None = Field(
+        default=None,
+        description="Optional year filter, e.g. '2023' or '2020-2024'.",
+    )
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def clamp_limit(cls, value: int | None) -> int:
+        return _clamp_limit(value, 100, 200)
+
+
 class BatchGetAuthorsArgs(ToolArgsModel):
     author_ids: list[str] = Field(description="List of author IDs (up to 1000)")
     fields: list[str] | None = Field(
@@ -538,9 +689,7 @@ class BatchGetAuthorsArgs(ToolArgsModel):
     @classmethod
     def validate_author_ids(cls, value: list[str]) -> list[str]:
         if len(value) > 1000:
-            raise ValueError(
-                f"Maximum 1000 author IDs per batch request, got {len(value)}"
-            )
+            raise ValueError(f"Maximum 1000 author IDs per batch request, got {len(value)}")
         return value
 
     @field_validator("fields")
@@ -622,9 +771,7 @@ class BatchGetPapersArgs(ToolArgsModel):
     @classmethod
     def validate_paper_ids(cls, value: list[str]) -> list[str]:
         if len(value) > 500:
-            raise ValueError(
-                f"Maximum 500 paper IDs per batch request, got {len(value)}"
-            )
+            raise ValueError(f"Maximum 500 paper IDs per batch request, got {len(value)}")
         return value
 
 
@@ -647,6 +794,415 @@ class GetCitationFormatsArgs(ToolArgsModel):
     )
 
 
+class SerpApiCitedByArgs(ToolArgsModel):
+    cites_id: str = Field(
+        alias="citesId",
+        description="Google Scholar cites_id from a SerpApi cited_by link.",
+    )
+    query: str | None = Field(
+        default=None,
+        description="Optional extra Scholar query refinement within the cited-by set.",
+    )
+    limit: int = Field(
+        default=10,
+        description="Max results (default 10, max 20).",
+    )
+    cursor: str | None = Field(
+        default=None,
+        description=OPAQUE_CURSOR_FIELD_DESCRIPTION,
+    )
+    year: str | None = Field(
+        default=None,
+        description="Optional year or year-range filter.",
+    )
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def clamp_limit(cls, value: int | None) -> int:
+        return _clamp_limit(value, 10, 20)
+
+
+class SerpApiVersionsArgs(ToolArgsModel):
+    cluster_id: str = Field(
+        alias="clusterId",
+        description="Google Scholar cluster_id from a SerpApi versions link.",
+    )
+    limit: int = Field(
+        default=10,
+        description="Max results (default 10, max 20).",
+    )
+    cursor: str | None = Field(
+        default=None,
+        description=OPAQUE_CURSOR_FIELD_DESCRIPTION,
+    )
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def clamp_limit(cls, value: int | None) -> int:
+        return _clamp_limit(value, 10, 20)
+
+
+class SerpApiAuthorProfileArgs(ToolArgsModel):
+    author_id: str = Field(
+        alias="authorId",
+        description="Google Scholar author_id from a SerpApi author profile or result.",
+    )
+
+
+class SerpApiAuthorArticlesArgs(ToolArgsModel):
+    author_id: str = Field(
+        alias="authorId",
+        description="Google Scholar author_id from a SerpApi author profile or result.",
+    )
+    limit: int = Field(
+        default=10,
+        description="Max results (default 10, max 20).",
+    )
+    cursor: str | None = Field(
+        default=None,
+        description=OPAQUE_CURSOR_FIELD_DESCRIPTION,
+    )
+    sort: str | None = Field(
+        default=None,
+        description="Optional SerpApi author sort hint, e.g. 'title' or 'pubdate'.",
+    )
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def clamp_limit(cls, value: int | None) -> int:
+        return _clamp_limit(value, 10, 20)
+
+
+class ProviderDiagnosticsArgs(ToolArgsModel):
+    include_recent_outcomes: bool = Field(
+        default=True,
+        alias="includeRecentOutcomes",
+        description="Whether to include recent per-provider outcome envelopes.",
+    )
+
+
+class SerpApiAccountStatusArgs(ToolArgsModel):
+    pass
+
+
+class ProviderBudgetArgs(ToolArgsModel):
+    max_total_calls: int | None = Field(
+        default=None,
+        alias="maxTotalCalls",
+        description="Optional cap across all provider calls during one smart search.",
+    )
+    max_semantic_scholar_calls: int | None = Field(
+        default=None,
+        alias="maxSemanticScholarCalls",
+        description="Optional Semantic Scholar call cap for one smart search.",
+    )
+    max_openalex_calls: int | None = Field(
+        default=None,
+        alias="maxOpenAlexCalls",
+        description="Optional OpenAlex call cap for one smart search.",
+    )
+    max_core_calls: int | None = Field(
+        default=None,
+        alias="maxCoreCalls",
+        description="Optional CORE call cap for one smart search.",
+    )
+    max_arxiv_calls: int | None = Field(
+        default=None,
+        alias="maxArxivCalls",
+        description="Optional arXiv call cap for one smart search.",
+    )
+    max_serpapi_calls: int | None = Field(
+        default=None,
+        alias="maxSerpApiCalls",
+        description="Optional SerpApi call cap for one smart search.",
+    )
+    allow_paid_providers: bool = Field(
+        default=True,
+        alias="allowPaidProviders",
+        description="Set false to disallow paid providers such as SerpApi.",
+    )
+
+
+class SmartSearchPapersArgs(ToolArgsModel):
+    query: str = Field(
+        description=(
+            "Concept-level or known-item research query. Natural language is "
+            "allowed; exact identifiers like DOI, arXiv ID, or URL are also "
+            "accepted."
+        )
+    )
+    limit: int = Field(
+        default=10,
+        description="Max smart-ranked results to return (default 10, max 25)",
+    )
+    search_session_id: str | None = Field(
+        default=None,
+        alias="searchSessionId",
+        description=("Optional prior searchSessionId to continue refining an existing research workspace."),
+    )
+    mode: Literal[
+        "auto",
+        "discovery",
+        "review",
+        "known_item",
+        "author",
+        "citation",
+    ] = Field(
+        default="auto",
+        description=(
+            "Task shape hint. Use auto unless the agent already knows whether "
+            "this is discovery, literature review, known-item lookup, author "
+            "pivot, or citation chasing."
+        ),
+    )
+    year: str | None = Field(
+        default=None,
+        description="Optional year or year-range hint, e.g. '2023' or '2020-2024'.",
+    )
+    venue: str | None = Field(
+        default=None,
+        description="Optional venue hint to keep the search focused.",
+    )
+    focus: str | None = Field(
+        default=None,
+        description="Optional subtopic, method, or application focus hint.",
+    )
+    latency_profile: LatencyProfile = Field(
+        default="balanced",
+        alias="latencyProfile",
+        description=(
+            "Latency/cost control: fast minimizes fanout and model work, "
+            "balanced preserves the current default behavior, and deep enables "
+            "controlled multi-provider expansion."
+        ),
+    )
+    provider_budget: ProviderBudgetArgs | None = Field(
+        default=None,
+        alias="providerBudget",
+        description=(
+            "Optional per-request provider budget for advanced clients. Use this "
+            "to cap total provider calls, provider-specific calls, or paid usage."
+        ),
+    )
+    include_enrichment: bool = Field(
+        default=False,
+        alias="includeEnrichment",
+        description=(
+            "When true, enrich only the final returned smart hits after retrieval, fusion, and ranking complete."
+        ),
+    )
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def clamp_limit(cls, value: int | None) -> int:
+        return _clamp_limit(value, 10, 25)
+
+
+class AskResultSetArgs(ToolArgsModel):
+    search_session_id: str = Field(
+        alias="searchSessionId",
+        description="searchSessionId from search_papers_smart or a reusable list tool.",
+    )
+    question: str = Field(description=("Follow-up question to answer using only papers from the saved result set."))
+    top_k: int = Field(
+        default=8,
+        alias="topK",
+        description=("Number of evidence papers to retrieve from the result set (max 12)."),
+    )
+    answer_mode: Literal["qa", "claim_check", "comparison"] = Field(
+        default="qa",
+        alias="answerMode",
+        description="Answer style: grounded QA, claim checking, or comparison.",
+    )
+    latency_profile: LatencyProfile = Field(
+        default="balanced",
+        alias="latencyProfile",
+        description="Latency/cost control for grounded answer synthesis.",
+    )
+
+    @field_validator("top_k", mode="before")
+    @classmethod
+    def clamp_top_k(cls, value: int | None) -> int:
+        return _clamp_limit(value, 8, 12)
+
+
+class MapResearchLandscapeArgs(ToolArgsModel):
+    search_session_id: str = Field(
+        alias="searchSessionId",
+        description="searchSessionId for the saved paper result set to cluster.",
+    )
+    max_themes: int = Field(
+        default=5,
+        alias="maxThemes",
+        description="Maximum number of themes to return (default 5, max 5).",
+    )
+    latency_profile: LatencyProfile = Field(
+        default="balanced",
+        alias="latencyProfile",
+        description="Latency/cost control for theme labeling and summarization.",
+    )
+
+    @field_validator("max_themes", mode="before")
+    @classmethod
+    def clamp_max_themes(cls, value: int | None) -> int:
+        return _clamp_limit(value, 5, 5)
+
+
+class ExpandResearchGraphArgs(ToolArgsModel):
+    seed_paper_ids: list[str] | None = Field(
+        default=None,
+        alias="seedPaperIds",
+        description=(
+            "Optional paper IDs to expand from. Use recommendedExpansionId when "
+            "available for Semantic Scholar-based expansion."
+        ),
+    )
+    seed_search_session_id: str | None = Field(
+        default=None,
+        alias="seedSearchSessionId",
+        description=(
+            "Optional searchSessionId whose paper results should be used as graph "
+            "seeds when explicit seedPaperIds are not provided."
+        ),
+    )
+    direction: Literal["citations", "references", "authors"] = Field(
+        default="citations",
+        description="Graph expansion direction.",
+    )
+    hops: int = Field(
+        default=1,
+        description="Expansion depth in hops (default 1, max 2).",
+    )
+    per_seed_limit: int = Field(
+        default=25,
+        alias="perSeedLimit",
+        description="Max frontier items to fetch per seed (default 25, max 50).",
+    )
+    latency_profile: LatencyProfile = Field(
+        default="balanced",
+        alias="latencyProfile",
+        description="Latency/cost control for graph ranking and scoring.",
+    )
+
+    @field_validator("hops", mode="before")
+    @classmethod
+    def clamp_hops(cls, value: int | None) -> int:
+        return _clamp_limit(value, 1, 2)
+
+    @field_validator("per_seed_limit", mode="before")
+    @classmethod
+    def clamp_per_seed_limit(cls, value: int | None) -> int:
+        return _clamp_limit(value, 25, 50)
+
+
+class SearchSpeciesEcosArgs(ToolArgsModel):
+    query: str = Field(description="Common-name or scientific-name species query for ECOS.")
+    limit: int = Field(
+        default=10,
+        description="Max species hits to return (default 10, max 25).",
+    )
+    match_mode: Literal["auto", "exact", "prefix"] = Field(
+        default="auto",
+        alias="matchMode",
+        description=(
+            "auto tries exact common/scientific-name matching first, then "
+            "prefix matching. exact and prefix restrict the search strategy."
+        ),
+    )
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def clamp_limit(cls, value: int | None) -> int:
+        return _clamp_limit(value, 10, 25)
+
+
+class EcosSpeciesLookupArgs(ToolArgsModel):
+    species_id: str = Field(description="ECOS species id or ECOS species URL.")
+
+
+class ListSpeciesDocumentsEcosArgs(EcosSpeciesLookupArgs):
+    document_kinds: list[EcosDocumentKind] | None = Field(
+        default=None,
+        alias="documentKinds",
+        description=(
+            "Optional document-kind filter. Supported values: recovery_plan, "
+            "five_year_review, biological_opinion, federal_register, "
+            "other_recovery_doc, conservation_plan_link."
+        ),
+    )
+
+
+class GetDocumentTextEcosArgs(ToolArgsModel):
+    url: str = Field(description="Absolute or ECOS-relative document URL to fetch and convert.")
+
+
+class SearchFederalRegisterArgs(ToolArgsModel):
+    query: str = Field(description="Federal Register search query.")
+    limit: int = Field(default=10, description="Max documents to return (default 10, max 25).")
+    agencies: list[str] | None = Field(
+        default=None,
+        description="Optional agency slug filter list, e.g. fish-and-wildlife-service.",
+    )
+    document_types: list[Literal["RULE", "PRORULE", "NOTICE", "PRESDOCU"]] | None = Field(
+        default=None,
+        alias="documentTypes",
+        description="Optional Federal Register document-type filter.",
+    )
+    publication_date_from: str | None = Field(
+        default=None,
+        alias="publicationDateFrom",
+        description="Optional publication-date lower bound in YYYY-MM-DD format.",
+    )
+    publication_date_to: str | None = Field(
+        default=None,
+        alias="publicationDateTo",
+        description="Optional publication-date upper bound in YYYY-MM-DD format.",
+    )
+    cfr_citation: str | None = Field(
+        default=None,
+        alias="cfrCitation",
+        description="Optional CFR citation filter, e.g. 50 CFR 17 or 40 CFR 122.26.",
+    )
+    cfr_title: int | None = Field(default=None, alias="cfrTitle", description="Optional CFR title filter.")
+    cfr_part: int | None = Field(default=None, alias="cfrPart", description="Optional CFR part filter.")
+    document_number: str | None = Field(
+        default=None,
+        alias="documentNumber",
+        description="Optional explicit Federal Register document number filter.",
+    )
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def clamp_limit(cls, value: int | None) -> int:
+        return _clamp_limit(value, 10, 25)
+
+
+class GetFederalRegisterDocumentArgs(ToolArgsModel):
+    identifier: str = Field(
+        description="Federal Register document number, FR citation, or GovInfo FR link.",
+    )
+
+
+class GetCfrTextArgs(ToolArgsModel):
+    title_number: int = Field(alias="titleNumber", description="CFR title number, e.g. 40.")
+    part_number: int = Field(alias="partNumber", description="CFR part number, e.g. 122.")
+    section_number: str | None = Field(
+        default=None,
+        alias="sectionNumber",
+        description="Optional CFR section suffix, e.g. 26 for 40 CFR 122.26.",
+    )
+    revision_year: int | None = Field(
+        default=None,
+        alias="revisionYear",
+        description="Optional CFR revision year used during volume resolution.",
+    )
+    effective_date: str | None = Field(
+        default=None,
+        alias="effectiveDate",
+        description="Optional effective date hint in YYYY-MM-DD format.",
+    )
+
+
 TOOL_INPUT_MODELS: dict[str, type[ToolArgsModel]] = {
     "search_papers": SearchPapersArgs,
     "search_papers_core": MinimalProviderSearchPapersArgs,
@@ -657,8 +1213,13 @@ TOOL_INPUT_MODELS: dict[str, type[ToolArgsModel]] = {
     "search_papers_openalex_bulk": OpenAlexBulkSearchPapersArgs,
     "search_papers_bulk": BulkSearchPapersArgs,
     "search_papers_match": PaperMatchArgs,
+    "resolve_citation": ResolveCitationArgs,
     "paper_autocomplete": PaperAutocompleteArgs,
+    "paper_autocomplete_openalex": OpenAlexPaperAutocompleteArgs,
     "get_paper_details": PaperLookupArgs,
+    "get_paper_metadata_crossref": CrossrefEnrichmentArgs,
+    "get_paper_open_access_unpaywall": UnpaywallEnrichmentArgs,
+    "enrich_paper": EnrichPaperArgs,
     "get_paper_details_openalex": OpenAlexPaperLookupArgs,
     "get_paper_citations": PaperListArgs,
     "get_paper_citations_openalex": OpenAlexPaperListArgs,
@@ -671,10 +1232,29 @@ TOOL_INPUT_MODELS: dict[str, type[ToolArgsModel]] = {
     "get_author_papers_openalex": OpenAlexAuthorPapersArgs,
     "search_authors": AuthorSearchArgs,
     "search_authors_openalex": OpenAlexAuthorSearchArgs,
+    "search_entities_openalex": OpenAlexEntitySearchArgs,
+    "search_papers_openalex_by_entity": OpenAlexEntityPaperSearchArgs,
     "batch_get_authors": BatchGetAuthorsArgs,
     "search_snippets": SnippetSearchArgs,
     "get_paper_recommendations": RecommendationArgs,
     "get_paper_recommendations_post": PostRecommendationsArgs,
     "batch_get_papers": BatchGetPapersArgs,
     "get_paper_citation_formats": GetCitationFormatsArgs,
+    "search_papers_serpapi_cited_by": SerpApiCitedByArgs,
+    "search_papers_serpapi_versions": SerpApiVersionsArgs,
+    "get_author_profile_serpapi": SerpApiAuthorProfileArgs,
+    "get_author_articles_serpapi": SerpApiAuthorArticlesArgs,
+    "get_serpapi_account_status": SerpApiAccountStatusArgs,
+    "get_provider_diagnostics": ProviderDiagnosticsArgs,
+    "search_species_ecos": SearchSpeciesEcosArgs,
+    "get_species_profile_ecos": EcosSpeciesLookupArgs,
+    "list_species_documents_ecos": ListSpeciesDocumentsEcosArgs,
+    "get_document_text_ecos": GetDocumentTextEcosArgs,
+    "search_federal_register": SearchFederalRegisterArgs,
+    "get_federal_register_document": GetFederalRegisterDocumentArgs,
+    "get_cfr_text": GetCfrTextArgs,
+    "search_papers_smart": SmartSearchPapersArgs,
+    "ask_result_set": AskResultSetArgs,
+    "map_research_landscape": MapResearchLandscapeArgs,
+    "expand_research_graph": ExpandResearchGraphArgs,
 }

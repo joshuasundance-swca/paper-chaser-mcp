@@ -3,9 +3,9 @@
 import logging
 import re
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any, Literal, Optional
 
-from .clients.serpapi import SerpApiKeyMissingError
 from .models import (
     ArxivSearchResponse,
     BrokerAttempt,
@@ -20,8 +20,29 @@ from .models.tools import (
     SearchPapersArgs,
     SearchProvider,
 )
+from .provider_runtime import (
+    ProviderDiagnosticsRegistry,
+    ProviderStatusBucket,
+)
+from .search_executor import (
+    ProviderSearchRequest,
+    SearchClientBundle,
+    SearchExecutor,
+    arxiv_result,
+    core_result,
+    earlier_result_attempt,
+    enrich_semantic_scholar_paper,
+    provider_attempt_from_outcome,
+    semantic_result,
+    serpapi_result,
+)
 
 logger = logging.getLogger("scholar-search-mcp")
+
+_SEARCH_EXECUTOR = SearchExecutor()
+
+BROKER_HEDGE_DELAY_SECONDS = 0.35
+HEDGE_ELIGIBLE_PROVIDERS: frozenset[SearchProvider] = frozenset({"semantic_scholar", "arxiv", "core"})
 
 SEMANTIC_SCHOLAR_ONLY_FIELDS = (
     "publication_date_or_year",
@@ -93,6 +114,18 @@ _RELEVANCE_STOPWORDS: frozenset[str] = frozenset(
         "would",
     }
 )
+_TITLEISH_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9'/-]*")
+
+
+@dataclass
+class _BrokerProviderResult:
+    provider: SearchProvider
+    attempt: BrokerAttempt
+    response: SearchResponse | None = None
+
+    @property
+    def has_results(self) -> bool:
+        return self.response is not None and bool(self.response.data)
 
 
 def _distinctive_query_tokens(query: str) -> list[str]:
@@ -123,44 +156,47 @@ def _has_unmatched_distinctive_tokens(query: str, papers: list[Paper]) -> bool:
     distinctive = _distinctive_query_tokens(query)
     if not distinctive:
         return False
-    result_text = " ".join(
-        " ".join(filter(None, [p.title, p.abstract])) for p in papers
-    ).lower()
+    result_text = " ".join(" ".join(filter(None, [p.title, p.abstract])) for p in papers).lower()
     return any(token not in result_text for token in distinctive)
 
 
-def _enrich_ss_paper(paper: Paper) -> Paper:
-    """Return a copy of a Semantic Scholar paper enriched with provenance fields.
+def _is_title_like_query(query: str) -> bool:
+    """Return True when *query* looks more like a known-item title than a topic.
 
-    ``sourceId`` is the Semantic Scholar-native ``paperId`` hash.
-    ``canonicalId`` follows the documented priority order:
-    DOI > paperId > arXiv ID > sourceId.
+    This heuristic is intentionally conservative and is only used together with
+    the low-relevance check. We only suppress brokered Semantic Scholar results
+    when the query looks title-like *and* the returned results failed the
+    distinctive-token relevance screen.
     """
-    external_ids: dict[str, Any] = (paper.model_extra or {}).get("externalIds") or {}
-    doi: str | None = external_ids.get("DOI") or None
-    arxiv_id: str | None = external_ids.get("ArXiv") or None
-    paper_id: str | None = paper.paper_id
-    source_id = paper_id
-    canonical_id: str | None = doi or paper_id or arxiv_id or source_id
-    return paper.model_copy(
-        update={
-            "source": paper.source or "semantic_scholar",
-            "source_id": source_id,
-            "canonical_id": canonical_id,
-            "recommended_expansion_id": canonical_id,
-            "expansion_id_status": "portable",
-        }
-    )
+
+    normalized = " ".join(str(query or "").split())
+    if not normalized:
+        return False
+    lowered = normalized.lower()
+    if any(marker in lowered for marker in ("doi:", "arxiv:", "site:", "author:")):
+        return False
+    if re.search(r"\b(?:19|20)\d{2}\b", normalized):
+        return False
+    words = _TITLEISH_WORD_RE.findall(normalized)
+    if not 4 <= len(words) <= 18:
+        return False
+    capitalized = sum(1 for word in words if word[:1].isupper())
+    capitalized_ratio = capitalized / max(len(words), 1)
+    has_title_punctuation = any(mark in normalized for mark in (":", '"', "“", "”", "-", "–", "—"))
+    return has_title_punctuation or capitalized_ratio >= 0.6
+
+
+def _enrich_ss_paper(paper: Paper) -> Paper:
+    """Return a copy of a Semantic Scholar paper enriched with provenance fields."""
+
+    return enrich_semantic_scholar_paper(paper)
 
 
 def _dump_search_response(response: SearchResponse) -> dict[str, Any]:
     result: dict[str, Any] = {
         "total": response.total,
         "offset": response.offset,
-        "data": [
-            paper.model_dump(by_alias=True, exclude_none=True, exclude_defaults=True)
-            for paper in response.data
-        ],
+        "data": [paper.model_dump(by_alias=True, exclude_none=True, exclude_defaults=True) for paper in response.data],
     }
     if response.broker_metadata is not None:
         result["brokerMetadata"] = response.broker_metadata.model_dump(by_alias=True)
@@ -217,6 +253,7 @@ def _metadata(
     preferred_provider: SearchProvider | None = None,
     provider_order: Sequence[SearchProvider] | None = None,
     low_relevance: bool = False,
+    suppressed_low_relevance_title: bool = False,
 ) -> BrokerMetadata:
     """Build consistent broker metadata for ``search_papers`` responses.
 
@@ -323,12 +360,15 @@ def _metadata(
             + "To expand from a paper use get_paper_citations or get_paper_references."
         )
     elif provider_used == "none":
-        if result_status == "provider_failed":
-            failed_labels = [
-                provider_labels.get(a.provider, a.provider)
-                for a in attempts
-                if a.status == "failed"
-            ]
+        if suppressed_low_relevance_title:
+            next_step_hint = (
+                "Semantic Scholar returned low-relevance results for a title-like query, "
+                "so the broker suppressed them instead of surfacing likely false positives. "
+                "Try search_papers_match for exact-title recovery, refine the title, or "
+                "change providerOrder."
+            )
+        elif result_status == "provider_failed":
+            failed_labels = [provider_labels.get(a.provider, a.provider) for a in attempts if a.status == "failed"]
             if len(failed_labels) == 1:
                 next_step_hint = (
                     f"{failed_labels[0]} returned an upstream error "
@@ -377,27 +417,73 @@ def _effective_provider_order(
     preferred_provider: SearchProvider | None,
     provider_order: Sequence[SearchProvider] | None,
 ) -> list[SearchProvider]:
-    order = list(provider_order or DEFAULT_SEARCH_PROVIDER_ORDER)
-    if preferred_provider is None:
-        return order
-    return [preferred_provider] + [
-        provider for provider in order if provider != preferred_provider
-    ]
+    return _SEARCH_EXECUTOR.effective_provider_order(
+        preferred_provider=preferred_provider,
+        provider_order=provider_order,
+        default_order=DEFAULT_SEARCH_PROVIDER_ORDER,
+    )
 
 
-def _skip_for_ss_only_filters(
-    provider: SearchProvider, ss_only_filters: list[str]
-) -> BrokerAttempt | None:
-    if provider not in {"core", "serpapi_google_scholar"} or not ss_only_filters:
-        return None
-    return BrokerAttempt(
-        provider=provider,
-        status="skipped",
-        reason=(
-            "Skipped because Semantic Scholar-only filters were requested: "
-            + ", ".join(ss_only_filters)
+def _provider_enabled(
+    provider: SearchProvider,
+    *,
+    enable_core: bool,
+    enable_semantic_scholar: bool,
+    enable_arxiv: bool,
+    enable_serpapi: bool,
+    serpapi_client: Any,
+) -> bool:
+    return _SEARCH_EXECUTOR.provider_enabled(
+        provider,
+        enabled={
+            "core": enable_core,
+            "semantic_scholar": enable_semantic_scholar,
+            "arxiv": enable_arxiv,
+            "serpapi_google_scholar": enable_serpapi,
+            "openalex": False,
+        },
+        clients=SearchClientBundle(
+            core_client=True,
+            semantic_client=True,
+            arxiv_client=True,
+            serpapi_client=serpapi_client,
         ),
     )
+
+
+def _hedge_target_index(
+    *,
+    effective_order: Sequence[SearchProvider],
+    current_index: int,
+    ss_only_filters: list[str],
+    enable_core: bool,
+    enable_semantic_scholar: bool,
+    enable_arxiv: bool,
+    enable_serpapi: bool,
+    serpapi_client: Any,
+) -> int | None:
+    return _SEARCH_EXECUTOR.hedge_target_index(
+        effective_order=effective_order,
+        current_index=current_index,
+        ss_only_filters=ss_only_filters,
+        enabled={
+            "core": enable_core,
+            "semantic_scholar": enable_semantic_scholar,
+            "arxiv": enable_arxiv,
+            "serpapi_google_scholar": enable_serpapi,
+            "openalex": False,
+        },
+        clients=SearchClientBundle(
+            core_client=True,
+            semantic_client=True,
+            arxiv_client=True,
+            serpapi_client=serpapi_client,
+        ),
+    )
+
+
+def _skip_for_ss_only_filters(provider: SearchProvider, ss_only_filters: list[str]) -> BrokerAttempt | None:
+    return _SEARCH_EXECUTOR.skip_for_semantic_scholar_only_filters(provider, ss_only_filters)
 
 
 def _disabled_provider_attempt(provider: SearchProvider) -> BrokerAttempt:
@@ -415,47 +501,36 @@ def _disabled_provider_attempt(provider: SearchProvider) -> BrokerAttempt:
 
 
 def _earlier_result_attempt(provider: SearchProvider) -> BrokerAttempt:
-    return BrokerAttempt(
-        provider=provider,
-        status="skipped",
-        reason="Skipped because an earlier provider already returned results.",
+    return earlier_result_attempt(provider)
+
+
+def _attempt_from_outcome(
+    provider: SearchProvider,
+    *,
+    status_bucket: ProviderStatusBucket,
+    reason: str | None,
+) -> BrokerAttempt:
+    return provider_attempt_from_outcome(
+        provider,
+        status_bucket=status_bucket,
+        reason=reason,
     )
 
 
 def _core_result(core_response: dict[str, Any], limit: int) -> SearchResponse:
-    core_search = CoreSearchResponse.model_validate(core_response)
-    return SearchResponse(
-        total=core_search.total or len(core_search.entries),
-        offset=0,
-        data=core_search.entries[:limit],
-    )
+    return core_result(core_response, limit)
 
 
 def _semantic_result(s2_response: dict[str, Any], limit: int) -> SearchResponse:
-    semantic_search = SemanticSearchResponse.model_validate(s2_response)
-    return SearchResponse(
-        total=semantic_search.total or len(semantic_search.data),
-        offset=semantic_search.offset,
-        data=[_enrich_ss_paper(paper) for paper in semantic_search.data[:limit]],
-    )
+    return semantic_result(s2_response, limit)
 
 
 def _serpapi_result(serpapi_papers: list[dict[str, Any]], limit: int) -> SearchResponse:
-    validated: list[Paper] = [Paper.model_validate(p) for p in serpapi_papers]
-    return SearchResponse(
-        total=len(validated),
-        offset=0,
-        data=validated[:limit],
-    )
+    return serpapi_result(serpapi_papers, limit)
 
 
 def _arxiv_result(arxiv_response: dict[str, Any], limit: int) -> SearchResponse:
-    arxiv_search = ArxivSearchResponse.model_validate(arxiv_response)
-    return SearchResponse(
-        total=arxiv_search.total_results,
-        offset=0,
-        data=arxiv_search.entries[:limit],
-    )
+    return arxiv_result(arxiv_response, limit)
 
 
 def _merge_search_results(
@@ -493,9 +568,7 @@ def _merge_search_results(
     )
 
 
-def _core_response_to_merged(
-    core_response: dict[str, Any], limit: int
-) -> dict[str, Any]:
+def _core_response_to_merged(core_response: dict[str, Any], limit: int) -> dict[str, Any]:
     """Convert CORE search response to unified shape (total, offset, data)."""
     core_search = CoreSearchResponse.model_validate(core_response)
     return _dump_search_response(
@@ -504,6 +577,81 @@ def _core_response_to_merged(
             offset=0,
             data=core_search.entries[:limit],
         )
+    )
+
+
+def _build_provider_search_request(
+    *,
+    query: str,
+    limit: int,
+    year: str | None,
+    fields: list[str] | None,
+    venue: list[str] | None,
+    publication_date_or_year: str | None,
+    fields_of_study: str | None,
+    publication_types: str | None,
+    open_access_pdf: bool | None,
+    min_citation_count: int | None,
+) -> ProviderSearchRequest:
+    return ProviderSearchRequest(
+        query=query,
+        limit=limit,
+        year=year,
+        fields=fields,
+        venue=venue,
+        publication_date_or_year=publication_date_or_year,
+        fields_of_study=fields_of_study,
+        publication_types=publication_types,
+        open_access_pdf=open_access_pdf,
+        min_citation_count=min_citation_count,
+    )
+
+
+async def _run_provider_search(
+    *,
+    provider: SearchProvider,
+    query: str,
+    limit: int,
+    year: Optional[str],
+    fields: Optional[list[str]],
+    venue: Optional[list[str]],
+    core_client: Any,
+    semantic_client: Any,
+    arxiv_client: Any,
+    serpapi_client: Any = None,
+    publication_date_or_year: Optional[str] = None,
+    fields_of_study: Optional[str] = None,
+    publication_types: Optional[str] = None,
+    open_access_pdf: Optional[bool] = None,
+    min_citation_count: Optional[int] = None,
+    provider_registry: ProviderDiagnosticsRegistry | None = None,
+) -> _BrokerProviderResult:
+    result = await _SEARCH_EXECUTOR.execute_provider(
+        provider=provider,
+        request=_build_provider_search_request(
+            query=query,
+            limit=limit,
+            year=year,
+            fields=fields,
+            venue=venue,
+            publication_date_or_year=publication_date_or_year,
+            fields_of_study=fields_of_study,
+            publication_types=publication_types,
+            open_access_pdf=open_access_pdf,
+            min_citation_count=min_citation_count,
+        ),
+        clients=SearchClientBundle(
+            core_client=core_client,
+            semantic_client=semantic_client,
+            arxiv_client=arxiv_client,
+            serpapi_client=serpapi_client,
+        ),
+        provider_registry=provider_registry,
+    )
+    return _BrokerProviderResult(
+        provider=provider,
+        attempt=result.attempt,
+        response=result.response,
     )
 
 
@@ -529,6 +677,8 @@ async def search_papers_with_fallback(
     min_citation_count: Optional[int] = None,
     preferred_provider: SearchProvider | None = None,
     provider_order: Sequence[SearchProvider] | None = None,
+    provider_registry: ProviderDiagnosticsRegistry | None = None,
+    allow_default_hedging: bool = False,
 ) -> dict[str, Any]:
     """Execute the search broker chain using the configured provider order.
 
@@ -559,169 +709,74 @@ async def search_papers_with_fallback(
         )
         if value is not None
     ]
-    effective_order = _effective_provider_order(
+    trace = await _SEARCH_EXECUTOR.search_with_fallback(
+        query=query,
+        limit=limit,
+        year=year,
+        fields=fields,
+        venue=venue,
         preferred_provider=preferred_provider,
         provider_order=provider_order,
+        default_provider_order=DEFAULT_SEARCH_PROVIDER_ORDER,
+        ss_only_filters=ss_only_filters,
+        enabled={
+            "core": enable_core,
+            "semantic_scholar": enable_semantic_scholar,
+            "arxiv": enable_arxiv,
+            "serpapi_google_scholar": enable_serpapi,
+            "openalex": False,
+        },
+        clients=SearchClientBundle(
+            core_client=core_client,
+            semantic_client=semantic_client,
+            arxiv_client=arxiv_client,
+            serpapi_client=serpapi_client,
+        ),
+        provider_registry=provider_registry,
+        allow_default_hedging=allow_default_hedging,
+        hedge_delay_seconds=BROKER_HEDGE_DELAY_SECONDS,
+        publication_date_or_year=publication_date_or_year,
+        fields_of_study=fields_of_study,
+        publication_types=publication_types,
+        open_access_pdf=open_access_pdf,
+        min_citation_count=min_citation_count,
     )
-
-    result: SearchResponse | None = None
-    provider_used = "none"
-    attempts: list[BrokerAttempt] = []
-    processed_providers = 0
-    for index, provider in enumerate(effective_order):
-        processed_providers = index + 1
-        skip_for_filters = _skip_for_ss_only_filters(provider, ss_only_filters)
-        if skip_for_filters is not None:
-            attempts.append(skip_for_filters)
-            continue
-
-        if provider == "core":
-            if not enable_core:
-                attempts.append(_disabled_provider_attempt(provider))
-                continue
-            try:
-                core_response = await core_client.search(
-                    query=query,
-                    limit=limit,
-                    start=0,
-                    year=year,
-                )
-                result = _core_result(core_response, limit)
-                if result.data:
-                    provider_used = provider
-                    attempts.append(
-                        BrokerAttempt(provider=provider, status="returned_results")
-                    )
-                    logger.info("search_papers: using CORE API results")
-                    break
-                attempts.append(
-                    BrokerAttempt(provider=provider, status="returned_no_results")
-                )
-                result = None
-            except Exception as exc:
-                attempts.append(
-                    BrokerAttempt(provider=provider, status="failed", reason=str(exc))
-                )
-                logger.info(
-                    "search_papers: CORE failed (%s), falling back to next channel",
-                    exc,
-                )
-                result = None
-            continue
-
-        if provider == "semantic_scholar":
-            if not enable_semantic_scholar:
-                attempts.append(_disabled_provider_attempt(provider))
-                continue
-            try:
-                s2_response = await semantic_client.search_papers(
-                    query=query,
-                    limit=limit,
-                    fields=fields,
-                    year=year,
-                    venue=venue,
-                    publication_date_or_year=publication_date_or_year,
-                    fields_of_study=fields_of_study,
-                    publication_types=publication_types,
-                    open_access_pdf=open_access_pdf,
-                    min_citation_count=min_citation_count,
-                )
-                result = _semantic_result(s2_response, limit)
-                if result.data:
-                    provider_used = provider
-                    attempts.append(
-                        BrokerAttempt(provider=provider, status="returned_results")
-                    )
-                    logger.info("search_papers: using Semantic Scholar results")
-                    break
-                attempts.append(
-                    BrokerAttempt(provider=provider, status="returned_no_results")
-                )
-                result = None
-            except Exception as exc:
-                attempts.append(
-                    BrokerAttempt(provider=provider, status="failed", reason=str(exc))
-                )
-                logger.info(
-                    "search_papers: Semantic Scholar failed (%s), "
-                    "falling back to next channel",
-                    exc,
-                )
-                result = None
-            continue
-
-        if provider == "serpapi_google_scholar":
-            if not enable_serpapi:
-                attempts.append(_disabled_provider_attempt(provider))
-                continue
-            if serpapi_client is None:
-                attempts.append(
-                    BrokerAttempt(
-                        provider=provider,
-                        status="skipped",
-                        reason="Enabled but no SerpApi client is configured.",
-                    )
-                )
-                continue
-            try:
-                serpapi_papers = await serpapi_client.search(
-                    query=query,
-                    limit=limit,
-                    year=year,
-                )
-                result = _serpapi_result(serpapi_papers, limit)
-                if result.data:
-                    provider_used = provider
-                    attempts.append(
-                        BrokerAttempt(provider=provider, status="returned_results")
-                    )
-                    logger.info("search_papers: using SerpApi Google Scholar results")
-                    break
-                attempts.append(
-                    BrokerAttempt(provider=provider, status="returned_no_results")
-                )
-                result = None
-            except SerpApiKeyMissingError:
-                raise
-            except Exception as exc:
-                attempts.append(
-                    BrokerAttempt(provider=provider, status="failed", reason=str(exc))
-                )
-                logger.info(
-                    "search_papers: SerpApi failed (%s), falling back to next channel",
-                    exc,
-                )
-                result = None
-            continue
-
-        if not enable_arxiv:
-            attempts.append(_disabled_provider_attempt(provider))
-            continue
-
-        arxiv_response = await arxiv_client.search(
-            query=query,
-            limit=limit,
-            year=year,
-        )
-        result = _arxiv_result(arxiv_response, limit)
-        if result.data:
-            provider_used = provider
-            attempts.append(BrokerAttempt(provider=provider, status="returned_results"))
-            logger.info("search_papers: using arXiv results")
-            break
-        attempts.append(BrokerAttempt(provider=provider, status="returned_no_results"))
-        result = None
+    result = trace.result
+    provider_used = trace.provider_used
+    attempts = list(trace.attempts)
+    effective_order = trace.effective_order
+    processed_providers = trace.processed_providers
 
     if provider_used != "none":
-        attempts.extend(
-            _earlier_result_attempt(provider)
-            for provider in effective_order[processed_providers:]
-        )
         if result is not None:
-            low_relevance = (
-                provider_used == "semantic_scholar"
-                and _has_unmatched_distinctive_tokens(query, result.data)
+            low_relevance = provider_used == "semantic_scholar" and _has_unmatched_distinctive_tokens(
+                query, result.data
             )
+            suppress_low_relevance_title = low_relevance and _is_title_like_query(query)
+            if suppress_low_relevance_title:
+                for attempt in attempts:
+                    if attempt.provider == provider_used and attempt.status == "returned_results":
+                        attempt.status = "returned_no_results"
+                        attempt.reason = (
+                            "returned low-relevance results for a title-like query; broker suppressed "
+                            "them to avoid obvious false positives"
+                        )
+                        break
+                return _dump_search_response(
+                    SearchResponse(
+                        broker_metadata=_metadata(
+                            provider_used="none",
+                            attempts=attempts,
+                            ss_only_filters=ss_only_filters,
+                            venue=venue,
+                            preferred_provider=preferred_provider,
+                            provider_order=provider_order,
+                            suppressed_low_relevance_title=True,
+                        ),
+                    )
+                )
+        attempts.extend(_earlier_result_attempt(provider) for provider in effective_order[processed_providers:])
+        if result is not None:
             result.broker_metadata = _metadata(
                 provider_used=provider_used,
                 attempts=attempts,
@@ -738,7 +793,7 @@ async def search_papers_with_fallback(
                 broker_metadata=_metadata(
                     provider_used="none",
                     attempts=attempts,
-                    ss_only_filters=ss_only_filters,
+                    ss_only_filters=trace.ss_only_filters,
                     venue=venue,
                     preferred_provider=preferred_provider,
                     provider_order=provider_order,

@@ -1,10 +1,11 @@
 ---
 description: |
   Exercise the primary Scholar Search MCP golden paths with an agent so the
-  repo gets a high-level regression check of discovery, pagination, author
-  pivot, and optional citation-export workflows. Evaluates agent UX quality:
-  intuitiveness, unnecessary round trips, missing features, and friction
-  points that make common workflows harder than they should be.
+  repo gets a high-level regression check of discovery, smart result-set
+  research, pagination, author pivot, and optional citation-export workflows.
+  Evaluates agent UX quality: intuitiveness, unnecessary round trips, missing
+  features, and friction points that make common workflows harder than they
+  should be.
   This workflow is manual-only by design because it can consume repository
   secrets in a public repo. Manual runs can switch between smoke,
   comprehensive, and feature-probe UX review modes with an optional focus
@@ -58,8 +59,14 @@ mcp-servers:
       GITHUB_WORKSPACE: "${{ github.workspace }}"
       CORE_API_KEY: "${{ secrets.CORE_API_KEY }}"
       SEMANTIC_SCHOLAR_API_KEY: "${{ secrets.SEMANTIC_SCHOLAR_API_KEY }}"
+      OPENAI_API_KEY: "${{ secrets.OPENAI_API_KEY }}"
+      SCHOLAR_SEARCH_ENABLE_AGENTIC: "true"
     allowed:
       - search_papers
+      - search_papers_smart
+      - ask_result_set
+      - map_research_landscape
+      - expand_research_graph
       - search_papers_bulk
       - search_papers_core
       - search_papers_semantic_scholar
@@ -67,6 +74,7 @@ mcp-servers:
       - search_papers_arxiv
       - search_papers_openalex
       - search_papers_openalex_bulk
+      - resolve_citation
       - search_papers_match
       - get_paper_details
       - get_paper_details_openalex
@@ -133,13 +141,15 @@ as functional pass/fail results.
 ## Goals
 
 1. Confirm the quick-discovery path returns structured, useful metadata.
-2. Confirm the exhaustive-retrieval path handles cursor pagination safely.
-3. Confirm known-item lookup and citation chasing still work from the same MCP
+2. Confirm the smart-discovery path creates a reusable `searchSessionId` and
+   supports grounded follow-up.
+3. Confirm the exhaustive-retrieval path handles cursor pagination safely.
+4. Confirm citation repair, known-item lookup, and citation chasing still work from the same MCP
    surface agents use in production.
-4. Confirm the author-pivot path works from the same MCP surface agents use in
+5. Confirm the author-pivot path works from the same MCP surface agents use in
    production.
-5. Confirm optional citation export still works when SerpApi is available.
-6. **Critically evaluate agent UX**: identify every friction point, unnecessary
+6. Confirm optional citation export still works when SerpApi is available.
+7. **Critically evaluate agent UX**: identify every friction point, unnecessary
    round trip, missing feature, confusing field name, or dead-end response that
    degrades the experience. This goal is weighted equally with the functional checks.
 
@@ -176,7 +186,29 @@ as functional pass/fail results.
      interpretation? Did the response tell you clearly what to do next without
      reading the docs?
 
-3. **Known-item lookup** (all modes)
+3. **Smart discovery and grounded follow-up** (all modes)
+   - Call `search_papers_smart(query="graph neural networks", limit=5)`.
+   - Record `searchSessionId`, `strategyMetadata.queryVariantsTried`,
+     `acceptedExpansions`, `rejectedExpansions`, and the top `whyMatched`
+     explanations.
+   - Call `ask_result_set(searchSessionId=..., question="What does this result set say about graph neural network benchmarks?")`.
+   - Confirm the smart response exposes `resourceUris`, `agentHints`, and a
+     reusable `searchSessionId`.
+   - **UX check**: Did the smart result set reduce round trips compared with the
+     raw flow, or did it hide too much reasoning behind opaque metadata?
+
+4. **Citation repair and known-item lookup** (all modes)
+   - Call `resolve_citation(citation="Rockstrom et al planetary boundaries 2009 Nature 461 472")`.
+   - Record `resolutionConfidence`, `resolutionStrategy`, `matchedFields`,
+     `conflictingFields`, and whether the response surfaced plausible alternatives.
+   - Then call `search_papers_match(query="Attention Is All You Need")`.
+   - Use the returned identifier with `get_paper_details`.
+   - Confirm the detailed record includes a stable identifier, title, and author
+     metadata.
+   - **UX check**: Did citation repair reduce the need to guess between title match,
+     snippets, and broad search? If not, note the friction explicitly.
+
+5. **Known-item lookup detail** (all modes)
    - Call `search_papers_match(query="Attention Is All You Need")`.
    - Use the returned identifier with `get_paper_details`.
    - Confirm the detailed record includes a stable identifier, title, and author
@@ -184,7 +216,7 @@ as functional pass/fail results.
    - **UX check**: How many round trips did this require? Could the match result
      itself carry enough detail to skip `get_paper_details` for most tasks?
 
-4. **Exhaustive retrieval / pagination** (all modes)
+6. **Exhaustive retrieval / pagination** (all modes)
    - Call `search_papers_bulk(query="graph neural networks", limit=5)`.
    - If `pagination.nextCursor` is present, call `search_papers_bulk` again with
      the exact `cursor` value that was returned.
@@ -195,7 +227,7 @@ as functional pass/fail results.
      or does it require reading docs to know that `cursor` must be passed back
      unchanged?
 
-5. **Provider-specific spot checks** (smoke + comprehensive)
+7. **Provider-specific spot checks** (smoke + comprehensive)
    - Run `search_papers_core(query="transformer architecture", limit=3)`.
    - Run `search_papers_semantic_scholar(query="transformer architecture", limit=3)`.
    - Run `search_papers_arxiv(query="transformer architecture", limit=3)`.
@@ -205,7 +237,7 @@ as functional pass/fail results.
    - **UX check**: Are the per-provider tools obviously named and scoped? Does
      an agent know when to use a provider-specific tool versus `search_papers`?
 
-6. **Author pivot** (all modes)
+8. **Author pivot** (all modes)
    - Run `search_authors(query="Yoshua Bengio", limit=3)`.
    - Use the top author identifier with `get_author_info`.
    - Call `get_author_papers(author_id=..., publicationDateOrYear="2022-", limit=5)`.
@@ -215,7 +247,7 @@ as functional pass/fail results.
      they published recently?" task require? What fields are missing that would
      make author-to-paper pivots easier?
 
-7. **Optional SerpApi citation export** (smoke + comprehensive)
+9. **Optional SerpApi citation export** (smoke + comprehensive)
    - If the SerpApi tools are configured, run
      `search_papers_serpapi(query="Attention Is All You Need", limit=3)`.
    - If a result exposes `scholarResultId`, call
@@ -227,15 +259,20 @@ as functional pass/fail results.
      is the right identifier to pass to `get_paper_citation_formats`? Or does
      it require reading docs?
 
-8. **No-results behavior** (all modes)
+10. **No-results behavior** (all modes)
    - Call `search_papers(query="asdkfjhasdkjfh research paper nonsense", limit=3)`.
    - Verify the server responds cleanly with an empty/low-result payload rather
      than malformed metadata or an unhelpful failure.
    - **UX check**: Does the empty-result payload suggest a clear recovery path
      (e.g., broaden query, try different provider), or does it just say "no results"?
 
-9. **Comprehensive-only follow-up probes**
+11. **Comprehensive-only follow-up probes**
    - If the effective mode is `comprehensive`, also:
+     - Call `map_research_landscape(searchSessionId=..., maxThemes=4)` using the
+       smart search session and confirm the response surfaces themes, gaps, and
+       suggested next searches clearly.
+     - Call `expand_research_graph(seedSearchSessionId=..., direction="citations")`
+       and confirm the graph frontier is actionable rather than decorative.
      - Call `get_paper_references` for the known paper and confirm backward
        references are structured clearly.
      - Call `get_paper_authors` for the known paper and confirm the paper-to-
@@ -247,19 +284,23 @@ as functional pass/fail results.
        and then either `get_paper_details_openalex` or an OpenAlex citation /
        author tool on one returned item so OpenAlex-specific UX gets coverage.
 
-10. **Feature-probe follow-up**
+12. **Feature-probe follow-up**
     - If the effective mode is `feature_probe`, use the supplied focus prompt to
       choose the most relevant extra tool path. Examples:
+      - feature about concept discovery or grounded follow-up → use
+        `search_papers_smart`, `ask_result_set`, `map_research_landscape`, and
+        `expand_research_graph`
       - feature about OpenAlex DOI or author flows → use the explicit
         `*_openalex` tools
-      - feature about known-item recovery → use `search_papers_match`,
-        `get_paper_details`, and `search_snippets`
+      - feature about known-item recovery or citation repair → use
+        `resolve_citation`, `search_papers_match`, `get_paper_details`, and
+        `search_snippets`
       - feature about citations or references → use `get_paper_citations` and
         `get_paper_references`
     - Keep the baseline notes, but spend most of the detailed analysis on the
       requested feature or UX hypothesis.
 
-11. **UX friction summary** (all modes)
+13. **UX friction summary** (all modes)
     - Review your UX friction log and produce a structured summary:
       - **Unnecessary round trips**: list each multi-step workflow that required
         more tool calls than expected. State the minimum you'd expect and the
@@ -274,7 +315,7 @@ as functional pass/fail results.
       - **Positive signals**: briefly note what felt especially smooth or
         well-designed so it is not accidentally degraded in future changes.
 
-12. **Assessment and issue creation**
+13. **Assessment and issue creation**
     - Summarize the effective mode, any supplied focus prompt, the exact tool
       calls you used, whether cursor handling felt safe and clear, whether author
       workflows felt first-class, and whether any provider-specific gaps stood

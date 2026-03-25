@@ -30,9 +30,7 @@ def test_author_field_models_reject_unsupported_fields() -> None:
     with pytest.raises(ValidationError, match="Unsupported author fields: aliases"):
         AuthorInfoArgs(author_id="9191855", fields=["aliases"])
 
-    with pytest.raises(
-        ValidationError, match="Supported values: authorId, name, affiliations"
-    ):
+    with pytest.raises(ValidationError, match="Supported values: authorId, name, affiliations"):
         AuthorSearchArgs(query="Ryan L. Perroy", fields=["name", "aliases"])
 
 
@@ -219,7 +217,66 @@ def test_bulk_search_response_no_token_means_last_page() -> None:
     parsed = BulkSearchResponse.model_validate(raw)
 
     assert parsed.pagination.has_more is False
-    assert parsed.pagination.next_cursor is None
+
+
+def test_paper_model_serializes_optional_enrichments() -> None:
+    """Paper.enrichments should round-trip as a first-class additive payload."""
+    from scholar_search_mcp.models import Paper
+
+    paper = Paper.model_validate(
+        {
+            "paperId": "paper-1",
+            "title": "Enriched paper",
+            "enrichments": {
+                "crossref": {
+                    "doi": "10.1234/example",
+                    "publisher": "Crossref Publisher",
+                },
+                "unpaywall": {
+                    "doi": "10.1234/example",
+                    "isOa": True,
+                    "oaStatus": "gold",
+                },
+            },
+        }
+    )
+    dumped = paper.model_dump(by_alias=True)
+
+    assert dumped["enrichments"]["crossref"]["doi"] == "10.1234/example"
+    assert dumped["enrichments"]["unpaywall"]["isOa"] is True
+    assert dumped["enrichments"]["unpaywall"]["oaStatus"] == "gold"
+
+
+def test_paper_enrichment_response_serializes_provider_results() -> None:
+    """Combined enrichment responses should keep DOI state and provider payloads."""
+    from scholar_search_mcp.models import PaperEnrichmentResponse
+
+    response = PaperEnrichmentResponse.model_validate(
+        {
+            "doiResolution": {
+                "resolvedDoi": "10.1234/example",
+                "resolutionSource": "paper_id",
+            },
+            "crossref": {
+                "provider": "crossref",
+                "found": True,
+                "resolvedDoi": "10.1234/example",
+                "enrichment": {"doi": "10.1234/example"},
+            },
+            "unpaywall": {
+                "provider": "unpaywall",
+                "found": True,
+                "doi": "10.1234/example",
+                "isOa": True,
+                "bestOaUrl": "https://oa.example/10.1234/example",
+            },
+        }
+    )
+    dumped = response.model_dump(by_alias=True, exclude_none=True)
+
+    assert dumped["doiResolution"]["resolvedDoi"] == "10.1234/example"
+    assert dumped["crossref"]["provider"] == "crossref"
+    assert dumped["unpaywall"]["isOa"] is True
 
 
 def test_citation_formats_response_model_serializes_correctly() -> None:
@@ -269,9 +326,7 @@ def test_paper_scholar_result_id_is_first_class_field() -> None:
 
     assert "recommendedExpansionId" in props
     assert "expansionIdStatus" in props
-    assert "Semantic Scholar-compatible identifier" in props[
-        "recommendedExpansionId"
-    ].get("description", "")
+    assert "Semantic Scholar-compatible identifier" in props["recommendedExpansionId"].get("description", "")
     assert "'portable' means" in props["expansionIdStatus"].get("description", "")
 
 

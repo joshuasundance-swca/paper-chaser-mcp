@@ -115,6 +115,18 @@ class RecordingOpenAlexClient:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []
 
+    async def paper_autocomplete(self, **kwargs) -> dict:
+        self.calls.append(("paper_autocomplete", kwargs))
+        return {
+            "matches": [
+                {
+                    "id": "W-auto-1",
+                    "displayName": "OpenAlex autocomplete",
+                    "source": "openalex",
+                }
+            ]
+        }
+
     async def search(self, **kwargs) -> dict:
         self.calls.append(("search", kwargs))
         return {
@@ -129,6 +141,33 @@ class RecordingOpenAlexClient:
             "total": 1,
             "data": [{"paperId": "W1", "source": "openalex"}],
             "pagination": {"hasMore": True, "nextCursor": "oa-next"},
+        }
+
+    async def search_entities(self, **kwargs) -> dict:
+        self.calls.append(("search_entities", kwargs))
+        return {
+            "entityType": kwargs["entity_type"],
+            "total": 1,
+            "offset": 0,
+            "data": [
+                {
+                    "entityId": "https://openalex.org/S1",
+                    "displayName": "OpenAlex Source",
+                    "source": "openalex",
+                }
+            ],
+            "pagination": {"hasMore": True, "nextCursor": "oa-entities"},
+        }
+
+    async def search_works_by_entity(self, **kwargs) -> dict:
+        self.calls.append(("search_works_by_entity", kwargs))
+        return {
+            "entityType": kwargs["entity_type"],
+            "entityId": kwargs["entity_id"],
+            "total": 1,
+            "offset": 0,
+            "data": [{"paperId": "W-entity-1", "source": "openalex"}],
+            "pagination": {"hasMore": True, "nextCursor": "oa-entity-papers"},
         }
 
     async def get_paper_details(self, **kwargs) -> dict:
@@ -173,6 +212,162 @@ class RecordingOpenAlexClient:
             "offset": 0,
             "data": [{"paperId": "W4", "source": "openalex"}],
             "pagination": {"hasMore": True, "nextCursor": "oa-author-papers"},
+        }
+
+
+class RecordingCrossrefClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    async def get_work(self, doi: str) -> dict:
+        self.calls.append(("get_work", {"doi": doi}))
+        return {
+            "doi": doi,
+            "title": "Crossref Paper",
+            "authors": [{"name": "Crossref Author"}],
+            "venue": "Journal of Tests",
+            "publisher": "Crossref Publisher",
+            "publicationType": "journal-article",
+            "publicationDate": "2024-05-01",
+            "year": 2024,
+            "url": f"https://doi.org/{doi}",
+            "citationCount": 42,
+        }
+
+    async def search_work(self, query: str) -> dict:
+        self.calls.append(("search_work", {"query": query}))
+        return {
+            "doi": "10.1234/crossref-query",
+            "title": "Crossref Query Paper",
+            "authors": [{"name": "Crossref Query Author"}],
+            "venue": "Journal of Query Tests",
+            "publisher": "Crossref Publisher",
+            "publicationType": "journal-article",
+            "publicationDate": "2023-02-15",
+            "year": 2023,
+            "url": "https://doi.org/10.1234/crossref-query",
+            "citationCount": 7,
+        }
+
+
+class RecordingUnpaywallClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    async def get_open_access(self, doi: str) -> dict:
+        self.calls.append(("get_open_access", {"doi": doi}))
+        return {
+            "doi": doi,
+            "isOa": True,
+            "oaStatus": "gold",
+            "bestOaUrl": f"https://oa.example/{doi}",
+            "pdfUrl": f"https://oa.example/{doi}.pdf",
+            "license": "cc-by",
+            "journalIsInDoaj": True,
+        }
+
+
+class RecordingEcosClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    async def search_species(self, **kwargs) -> dict:
+        self.calls.append(("search_species", kwargs))
+        return {
+            "query": kwargs["query"],
+            "matchMode": kwargs.get("match_mode", "auto"),
+            "total": 1,
+            "data": [
+                {
+                    "speciesId": "8104",
+                    "commonName": "California least tern",
+                    "scientificName": "Sternula antillarum browni",
+                    "statusCategory": "Animal",
+                    "listingStatus": "Endangered",
+                    "group": "Birds",
+                    "leadAgency": "FWS",
+                    "profileUrl": "https://ecos.fws.gov/ecp/species/8104",
+                }
+            ],
+        }
+
+    async def get_species_profile(self, **kwargs) -> dict:
+        self.calls.append(("get_species_profile", kwargs))
+        return {
+            "species": {
+                "speciesId": "8104",
+                "commonName": "California least tern",
+                "scientificName": "Sternula antillarum browni",
+                "group": "Birds",
+                "profileUrl": "https://ecos.fws.gov/ecp/species/8104",
+            },
+            "speciesEntities": [
+                {
+                    "entityId": 96,
+                    "agency": "FWS",
+                    "status": "Endangered",
+                    "statusCategory": "Animal",
+                }
+            ],
+            "lifeHistory": "Ground-nesting seabird.",
+            "range": {"historicalRangeStates": ["CA"]},
+            "documents": {
+                "recoveryPlans": [
+                    {
+                        "documentKind": "recovery_plan",
+                        "title": "Revised California Least Tern Recovery Plan",
+                        "url": ("https://ecos.fws.gov/docs/recovery_plan/850927_w signature.pdf"),
+                        "documentDate": "09/27/1985",
+                    }
+                ],
+                "fiveYearReviews": [
+                    {
+                        "documentKind": "five_year_review",
+                        "title": "California Least Tern 5YR 2025",
+                        "url": "https://ecosphere-documents-production-public.s3.amazonaws.com/sams/public_docs/species_nonpublish/30669.pdf",
+                        "documentDate": "08/28/2025",
+                    }
+                ],
+                "biologicalOpinions": [],
+                "federalRegisterDocuments": [],
+                "otherRecoveryDocs": [],
+            },
+            "conservationPlanLinks": [],
+        }
+
+    async def list_species_documents(self, **kwargs) -> dict:
+        self.calls.append(("list_species_documents", kwargs))
+        return {
+            "speciesId": "8104",
+            "total": 2,
+            "documentKindsApplied": kwargs.get("document_kinds") or [],
+            "data": [
+                {
+                    "documentKind": "five_year_review",
+                    "title": "California Least Tern 5YR 2025",
+                    "url": "https://ecosphere-documents-production-public.s3.amazonaws.com/sams/public_docs/species_nonpublish/30669.pdf",
+                    "documentDate": "08/28/2025",
+                },
+                {
+                    "documentKind": "recovery_plan",
+                    "title": "Revised California Least Tern Recovery Plan",
+                    "url": ("https://ecos.fws.gov/docs/recovery_plan/850927_w signature.pdf"),
+                    "documentDate": "09/27/1985",
+                },
+            ],
+        }
+
+    async def get_document_text(self, **kwargs) -> dict:
+        self.calls.append(("get_document_text", kwargs))
+        return {
+            "document": {
+                "title": "California Least Tern 5YR 2025",
+                "url": kwargs["url"],
+            },
+            "markdown": ("# Five-Year Review\n\n## Recommendation\n\nRetain endangered status."),
+            "contentType": "application/pdf",
+            "extractionStatus": "ok",
+            "warnings": [],
         }
 
 

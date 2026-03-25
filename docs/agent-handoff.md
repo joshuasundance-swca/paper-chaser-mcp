@@ -5,9 +5,9 @@ This document is the current working handoff for the fork. It is intended to giv
 ## Current Status
 
 - Local development baseline is configured through `pyproject.toml` and `.pre-commit-config.yaml`.
-- The default free broker path is `CORE -> Semantic Scholar -> arXiv` for
-  `search_papers`; SerpApi can be inserted between Semantic Scholar and arXiv
-  when enabled, but it is disabled by default.
+- The default free broker path is `Semantic Scholar -> arXiv -> CORE` for
+  `search_papers`; SerpApi remains an optional paid recovery hop at the end of
+  the broker order when enabled, but it is disabled by default.
 - XML parsing uses `defusedxml`.
 - README configuration examples are valid JSON.
 - GitHub Actions now validates pushes and pull requests.
@@ -35,11 +35,28 @@ This document is the current working handoff for the fork. It is intended to giv
   smoke-test target from `SMOKE_TEST_HEALTH_URL`, `containerAppHealthUrl`, or
   `containerAppFqdn`.
 - `scholar_search_mcp/server.py` is now a compatibility facade over smaller modules.
+- The repo now exposes a compatibility-first smart layer on top of the stable
+  raw MCP surface: `search_papers_smart`, `ask_result_set`,
+  `map_research_landscape`, and `expand_research_graph`.
+- Primary read tools now surface additive agent UX metadata:
+  `agentHints`, `clarification`, `resourceUris`, and reusable
+  `searchSessionId` handles where appropriate.
+- Published MCP tool schemas are now sanitized for flatter, more
+  Microsoft-friendly compatibility while internal Pydantic validation remains
+  strict.
+- The server now exposes additive read-only resources for papers, authors,
+  saved searches, and citation/reference trails, plus helper prompts for
+  smart-search planning and query refinement.
 - Agent-facing workflow guidance now prioritizes quick discovery, exhaustive retrieval,
   citation chasing, known-item lookup, and author pivots.
 - OpenAlex now has an explicit provider-specific MCP surface for OpenAlex-native
   search, cursor pagination, DOI/OpenAlex-ID lookup, citation/reference
   traversal, and author pivots without changing the default broker path.
+- The repo now also exposes a regulation-oriented raw-tool slice: keyless
+  `search_federal_register` discovery, GovInfo-backed
+  `get_federal_register_document`, GovInfo-only `get_cfr_text`, and ECOS
+  `frCitation` enrichment for GovInfo-linked Federal Register items so species
+  dossiers can hand off directly into regulatory primary sources.
 - `docs/golden-paths.md` records the primary personas, golden paths, concrete example
   flows, and success signals for future agent work.
 - `.github/copilot-instructions.md` now gives GitHub-native guidance for Copilot
@@ -66,6 +83,35 @@ This document is the current working handoff for the fork. It is intended to giv
   on `search_papers_match` fall back to fuzzy title search (unquoted, then
   quoted-phrase variants) and then to a structured no-match payload.  The
   fallback search window was increased to 100 results (the API maximum).
+- Known-item recovery is now stricter and safer: `resolve_citation` abstains on
+  weak report-style or non-paper-like references instead of forcing a bad paper
+  match, and `search_papers_match` can now recover exact-title misses through
+  strict OpenAlex or Crossref confirmation before falling back to no-match.
+- Regulatory known-item recovery is now explicit too: `resolve_citation`
+  recognizes Federal Register and CFR-style references as non-paper primary
+  sources, abstains early, and steers agents toward `search_federal_register`,
+  `get_federal_register_document`, or `get_cfr_text` instead of paper search.
+- Federal Register retrieval is more resilient for agent workflows: historical
+  FR citations now parse out of longer citation strings, GovInfo granule
+  failures fall back to FederalRegister.gov HTML when metadata is available,
+  and `search_federal_register` now tolerates document-number and CFR-filter
+  combinations that previously surfaced brittle 400 errors.
+- Smart known-item routing no longer ends in a dead-end structured error when
+  citation repair abstains. The smart workflow now falls back to title/OpenAlex
+  recovery and then to a broader candidate set with explicit warnings so agents
+  can keep moving while still treating the result as unconfirmed.
+- Semantic Scholar citation/reference list normalization now treats top-level
+  `data: null` payloads as empty lists, preventing valid graph-expansion seeds
+  from failing when upstream reference data is missing instead of merely empty.
+- Brokered `search_papers` now suppresses obviously low-relevance Semantic
+  Scholar hits for title-like known-item queries instead of returning garbage
+  false positives.
+- Smart follow-up quality is tighter: `ask_result_set` comparison mode uses a
+  grounded structured fallback, `map_research_landscape` sanitizes weak theme
+  labels, and `expand_research_graph` keeps saved-session intent in frontier
+  scoring while filtering off-topic next-hop candidates.
+- `get_serpapi_account_status` now returns only a sanitized public quota summary
+  rather than the raw SerpApi account payload.
 - `search_snippets` now degrades provider 4xx/5xx failures to an empty payload
   with retry guidance instead of surfacing the raw provider error.
 - `.github/workflows/test-scholar-search.md` now defines a GitHub Agentic
@@ -110,16 +156,43 @@ This document is the current working handoff for the fork. It is intended to giv
   produces a structured "UX friction summary" before issue creation. The
   model can be configured via the `GH_AW_MODEL_AGENT_COPILOT` Actions
   variable (e.g., set to `gpt-5.4` to use GPT-5.4).
+- Microsoft-oriented packaging assets are now checked in as
+  `mcp-tools.core.json`, `mcp-tools.full.json`, and
+  `microsoft-plugin.sample.json` so one universal server can still ship a
+  conservative or full Streamable HTTP packaging profile.
+- The README tool table now includes all three regulatory tools
+  (`search_federal_register`, `get_federal_register_document`, `get_cfr_text`)
+  and a dedicated Federal Register / GovInfo configuration section documents
+  `SCHOLAR_SEARCH_ENABLE_FEDERAL_REGISTER`, `SCHOLAR_SEARCH_ENABLE_GOVINFO_CFR`,
+  `GOVINFO_API_KEY`, `FEDERAL_REGISTER_TIMEOUT_SECONDS`,
+  `GOVINFO_TIMEOUT_SECONDS`, `GOVINFO_DOCUMENT_TIMEOUT_SECONDS`, and
+  `GOVINFO_MAX_DOCUMENT_SIZE_MB`.
+- OpenAlex institution/source/topic pivots are now first-class tools:
+  `search_entities_openalex` and `search_papers_openalex_by_entity` expose
+  explicit entity-scoped work retrieval with OpenAlex cursor pagination.
+- `pyproject.toml` project description and keywords are updated to reflect the
+  full current provider surface (Semantic Scholar, CORE, arXiv, OpenAlex,
+  SerpApi, Crossref, Unpaywall, ECOS, Federal Register, GovInfo).
 
 ## Module Map
 
 - `scholar_search_mcp/__main__.py` is the `python -m` entrypoint.
 - `scholar_search_mcp/server.py` is the public MCP facade and compatibility layer used by tests and package entrypoints.
+- `scholar_search_mcp/compat.py` owns schema sanitization plus additive
+  `agentHints` / `clarification` / `resourceUris` / `searchSessionId`
+  enrichment for raw-tool responses.
 - `scholar_search_mcp/dispatch.py` routes MCP tool calls through a dispatch map.
 - `scholar_search_mcp/search.py` owns the `search_papers` fallback chain and merged response helpers.
 - `scholar_search_mcp/tools.py` defines MCP tool schemas.
 - `scholar_search_mcp/runtime.py` owns stdio startup.
 - `scholar_search_mcp/settings.py` contains environment parsing helpers.
+- `scholar_search_mcp/agentic/` contains the additive smart-tool runtime:
+  config, models, provider adapters, planner, retrieval, ranking, workspace,
+  and LangGraph scaffolding.
+- `scholar_search_mcp/clients/federal_register/` contains the keyless
+  FederalRegister.gov discovery client.
+- `scholar_search_mcp/clients/govinfo/` contains the GovInfo retrieval client
+  for authoritative Federal Register and CFR text.
 - `scholar_search_mcp/deployment.py` wraps the HTTP app with `/healthz`,
   optional backend-token auth, and optional Origin allowlisting for hosted
   deployments.
@@ -128,7 +201,9 @@ This document is the current working handoff for the fork. It is intended to giv
   Compose and Azure-hosted deployments.
 - `scholar_search_mcp/deployment_utils.py` resolves smoke-test endpoints from
   Azure deployment outputs or an explicit environment override.
-- `scholar_search_mcp/clients/` contains provider clients for CORE, Semantic Scholar, OpenAlex, and arXiv.
+- `scholar_search_mcp/clients/` contains provider clients for Semantic Scholar,
+  arXiv, CORE, OpenAlex, SerpApi, Crossref, Unpaywall, ECOS, Federal Register,
+  and GovInfo.
 - `scholar_search_mcp/models/common.py` contains shared Pydantic models including `Paper` (with `scholarResultId`).
 - `scholar_search_mcp/parsing.py`, `scholar_search_mcp/constants.py`, and `scholar_search_mcp/transport.py` hold shared helper code and compatibility imports.
 - `scripts/validate_deployment.py` validates the Azure/Docker deployment path.
@@ -140,7 +215,7 @@ This document is the current working handoff for the fork. It is intended to giv
 From the project root, install the package with development extras and then run the validation commands inside the repository virtual environment:
 
 ```bash
-pip install -e .[dev]
+pip install -e ".[all]"
 ```
 
 Then run:
@@ -187,6 +262,25 @@ gh aw compile test-scholar-search --dir .github/workflows
 - `Paper.scholarResultId` is now a first-class model field (not just an extra). This
   makes it visible in the JSON schema so agents can discover it without reading long
   tool descriptions. The field is always `None` for non-SerpApi results.
+- The additive smart-tool layer now exists under `scholar_search_mcp/agentic/`.
+  It keeps the raw MCP tools stable while adding concept-level discovery,
+  grounded follow-up QA, landscape mapping, and compact graph expansion
+  through reusable `searchSessionId` workspaces.
+- FastMCP `Context` is now injected into tool handlers without appearing in the
+  public MCP schema. That enables progress updates, optional sampling, and
+  optional bounded elicitation without changing tool arguments.
+- Raw-tool responses now carry additive `agentHints`, `clarification`,
+  `resourceUris`, and `searchSessionId` metadata so low-context agents can
+  continue the workflow more easily.
+- A first-class `resolve_citation` workflow now sits alongside
+  `search_papers_match`, `search_snippets`, and `get_paper_details` so agents
+  can repair incomplete references without guessing which raw tool to try next.
+- The server now exposes `paper://{paper_id}`, `author://{author_id}`,
+  `search://{searchSessionId}`, and
+  `trail://paper/{paper_id}?direction=citations|references` resources.
+- Checked-in Microsoft packaging assets now document a conservative raw-tool
+  subset and a fuller smart-tool package over Streamable HTTP without forking
+  the runtime.
 - `BrokerMetadata.nextStepHint` was added as a new field. The `_metadata()` helper
   in `search.py` now populates it with provider-specific guidance:
   - For `serpapi_google_scholar` results: hints that `paper.scholarResultId` can be
@@ -194,7 +288,8 @@ gh aw compile test-scholar-search --dir .github/workflows
   - For "none" results: hints to broaden the query or try `search_papers_bulk`.
   - For all other results: hints to use `search_papers_bulk` or citation expansion.
 - `SERVER_INSTRUCTIONS` was restructured as a numbered decision tree for faster
-  agent scanning: QUICK DISCOVERY → EXHAUSTIVE → KNOWN ITEM → CITATION → AUTHOR → SNIPPET.
+  agent scanning: QUICK DISCOVERY → EXHAUSTIVE → CITATION REPAIR → KNOWN ITEM
+  → CITATION → AUTHOR → SNIPPET.
 - `AGENT_WORKFLOW_GUIDE` was rewritten with a quick-decision-table format under
   `guide://scholar-search/agent-workflows`.
 - `plan_scholar_search` prompt was updated to reference `brokerMetadata.nextStepHint`.
@@ -202,8 +297,20 @@ gh aw compile test-scholar-search --dir .github/workflows
   for each golden path.
 - `search_papers_match` now normalizes wrapped Semantic Scholar match responses
   to one clean paper-shaped payload.
-- CORE search now follows redirects so the default broker path does not record
-  an avoidable failed first provider attempt for predictable 301s.
+- `search_papers_match` can now recover exact-title misses via strict OpenAlex
+  and Crossref confirmation before falling back to structured no-match.
+- `resolve_citation` now prefers abstention plus alternatives for weak
+  report-style or non-paper-looking references instead of forcing a canonical
+  paper match.
+- `search_papers` now suppresses low-relevance title-like false positives and
+  routes agents toward the dedicated known-item tools instead.
+- `get_serpapi_account_status` now returns a strict sanitized quota summary with
+  no raw upstream credential or account-identifier passthrough.
+- `ask_result_set(answerMode="comparison")` now uses a grounded structured
+  fallback, `map_research_landscape` sanitizes weak labels before emission, and
+  `expand_research_graph` keeps saved-session intent in graph-frontier scoring.
+- CORE search now follows redirects so brokered fallbacks into CORE do not
+  record avoidable failed provider attempts for predictable 301s.
 - `brokerMetadata.nextStepHint` now distinguishes between the closest
   continuation path and a Semantic Scholar/provider pivot.
 - Provider-specific search tool schemas now expose only the parameters their
@@ -212,7 +319,7 @@ gh aw compile test-scholar-search --dir .github/workflows
   onboarding resources, prompt text, and `.github/copilot-instructions.md`.
 - CORE search now retries short-lived 5xx responses, which was required after
   live broker smoke testing exposed transient backend shard failures on the
-  first hop.
+  CORE fallback hop.
 - A hosted deployment path now exists for Azure: `scholar_search_mcp.deployment`
   adds `/healthz`, optional backend-token auth, and optional Origin allowlists
   in front of the FastMCP HTTP app.
@@ -230,6 +337,8 @@ gh aw compile test-scholar-search --dir .github/workflows
   passed in this environment after installing `.[dev]`.
 - The current pass keeps runtime behavior stable and focuses on schema discoverability,
   structured hints, and tighter agent guidance.
+- The current pass also adds the compatibility-first smart workflow surface,
+  workspace registry, schema sanitization, and resource-oriented follow-up UX.
 - The highest-impact UX issues from the last live agent pass were addressed with
   targeted runtime fixes and regression coverage.
 - The latest pass tightens expansion-ID guidance so brokered CORE `canonicalId`
@@ -238,6 +347,10 @@ gh aw compile test-scholar-search --dir .github/workflows
 - Current follow-up work is now mostly product-shaping work around provider
   preferences and whether retry-recovered provider behavior should be surfaced
   to agents.
+- Optional elicitation now supports one bounded clarification round on
+  `search_papers`, `search_papers_match`, and `search_authors` when the client
+  advertises MCP elicitation support. Declined or cancelled elicitation falls
+  back to the normal `clarification` response field.
 - The latest pass also hardens author lookup UX: unsupported author fields now
   fail locally with a clearer validation error, exact-name punctuation is
   normalized before `/author/search`, and paper-to-author expansion errors now
@@ -249,6 +362,22 @@ gh aw compile test-scholar-search --dir .github/workflows
 - A live broker smoke test was completed against the configured providers in
   this workspace. It confirmed the new hint wording live and exposed a
   transient CORE 500, which is now mitigated by short retries in the client.
+- Provider enablement is now fully parameterized in the Azure Bicep scaffold.
+  All ten providers (`enableSemanticScholar`, `enableArxiv`, `enableCore`,
+  `enableOpenAlex`, `enableSerpApi`, `enableCrossref`, `enableUnpaywall`,
+  `enableEcos`, `enableFederalRegister`, `enableGovinfoCfr`) are controlled by named Bicep parameters in `infra/main.bicep`
+  and threaded through to the Container App. The previously-hardcoded
+  `SCHOLAR_SEARCH_ENABLE_CORE=true` mismatch is fixed: CORE now defaults to
+  `false` in Bicep, `.bicepparam` files, and both Compose files, matching the
+  application default in `settings.py`. The `core-api-key` Key Vault secret is
+  also now conditional — it is only mounted when `enableCore=true`, so
+  environments without a CORE API key no longer require an orphaned Key Vault
+  entry. Email/URL overrides for Crossref, Unpaywall, and ECOS (`crossrefMailto`,
+  `unpayWallEmail`, `ecosBaseUrl`, `ecosVerifyTls`) are exposed as plain Bicep
+  params and injected as env vars only when non-empty (Crossref/Unpaywall/ECOS
+  do not require Key Vault secrets). A new provider enablement matrix table and a
+  complete Bicep parameters reference table are now in
+  `docs/azure-deployment.md`.
 
 - The repo now carries a checked-in agentic workflow source/lock pair for
   high-level MCP smoke testing, covering quick discovery, known-item lookup,
@@ -379,43 +508,42 @@ gh aw compile test-scholar-search --dir .github/workflows
 4. Consider moving from per-request `httpx.AsyncClient` creation to shared clients if connection reuse becomes important.
 5. Decide whether the compatibility facade in `scholar_search_mcp/server.py` should remain broad or be narrowed with an explicit supported surface.
 6. Revisit `.github/copilot-instructions.md` and `docs/golden-paths.md` whenever future agent-facing search behavior materially changes.
-7. Consider whether OpenAlex institution/source pivots should become first-class
-   tools now that the base OpenAlex author/citation surface exists.
-8. Expand the agentic workflow once stable secrets are available for deeper provider-specific assertions, for example optional SerpApi or OpenAlex coverage.
-9. Act on the first UX friction report produced by the
-   `GH_AW_MODEL_AGENT_COPILOT`-configured verifier. Focus on the
-   highest-impact item from the structured "UX friction summary": likely a
-   round-trip reduction or a clearly missing feature rather than cosmetic work.
-10. Review labels in the repository (`agentic`, `needs-copilot`, `needs-human`,
-    `blocked`, `no-agent`, `automation`, `testing`) to ensure they exist before
-    the first verifier run creates an issue. Missing labels cause issue creation
-    to fail silently on the label assignment step.
-11. Set the `GH_AW_MODEL_AGENT_COPILOT` Actions variable to `gpt-5.4` in the
-    repository settings if you want to override the compiled default at runtime.
-12. Run the `Deploy Azure` workflow against `dev` in `bootstrap` mode first,
-    then seed Key Vault and run it again in `full` mode once GitHub
-    environment secrets, the optional runner-label variable, and the federated
-    credential are in place. Capture any environment-specific fixes back into
-    the docs.
+7. ~~OpenAlex institution/source pivots~~ — **completed**: `search_entities_openalex`
+   and `search_papers_openalex_by_entity` are now first-class tools.
+8. Tune the smart discovery thresholds and trace logs once real-world
+   `search_papers_smart` runs accumulate enough UX feedback.
+9. Expand the agentic workflow once stable secrets are available for deeper provider-specific assertions, for example optional SerpApi or OpenAI-backed smart-tool coverage.
+10. Act on the first UX friction report produced by the
+    `GH_AW_MODEL_AGENT_COPILOT`-configured verifier. Focus on the
+    highest-impact item from the structured "UX friction summary": likely a
+    round-trip reduction or a clearly missing feature rather than cosmetic work.
+11. Consider adding a dedicated ECOS-to-regulatory golden path in
+    `docs/golden-paths.md` covering the full chain from species dossier through
+    `frCitation` to GovInfo/FR retrieval, now that all three regulatory tools
+    are stable and documented.
+12. Evaluate whether a Federal Register walkthrough (analogous to the ECOS
+    California-least-tern walkthrough in the README) should be added to help
+    agents discover the discovery→direct-retrieval→CFR-text chain without
+    reading the full tool descriptions.
 
 ## Ready Handoff Prompt
 
-Use this prompt for the next agent if the goal is to act on the UX review directly:
+Use this prompt for the next agent if the goal is to act on the UX review or expand coverage:
 
 ```text
-You are picking up scholar-search-mcp after an agent UX review. Read README.md, docs/golden-paths.md, and docs/agent-handoff.md first.
+You are picking up scholar-search-mcp after a documentation refresh pass. Read README.md, docs/golden-paths.md, and docs/agent-handoff.md first.
 
-Focus on the remaining agent-facing follow-up after the recent UX fixes:
-1. Revisit budget-aware provider steering if future UX work needs stronger source control.
-2. Decide whether retry-recovered provider behavior should remain invisible or become broker metadata.
-3. Keep the durable onboarding surfaces aligned if the workflow contract changes again.
+Focus on the highest-value remaining work from the Suggested Next Steps list:
+1. Decide whether retry-recovered provider behavior should remain invisible or become broker metadata.
+2. Tune smart discovery thresholds and trace logging as real-world search_papers_smart runs accumulate UX feedback.
+3. Act on the UX friction summary produced by the GH_AW_MODEL_AGENT_COPILOT-configured verifier — start with the highest-impact item (likely a round-trip reduction or a missing feature signal) rather than cosmetic changes.
 
 Your task:
 - Inspect the broker, onboarding, and durable-doc surfaces that describe the
   intended workflow contract.
-- Implement the smallest complete change you can defend for any remaining
-  provider-steering or metadata decision you touch.
-- Add or update targeted tests and durable docs if the agent-facing behavior changes again.
+- Implement the smallest complete change you can defend for any provider-steering,
+  metadata, or UX contract decision you touch.
+- Add or update targeted tests and durable docs if agent-facing behavior changes.
 
 Validation target:
 - python -m pip check

@@ -1,21 +1,18 @@
 import pytest
 
 from scholar_search_mcp import server
+from scholar_search_mcp.runtime import run_server
 from scholar_search_mcp.settings import AppSettings
 
 
 def test_app_settings_reads_provider_order_from_env() -> None:
-    settings = AppSettings.from_env(
-        {"SCHOLAR_SEARCH_PROVIDER_ORDER": "semantic_scholar,arxiv"}
-    )
+    settings = AppSettings.from_env({"SCHOLAR_SEARCH_PROVIDER_ORDER": "semantic_scholar,arxiv"})
 
     assert settings.provider_order == ("semantic_scholar", "arxiv")
 
 
 def test_app_settings_accepts_serpapi_alias_in_provider_order() -> None:
-    settings = AppSettings.from_env(
-        {"SCHOLAR_SEARCH_PROVIDER_ORDER": "semantic_scholar,serpapi,arxiv"}
-    )
+    settings = AppSettings.from_env({"SCHOLAR_SEARCH_PROVIDER_ORDER": "semantic_scholar,serpapi,arxiv"})
 
     assert settings.provider_order == (
         "semantic_scholar",
@@ -26,9 +23,7 @@ def test_app_settings_accepts_serpapi_alias_in_provider_order() -> None:
 
 def test_app_settings_rejects_duplicate_provider_order_entries() -> None:
     with pytest.raises(ValueError, match="cannot repeat providers"):
-        AppSettings.from_env(
-            {"SCHOLAR_SEARCH_PROVIDER_ORDER": "core,core,semantic_scholar"}
-        )
+        AppSettings.from_env({"SCHOLAR_SEARCH_PROVIDER_ORDER": "core,core,semantic_scholar"})
 
 
 def test_search_papers_args_accept_serpapi_alias() -> None:
@@ -51,10 +46,35 @@ def test_app_settings_serpapi_disabled_by_default() -> None:
 
     settings = AppSettings.from_env({})  # empty env
     assert settings.enable_serpapi is False
+    assert settings.enable_agentic is False
+    assert settings.openai_api_key is None
     assert settings.serpapi_api_key is None
     assert settings.enable_openalex is True
     assert settings.openalex_api_key is None
     assert settings.openalex_mailto is None
+    assert settings.govinfo_api_key is None
+    assert settings.enable_crossref is True
+    assert settings.enable_unpaywall is True
+    assert settings.enable_ecos is True
+    assert settings.enable_federal_register is True
+    assert settings.enable_govinfo_cfr is True
+    assert settings.ecos_base_url == "https://ecos.fws.gov"
+    assert settings.crossref_mailto is None
+    assert settings.unpaywall_email is None
+    assert settings.disable_embeddings is True
+    assert settings.agentic_openai_timeout_seconds == 30.0
+    assert settings.crossref_timeout_seconds == 30.0
+    assert settings.unpaywall_timeout_seconds == 30.0
+    assert settings.ecos_timeout_seconds == 30.0
+    assert settings.federal_register_timeout_seconds == 30.0
+    assert settings.govinfo_timeout_seconds == 30.0
+    assert settings.govinfo_document_timeout_seconds == 60.0
+    assert settings.govinfo_max_document_size_mb == 25
+    assert settings.ecos_document_timeout_seconds == 60.0
+    assert settings.ecos_document_conversion_timeout_seconds == 60.0
+    assert settings.ecos_max_document_size_mb == 25
+    assert settings.ecos_verify_tls is True
+    assert settings.ecos_ca_bundle is None
 
 
 def test_app_settings_serpapi_enabled_via_env() -> None:
@@ -84,6 +104,72 @@ def test_app_settings_openalex_enabled_with_optional_mailto_and_key() -> None:
     assert settings.openalex_mailto == "team@example.com"
 
 
+def test_app_settings_parses_crossref_and_unpaywall_configuration() -> None:
+    settings = AppSettings.from_env(
+        {
+            "SCHOLAR_SEARCH_ENABLE_CROSSREF": "true",
+            "CROSSREF_MAILTO": "ops@example.com",
+            "CROSSREF_TIMEOUT_SECONDS": "12.5",
+            "SCHOLAR_SEARCH_ENABLE_UNPAYWALL": "true",
+            "UNPAYWALL_EMAIL": "oa@example.com",
+            "UNPAYWALL_TIMEOUT_SECONDS": "9",
+        }
+    )
+
+    assert settings.enable_crossref is True
+    assert settings.crossref_mailto == "ops@example.com"
+    assert settings.crossref_timeout_seconds == 12.5
+    assert settings.enable_unpaywall is True
+    assert settings.unpaywall_email == "oa@example.com"
+    assert settings.unpaywall_timeout_seconds == 9.0
+
+
+def test_app_settings_parses_ecos_configuration() -> None:
+    settings = AppSettings.from_env(
+        {
+            "SCHOLAR_SEARCH_ENABLE_ECOS": "true",
+            "ECOS_BASE_URL": "https://ecos.fws.gov",
+            "ECOS_TIMEOUT_SECONDS": "12",
+            "ECOS_DOCUMENT_TIMEOUT_SECONDS": "75",
+            "ECOS_DOCUMENT_CONVERSION_TIMEOUT_SECONDS": "22",
+            "ECOS_MAX_DOCUMENT_SIZE_MB": "40",
+            "ECOS_VERIFY_TLS": "false",
+            "ECOS_CA_BUNDLE": "C:/certs/ecos-ca.pem",
+        }
+    )
+
+    assert settings.enable_ecos is True
+    assert settings.ecos_base_url == "https://ecos.fws.gov"
+    assert settings.ecos_timeout_seconds == 12.0
+    assert settings.ecos_document_timeout_seconds == 75.0
+    assert settings.ecos_document_conversion_timeout_seconds == 22.0
+    assert settings.ecos_max_document_size_mb == 40
+    assert settings.ecos_verify_tls is False
+    assert settings.ecos_ca_bundle == "C:/certs/ecos-ca.pem"
+
+
+def test_app_settings_parses_regulatory_configuration() -> None:
+    settings = AppSettings.from_env(
+        {
+            "GOVINFO_API_KEY": "gov-key",
+            "SCHOLAR_SEARCH_ENABLE_FEDERAL_REGISTER": "true",
+            "SCHOLAR_SEARCH_ENABLE_GOVINFO_CFR": "true",
+            "FEDERAL_REGISTER_TIMEOUT_SECONDS": "11",
+            "GOVINFO_TIMEOUT_SECONDS": "14",
+            "GOVINFO_DOCUMENT_TIMEOUT_SECONDS": "25",
+            "GOVINFO_MAX_DOCUMENT_SIZE_MB": "18",
+        }
+    )
+
+    assert settings.govinfo_api_key == "gov-key"
+    assert settings.enable_federal_register is True
+    assert settings.enable_govinfo_cfr is True
+    assert settings.federal_register_timeout_seconds == 11.0
+    assert settings.govinfo_timeout_seconds == 14.0
+    assert settings.govinfo_document_timeout_seconds == 25.0
+    assert settings.govinfo_max_document_size_mb == 18
+
+
 def test_app_settings_normalizes_blank_optional_values_to_none() -> None:
     settings = AppSettings.from_env(
         {
@@ -92,15 +178,23 @@ def test_app_settings_normalizes_blank_optional_values_to_none() -> None:
             "OPENALEX_API_KEY": "   ",
             "OPENALEX_MAILTO": "",
             "SERPAPI_API_KEY": "   ",
+            "GOVINFO_API_KEY": " ",
+            "CROSSREF_MAILTO": " ",
+            "UNPAYWALL_EMAIL": " ",
+            "OPENAI_API_KEY": "  ",
             "SCHOLAR_SEARCH_HTTP_AUTH_TOKEN": "",
         }
     )
 
     assert settings.core_api_key is None
+    assert settings.openai_api_key is None
     assert settings.semantic_scholar_api_key is None
     assert settings.openalex_api_key is None
     assert settings.openalex_mailto is None
     assert settings.serpapi_api_key is None
+    assert settings.govinfo_api_key is None
+    assert settings.crossref_mailto is None
+    assert settings.unpaywall_email is None
     assert settings.http_auth_token is None
 
 
@@ -129,6 +223,56 @@ def test_app_settings_parses_http_transport_configuration() -> None:
     assert settings.http_path == "/api/mcp"
 
 
+def test_app_settings_parses_agentic_configuration() -> None:
+    settings = AppSettings.from_env(
+        {
+            "OPENAI_API_KEY": "sk-test",
+            "SCHOLAR_SEARCH_ENABLE_AGENTIC": "true",
+            "SCHOLAR_SEARCH_AGENTIC_PROVIDER": "openai",
+            "SCHOLAR_SEARCH_PLANNER_MODEL": "gpt-5.4-mini",
+            "SCHOLAR_SEARCH_SYNTHESIS_MODEL": "gpt-5.4",
+            "SCHOLAR_SEARCH_EMBEDDING_MODEL": "text-embedding-3-large",
+            "SCHOLAR_SEARCH_DISABLE_EMBEDDINGS": "true",
+            "SCHOLAR_SEARCH_AGENTIC_OPENAI_TIMEOUT_SECONDS": "18",
+            "SCHOLAR_SEARCH_AGENTIC_INDEX_BACKEND": "memory",
+            "SCHOLAR_SEARCH_SESSION_TTL_SECONDS": "900",
+            "SCHOLAR_SEARCH_ENABLE_AGENTIC_TRACE_LOG": "true",
+        }
+    )
+
+    assert settings.openai_api_key == "sk-test"
+    assert settings.enable_agentic is True
+    assert settings.agentic_provider == "openai"
+    assert settings.planner_model == "gpt-5.4-mini"
+    assert settings.synthesis_model == "gpt-5.4"
+    assert settings.embedding_model == "text-embedding-3-large"
+    assert settings.disable_embeddings is True
+    assert settings.agentic_openai_timeout_seconds == 18.0
+    assert settings.agentic_index_backend == "memory"
+    assert settings.session_ttl_seconds == 900
+    assert settings.enable_agentic_trace_log is True
+
+
+def test_run_server_logs_embedding_flag(caplog: pytest.LogCaptureFixture) -> None:
+    settings = AppSettings.from_env(
+        {
+            "SCHOLAR_SEARCH_ENABLE_AGENTIC": "true",
+            "SCHOLAR_SEARCH_DISABLE_EMBEDDINGS": "true",
+        }
+    )
+
+    class _App:
+        def run(self, **kwargs: object) -> None:
+            del kwargs
+
+    caplog.set_level("INFO", logger="scholar-search-mcp")
+
+    run_server(app=_App(), logger=server.logger, settings=settings)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("embeddings=disabled" in message for message in messages)
+
+
 def test_app_settings_ignores_unrelated_azure_workflow_metadata() -> None:
     settings = AppSettings.from_env(
         {
@@ -143,25 +287,21 @@ def test_app_settings_ignores_unrelated_azure_workflow_metadata() -> None:
     )
 
     assert settings.transport == "stdio"
-    assert settings.enable_core is True
+    assert settings.enable_core is False
     assert settings.enable_semantic_scholar is True
     assert settings.enable_serpapi is False
     assert settings.http_auth_token is None
 
 
 @pytest.mark.parametrize("value", ["false", "0", "no", "off"])
-def test_env_bool_parses_common_false_values(
-    monkeypatch: pytest.MonkeyPatch, value: str
-) -> None:
+def test_env_bool_parses_common_false_values(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
     monkeypatch.setenv("SCHOLAR_TEST_BOOL", value)
 
     assert server._env_bool("SCHOLAR_TEST_BOOL", True) is False
 
 
 @pytest.mark.parametrize("value", ["true", "1", "yes"])
-def test_env_bool_treats_other_common_values_as_true(
-    monkeypatch: pytest.MonkeyPatch, value: str
-) -> None:
+def test_env_bool_treats_other_common_values_as_true(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
     monkeypatch.setenv("SCHOLAR_TEST_BOOL", value)
 
     assert server._env_bool("SCHOLAR_TEST_BOOL", False) is True

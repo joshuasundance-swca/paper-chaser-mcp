@@ -17,6 +17,10 @@ Before changing code, read these files in order:
 ## Development Priorities
 
 - Keep the **default tool surface small and obvious** for low-context agents.
+- Keep the smart layer **additive, not replacement**: raw tools remain the
+  stable contract of record, while smart tools (`search_papers_smart`,
+  `ask_result_set`, `map_research_landscape`, `expand_research_graph`) should
+  reduce round trips for concept-level research.
 - **Minimize agent round trips**: every tool should give agents enough context
   in a single response to take the obvious next step. When a task requires 3+
   tool calls where 1-2 should suffice, that is a UX bug worth filing an issue
@@ -29,8 +33,10 @@ Before changing code, read these files in order:
   cursors). An agent that receives a response with no obvious follow-up action
   has hit a UX defect.
 - Preserve the workflow hierarchy:
+  - `search_papers_smart` for concept discovery, reusable result sets, and grounded follow-up
   - `search_papers` for quick literature discovery
   - `search_papers_bulk` for exhaustive or paginated retrieval
+  - `resolve_citation` for broken references, incomplete bibliography lines, and almost-right citations
   - `search_papers_match` / `get_paper_details` for known-item lookup
   - `get_paper_citations` / `get_paper_references` for citation chasing
   - `search_authors` → `get_author_info` → `get_author_papers` for author pivots
@@ -43,6 +49,9 @@ Before changing code, read these files in order:
 - Keep continuation semantics explicit: `search_papers_bulk` is not a generic
   "next page" for brokered results, and should be described as a pivot whenever
   it changes provider or filter semantics.
+- Keep reusable result-set handles explicit: `searchSessionId` should always be
+  enough to continue grounded QA, clustering, or graph expansion without hidden
+  session state.
 - Keep provider-specific tool contracts honest: CORE, SerpApi, arXiv, and
   OpenAlex surfaces should not casually advertise filters they do not honor.
 
@@ -67,7 +76,7 @@ Before changing code, read these files in order:
 Install development extras first:
 
 ```bash
-pip install -e .[dev]
+pip install -e ".[all]"
 ```
 
 Then run:

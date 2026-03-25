@@ -3,7 +3,13 @@ import json
 import pytest
 
 from scholar_search_mcp import server
+from scholar_search_mcp.provider_runtime import ProviderDiagnosticsRegistry
 from tests.helpers import DummyResponse, DummySerpApiAsyncClient
+
+
+@pytest.fixture(autouse=True)
+def _reset_provider_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(server, "provider_registry", ProviderDiagnosticsRegistry())
 
 
 def test_serpapi_normalize_organic_result_minimal() -> None:
@@ -166,9 +172,7 @@ async def test_serpapi_client_raises_quota_error_on_429(
         SerpApiScholarClient,
     )
 
-    dummy = DummySerpApiAsyncClient(
-        DummyResponse(status_code=429, headers={"Retry-After": "60"})
-    )
+    dummy = DummySerpApiAsyncClient(DummyResponse(status_code=429, headers={"Retry-After": "60"}))
     monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: dummy)
 
     client = SerpApiScholarClient(api_key="test-key")
@@ -204,9 +208,7 @@ async def test_serpapi_client_raises_key_error_for_application_auth_error(
         SerpApiScholarClient,
     )
 
-    dummy = DummySerpApiAsyncClient(
-        DummyResponse(status_code=200, payload={"error": "Invalid API key"})
-    )
+    dummy = DummySerpApiAsyncClient(DummyResponse(status_code=200, payload={"error": "Invalid API key"}))
     monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: dummy)
 
     client = SerpApiScholarClient(api_key="bad-key")
@@ -239,9 +241,7 @@ async def test_serpapi_client_search_returns_normalized_papers(
             }
         ]
     }
-    dummy = DummySerpApiAsyncClient(
-        DummyResponse(status_code=200, payload=serpapi_payload)
-    )
+    dummy = DummySerpApiAsyncClient(DummyResponse(status_code=200, payload=serpapi_payload))
     monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: dummy)
 
     client = SerpApiScholarClient(api_key="test-key")
@@ -254,6 +254,51 @@ async def test_serpapi_client_search_returns_normalized_papers(
     assert p["sourceId"] == "r-001"
     assert p["year"] == 2022
     assert p["citationCount"] == 100
+
+
+@pytest.mark.asyncio
+async def test_serpapi_client_get_account_status_sanitizes_secret_like_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Account status must expose only the public allowlisted quota fields."""
+    from scholar_search_mcp.clients.serpapi import SerpApiScholarClient
+    from scholar_search_mcp.clients.serpapi import client as serpapi_client_module
+
+    serpapi_payload = {
+        "account_id": "acct-123",
+        "api_key": "SECRET_API_KEY",
+        "account_email": "demo@serpapi.com",
+        "plan_id": "bigdata",
+        "plan_name": "Big Data Plan",
+        "plan_monthly_price": 250.0,
+        "searches_per_month": 30000,
+        "plan_searches_left": 5958,
+        "extra_credits": 5,
+        "total_searches_left": 5963,
+        "this_month_usage": 24042,
+        "last_hour_searches": 42,
+        "account_rate_limit_per_hour": 6000,
+        "unexpected_secret": "should-not-leak",
+    }
+    dummy = DummySerpApiAsyncClient(DummyResponse(status_code=200, payload=serpapi_payload))
+    monkeypatch.setattr(serpapi_client_module.httpx, "AsyncClient", lambda timeout: dummy)
+
+    client = SerpApiScholarClient(api_key="test-key")
+    status = await client.get_account_status()
+
+    assert status == {
+        "provider": "serpapi_google_scholar",
+        "planId": "bigdata",
+        "planName": "Big Data Plan",
+        "planMonthlyPrice": 250.0,
+        "searchesPerMonth": 30000,
+        "planSearchesLeft": 5958,
+        "extraCredits": 5,
+        "totalSearchesLeft": 5963,
+        "thisMonthUsage": 24042,
+        "lastHourSearches": 42,
+        "accountRateLimitPerHour": 6000,
+    }
 
 
 @pytest.mark.asyncio
@@ -276,9 +321,7 @@ async def test_serpapi_client_search_with_year_range(
             captured_params.append(dict(params))
             return DummyResponse(status_code=200, payload={"organic_results": []})
 
-    monkeypatch.setattr(
-        server.httpx, "AsyncClient", lambda timeout: CapturingAsyncClient()
-    )
+    monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: CapturingAsyncClient())
 
     client = SerpApiScholarClient(api_key="test-key")
     await client.search("transformers", year="2020-2023")
@@ -306,9 +349,7 @@ async def test_serpapi_client_get_citation_formats_returns_structured_response(
             {"name": "BibTeX", "link": "https://scholar.google.com/bibtex/r-001"},
         ],
     }
-    dummy = DummySerpApiAsyncClient(
-        DummyResponse(status_code=200, payload=cite_payload)
-    )
+    dummy = DummySerpApiAsyncClient(DummyResponse(status_code=200, payload=cite_payload))
     monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: dummy)
 
     client = SerpApiScholarClient(api_key="test-key")
@@ -336,7 +377,7 @@ async def test_serpapi_client_get_citation_formats_rejects_empty_result_id() -> 
 async def test_search_papers_uses_serpapi_when_enabled_and_others_fail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """SerpApi must be tried between Semantic Scholar and arXiv in the chain."""
+    """SerpApi should be reachable when the caller explicitly steers to it."""
 
     class FailingCoreClient:
         async def search(self, **kwargs) -> dict:
@@ -366,7 +407,14 @@ async def test_search_papers_uses_serpapi_when_enabled_and_others_fail(
     monkeypatch.setattr(server, "client", FailingSemanticClient())
     monkeypatch.setattr(server, "serpapi_client", FakeSerpApiClient())
 
-    response = await server.call_tool("search_papers", {"query": "neural nets"})
+    response = await server.call_tool(
+        "search_papers",
+        {
+            "query": "neural nets",
+            "preferredProvider": "serpapi",
+            "providerOrder": ["serpapi", "arxiv", "core", "semantic_scholar"],
+        },
+    )
     payload = json.loads(response[0].text)
 
     assert payload["total"] == 1
@@ -397,9 +445,7 @@ async def test_search_papers_skips_serpapi_when_disabled(
         async def search(self, **kwargs) -> dict:
             return {
                 "totalResults": 1,
-                "entries": [
-                    {"paperId": "ax-1", "title": "arXiv paper", "source": "arxiv"}
-                ],
+                "entries": [{"paperId": "ax-1", "title": "arXiv paper", "source": "arxiv"}],
             }
 
     serpapi_spy = SerpApiClientSpy()
@@ -608,9 +654,7 @@ async def test_call_tool_get_citation_formats_returns_normalized_response(
     monkeypatch.setattr(server, "enable_serpapi", True)
     monkeypatch.setattr(server, "serpapi_client", FakeSerpApiClient())
 
-    response = await server.call_tool(
-        "get_paper_citation_formats", {"result_id": "attn-001"}
-    )
+    response = await server.call_tool("get_paper_citation_formats", {"result_id": "attn-001"})
     payload = json.loads(response[0].text)
 
     assert payload["resultId"] == "attn-001"
@@ -679,7 +723,14 @@ async def test_search_papers_raises_when_serpapi_enabled_without_key(
     monkeypatch.setattr(server, "arxiv_client", ArxivFallback())
 
     with pytest.raises(SerpApiKeyMissingError, match="SERPAPI_API_KEY"):
-        await server.call_tool("search_papers", {"query": "test"})
+        await server.call_tool(
+            "search_papers",
+            {
+                "query": "test",
+                "preferredProvider": "serpapi",
+                "providerOrder": ["serpapi", "arxiv", "core", "semantic_scholar"],
+            },
+        )
 
 
 @pytest.mark.asyncio
@@ -800,9 +851,7 @@ async def test_call_tool_get_citation_formats_routes_to_serpapi_client_method(
             self.calls.append(("get_citation_formats", {"result_id": result_id}))
             return {
                 "citations": [{"title": "MLA", "snippet": "Smith, A. 2023."}],
-                "links": [
-                    {"name": "BibTeX", "link": "https://scholar.google.com/bib/x"}
-                ],
+                "links": [{"name": "BibTeX", "link": "https://scholar.google.com/bib/x"}],
             }
 
     spy = RecordingSerpApiClient()
@@ -811,9 +860,7 @@ async def test_call_tool_get_citation_formats_routes_to_serpapi_client_method(
 
     await server.call_tool("get_paper_citation_formats", {"result_id": "route-spy-001"})
 
-    assert spy.calls == [("get_citation_formats", {"result_id": "route-spy-001"})], (
-        f"Unexpected calls: {spy.calls}"
-    )
+    assert spy.calls == [("get_citation_formats", {"result_id": "route-spy-001"})], f"Unexpected calls: {spy.calls}"
 
 
 @pytest.mark.asyncio
@@ -859,7 +906,14 @@ async def test_search_papers_serpapi_all_provenance_fields_in_response(
     monkeypatch.setattr(server, "enable_arxiv", False)
     monkeypatch.setattr(server, "serpapi_client", FakeSerpApiClient())
 
-    response = await server.call_tool("search_papers", {"query": "e2e provenance"})
+    response = await server.call_tool(
+        "search_papers",
+        {
+            "query": "e2e provenance",
+            "preferredProvider": "serpapi",
+            "providerOrder": ["serpapi", "arxiv", "core", "semantic_scholar"],
+        },
+    )
     payload = json.loads(response[0].text)
 
     assert len(payload["data"]) == 1

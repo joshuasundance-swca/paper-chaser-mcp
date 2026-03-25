@@ -27,10 +27,7 @@ SERVER_METADATA = REPO_ROOT / "server.json"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=(
-            "Validate deployment assets for the Azure-hosted Scholar Search MCP "
-            "service."
-        )
+        description=("Validate deployment assets for the Azure-hosted Scholar Search MCP service.")
     )
     parser.add_argument(
         "--skip-az",
@@ -101,9 +98,7 @@ def validate_xml_policy() -> None:
 
 def _read_server_metadata() -> dict:
     if not SERVER_METADATA.exists():
-        raise SystemExit(
-            "Missing server.json. Public MCP packaging requires registry metadata."
-        )
+        raise SystemExit("Missing server.json. Public MCP packaging requires registry metadata.")
     try:
         payload = json.loads(SERVER_METADATA.read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
@@ -122,11 +117,7 @@ def _extract_oci_packages(payload: dict) -> list[dict]:
     for candidate in packages:
         if not isinstance(candidate, dict):
             continue
-        package_type = (
-            candidate.get("registryType")
-            or candidate.get("registry_type")
-            or candidate.get("type")
-        )
+        package_type = candidate.get("registryType") or candidate.get("registry_type") or candidate.get("type")
         if isinstance(package_type, str) and package_type.lower() == "oci":
             oci_packages.append(candidate)
     return oci_packages
@@ -135,11 +126,7 @@ def _extract_oci_packages(payload: dict) -> list[dict]:
 def _expected_ghcr_identifier(repository_url: str, version: str) -> str:
     parsed = urllib.parse.urlparse(repository_url)
     path_parts = [part for part in parsed.path.split("/") if part]
-    if (
-        parsed.scheme != "https"
-        or parsed.netloc != "github.com"
-        or len(path_parts) != 2
-    ):
+    if parsed.scheme != "https" or parsed.netloc != "github.com" or len(path_parts) != 2:
         raise SystemExit(
             "server.json repository.url must point to an "
             "https://github.com/<owner>/<repo> path for public OCI packaging."
@@ -157,8 +144,7 @@ def validate_server_metadata() -> dict[str, str]:
         raise SystemExit("server.json must define a non-empty string 'name'.")
     if not name.startswith("io.github."):
         raise SystemExit(
-            "server.json name must use the public GitHub namespace form "
-            "(io.github.username/* or io.github.orgname/*)."
+            "server.json name must use the public GitHub namespace form (io.github.username/* or io.github.orgname/*)."
         )
     if "/" not in name:
         raise SystemExit("server.json name must include a server identifier path.")
@@ -170,23 +156,18 @@ def validate_server_metadata() -> dict[str, str]:
     repository = payload.get("repository")
     repository_url = repository.get("url") if isinstance(repository, dict) else None
     if not isinstance(repository_url, str) or not repository_url.strip():
-        raise SystemExit(
-            "server.json repository.url must be a non-empty GitHub repository URL."
-        )
+        raise SystemExit("server.json repository.url must be a non-empty GitHub repository URL.")
 
     oci_packages = _extract_oci_packages(payload)
     if not oci_packages:
         raise SystemExit(
-            "server.json must include at least one OCI package entry "
-            "(registryType/registry_type/type == 'oci')."
+            "server.json must include at least one OCI package entry (registryType/registry_type/type == 'oci')."
         )
 
     primary_package = oci_packages[0]
     package_identifier = primary_package.get("identifier")
     if not isinstance(package_identifier, str) or not package_identifier.strip():
-        raise SystemExit(
-            "server.json OCI packages must define a non-empty string 'identifier'."
-        )
+        raise SystemExit("server.json OCI packages must define a non-empty string 'identifier'.")
 
     expected_identifier = _expected_ghcr_identifier(repository_url, version)
     if package_identifier != expected_identifier:
@@ -199,10 +180,7 @@ def validate_server_metadata() -> dict[str, str]:
     transport = primary_package.get("transport")
     transport_type = transport.get("type") if isinstance(transport, dict) else None
     if transport_type != "stdio":
-        raise SystemExit(
-            "Public OCI MCP packages must declare transport.type='stdio' in "
-            "server.json."
-        )
+        raise SystemExit("Public OCI MCP packages must declare transport.type='stdio' in server.json.")
 
     return {
         "name": name,
@@ -352,17 +330,11 @@ def validate_image_config(
     env = _parse_image_env(config)
     configured_transport = env.get("SCHOLAR_SEARCH_TRANSPORT")
     if configured_transport and configured_transport.lower() != "stdio":
-        raise SystemExit(
-            "Docker image default transport must be stdio when "
-            "SCHOLAR_SEARCH_TRANSPORT is set."
-        )
+        raise SystemExit("Docker image default transport must be stdio when SCHOLAR_SEARCH_TRANSPORT is set.")
 
     user = str(config.get("User") or "").strip().lower()
     if user in {"", "0", "root"}:
-        raise SystemExit(
-            "Docker image must run as a non-root user. "
-            f"Current image user is {config.get('User')!r}."
-        )
+        raise SystemExit(f"Docker image must run as a non-root user. Current image user is {config.get('User')!r}.")
 
 
 def validate_docker(
@@ -437,9 +409,7 @@ def validate_docker(
             body={},
         )
         if status != 403:
-            raise SystemExit(
-                f"Expected blocked-origin /mcp request to return 403, got {status}."
-            )
+            raise SystemExit(f"Expected blocked-origin /mcp request to return 403, got {status}.")
 
         status, _ = request_json(
             mcp_url,
@@ -448,10 +418,7 @@ def validate_docker(
             body={},
         )
         if status != 401:
-            raise SystemExit(
-                "Expected missing-backend-auth /mcp request to return 401, "
-                f"got {status}."
-            )
+            raise SystemExit(f"Expected missing-backend-auth /mcp request to return 401, got {status}.")
 
         status, _ = request_json(
             mcp_url,

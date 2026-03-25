@@ -1,5 +1,7 @@
 """Shared Pydantic models for request validation and normalized payloads."""
 
+from __future__ import annotations
+
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
@@ -34,6 +36,56 @@ class Author(ApiModel):
     """Normalized author payload."""
 
     name: str | None = None
+
+
+class CrossrefWorkSummary(ApiModel):
+    """Normalized Crossref work subset used by explicit enrichment tools."""
+
+    doi: str | None = None
+    title: str | None = None
+    authors: list[Author] = Field(default_factory=list)
+    venue: str | None = None
+    publisher: str | None = None
+    publication_type: str | None = Field(default=None, alias="publicationType")
+    publication_date: str | None = Field(default=None, alias="publicationDate")
+    year: int | None = None
+    url: str | None = None
+    citation_count: int | None = Field(default=None, alias="citationCount")
+
+
+class CrossrefEnrichment(ApiModel):
+    """Additive paper enrichment fields sourced from Crossref."""
+
+    doi: str | None = None
+    publisher: str | None = None
+    venue: str | None = None
+    publication_type: str | None = Field(default=None, alias="publicationType")
+    publication_date: str | None = Field(default=None, alias="publicationDate")
+    year: int | None = None
+    url: str | None = None
+    citation_count: int | None = Field(default=None, alias="citationCount")
+
+
+class UnpaywallEnrichment(ApiModel):
+    """Additive paper enrichment fields sourced from Unpaywall."""
+
+    doi: str | None = None
+    is_oa: bool | None = Field(default=None, alias="isOa")
+    oa_status: str | None = Field(default=None, alias="oaStatus")
+    best_oa_url: str | None = Field(default=None, alias="bestOaUrl")
+    pdf_url: str | None = Field(default=None, alias="pdfUrl")
+    license: str | None = None
+    journal_is_in_doaj: bool | None = Field(
+        default=None,
+        alias="journalIsInDoaj",
+    )
+
+
+class PaperEnrichments(ApiModel):
+    """Optional additive enrichment payload attached to a normalized paper."""
+
+    crossref: CrossrefEnrichment | None = None
+    unpaywall: UnpaywallEnrichment | None = None
 
 
 class Paper(ApiModel):
@@ -89,6 +141,16 @@ class Paper(ApiModel):
             "to get_paper_citation_formats to retrieve MLA, APA, BibTeX, and "
             "other export formats. Use this field — not sourceId — because "
             "sourceId may be a cluster_id or cites_id when result_id is absent."
+        ),
+    )
+    enrichments: PaperEnrichments | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Optional additive enrichment payload. Crossref can improve DOI, "
+            "publisher, venue, and publication metadata, while Unpaywall can "
+            "surface open-access and PDF availability without changing the base "
+            "paper-search contract."
         ),
     )
 
@@ -457,8 +519,137 @@ class CitationFormatsResponse(ApiModel):
     provider: str = "serpapi_google_scholar"
 
 
+class CitationResolutionCandidate(ApiModel):
+    """One ranked candidate returned by citation repair."""
+
+    paper: Paper
+    score: float = 0.0
+    resolution_strategy: str = Field(
+        default="",
+        alias="resolutionStrategy",
+    )
+    matched_fields: list[str] = Field(
+        default_factory=list,
+        alias="matchedFields",
+    )
+    conflicting_fields: list[str] = Field(
+        default_factory=list,
+        alias="conflictingFields",
+    )
+    title_similarity: float = Field(
+        default=0.0,
+        alias="titleSimilarity",
+    )
+    year_delta: int | None = Field(
+        default=None,
+        alias="yearDelta",
+    )
+    author_overlap: int = Field(
+        default=0,
+        alias="authorOverlap",
+    )
+    candidate_count: int | None = Field(
+        default=None,
+        alias="candidateCount",
+    )
+    why_selected: str = Field(
+        default="",
+        alias="whySelected",
+    )
+
+
+class CitationResolutionResponse(ApiModel):
+    """Structured response from the citation-repair workflow."""
+
+    best_match: CitationResolutionCandidate | None = Field(
+        default=None,
+        alias="bestMatch",
+    )
+    alternatives: list[CitationResolutionCandidate] = Field(default_factory=list)
+    resolution_confidence: Literal["high", "medium", "low"] = Field(
+        default="low",
+        alias="resolutionConfidence",
+    )
+    resolution_strategy: str = Field(
+        default="none",
+        alias="resolutionStrategy",
+    )
+    matched_fields: list[str] = Field(
+        default_factory=list,
+        alias="matchedFields",
+    )
+    conflicting_fields: list[str] = Field(
+        default_factory=list,
+        alias="conflictingFields",
+    )
+    normalized_citation: str = Field(
+        default="",
+        alias="normalizedCitation",
+    )
+    extracted_fields: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="extractedFields",
+    )
+    inferred_fields: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="inferredFields",
+    )
+    candidate_count: int = Field(
+        default=0,
+        alias="candidateCount",
+    )
+    message: str = ""
+
+
 class BatchPaperResponse(RootModel[list[Paper]]):
     """Semantic Scholar batch lookup response."""
+
+
+class DoiResolution(ApiModel):
+    """Resolved DOI state used by explicit enrichment workflows."""
+
+    resolved_doi: str | None = Field(default=None, alias="resolvedDoi")
+    resolution_source: str | None = Field(default=None, alias="resolutionSource")
+
+
+class CrossrefEnrichmentResult(ApiModel):
+    """Structured response from the explicit Crossref enrichment tool."""
+
+    provider: str = "crossref"
+    found: bool = False
+    resolved_doi: str | None = Field(default=None, alias="resolvedDoi")
+    work: CrossrefWorkSummary | None = None
+    enrichment: CrossrefEnrichment | None = None
+
+
+class UnpaywallEnrichmentResult(ApiModel):
+    """Structured response from the explicit Unpaywall enrichment tool."""
+
+    provider: str = "unpaywall"
+    found: bool = False
+    doi: str | None = None
+    is_oa: bool | None = Field(default=None, alias="isOa")
+    oa_status: str | None = Field(default=None, alias="oaStatus")
+    best_oa_url: str | None = Field(default=None, alias="bestOaUrl")
+    pdf_url: str | None = Field(default=None, alias="pdfUrl")
+    license: str | None = None
+    journal_is_in_doaj: bool | None = Field(
+        default=None,
+        alias="journalIsInDoaj",
+    )
+    enrichment: UnpaywallEnrichment | None = None
+
+
+class PaperEnrichmentResponse(ApiModel):
+    """Combined Crossref + Unpaywall enrichment response."""
+
+    doi_resolution: DoiResolution = Field(
+        default_factory=DoiResolution,
+        alias="doiResolution",
+    )
+    crossref: CrossrefEnrichmentResult | None = None
+    unpaywall: UnpaywallEnrichmentResult | None = None
+    enrichments: PaperEnrichments | None = None
 
 
 def dump_jsonable(value: Any) -> Any:

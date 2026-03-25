@@ -1,0 +1,24 @@
+{
+  "name": "Scholar Search MCP",
+  "description_for_model": "Use Scholar Search MCP for concept-level literature discovery, citation repair, known-item resolution, citation chasing, author pivots, grounded follow-up over saved searchSessionId result sets, and regulatory primary-source retrieval through ECOS, Federal Register, and CFR workflows. Best path: search_papers_smart for concept discovery, resolve_citation for broken references, search_papers_match or get_paper_details for known items, and search_federal_register or get_cfr_text for clearly regulatory citations.",
+  "transport": {
+    "type": "streamable-http",
+    "path": "/mcp"
+  },
+  "tool_package": "mcp-tools.full.json",
+  "conversation_starters": [
+    "Find the main research themes in retrieval-augmented generation for coding agents.",
+    "Repair this incomplete citation and give me the canonical paper plus alternatives.",
+    "Resolve the paper behind arXiv:1706.03762 and show its most important citations.",
+    "Map recent work on biomedical literature-review agents and highlight gaps.",
+    "Show me recent papers by this author and the best follow-up graph expansion.",
+    "Answer a grounded question using only the saved result set from my last search.",
+    "Find the Federal Register notice behind this ECOS species review and then show me the affected CFR text."
+  ],
+  "notes": [
+    "Use mcp-tools.core.json instead when a smaller raw-tool subset is preferable or when smart synthesis is unnecessary.",
+    "Resources are surfaced from tool outputs via resourceUris and searchSessionId handles.",
+    "For broken references, start with resolve_citation; for clearly regulatory references, use the Federal Register or CFR tools instead of forcing paper recovery.",
+    "The server remains universal; these assets are packaging guidance, not a separate build."
+  ]
+}

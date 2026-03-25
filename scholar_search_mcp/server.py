@@ -2,16 +2,33 @@
 
 import json
 import logging
+from contextlib import asynccontextmanager
 from inspect import Parameter, Signature
 from typing import Any, Literal, cast
 
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
 from fastmcp.server.middleware.timing import TimingMiddleware
 from mcp.types import TextContent, Tool, ToolAnnotations
 from pydantic import Field
 from pydantic.fields import PydanticUndefined
 
-from .clients import ArxivClient, CoreApiClient, OpenAlexClient, SemanticScholarClient
+from .agentic import (
+    AgenticConfig,
+    AgenticRuntime,
+    WorkspaceRegistry,
+    resolve_provider_bundle,
+)
+from .clients import (
+    ArxivClient,
+    CoreApiClient,
+    CrossrefClient,
+    EcosClient,
+    FederalRegisterClient,
+    GovInfoClient,
+    OpenAlexClient,
+    SemanticScholarClient,
+    UnpaywallClient,
+)
 from .clients.serpapi import SerpApiScholarClient
 from .constants import (
     API_BASE_URL,
@@ -27,13 +44,20 @@ from .constants import (
     SEMANTIC_SCHOLAR_MIN_INTERVAL,
 )
 from .dispatch import dispatch_tool
-from .models import TOOL_INPUT_MODELS, dump_jsonable
+from .enrichment import PaperEnrichmentService
+from .models import dump_jsonable
 from .parsing import _arxiv_id_from_url, _text
+from .provider_runtime import ProviderDiagnosticsRegistry
+from .renderers.resources import (
+    render_author_resource_payload,
+    render_paper_resource_payload,
+)
 from .runtime import run_server
 from .search import _core_response_to_merged, _merge_search_results
 from .settings import AppSettings, _env_bool
-from .tools import TOOL_DESCRIPTIONS
-from .transport import asyncio, httpx
+from .tool_schema import sanitize_published_schema
+from .tool_specs import get_tool_spec, iter_tool_specs
+from .transport import asyncio, httpx, maybe_close_async_resource
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("scholar-search-mcp")
@@ -41,29 +65,71 @@ logger = logging.getLogger("scholar-search-mcp")
 SERVER_INSTRUCTIONS = """
 Decision tree for tool selection:
 
-1. QUICK DISCOVERY → search_papers (brokered, single page, returns brokerMetadata)
-2. EXHAUSTIVE / MULTI-PAGE → search_papers_bulk
+1. CONCEPT-LEVEL DISCOVERY / REVIEW → search_papers_smart
+   (returns searchSessionId, strategyMetadata, resourceUris, and agentHints;
+   use latencyProfile=fast for smoke tests, balanced for default work, and deep
+   for controlled multi-provider expansion)
+2. QUICK RAW DISCOVERY → search_papers
+   (brokered, single page, returns brokerMetadata plus agentHints/resourceUris)
+3. EXHAUSTIVE / MULTI-PAGE → search_papers_bulk
    (cursor-paginated, up to 1 000 returned/call; read retrievalNote because
    default bulk ordering is not relevance-ranked)
-3. KNOWN ITEM (messy title) → search_papers_match
-4. KNOWN ITEM (DOI / arXiv / URL) → get_paper_details
-5. CITATION EXPANSION → get_paper_citations (cited-by) or get_paper_references (refs)
-6. AUTHOR PIVOT → search_authors → get_author_info → get_author_papers
-7. PHRASE / QUOTE RECOVERY → search_snippets (last resort)
-8. OPENALEX-SPECIFIC PATHS → use the *_openalex tools when you explicitly need
-   OpenAlex-native DOI/ID lookup, OpenAlex cursor paging, or OpenAlex author pivots
+4. CITATION REPAIR / ALMOST-RIGHT REFERENCES → resolve_citation
+5. KNOWN ITEM (messy title) → search_papers_match
+6. KNOWN ITEM (DOI / arXiv / URL) → get_paper_details
+7. PAPER ENRICHMENT / OA CHECK → get_paper_metadata_crossref,
+   get_paper_open_access_unpaywall, or enrich_paper after you already have a
+   concrete paper, DOI, or DOI-bearing identifier
+8. GROUNDED FOLLOW-UP → ask_result_set or map_research_landscape using searchSessionId
+9. CITATION EXPANSION → get_paper_citations (cited-by) or get_paper_references (refs)
+10. AUTHOR PIVOT → search_authors → get_author_info → get_author_papers
+11. PHRASE / QUOTE RECOVERY → search_snippets (last resort)
+12. OPENALEX-SPECIFIC PATHS → use the *_openalex tools when you explicitly need
+   OpenAlex-native DOI/ID lookup, OpenAlex cursor paging, author pivots, or
+   source/institution/topic pivots via search_entities_openalex and
+   search_papers_openalex_by_entity
+13. SERPAPI RECOVERY PATHS → use search_papers_serpapi_cited_by,
+   search_papers_serpapi_versions, get_author_profile_serpapi,
+   get_author_articles_serpapi, or get_serpapi_account_status only when
+   SCHOLAR_SEARCH_ENABLE_SERPAPI=true and the workflow justifies paid recall recovery
+14. ECOS SPECIES DOSSIERS → search_species_ecos → get_species_profile_ecos →
+   list_species_documents_ecos → get_document_text_ecos for species pages,
+   regulatory documents, and recovery PDFs from the U.S. Fish and Wildlife
+   Service ECOS system
+15. REGULATORY PRIMARY SOURCES → search_federal_register for discovery,
+    get_federal_register_document for one notice or rule, and get_cfr_text for
+    authoritative CFR part/section text
+16. PROVIDER HEALTH / DEBUGGING → get_provider_diagnostics
 
 After search_papers: read brokerMetadata.nextStepHint for the recommended next move.
+After search_papers_smart: reuse searchSessionId for ask_result_set,
+map_research_landscape, or expand_research_graph, and inspect acceptedExpansions,
+rejectedExpansions, speculativeExpansions, providersUsed, driftWarnings,
+latencyProfile, providerBudgetApplied, and providerOutcomes. Set
+includeEnrichment=true only when you want Crossref and Unpaywall metadata on the
+final smart-ranked hits; enrichment is post-ranking only and never changes
+retrieval or provider ordering.
+Primary read tools now also return agentHints, clarification, resourceUris, and,
+when they produce reusable result sets, searchSessionId.
+For known-item flows, includeEnrichment=true on search_papers_match,
+get_paper_details, or resolve_citation adds Crossref and Unpaywall metadata only
+after the base paper resolution succeeds.
 For Semantic Scholar expansion tools, prefer paper.recommendedExpansionId when
 present. If paper.expansionIdStatus is not_portable, do not retry with brokered
 paperId/sourceId/canonicalId values; resolve the paper through DOI or a
 Semantic Scholar-native lookup first.
-If search_papers_match returns no match, the item may be a dissertation,
-software release, report, or other output outside the indexed paper surface.
+If search_papers_match returns no match, or if the user has a broken
+bibliography line, partial reference, or almost-right citation, prefer
+resolve_citation before guessing. A no-match can still mean the item is a
+dissertation, software release, report, or other output outside the indexed
+paper surface. If the citation is clearly regulatory (for example a Federal
+Register or CFR reference), switch to search_federal_register,
+get_federal_register_document, or get_cfr_text instead of forcing a paper
+lookup.
 For common-name author lookup, add affiliation, coauthor, venue, or topic clues
 before expanding into get_author_info/get_author_papers.
 To steer the broker: use preferredProvider (try-first) or providerOrder (full override).
-Provider names: core, semantic_scholar, arxiv, serpapi / serpapi_google_scholar.
+Provider names: semantic_scholar, arxiv, core, serpapi / serpapi_google_scholar.
 Provider-specific search inputs: search_papers_core, search_papers_serpapi, and
 search_papers_arxiv only accept query/limit/year; search_papers_semantic_scholar
 supports the wider Semantic Scholar filter set. OpenAlex is available through
@@ -92,16 +158,29 @@ AGENT_WORKFLOW_GUIDE = """
 
 ## Quick decision tree
 
+- **Concept-level discovery or literature review**: `search_papers_smart` →
+  reuse `searchSessionId` with `ask_result_set`, `map_research_landscape`,
+  or `expand_research_graph`. Use `latencyProfile=fast` for smoke baselines,
+  `balanced` for the default path, and `deep` when controlled multi-provider
+    expansion is worth the extra latency. In `known_item` mode, if one exact
+    anchor is not confidently resolved, the smart workflow now falls back to a
+    broader candidate set with warnings instead of stopping on a dead-end error.
 - **Quick literature discovery**: `search_papers` → inspect
-  `brokerMetadata.nextStepHint` to decide whether to broaden, narrow,
-  paginate, or pivot.
+  `brokerMetadata.nextStepHint`, `agentHints`, and `resourceUris` to decide
+  whether to broaden, narrow, paginate, or pivot.
 - **Exhaustive / multi-page retrieval**: `search_papers_bulk` with cursor loop until
   `pagination.hasMore` is false; read `retrievalNote` because default bulk
   ordering is not relevance-ranked.
 - **Small targeted Semantic Scholar page**: `search_papers_semantic_scholar` (or
   `search_papers` if brokered discovery is fine) instead of bulk retrieval.
+- **Citation repair / incomplete references**: `resolve_citation`
 - **Known-item lookup (messy title)**: `search_papers_match`
 - **Known-item lookup (DOI / arXiv / URL / S2 ID)**: `get_paper_details`
+- **Post-resolution paper enrichment**: `get_paper_metadata_crossref`,
+  `get_paper_open_access_unpaywall`, or `enrich_paper` after you already have a
+  paper or DOI. For known-item and smart flows, opt in with
+  `includeEnrichment=true` when you want additive metadata without changing the
+  retrieval path.
 - **Citation chasing (cited-by expansion)**: `get_paper_citations`
 - **Citation chasing (backward references)**: `get_paper_references`
 - **Author-centric workflows**: `search_authors` → `get_author_info` →
@@ -118,6 +197,14 @@ AGENT_WORKFLOW_GUIDE = """
   other grey literature may fall outside the indexed paper surface even when a
   title is real; treat a structured no-match from `search_papers_match` as a
   signal to verify externally.
+- **Almost-right citations or broken bibliography lines**: prefer
+  `resolve_citation` before bouncing between title match, snippets, and broad
+  search. The resolver returns confidence, alternatives, conflicts, and the
+  fastest next clue to add.
+- **Regulatory primary-source citations**: if `resolve_citation` identifies a
+    Federal Register or CFR-style reference, pivot to `search_federal_register`,
+    `get_federal_register_document`, or `get_cfr_text` instead of treating it as
+    a scholarly paper.
 - **Quote or snippet validation**: `search_snippets` — special-purpose recovery
   tool only when title/keyword search is weak; provider 4xx/5xx errors degrade
   to empty results with retry guidance.
@@ -127,7 +214,25 @@ AGENT_WORKFLOW_GUIDE = """
 - **OpenAlex-specific workflows**: use `search_papers_openalex` for one explicit
   OpenAlex page, `search_papers_openalex_bulk` for cursor-paginated OpenAlex
   traversal, `get_paper_details_openalex` for OpenAlex ID/DOI lookup, and the
-  OpenAlex citation/author tools when you want OpenAlex-native semantics.
+  OpenAlex citation/author tools when you want OpenAlex-native semantics. Use
+  `paper_autocomplete_openalex`, `search_entities_openalex`, and
+  `search_papers_openalex_by_entity` for title hints plus venue, affiliation,
+  or topic pivots.
+- **SerpApi recovery workflows**: keep SerpApi off the default broad path and use
+  `search_papers_serpapi_cited_by`, `search_papers_serpapi_versions`,
+  `get_author_profile_serpapi`, `get_author_articles_serpapi`, and
+  `get_serpapi_account_status` only when Google Scholar recall recovery or quota
+  inspection is explicitly needed.
+- **Provider/runtime debugging**: `get_provider_diagnostics`
+- **ECOS species dossiers**: `search_species_ecos` -> `get_species_profile_ecos`
+  -> `list_species_documents_ecos` -> `get_document_text_ecos`
+- **Regulatory primary sources**: `search_federal_register` for discovery,
+    `get_federal_register_document` for one notice or rule, and `get_cfr_text`
+    for authoritative CFR text. This is the preferred path after an ECOS
+    document exposes `frCitation` or a GovInfo FR link.
+- **Grounded follow-up over a saved result set**: `ask_result_set` for QA,
+  claim checks, or comparisons; `map_research_landscape` for themes, gaps, and
+  disagreements; `expand_research_graph` for a compact citation or author graph.
 
 ## Provider steering
 
@@ -165,6 +270,16 @@ call. Use `search_papers_core`, `search_papers_semantic_scholar`,
 For every paginated tool: treat `pagination.nextCursor` as opaque, pass it back
 exactly as returned, and do not derive, edit, fabricate, or cross-reuse it.
 
+## Agent-facing metadata
+
+- Primary read tools now return `agentHints`, `clarification`, and
+  `resourceUris`.
+- Discovery and expansion tools that create reusable result sets also return
+  `searchSessionId`.
+- The resources surfaced from tool outputs are `paper://{paper_id}`,
+  `author://{author_id}`, `search://{searchSessionId}`, and
+  `trail://paper/{paper_id}?direction=citations|references`.
+
 ## Agentic UX review loop
 
 - Start with a smoke baseline across discovery, known-item lookup, pagination,
@@ -192,9 +307,11 @@ __all__ = [
     "SEMANTIC_SCHOLAR_MIN_INTERVAL",
     "SemanticScholarClient",
     "CoreApiClient",
+    "CrossrefClient",
     "OpenAlexClient",
     "ArxivClient",
     "SerpApiScholarClient",
+    "UnpaywallClient",
     "_arxiv_id_from_url",
     "_text",
     "_core_response_to_merged",
@@ -206,21 +323,36 @@ __all__ = [
     "http_app",
     "build_http_app",
     "settings",
+    "agentic_config",
     "api_key",
+    "openai_api_key",
     "core_api_key",
     "serpapi_api_key",
     "openalex_api_key",
     "openalex_mailto",
+    "crossref_mailto",
+    "unpaywall_email",
     "enable_core",
     "enable_semantic_scholar",
     "enable_openalex",
     "enable_arxiv",
     "enable_serpapi",
+    "enable_crossref",
+    "enable_unpaywall",
+    "enable_ecos",
     "client",
     "core_client",
+    "crossref_client",
+    "ecos_client",
     "openalex_client",
     "arxiv_client",
     "serpapi_client",
+    "unpaywall_client",
+    "provider_registry",
+    "enrichment_service",
+    "workspace_registry",
+    "provider_bundle",
+    "agentic_runtime",
     "list_tools",
     "call_tool",
     "main",
@@ -232,42 +364,7 @@ def _format_tool_display_name(name: str) -> str:
 
 
 def _tool_tags(name: str) -> set[str]:
-    provider_tags = {
-        "search_papers": {"search", "brokered"},
-        "search_papers_core": {"search", "provider-specific", "provider:core"},
-        "search_papers_semantic_scholar": {
-            "search",
-            "provider-specific",
-            "provider:semantic_scholar",
-        },
-        "search_papers_serpapi": {
-            "search",
-            "provider-specific",
-            "provider:serpapi_google_scholar",
-        },
-        "search_papers_arxiv": {"search", "provider-specific", "provider:arxiv"},
-        "search_papers_openalex": {
-            "search",
-            "provider-specific",
-            "provider:openalex",
-        },
-        "search_papers_openalex_bulk": {
-            "search",
-            "provider-specific",
-            "provider:openalex",
-        },
-    }
-    if name in provider_tags:
-        return provider_tags[name]
-    if name.startswith("search_"):
-        return {"search"}
-    if name.startswith("get_paper_"):
-        return {"paper"}
-    if name.startswith("get_author_") or name == "search_authors":
-        return {"author"}
-    if name.startswith("batch_"):
-        return {"batch"}
-    return {"scholar-search"}
+    return set(get_tool_spec(name).tags)
 
 
 def _parameter_name(field_name: str, alias: str | None) -> str:
@@ -297,25 +394,36 @@ def _build_signature(model: Any) -> tuple[Signature, dict[str, Any]]:
                 default=_parameter_default(model_field),
             )
         )
+    annotations["ctx"] = Context
+    parameters.append(
+        Parameter(
+            "ctx",
+            Parameter.POSITIONAL_OR_KEYWORD,
+            annotation=Context,
+            default=None,
+        )
+    )
     return Signature(parameters=parameters), annotations
 
 
 def _register_tool(tool_name: str) -> None:
-    signature, annotations = _build_signature(TOOL_INPUT_MODELS[tool_name])
+    tool_spec = get_tool_spec(tool_name)
+    signature, annotations = _build_signature(tool_spec.input_model)
 
     async def _tool_impl(**kwargs: Any) -> dict[str, Any]:
-        return await _execute_tool(tool_name, kwargs)
+        ctx = kwargs.pop("ctx", None)
+        return await _execute_tool(tool_name, kwargs, ctx=ctx)
 
     _tool_impl.__name__ = tool_name
-    _tool_impl.__doc__ = TOOL_DESCRIPTIONS[tool_name]
+    _tool_impl.__doc__ = tool_spec.description
     setattr(_tool_impl, "__signature__", signature)
     _tool_impl.__annotations__ = annotations
 
     app.tool(
         name=tool_name,
         title=_format_tool_display_name(tool_name),
-        description=TOOL_DESCRIPTIONS[tool_name],
-        tags=_tool_tags(tool_name),
+        description=tool_spec.description,
+        tags=set(tool_spec.tags),
         annotations=ToolAnnotations(
             title=_format_tool_display_name(tool_name),
             readOnlyHint=True,
@@ -323,9 +431,20 @@ def _register_tool(tool_name: str) -> None:
             openWorldHint=True,
         ),
     )(_tool_impl)
+    _sanitize_registered_tool_schema(tool_name)
 
 
-async def _execute_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+def _sanitize_registered_tool_schema(tool_name: str) -> None:
+    tool = cast(Any, app.local_provider._components[f"tool:{tool_name}@"])
+    tool.parameters = sanitize_published_schema(tool.parameters)
+
+
+async def _execute_tool(
+    name: str,
+    arguments: dict[str, Any],
+    *,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
     return await dispatch_tool(
         name,
         arguments,
@@ -339,37 +458,161 @@ async def _execute_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         enable_arxiv=enable_arxiv,
         serpapi_client=serpapi_client,
         enable_serpapi=enable_serpapi,
+        crossref_client=crossref_client,
+        unpaywall_client=unpaywall_client,
+        ecos_client=ecos_client,
+        federal_register_client=federal_register_client,
+        govinfo_client=govinfo_client,
+        enable_crossref=enable_crossref,
+        enable_unpaywall=enable_unpaywall,
+        enable_ecos=enable_ecos,
+        enable_federal_register=enable_federal_register,
+        enable_govinfo_cfr=enable_govinfo_cfr,
+        enrichment_service=enrichment_service,
         provider_order=provider_order,
+        provider_registry=provider_registry,
+        workspace_registry=workspace_registry,
+        agentic_runtime=agentic_runtime,
+        ctx=ctx,
     )
 
 
 settings = AppSettings.from_env()
+agentic_config = AgenticConfig.from_settings(settings)
 api_key = settings.semantic_scholar_api_key
+openai_api_key = settings.openai_api_key
 core_api_key = settings.core_api_key
 openalex_api_key = settings.openalex_api_key
 openalex_mailto = settings.openalex_mailto
 serpapi_api_key = settings.serpapi_api_key
+govinfo_api_key = settings.govinfo_api_key
+crossref_mailto = settings.crossref_mailto
+unpaywall_email = settings.unpaywall_email
+ecos_base_url = settings.ecos_base_url
 enable_core = settings.enable_core
 enable_semantic_scholar = settings.enable_semantic_scholar
 enable_openalex = settings.enable_openalex
 enable_arxiv = settings.enable_arxiv
 enable_serpapi = settings.enable_serpapi
+enable_crossref = settings.enable_crossref
+enable_unpaywall = settings.enable_unpaywall
+enable_ecos = settings.enable_ecos
+enable_federal_register = settings.enable_federal_register
+enable_govinfo_cfr = settings.enable_govinfo_cfr
 provider_order = list(settings.provider_order)
+provider_registry = ProviderDiagnosticsRegistry()
 client = SemanticScholarClient(api_key=api_key)
 core_client = CoreApiClient(api_key=core_api_key)
+federal_register_client = FederalRegisterClient(timeout=settings.federal_register_timeout_seconds)
+govinfo_client = GovInfoClient(
+    api_key=govinfo_api_key,
+    timeout=settings.govinfo_timeout_seconds,
+    document_timeout=settings.govinfo_document_timeout_seconds,
+    max_document_size_mb=settings.govinfo_max_document_size_mb,
+)
+crossref_client = CrossrefClient(
+    mailto=crossref_mailto,
+    timeout=settings.crossref_timeout_seconds,
+)
+ecos_client = EcosClient(
+    base_url=ecos_base_url,
+    timeout=settings.ecos_timeout_seconds,
+    document_timeout=settings.ecos_document_timeout_seconds,
+    document_conversion_timeout=settings.ecos_document_conversion_timeout_seconds,
+    max_document_size_mb=settings.ecos_max_document_size_mb,
+    verify_tls=settings.ecos_verify_tls,
+    ca_bundle=settings.ecos_ca_bundle,
+    provider_registry=provider_registry,
+)
 openalex_client = OpenAlexClient(api_key=openalex_api_key, mailto=openalex_mailto)
 arxiv_client = ArxivClient()
 serpapi_client = SerpApiScholarClient(api_key=serpapi_api_key)
+unpaywall_client = UnpaywallClient(
+    email=unpaywall_email,
+    timeout=settings.unpaywall_timeout_seconds,
+)
+enrichment_service = PaperEnrichmentService(
+    crossref_client=crossref_client,
+    unpaywall_client=unpaywall_client,
+    enable_crossref=enable_crossref,
+    enable_unpaywall=enable_unpaywall,
+    provider_registry=provider_registry,
+)
+provider_bundle = resolve_provider_bundle(
+    agentic_config,
+    openai_api_key=openai_api_key,
+    provider_registry=provider_registry,
+)
+workspace_registry = WorkspaceRegistry(
+    ttl_seconds=settings.session_ttl_seconds,
+    enable_trace_log=settings.enable_agentic_trace_log,
+    index_backend=settings.agentic_index_backend,
+    similarity_fn=provider_bundle.similarity,
+    async_batched_similarity_fn=provider_bundle.abatched_similarity,
+    async_embed_query_fn=(None if settings.disable_embeddings else provider_bundle.aembed_query),
+    async_embed_texts_fn=(None if settings.disable_embeddings else provider_bundle.aembed_texts),
+    embed_query_fn=(None if settings.disable_embeddings else provider_bundle.embed_query),
+    embed_texts_fn=(None if settings.disable_embeddings else provider_bundle.embed_texts),
+)
+agentic_runtime = AgenticRuntime(
+    config=agentic_config,
+    provider_bundle=provider_bundle,
+    workspace_registry=workspace_registry,
+    client=client,
+    core_client=core_client,
+    openalex_client=openalex_client,
+    arxiv_client=arxiv_client,
+    serpapi_client=serpapi_client,
+    enable_core=enable_core,
+    enable_semantic_scholar=enable_semantic_scholar,
+    enable_openalex=enable_openalex,
+    enable_arxiv=enable_arxiv,
+    enable_serpapi=enable_serpapi,
+    provider_registry=provider_registry,
+    enrichment_service=enrichment_service,
+)
+
+
+@asynccontextmanager
+async def _server_lifespan(_: FastMCP):
+    try:
+        yield
+    finally:
+        await agentic_runtime.aclose()
+        await maybe_close_async_resource(client)
+        await maybe_close_async_resource(core_client)
+        await maybe_close_async_resource(openalex_client)
+        await maybe_close_async_resource(arxiv_client)
+        await maybe_close_async_resource(serpapi_client)
+        await maybe_close_async_resource(crossref_client)
+        await maybe_close_async_resource(unpaywall_client)
+        await maybe_close_async_resource(ecos_client)
+        await maybe_close_async_resource(federal_register_client)
+        await maybe_close_async_resource(govinfo_client)
+
 
 app = FastMCP(
     "scholar-search",
     instructions=SERVER_INSTRUCTIONS,
+    lifespan=_server_lifespan,
     strict_input_validation=True,
 )
 app.add_middleware(TimingMiddleware(logger=logger))
 
-for _tool_name in TOOL_INPUT_MODELS:
-    _register_tool(_tool_name)
+for _tool_spec in iter_tool_specs():
+    _register_tool(_tool_spec.name)
+
+
+def _resource_text(payload: dict[str, Any]) -> str:
+    return json.dumps(dump_jsonable(payload), ensure_ascii=False, indent=2)
+
+
+def _paper_resource_payload(paper: dict[str, Any]) -> dict[str, Any]:
+    return render_paper_resource_payload(paper)
+
+
+def _author_resource_payload(author: dict[str, Any]) -> dict[str, Any]:
+    return render_author_resource_payload(author)
 
 
 @app.resource(
@@ -380,6 +623,99 @@ for _tool_name in TOOL_INPUT_MODELS:
 def agent_workflows() -> str:
     """Return a compact workflow guide for agents."""
     return AGENT_WORKFLOW_GUIDE
+
+
+@app.resource(
+    "paper://{paper_id}",
+    title="Paper resource",
+    description="Compact cached or fetched paper payload plus markdown summary.",
+    mime_type="application/json",
+)
+async def paper_resource(paper_id: str) -> str:
+    cached = workspace_registry.render_paper_resource(paper_id)
+    if cached is not None:
+        return _resource_text(cached)
+    last_error: Exception | None = None
+    for fetch in (
+        lambda: client.get_paper_details(paper_id),
+        lambda: openalex_client.get_paper_details(paper_id),
+    ):
+        try:
+            paper = await fetch()
+            return _resource_text(_paper_resource_payload(paper))
+        except Exception as exc:
+            last_error = exc
+            logger.debug("Paper resource fetch failed for %r: %s", paper_id, exc)
+    raise ValueError(f"Could not resolve paper resource for {paper_id!r}.") from last_error
+
+
+@app.resource(
+    "author://{author_id}",
+    title="Author resource",
+    description="Compact cached or fetched author payload plus markdown summary.",
+    mime_type="application/json",
+)
+async def author_resource(author_id: str) -> str:
+    cached = workspace_registry.render_author_resource(author_id)
+    if cached is not None:
+        return _resource_text(cached)
+    last_error: Exception | None = None
+    for fetch in (
+        lambda: client.get_author_info(author_id),
+        lambda: openalex_client.get_author_info(author_id),
+    ):
+        try:
+            author = await fetch()
+            return _resource_text(_author_resource_payload(author))
+        except Exception as exc:
+            last_error = exc
+            logger.debug("Author resource fetch failed for %r: %s", author_id, exc)
+    raise ValueError(f"Could not resolve author resource for {author_id!r}.") from last_error
+
+
+@app.resource(
+    "search://{search_session_id}",
+    title="Search session resource",
+    description="Saved result-set handle surfaced from tool outputs.",
+    mime_type="application/json",
+)
+def search_session_resource(search_session_id: str) -> str:
+    return _resource_text(workspace_registry.render_search_resource(search_session_id))
+
+
+@app.resource(
+    "trail://paper/{paper_id}?direction={direction}",
+    title="Paper trail resource",
+    description=("Citation or reference trail for a paper, preferably discovered through tool outputs."),
+    mime_type="application/json",
+)
+async def paper_trail_resource(
+    paper_id: str,
+    direction: Literal["citations", "references"],
+) -> str:
+    cached_trail = workspace_registry.find_trail(paper_id=paper_id, direction=direction)
+    if cached_trail is not None:
+        return _resource_text(workspace_registry.render_search_resource(cached_trail.search_session_id))
+    payload = await (
+        client.get_paper_citations(paper_id=paper_id, limit=25, fields=None, offset=None)
+        if direction == "citations"
+        else client.get_paper_references(
+            paper_id=paper_id,
+            limit=25,
+            fields=None,
+            offset=None,
+        )
+    )
+    title = "Citations" if direction == "citations" else "References"
+    summary = {
+        "markdown": (
+            f"# {title} trail for `{paper_id}`\n\n"
+            f"- Direction: {direction}\n"
+            f"- Results: {len((payload or {}).get('data') or [])}"
+        ),
+        "data": payload,
+    }
+    return _resource_text(summary)
 
 
 @app.prompt(
@@ -411,14 +747,15 @@ def plan_scholar_search(
             "tool paths that exercise it."
         ),
     }
-    focus_text = (
-        f" Focus prompt: {focus_prompt}."
-        if focus_prompt
-        else " No extra focus prompt was supplied."
-    )
+    focus_text = f" Focus prompt: {focus_prompt}." if focus_prompt else " No extra focus prompt was supplied."
     return (
         f"You are planning a scholar-search workflow about '{topic}'. Goal: {goal}. "
         f"Mode: {mode}. {mode_guidance[mode]}{focus_text} "
+        "If the task is concept-level discovery, literature review, or a grounded "
+        "follow-up over a reusable result set, prefer search_papers_smart first "
+        "and reuse searchSessionId with ask_result_set, map_research_landscape, "
+        "or expand_research_graph. Fall back to raw tools when you need provider-"
+        "specific control, pagination, or exact low-level semantics. "
         "Start with search_papers for quick literature discovery, then read "
         "brokerMetadata.nextStepHint to decide whether to broaden, narrow, paginate, "
         "pivot providers, or pivot into authors. "
@@ -436,11 +773,17 @@ def plan_scholar_search(
         "If the task explicitly needs OpenAlex-native DOI/ID lookup, OpenAlex "
         "cursor pagination, or OpenAlex author/citation semantics, use the "
         "dedicated *_openalex tools instead of the default broker. "
-        "If the task is known-item lookup, use search_papers_match for messy titles "
+        "If the task is citation repair, broken bibliography recovery, or "
+        "almost-right reference correction, use resolve_citation first. If the "
+        "task is known-item lookup, use search_papers_match for messy titles "
         "and get_paper_details for DOI, arXiv ID, URL, or canonical IDs. Treat a "
         "structured no-match from search_papers_match as a hint that the item may "
         "be a dissertation, software release, report, or other output outside the "
-        "indexed paper surface. "
+        "indexed paper surface. Once you have a stable paper anchor, use "
+        "get_paper_metadata_crossref, get_paper_open_access_unpaywall, or "
+        "enrich_paper for additive metadata and OA/PDF discovery. Known-item "
+        "tools and search_papers_smart also expose includeEnrichment=true when "
+        "you want post-resolution enrichment without changing ranking. "
         "If the task starts from a known paper, use get_paper_citations for cited-by "
         "expansion and get_paper_references for backward references, and explain "
         "that direction clearly. "
@@ -466,6 +809,90 @@ def plan_scholar_search(
         "Treat pagination.nextCursor as opaque: reuse it exactly as returned, do "
         "not edit or fabricate it, and keep it scoped to the tool/query flow that "
         "produced it."
+    )
+
+
+@app.prompt(
+    name="plan_smart_scholar_search",
+    title="Plan Smart Scholar Search",
+    description=("Generate a smart-tool-first research plan for concept-level discovery."),
+)
+def plan_smart_scholar_search(
+    topic: str,
+    goal: str = ("map the literature, answer grounded follow-up questions, and identify the best next actions"),
+    mode: Literal["discovery", "review", "known_item", "author", "citation"] = "discovery",
+) -> str:
+    return (
+        f"You are planning a smart scholar-search workflow about '{topic}'. "
+        f"Goal: {goal}. Mode: {mode}. Start with search_papers_smart for "
+        "concept-level discovery or "
+        "known-item resolution. For broken citations or almost-right "
+        "references, prefer resolve_citation before broader discovery. Reuse "
+        "searchSessionId across ask_result_set, "
+        "map_research_landscape, and expand_research_graph. If the smart workflow "
+        "cannot stay grounded, drop to raw tools: search_papers, search_papers_bulk, "
+        "get_paper_details, resolve_citation, get_paper_citations, "
+        "get_paper_references, search_authors, and get_author_papers."
+        " When you already have the right paper and want richer metadata or OA "
+        "signals, use includeEnrichment=true on the smart or known-item path, or "
+        "call enrich_paper explicitly."
+    )
+
+
+@app.prompt(
+    name="triage_literature",
+    title="Triage Literature",
+    description="Turn a research topic into a compact triage workflow.",
+)
+def triage_literature(
+    topic: str,
+    goal: str = "identify core themes, strongest anchors, and the next best tool call",
+) -> str:
+    return (
+        f"Triage literature for '{topic}'. Goal: {goal}. Start with "
+        "search_papers_smart. Inspect strategyMetadata, "
+        "acceptedExpansions, rejectedExpansions, resourceUris, and "
+        "agentHints. Save the searchSessionId, then ask one grounded question with "
+        "ask_result_set and one clustering question with map_research_landscape. "
+        "If one hit becomes a strong anchor, optionally enrich it with Crossref "
+        "and Unpaywall before the next citation or QA step."
+    )
+
+
+@app.prompt(
+    name="plan_citation_chase",
+    title="Plan Citation Chase",
+    description="Generate a citation-expansion workflow from a paper anchor.",
+)
+def plan_citation_chase(
+    paper_id: str,
+    direction: Literal["citations", "references"] = "citations",
+    goal: str = "find the most influential neighboring work and preserve provenance",
+) -> str:
+    return (
+        f"Plan a citation chase from paper '{paper_id}' in the "
+        f"'{direction}' direction. Goal: {goal}. Prefer expand_research_graph "
+        "for a compact frontier. If you need "
+        "provider-native control or pagination, use get_paper_citations or "
+        "get_paper_references directly and treat pagination.nextCursor as opaque."
+    )
+
+
+@app.prompt(
+    name="refine_query",
+    title="Refine Query",
+    description="Generate a bounded query-refinement workflow for the current topic.",
+)
+def refine_query(
+    query: str,
+    weakness: str = "results are too broad, too narrow, or too noisy",
+) -> str:
+    return (
+        f"Refine the query '{query}'. Problem signal: {weakness}. "
+        "Try search_papers_smart first and inspect acceptedExpansions, "
+        "rejectedExpansions, speculativeExpansions, and driftWarnings. "
+        "If needed, add year/venue/focus constraints or fall back to raw search_papers "
+        "with providerOrder or preferredProvider."
     )
 
 

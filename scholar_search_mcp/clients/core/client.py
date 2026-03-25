@@ -5,7 +5,7 @@ from typing import Any, Literal, Optional
 
 from ...constants import CORE_API_BASE
 from ...models import Author, CoreSearchResponse, Paper, dump_jsonable
-from ...transport import asyncio, httpx
+from ...transport import asyncio, httpx, maybe_close_async_resource
 
 logger = logging.getLogger("scholar-search-mcp")
 
@@ -24,6 +24,12 @@ class CoreApiClient:
         self.timeout = timeout
         self.max_retries = max_retries
         self.base_delay = base_delay
+        self._http_client: Any | None = None
+
+    def _get_http_client(self) -> Any:
+        if self._http_client is None:
+            self._http_client = httpx.AsyncClient(timeout=self.timeout)
+        return self._http_client
 
     async def search(
         self,
@@ -48,9 +54,7 @@ class CoreApiClient:
                 year_start = year_start.strip()[:4]
                 year_end = year_end.strip()[:4]
                 if year_start.isdigit() and year_end.isdigit():
-                    params["q"] = (
-                        f"{params['q']} yearPublished:[{year_start} TO {year_end}]"
-                    )
+                    params["q"] = f"{params['q']} yearPublished:[{year_start} TO {year_end}]"
             else:
                 single_year = year.strip()[:4]
                 if single_year.isdigit():
@@ -60,27 +64,27 @@ class CoreApiClient:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                for attempt in range(self.max_retries + 1):
-                    response = await client.get(
-                        CORE_API_BASE,
-                        params=params,
-                        headers=headers,
-                        follow_redirects=True,
+            client = self._get_http_client()
+            for attempt in range(self.max_retries + 1):
+                response = await client.get(
+                    CORE_API_BASE,
+                    params=params,
+                    headers=headers,
+                    follow_redirects=True,
+                )
+                if response.status_code >= 500 and attempt < self.max_retries:
+                    delay = self.base_delay * (2**attempt)
+                    logger.warning(
+                        "CORE search returned %s, retrying in %.1fs (%s/%s)",
+                        response.status_code,
+                        delay,
+                        attempt + 1,
+                        self.max_retries,
                     )
-                    if response.status_code >= 500 and attempt < self.max_retries:
-                        delay = self.base_delay * (2**attempt)
-                        logger.warning(
-                            "CORE search returned %s, retrying in %.1fs (%s/%s)",
-                            response.status_code,
-                            delay,
-                            attempt + 1,
-                            self.max_retries,
-                        )
-                        await asyncio.sleep(delay)
-                        continue
-                    response.raise_for_status()
-                    break
+                    await asyncio.sleep(delay)
+                    continue
+                response.raise_for_status()
+                break
         except Exception as exc:
             logger.warning("CORE search request failed: %s", exc)
             raise
@@ -94,8 +98,7 @@ class CoreApiClient:
                 entries.append(Paper.model_validate(paper))
         if results and len(entries) < len(results):
             logger.debug(
-                "CORE returned %s results, %s had valid url/title "
-                "(some may lack doi/downloadUrl)",
+                "CORE returned %s results, %s had valid url/title (some may lack doi/downloadUrl)",
                 len(results),
                 len(entries),
             )
@@ -105,6 +108,11 @@ class CoreApiClient:
                 entries=entries,
             )
         )
+
+    async def aclose(self) -> None:
+        """Close the shared HTTP client, if one has been created."""
+        client, self._http_client = self._http_client, None
+        await maybe_close_async_resource(client)
 
     def _result_to_paper(self, result: dict[str, Any]) -> Optional[dict[str, Any]]:
         """Convert one CORE result to an S2-compatible paper dict."""
@@ -121,11 +129,7 @@ class CoreApiClient:
                 url = download_url
             elif isinstance(download_url, dict):
                 url = download_url.get("url") or download_url.get("link")
-                if (
-                    not url
-                    and isinstance(download_url.get("urls"), list)
-                    and download_url["urls"]
-                ):
+                if not url and isinstance(download_url.get("urls"), list) and download_url["urls"]:
                     first_url = download_url["urls"][0]
                     if isinstance(first_url, str):
                         url = first_url
@@ -142,11 +146,7 @@ class CoreApiClient:
                 elif isinstance(first_source_url, dict):
                     url = first_source_url.get("url") or first_source_url.get("link")
             elif isinstance(source_urls, dict):
-                urls = (
-                    source_urls.get("urls")
-                    or source_urls.get("url")
-                    or source_urls.get("link")
-                )
+                urls = source_urls.get("urls") or source_urls.get("url") or source_urls.get("link")
                 if isinstance(urls, list) and urls:
                     url = urls[0]
                 elif isinstance(urls, str):
@@ -214,8 +214,7 @@ class CoreApiClient:
             Paper(
                 paperId=str(result.get("id", result.get("doi", ""))),
                 title=title,
-                abstract=(result.get("abstract") or result.get("fullText") or "")[:5000]
-                or None,
+                abstract=(result.get("abstract") or result.get("fullText") or "")[:5000] or None,
                 year=year_val,
                 authors=authors,
                 citationCount=result.get("citationCount"),

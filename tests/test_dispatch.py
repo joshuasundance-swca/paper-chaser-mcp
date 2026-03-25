@@ -3,16 +3,59 @@ import pytest
 import scholar_search_mcp
 import scholar_search_mcp.__main__ as server_main
 import scholar_search_mcp.cli as cli
+import scholar_search_mcp.clients.serpapi.client as serpapi_client_module
 from scholar_search_mcp import server
+from scholar_search_mcp.clients.serpapi import SerpApiScholarClient
+from scholar_search_mcp.enrichment import PaperEnrichmentService
 from scholar_search_mcp.utils.cursor import decode_bulk_cursor, decode_cursor
-from tests.helpers import RecordingOpenAlexClient, RecordingSemanticClient, _payload
+from tests.helpers import (
+    DummyResponse,
+    DummySerpApiAsyncClient,
+    RecordingCrossrefClient,
+    RecordingEcosClient,
+    RecordingOpenAlexClient,
+    RecordingSemanticClient,
+    RecordingUnpaywallClient,
+    _payload,
+)
+
+
+def _assert_additive_metadata(
+    payload: dict,
+    *,
+    expect_search_session_id: bool = False,
+) -> None:
+    assert "agentHints" in payload
+    assert "resourceUris" in payload
+    if expect_search_session_id:
+        assert payload.get("searchSessionId")
+
+
+def _install_recording_enrichment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[RecordingCrossrefClient, RecordingUnpaywallClient]:
+    crossref = RecordingCrossrefClient()
+    unpaywall = RecordingUnpaywallClient()
+    service = PaperEnrichmentService(
+        crossref_client=crossref,
+        unpaywall_client=unpaywall,
+        enable_crossref=True,
+        enable_unpaywall=True,
+        provider_registry=server.provider_registry,
+    )
+    monkeypatch.setattr(server, "enable_crossref", True)
+    monkeypatch.setattr(server, "enable_unpaywall", True)
+    monkeypatch.setattr(server, "crossref_client", crossref)
+    monkeypatch.setattr(server, "unpaywall_client", unpaywall)
+    monkeypatch.setattr(server, "enrichment_service", service)
+    return crossref, unpaywall
 
 
 @pytest.mark.asyncio
 async def test_list_tools_returns_expected_public_contract() -> None:
     tools = await server.list_tools()
 
-    assert len(tools) == 29
+    assert len(tools) == 53
     tool_map = {tool.name: tool for tool in tools}
     assert set(tool_map) == {
         "search_papers",
@@ -24,8 +67,13 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "search_papers_openalex_bulk",
         "search_papers_bulk",
         "search_papers_match",
+        "resolve_citation",
         "paper_autocomplete",
+        "paper_autocomplete_openalex",
         "get_paper_details",
+        "get_paper_metadata_crossref",
+        "get_paper_open_access_unpaywall",
+        "enrich_paper",
         "get_paper_details_openalex",
         "get_paper_citations",
         "get_paper_citations_openalex",
@@ -37,6 +85,8 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "get_author_papers",
         "search_authors",
         "search_authors_openalex",
+        "search_entities_openalex",
+        "search_papers_openalex_by_entity",
         "get_author_papers_openalex",
         "batch_get_authors",
         "search_snippets",
@@ -44,6 +94,23 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "get_paper_recommendations_post",
         "batch_get_papers",
         "get_paper_citation_formats",
+        "search_papers_serpapi_cited_by",
+        "search_papers_serpapi_versions",
+        "get_author_profile_serpapi",
+        "get_author_articles_serpapi",
+        "get_serpapi_account_status",
+        "get_provider_diagnostics",
+        "search_species_ecos",
+        "get_species_profile_ecos",
+        "list_species_documents_ecos",
+        "get_document_text_ecos",
+        "search_federal_register",
+        "get_federal_register_document",
+        "get_cfr_text",
+        "search_papers_smart",
+        "ask_result_set",
+        "map_research_landscape",
+        "expand_research_graph",
     }
     assert tool_map["search_papers"].inputSchema["required"] == ["query"]
     assert set(tool_map["search_papers"].inputSchema["properties"]) == {
@@ -65,9 +132,7 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "limit",
         "year",
     }
-    assert set(
-        tool_map["search_papers_semantic_scholar"].inputSchema["properties"]
-    ) == {
+    assert set(tool_map["search_papers_semantic_scholar"].inputSchema["properties"]) == {
         "query",
         "limit",
         "fields",
@@ -94,15 +159,78 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "limit",
         "year",
     }
+    assert set(tool_map["paper_autocomplete_openalex"].inputSchema["properties"]) == {
+        "query",
+        "limit",
+    }
     assert set(tool_map["search_papers_openalex_bulk"].inputSchema["properties"]) == {
         "query",
         "limit",
         "year",
         "cursor",
     }
+    assert set(tool_map["search_entities_openalex"].inputSchema["properties"]) == {
+        "query",
+        "entityType",
+        "limit",
+        "cursor",
+    }
+    assert set(tool_map["search_papers_openalex_by_entity"].inputSchema["properties"]) == {
+        "entityType",
+        "entityId",
+        "limit",
+        "cursor",
+        "year",
+    }
+    assert set(tool_map["resolve_citation"].inputSchema["properties"]) == {
+        "citation",
+        "maxCandidates",
+        "titleHint",
+        "authorHint",
+        "yearHint",
+        "venueHint",
+        "doiHint",
+        "includeEnrichment",
+    }
+    assert set(tool_map["get_paper_details"].inputSchema["properties"]) == {
+        "paper_id",
+        "fields",
+        "includeEnrichment",
+    }
+    assert set(tool_map["get_paper_metadata_crossref"].inputSchema["properties"]) == {
+        "paper_id",
+        "doi",
+        "query",
+    }
+    assert set(tool_map["get_paper_open_access_unpaywall"].inputSchema["properties"]) == {
+        "paper_id",
+        "doi",
+    }
+    assert set(tool_map["enrich_paper"].inputSchema["properties"]) == {
+        "paper_id",
+        "doi",
+        "query",
+    }
+    assert set(tool_map["search_species_ecos"].inputSchema["properties"]) == {
+        "query",
+        "limit",
+        "matchMode",
+    }
+    assert set(tool_map["get_species_profile_ecos"].inputSchema["properties"]) == {
+        "species_id",
+    }
+    assert set(tool_map["list_species_documents_ecos"].inputSchema["properties"]) == {
+        "species_id",
+        "documentKinds",
+    }
+    assert set(tool_map["get_document_text_ecos"].inputSchema["properties"]) == {
+        "url",
+    }
     search_tags = tool_map["search_papers"].meta or {}
     semantic_tags = tool_map["search_papers_semantic_scholar"].meta or {}
     openalex_tags = tool_map["search_papers_openalex"].meta or {}
+    citation_tags = tool_map["resolve_citation"].meta or {}
+    ecos_tags = tool_map["search_species_ecos"].meta or {}
     assert set(search_tags["fastmcp"]["tags"]) == {
         "search",
         "brokered",
@@ -117,12 +245,56 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "provider-specific",
         "provider:openalex",
     }
+    assert set(citation_tags["fastmcp"]["tags"]) == {
+        "citation-repair",
+        "known-item",
+        "recovery",
+    }
+    assert set(ecos_tags["fastmcp"]["tags"]) == {
+        "search",
+        "species",
+        "provider-specific",
+        "provider:ecos",
+    }
+    assert set(tool_map["search_papers_smart"].inputSchema["properties"]) == {
+        "query",
+        "limit",
+        "searchSessionId",
+        "mode",
+        "year",
+        "venue",
+        "focus",
+        "latencyProfile",
+        "providerBudget",
+        "includeEnrichment",
+    }
+    assert set(tool_map["ask_result_set"].inputSchema["properties"]) == {
+        "searchSessionId",
+        "question",
+        "topK",
+        "answerMode",
+        "latencyProfile",
+    }
+    assert set(tool_map["map_research_landscape"].inputSchema["properties"]) == {
+        "searchSessionId",
+        "maxThemes",
+        "latencyProfile",
+    }
+    assert set(tool_map["expand_research_graph"].inputSchema["properties"]) == {
+        "seedPaperIds",
+        "seedSearchSessionId",
+        "direction",
+        "hops",
+        "perSeedLimit",
+        "latencyProfile",
+    }
     assert tool_map["batch_get_papers"].inputSchema["required"] == ["paper_ids"]
     assert tool_map["batch_get_authors"].inputSchema["required"] == ["author_ids"]
     post_rec_schema = tool_map["get_paper_recommendations_post"].inputSchema
     assert "positivePaperIds" in post_rec_schema["required"]
     citation_schema = tool_map["get_paper_citation_formats"].inputSchema
     assert citation_schema["required"] == ["result_id"]
+    assert set(tool_map["get_provider_diagnostics"].inputSchema["properties"]) == {"includeRecentOutcomes"}
 
 
 @pytest.mark.asyncio
@@ -212,7 +384,398 @@ async def test_call_tool_routes_non_search_tools(
     payload = _payload(await server.call_tool(tool_name, arguments))
 
     assert fake_client.calls == [expected_call]
-    assert payload == expected_payload
+    if isinstance(expected_payload, list):
+        assert payload == expected_payload
+        return
+    for key, value in expected_payload.items():
+        assert payload[key] == value
+    _assert_additive_metadata(
+        payload,
+        expect_search_session_id=tool_name in {"get_paper_citations", "get_paper_references", "get_author_papers"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_explicit_enrichment_tools_route_through_recording_clients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    crossref, unpaywall = _install_recording_enrichment(monkeypatch)
+
+    crossref_payload = _payload(
+        await server.call_tool(
+            "get_paper_metadata_crossref",
+            {"doi": "https://doi.org/10.1234/seed-doi"},
+        )
+    )
+    unpaywall_payload = _payload(
+        await server.call_tool(
+            "get_paper_open_access_unpaywall",
+            {"doi": "doi:10.1234/seed-doi"},
+        )
+    )
+    merged_payload = _payload(
+        await server.call_tool(
+            "enrich_paper",
+            {"query": "Crossref Query Paper"},
+        )
+    )
+
+    assert crossref.calls[0] == ("get_work", {"doi": "10.1234/seed-doi"})
+    assert crossref_payload["found"] is True
+    assert crossref_payload["resolvedDoi"] == "10.1234/seed-doi"
+    assert crossref_payload["work"]["publisher"] == "Crossref Publisher"
+    _assert_additive_metadata(crossref_payload)
+
+    assert unpaywall.calls[0] == ("get_open_access", {"doi": "10.1234/seed-doi"})
+    assert unpaywall_payload["found"] is True
+    assert unpaywall_payload["isOa"] is True
+    assert unpaywall_payload["pdfUrl"] == "https://oa.example/10.1234/seed-doi.pdf"
+    _assert_additive_metadata(unpaywall_payload)
+
+    assert ("search_work", {"query": "Crossref Query Paper"}) in crossref.calls
+    assert (
+        "get_open_access",
+        {"doi": "10.1234/crossref-query"},
+    ) in unpaywall.calls
+    assert merged_payload["doiResolution"]["resolvedDoi"] == "10.1234/crossref-query"
+    assert merged_payload["enrichments"]["crossref"]["doi"] == "10.1234/crossref-query"
+    assert merged_payload["enrichments"]["unpaywall"]["isOa"] is True
+    _assert_additive_metadata(merged_payload)
+
+
+@pytest.mark.asyncio
+async def test_ecos_tools_route_through_recording_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ecos = RecordingEcosClient()
+    monkeypatch.setattr(server, "ecos_client", ecos)
+    monkeypatch.setattr(server, "enable_ecos", True)
+
+    search_payload = _payload(
+        await server.call_tool(
+            "search_species_ecos",
+            {"query": "California least tern"},
+        )
+    )
+    profile_payload = _payload(
+        await server.call_tool(
+            "get_species_profile_ecos",
+            {"species_id": "8104"},
+        )
+    )
+    list_payload = _payload(
+        await server.call_tool(
+            "list_species_documents_ecos",
+            {
+                "species_id": "8104",
+                "documentKinds": ["recovery_plan", "five_year_review"],
+            },
+        )
+    )
+    text_payload = _payload(
+        await server.call_tool(
+            "get_document_text_ecos",
+            {
+                "url": "https://ecosphere-documents-production-public.s3.amazonaws.com/sams/public_docs/species_nonpublish/30669.pdf"
+            },
+        )
+    )
+
+    assert ecos.calls == [
+        (
+            "search_species",
+            {
+                "query": "California least tern",
+                "limit": 10,
+                "match_mode": "auto",
+            },
+        ),
+        ("get_species_profile", {"species_id": "8104"}),
+        (
+            "list_species_documents",
+            {
+                "species_id": "8104",
+                "document_kinds": ["recovery_plan", "five_year_review"],
+            },
+        ),
+        (
+            "get_document_text",
+            {
+                "url": "https://ecosphere-documents-production-public.s3.amazonaws.com/sams/public_docs/species_nonpublish/30669.pdf"
+            },
+        ),
+    ]
+    assert search_payload["data"][0]["speciesId"] == "8104"
+    assert profile_payload["species"]["speciesId"] == "8104"
+    assert list_payload["data"][0]["documentKind"] == "five_year_review"
+    assert text_payload["extractionStatus"] == "ok"
+    _assert_additive_metadata(search_payload)
+    _assert_additive_metadata(profile_payload)
+    _assert_additive_metadata(list_payload)
+    _assert_additive_metadata(text_payload)
+
+
+@pytest.mark.asyncio
+async def test_ecos_tools_raise_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(server, "enable_ecos", False)
+
+    with pytest.raises(ValueError, match="requires ECOS"):
+        await server.call_tool(
+            "search_species_ecos",
+            {"query": "California least tern"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_search_papers_match_include_enrichment_is_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_client = RecordingSemanticClient()
+
+    async def fake_match(**kwargs: dict) -> dict:
+        fake_client.calls.append(("search_papers_match", kwargs))
+        return {
+            "paperId": "match-1",
+            "title": "Best match",
+            "year": 2024,
+            "authors": [{"name": "Lead Author"}],
+            "venue": "Journal of Tests",
+            "matchFound": True,
+            "matchStrategy": "exact_title",
+        }
+
+    class MatchingCrossrefClient(RecordingCrossrefClient):
+        async def search_work(self, query: str) -> dict:
+            self.calls.append(("search_work", {"query": query}))
+            return {
+                "doi": "10.1234/crossref-query",
+                "title": "Best match",
+                "authors": [{"name": "Lead Author"}],
+                "venue": "Journal of Tests",
+                "publisher": "Crossref Publisher",
+                "publicationType": "journal-article",
+                "publicationDate": "2024-05-01",
+                "year": 2024,
+                "url": "https://doi.org/10.1234/crossref-query",
+                "citationCount": 7,
+            }
+
+    fake_client.search_papers_match = fake_match  # type: ignore[method-assign]
+    crossref = MatchingCrossrefClient()
+    unpaywall = RecordingUnpaywallClient()
+    service = PaperEnrichmentService(
+        crossref_client=crossref,
+        unpaywall_client=unpaywall,
+        enable_crossref=True,
+        enable_unpaywall=True,
+        provider_registry=server.provider_registry,
+    )
+    monkeypatch.setattr(server, "enable_crossref", True)
+    monkeypatch.setattr(server, "enable_unpaywall", True)
+    monkeypatch.setattr(server, "crossref_client", crossref)
+    monkeypatch.setattr(server, "unpaywall_client", unpaywall)
+    monkeypatch.setattr(server, "enrichment_service", service)
+    monkeypatch.setattr(server, "client", fake_client)
+
+    baseline = _payload(
+        await server.call_tool(
+            "search_papers_match",
+            {"query": "Best match"},
+        )
+    )
+    enriched = _payload(
+        await server.call_tool(
+            "search_papers_match",
+            {"query": "Best match", "includeEnrichment": True},
+        )
+    )
+
+    assert "enrichments" not in baseline
+    assert crossref.calls == [("search_work", {"query": "Best match"})]
+    assert unpaywall.calls == [("get_open_access", {"doi": "10.1234/crossref-query"})]
+    assert enriched["enrichments"]["crossref"]["doi"] == "10.1234/crossref-query"
+    assert enriched["enrichments"]["unpaywall"]["bestOaUrl"].endswith("10.1234/crossref-query")
+    assert [call[0] for call in fake_client.calls] == [
+        "search_papers_match",
+        "search_papers_match",
+        "get_paper_details",
+    ]
+    assert fake_client.calls[0][1]["query"] == "Best match"
+    assert fake_client.calls[0][1]["fields"] is None
+    assert fake_client.calls[1][1]["query"] == "Best match"
+    assert fake_client.calls[1][1]["fields"] is None
+    assert fake_client.calls[2] == (
+        "get_paper_details",
+        {
+            "paper_id": "match-1",
+            "fields": [
+                "paperId",
+                "title",
+                "year",
+                "authors",
+                "venue",
+                "publicationDate",
+                "url",
+                "externalIds",
+            ],
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_search_papers_match_include_enrichment_skips_untrusted_crossref_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_client = RecordingSemanticClient()
+
+    async def fake_match(**kwargs: dict) -> dict:
+        fake_client.calls.append(("search_papers_match", kwargs))
+        return {
+            "paperId": "match-1",
+            "title": "Best match",
+            "year": 2024,
+            "authors": [{"name": "Lead Author"}],
+            "venue": "Journal of Tests",
+            "matchFound": True,
+            "matchStrategy": "exact_title",
+        }
+
+    fake_client.search_papers_match = fake_match  # type: ignore[method-assign]
+    crossref, unpaywall = _install_recording_enrichment(monkeypatch)
+    monkeypatch.setattr(server, "client", fake_client)
+
+    enriched = _payload(
+        await server.call_tool(
+            "search_papers_match",
+            {"query": "Best match", "includeEnrichment": True},
+        )
+    )
+
+    assert "enrichments" not in enriched
+    assert crossref.calls == [("search_work", {"query": "Best match"})]
+    assert unpaywall.calls == []
+
+
+@pytest.mark.asyncio
+async def test_search_snippets_uses_search_papers_fallback_when_degraded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FallbackSemanticClient(RecordingSemanticClient):
+        async def search_snippets(self, **kwargs) -> dict:
+            self.calls.append(("search_snippets", kwargs))
+            return {
+                "data": [],
+                "degraded": True,
+                "providerStatusCode": 400,
+                "message": "Semantic Scholar snippet search could not serve this query.",
+            }
+
+        async def search_papers(self, **kwargs) -> dict:
+            self.calls.append(("search_papers", kwargs))
+            return {
+                "total": 1,
+                "offset": 0,
+                "data": [
+                    {
+                        "paperId": "paper-1",
+                        "title": "Anthropogenic noise effects on wildlife",
+                        "year": 2015,
+                        "url": "https://example.org/paper-1",
+                        "abstract": (
+                            "A synthesis of two decades of research documenting the effects of noise on wildlife."
+                        ),
+                    }
+                ],
+            }
+
+    fake_client = FallbackSemanticClient()
+    monkeypatch.setattr(server, "client", fake_client)
+
+    payload = _payload(
+        await server.call_tool(
+            "search_snippets",
+            {"query": '"anthropogenic noise wildlife review"', "limit": 3},
+        )
+    )
+
+    assert payload["degraded"] is True
+    assert payload["fallbackUsed"] == "search_papers"
+    assert payload["providerStatusCode"] == 400
+    assert payload["data"][0]["paper"]["paperId"] == "paper-1"
+    assert payload["data"][0]["snippet"]["snippetKind"] == "fallback_paper_match"
+    assert payload["data"][0]["snippet"]["section"] == "abstract"
+    assert "two decades of research" in payload["data"][0]["snippet"]["text"]
+    assert fake_client.calls == [
+        (
+            "search_snippets",
+            {
+                "query": '"anthropogenic noise wildlife review"',
+                "limit": 3,
+                "fields": None,
+                "year": None,
+                "publication_date_or_year": None,
+                "fields_of_study": None,
+                "min_citation_count": None,
+                "venue": None,
+            },
+        ),
+        (
+            "search_papers",
+            {
+                "query": "anthropogenic noise wildlife review",
+                "limit": 3,
+                "fields": ["paperId", "title", "year", "url", "abstract"],
+                "year": None,
+                "publication_date_or_year": None,
+                "fields_of_study": None,
+                "min_citation_count": None,
+                "venue": None,
+            },
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_paper_details_include_enrichment_uses_resolved_doi(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_client = RecordingSemanticClient()
+
+    async def fake_get_paper_details(**kwargs: dict) -> dict:
+        fake_client.calls.append(("get_paper_details", kwargs))
+        return {
+            "paperId": kwargs["paper_id"],
+            "title": "Detailed paper",
+            "canonicalId": "doi:10.5678/details-paper",
+        }
+
+    fake_client.get_paper_details = fake_get_paper_details  # type: ignore[method-assign]
+    crossref, unpaywall = _install_recording_enrichment(monkeypatch)
+    monkeypatch.setattr(server, "client", fake_client)
+
+    payload = _payload(
+        await server.call_tool(
+            "get_paper_details",
+            {"paper_id": "doi:10.5678/details-paper", "includeEnrichment": True},
+        )
+    )
+
+    assert fake_client.calls == [
+        (
+            "get_paper_details",
+            {
+                "paper_id": "doi:10.5678/details-paper",
+                "fields": None,
+            },
+        )
+    ]
+    assert crossref.calls == [("get_work", {"doi": "10.5678/details-paper"})]
+    assert unpaywall.calls == [("get_open_access", {"doi": "10.5678/details-paper"})]
+    assert payload["enrichments"]["crossref"]["publisher"] == "Crossref Publisher"
+    assert payload["enrichments"]["unpaywall"]["license"] == "cc-by"
+    _assert_additive_metadata(payload)
 
 
 @pytest.mark.asyncio
@@ -324,12 +887,8 @@ async def test_openalex_detail_and_author_tools_route_to_openalex_client(
     monkeypatch.setattr(server, "openalex_client", openalex)
     monkeypatch.setattr(server, "enable_openalex", True)
 
-    paper = _payload(
-        await server.call_tool("get_paper_details_openalex", {"paper_id": "W42"})
-    )
-    author = _payload(
-        await server.call_tool("get_author_info_openalex", {"author_id": "A42"})
-    )
+    paper = _payload(await server.call_tool("get_paper_details_openalex", {"paper_id": "W42"}))
+    author = _payload(await server.call_tool("get_author_info_openalex", {"author_id": "A42"}))
     author_papers = _payload(
         await server.call_tool(
             "get_author_papers_openalex",
@@ -347,9 +906,227 @@ async def test_openalex_detail_and_author_tools_route_to_openalex_client(
             {"author_id": "A42", "limit": 100, "cursor": None, "year": "2023"},
         ),
     ]
-    assert decode_bulk_cursor(author_papers["pagination"]["nextCursor"]).provider == (
-        "openalex"
+    assert decode_bulk_cursor(author_papers["pagination"]["nextCursor"]).provider == ("openalex")
+
+
+@pytest.mark.asyncio
+async def test_new_openalex_tools_route_and_wrap_bulk_cursors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    openalex = RecordingOpenAlexClient()
+    monkeypatch.setattr(server, "openalex_client", openalex)
+    monkeypatch.setattr(server, "enable_openalex", True)
+
+    autocomplete = _payload(
+        await server.call_tool(
+            "paper_autocomplete_openalex",
+            {"query": "transformer"},
+        )
     )
+    entities = _payload(
+        await server.call_tool(
+            "search_entities_openalex",
+            {"query": "neurips", "entityType": "source"},
+        )
+    )
+    entity_papers = _payload(
+        await server.call_tool(
+            "search_papers_openalex_by_entity",
+            {"entityType": "source", "entityId": "S1"},
+        )
+    )
+
+    assert autocomplete["matches"][0]["source"] == "openalex"
+    assert openalex.calls[0] == (
+        "paper_autocomplete",
+        {"query": "transformer", "limit": 10},
+    )
+    assert openalex.calls[1] == (
+        "search_entities",
+        {"entity_type": "source", "query": "neurips", "limit": 10, "cursor": None},
+    )
+    assert decode_bulk_cursor(entities["pagination"]["nextCursor"]).provider == ("openalex")
+    assert openalex.calls[2] == (
+        "search_works_by_entity",
+        {
+            "entity_type": "source",
+            "entity_id": "S1",
+            "limit": 100,
+            "cursor": None,
+            "year": None,
+        },
+    )
+    assert decode_bulk_cursor(entity_papers["pagination"]["nextCursor"]).provider == ("openalex")
+
+
+@pytest.mark.asyncio
+async def test_new_serpapi_tools_and_provider_diagnostics_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RecordingSerpApiClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+
+        async def search_cited_by(self, **kwargs) -> dict:
+            self.calls.append(("search_cited_by", kwargs))
+            return {
+                "provider": "serpapi_google_scholar",
+                "total": 1,
+                "offset": 0,
+                "data": [
+                    {
+                        "paperId": "serp-cites-1",
+                        "source": "serpapi_google_scholar",
+                    }
+                ],
+                "pagination": {"hasMore": True, "nextCursor": "10"},
+            }
+
+        async def search_versions(self, **kwargs) -> dict:
+            self.calls.append(("search_versions", kwargs))
+            return {
+                "provider": "serpapi_google_scholar",
+                "total": 1,
+                "offset": 0,
+                "data": [
+                    {
+                        "paperId": "serp-version-1",
+                        "source": "serpapi_google_scholar",
+                    }
+                ],
+                "pagination": {"hasMore": True, "nextCursor": "10"},
+            }
+
+        async def get_author_profile(self, **kwargs) -> dict:
+            self.calls.append(("get_author_profile", kwargs))
+            return {
+                "provider": "serpapi_google_scholar",
+                "authorId": kwargs["author_id"],
+                "name": "Scholar Author",
+            }
+
+        async def get_author_articles(self, **kwargs) -> dict:
+            self.calls.append(("get_author_articles", kwargs))
+            return {
+                "provider": "serpapi_google_scholar",
+                "authorId": kwargs["author_id"],
+                "total": 1,
+                "offset": kwargs.get("start", 0),
+                "data": [
+                    {
+                        "paperId": "serp-author-1",
+                        "source": "serpapi_google_scholar",
+                    }
+                ],
+                "pagination": {"hasMore": True, "nextCursor": "10"},
+            }
+
+        async def get_account_status(self) -> dict:
+            self.calls.append(("get_account_status", {}))
+            return {
+                "provider": "serpapi_google_scholar",
+                "plan_searches_left": 42,
+            }
+
+    monkeypatch.setattr(server, "enable_serpapi", True)
+    monkeypatch.setattr(server, "serpapi_client", RecordingSerpApiClient())
+
+    cited_by = _payload(
+        await server.call_tool(
+            "search_papers_serpapi_cited_by",
+            {"citesId": "cites-1"},
+        )
+    )
+    versions = _payload(
+        await server.call_tool(
+            "search_papers_serpapi_versions",
+            {"clusterId": "cluster-1"},
+        )
+    )
+    author = _payload(
+        await server.call_tool(
+            "get_author_profile_serpapi",
+            {"authorId": "author-1"},
+        )
+    )
+    articles = _payload(
+        await server.call_tool(
+            "get_author_articles_serpapi",
+            {"authorId": "author-1"},
+        )
+    )
+    account = _payload(await server.call_tool("get_serpapi_account_status", {}))
+    diagnostics = _payload(await server.call_tool("get_provider_diagnostics", {}))
+
+    assert cited_by["data"][0]["paperId"] == "serp-cites-1"
+    assert decode_cursor(cited_by["pagination"]["nextCursor"]).provider == ("serpapi_google_scholar")
+    assert versions["data"][0]["paperId"] == "serp-version-1"
+    assert decode_cursor(versions["pagination"]["nextCursor"]).provider == ("serpapi_google_scholar")
+    assert author["authorId"] == "author-1"
+    assert articles["authorId"] == "author-1"
+    assert decode_cursor(articles["pagination"]["nextCursor"]).provider == ("serpapi_google_scholar")
+    assert account["provider"] == "serpapi_google_scholar"
+    assert any(item["provider"] == "openai" for item in diagnostics["providers"])
+
+
+@pytest.mark.asyncio
+async def test_get_serpapi_account_status_sanitizes_upstream_response_in_public_tool_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    serpapi_payload = {
+        "account_id": "acct-123",
+        "api_key": "SECRET_API_KEY",
+        "account_email": "demo@serpapi.com",
+        "plan_id": "bigdata",
+        "plan_name": "Big Data Plan",
+        "plan_monthly_price": 250.0,
+        "searches_per_month": 30000,
+        "plan_searches_left": 5958,
+        "extra_credits": 5,
+        "total_searches_left": 5963,
+        "this_month_usage": 24042,
+        "last_hour_searches": 42,
+        "account_rate_limit_per_hour": 6000,
+        "secret_token": "should-not-leak",
+    }
+    dummy = DummySerpApiAsyncClient(DummyResponse(status_code=200, payload=serpapi_payload))
+    monkeypatch.setattr(serpapi_client_module.httpx, "AsyncClient", lambda timeout: dummy)
+    monkeypatch.setattr(server, "enable_serpapi", True)
+    monkeypatch.setattr(server, "serpapi_client", SerpApiScholarClient(api_key="test-key"))
+
+    account = _payload(await server.call_tool("get_serpapi_account_status", {}))
+
+    assert account["provider"] == "serpapi_google_scholar"
+    assert account["planId"] == "bigdata"
+    assert account["planSearchesLeft"] == 5958
+    assert account["totalSearchesLeft"] == 5963
+    assert account["accountRateLimitPerHour"] == 6000
+    assert "api_key" not in account
+    assert "account_email" not in account
+    assert "account_id" not in account
+    assert "secret_token" not in account
+
+
+@pytest.mark.asyncio
+async def test_provider_diagnostics_surface_crossref_and_unpaywall(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_recording_enrichment(monkeypatch)
+
+    await server.call_tool("get_paper_metadata_crossref", {"doi": "10.1234/diag"})
+    await server.call_tool(
+        "get_paper_open_access_unpaywall",
+        {"doi": "10.1234/diag"},
+    )
+    diagnostics = _payload(await server.call_tool("get_provider_diagnostics", {}))
+    provider_map = {item["provider"]: item for item in diagnostics["providers"] if isinstance(item, dict)}
+
+    assert provider_map["crossref"]["enabled"] is True
+    assert provider_map["unpaywall"]["enabled"] is True
+    assert provider_map["crossref"]["lastEndpoint"] == "get_work"
+    assert provider_map["unpaywall"]["lastEndpoint"] == "get_open_access"
+    assert provider_map["crossref"]["recentOutcomes"]
+    assert provider_map["unpaywall"]["recentOutcomes"]
 
 
 def test_package_import_and_module_entrypoints_keep_expected_targets() -> None:
@@ -407,6 +1184,12 @@ async def test_call_tool_raises_for_unknown_tool() -> None:
             lambda p: p["paperId"] == "match-1",
         ),
         (
+            "resolve_citation",
+            {"citation": "Vaswani A, Shazeer N, Parmar N, et al. 2017. Attention Is All You Need. NeurIPS."},
+            "search_papers_match",
+            lambda p: "resolutionConfidence" in p and "candidateCount" in p,
+        ),
+        (
             "paper_autocomplete",
             {"query": "transformer"},
             "paper_autocomplete",
@@ -460,3 +1243,23 @@ async def test_call_tool_routes_new_tools(
         f"Expected {expected_method!r} to have been called; got {fake_client.calls}"
     )
     assert check_payload(payload)
+    if isinstance(payload, dict):
+        _assert_additive_metadata(
+            payload,
+            expect_search_session_id=tool_name
+            in {
+                "search_papers_bulk",
+                "get_paper_authors",
+                "search_authors",
+                "resolve_citation",
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_smart_tools_return_structured_feature_errors_when_disabled() -> None:
+    payload = _payload(await server.call_tool("search_papers_smart", {"query": "transformers"}))
+
+    assert payload["error"] == "FEATURE_NOT_CONFIGURED"
+    assert "fallbackTools" in payload
+    assert payload["agentHints"]["nextToolCandidates"]

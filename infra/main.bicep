@@ -37,6 +37,85 @@ param maxReplicas int = 3
 @description('Whether to enable the optional SerpApi provider path.')
 param enableSerpApi bool = false
 
+@description('Whether to enable additive smart workflows in the deployed server.')
+param enableAgentic bool = false
+
+@description('Provider bundle for the smart workflow layer.')
+@allowed([
+  'openai'
+  'deterministic'
+])
+param agenticProvider string = 'openai'
+
+@description('Planner model used for smart-search routing and query refinement.')
+param plannerModel string = 'gpt-5.4-mini'
+
+@description('Synthesis model used for grounded answers and theme labelling.')
+param synthesisModel string = 'gpt-5.4'
+
+@description('Embedding model used for smart ranking and saved-result-set retrieval.')
+param embeddingModel string = 'text-embedding-3-large'
+
+@description('Disable all embedding generation and embedding-based similarity paths.')
+param disableEmbeddings bool = true
+
+@description('Timeout in seconds for OpenAI-backed smart-layer requests.')
+@minValue(1)
+param agenticOpenAiTimeoutSeconds int = 30
+
+@description('Workspace index backend for saved smart-search result sets.')
+@allowed([
+  'memory'
+  'faiss'
+])
+param agenticIndexBackend string = 'memory'
+
+@description('TTL in seconds for cached searchSessionId workspaces.')
+@minValue(60)
+param sessionTtlSeconds int = 1800
+
+@description('Emit local trace events for smart workflows.')
+param enableAgenticTraceLog bool = false
+
+@description('Whether to enable the Semantic Scholar search provider.')
+param enableSemanticScholar bool = true
+
+@description('Whether to enable the arXiv search provider.')
+param enableArxiv bool = true
+
+@description('Whether to enable the CORE search provider. Off by default; requires a core-api-key Key Vault secret when enabled.')
+param enableCore bool = false
+
+@description('Whether to enable the OpenAlex search provider.')
+param enableOpenAlex bool = true
+
+@description('Whether to enable the Crossref provider for paper metadata and DOI lookup.')
+param enableCrossref bool = true
+
+@description('Whether to enable the Unpaywall provider for open-access full-text lookup.')
+param enableUnpaywall bool = true
+
+@description('Whether to enable the ECOS provider for species and environmental document retrieval.')
+param enableEcos bool = true
+
+@description('Whether to enable the Federal Register provider for regulatory document search.')
+param enableFederalRegister bool = true
+
+@description('Whether to enable the GovInfo CFR provider for Code of Federal Regulations retrieval. Requires a govinfo-api-key Key Vault secret for authoritative access; falls back to degraded HTML recovery without it.')
+param enableGovinfoCfr bool = true
+
+@description('Polite pool email sent as User-Agent to Crossref APIs. Optional; leave empty to use the application default.')
+param crossrefMailto string = ''
+
+@description('Email address sent as User-Agent to Unpaywall APIs. Optional; leave empty to use the application default.')
+param unpayWallEmail string = ''
+
+@description('Override the ECOS base URL. Leave empty to use the application default (https://ecos.fws.gov).')
+param ecosBaseUrl string = ''
+
+@description('Whether to verify TLS certificates when calling ECOS. Set to false only in air-gapped or private environments with custom PKI.')
+param ecosVerifyTls bool = true
+
 @description('Azure API Management v2 SKU used for private ingress plus outbound virtual network integration.')
 @allowed([
   'StandardV2'
@@ -165,27 +244,52 @@ module containerApp './modules/containerApp.bicep' = if (deployFull) {
   ]
   params: {
     appInsightsConnectionString: appInsights.outputs.connectionString
+    agenticIndexBackend: agenticIndexBackend
+    agenticProvider: agenticProvider
     allowedOrigins: apiManagementGatewayOrigin
     backendAuthSecretName: backendAuthSecretName
     backendAuthSecretUri: '${keyVault.outputs.vaultUri}secrets/${backendAuthSecretName}'
     containerAppName: containerAppName
     containerCpu: containerCpu
     containerMemory: containerMemory
+    embeddingModel: embeddingModel
+    disableEmbeddings: disableEmbeddings
+    enableAgentic: enableAgentic
+    enableAgenticTraceLog: enableAgenticTraceLog
+    agenticOpenAiTimeoutSeconds: agenticOpenAiTimeoutSeconds
     environmentName: environmentName
     environmentResourceId: environment.outputs.resourceId
     image: '${acr.outputs.loginServer}/${imageRepository}:${imageTag}'
     keyVaultCoreApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/core-api-key'
+    keyVaultOpenAiApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/openai-api-key'
     keyVaultOpenAlexApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/openalex-api-key'
     keyVaultOpenAlexMailtoSecretUri: '${keyVault.outputs.vaultUri}secrets/openalex-mailto'
     keyVaultSemanticScholarApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/semantic-scholar-api-key'
     keyVaultSerpApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/serpapi-api-key'
+    keyVaultGovInfoApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/govinfo-api-key'
     location: location
     managedIdentityResourceId: identity.outputs.resourceId
     maxReplicas: maxReplicas
     minReplicas: minReplicas
+    plannerModel: plannerModel
     registryServer: acr.outputs.loginServer
+    sessionTtlSeconds: sessionTtlSeconds
+    synthesisModel: synthesisModel
     tags: tags
     enableSerpApi: enableSerpApi
+    enableSemanticScholar: enableSemanticScholar
+    enableArxiv: enableArxiv
+    enableCore: enableCore
+    enableOpenAlex: enableOpenAlex
+    enableCrossref: enableCrossref
+    enableUnpaywall: enableUnpaywall
+    enableEcos: enableEcos
+    enableFederalRegister: enableFederalRegister
+    enableGovinfoCfr: enableGovinfoCfr
+    crossrefMailto: crossrefMailto
+    unpayWallEmail: unpayWallEmail
+    ecosBaseUrl: ecosBaseUrl
+    ecosVerifyTls: ecosVerifyTls
   }
 }
 

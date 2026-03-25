@@ -52,12 +52,120 @@ usage.
 4. Create GitHub environment secrets for deployment identifiers, plus the
    optional runner-label variable if you need to override the default labels.
 5. Populate Key Vault with these secret names before production deployment:
-   - `core-api-key`
+   - `openai-api-key` if you enable the smart layer with `agenticProvider=openai`
+   - `core-api-key` **only** if you set `enableCore=true`; CORE is disabled by
+     default in this scaffold (matching the application default). Leave this
+     secret out until you deliberately opt in.
    - `semantic-scholar-api-key`
    - `openalex-api-key`
    - `openalex-mailto`
-   - `serpapi-api-key` if enabled
+   - `serpapi-api-key` if `enableSerpApi=true`
    - `mcp-backend-auth-token`
+
+   Crossref, Unpaywall, ECOS, and Federal Register are enabled by default but
+   **do not require Key Vault secrets**. Their polite-pool contact values
+   (`crossrefMailto`, `unpayWallEmail`) are plain Bicep string params and can
+   be left empty to use the application defaults.
+
+   GovInfo CFR is enabled by default and works without a key (falls back to
+   degraded HTML recovery), but provisioning a `govinfo-api-key` in Key Vault
+   grants authoritative XML access.
+
+## Provider enablement matrix
+
+The table below shows the default state of every search provider in this Azure
+scaffold, the Bicep parameter that controls it, and whether it needs a Key Vault
+secret.
+
+| Provider | Default | Bicep param | Requires Key Vault secret? |
+| --- | --- | --- | --- |
+| Semantic Scholar | **on** | `enableSemanticScholar` | Yes (`semantic-scholar-api-key`) |
+| arXiv | **on** | `enableArxiv` | No |
+| CORE | **off** | `enableCore` | Yes (`core-api-key`) — only needed when enabled |
+| OpenAlex | **on** | `enableOpenAlex` | Yes (`openalex-api-key`, `openalex-mailto`) |
+| SerpApi | off | `enableSerpApi` | Yes (`serpapi-api-key`) — only needed when enabled |
+| Crossref | **on** | `enableCrossref` | No (optional `crossrefMailto` plain param) |
+| Unpaywall | **on** | `enableUnpaywall` | No (optional `unpayWallEmail` plain param) |
+| ECOS | **on** | `enableEcos` | No |
+| Federal Register | **on** | `enableFederalRegister` | No |
+| GovInfo CFR | **on** | `enableGovinfoCfr` | Optional (`govinfo-api-key`) — authoritative XML; degrades to HTML without it |
+
+The smart layer (`enableAgentic=true` with `agenticProvider=openai`) adds a
+separate `openai-api-key` requirement.
+
+## Bicep parameters reference
+
+All Bicep parameters below can be set in the environment `.bicepparam` file or
+passed as overrides at deployment time. Sensitive runtime values always belong
+in Key Vault, never in `.bicepparam`.
+
+### Infrastructure shape
+
+| Parameter | Default | Purpose |
+| --- | --- | --- |
+| `location` | resource group location | Azure region for all resources |
+| `environmentName` | *(required)* | Environment label used in resource names (e.g. `dev`, `staging`, `prod`) |
+| `appName` | `scholar-search` | Short application name prefix for resource names |
+| `imageRepository` | `scholar-search-mcp` | Container image name inside ACR |
+| `imageTag` | `latest` | Container image tag to deploy |
+| `deployMode` | `full` | `bootstrap` (first run) or `full` (image + workload) |
+| `containerCpu` | `1` | CPU cores for the Container App container |
+| `containerMemory` | `2Gi` | Memory for the Container App container |
+| `minReplicas` | `1` | Minimum scale-to-zero boundary (0 for dev, ≥1 for prod) |
+| `maxReplicas` | `3` | Maximum horizontal replica count |
+| `tags` | application/environment/managedBy | Safe resource tags; do not add secrets or private identifiers |
+
+### API Management
+
+| Parameter | Default | Purpose |
+| --- | --- | --- |
+| `apiManagementSku` | `StandardV2` | APIM SKU (`StandardV2` or `PremiumV2`) |
+| `apiManagementApiPath` | `scholar-search` | Relative API path in APIM |
+| `apiManagementPublisherName` | `Scholar Search MCP` | Publisher display name in APIM |
+| `apiManagementPublisherEmail` | `owner@example.invalid` | Publisher email in APIM; use a non-secret operational inbox |
+
+### Provider enable flags
+
+| Parameter | Default | Controls env var |
+| --- | --- | --- |
+| `enableSemanticScholar` | `true` | `SCHOLAR_SEARCH_ENABLE_SEMANTIC_SCHOLAR` |
+| `enableArxiv` | `true` | `SCHOLAR_SEARCH_ENABLE_ARXIV` |
+| `enableCore` | **`false`** | `SCHOLAR_SEARCH_ENABLE_CORE` |
+| `enableOpenAlex` | `true` | `SCHOLAR_SEARCH_ENABLE_OPENALEX` |
+| `enableSerpApi` | `false` | `SCHOLAR_SEARCH_ENABLE_SERPAPI` |
+| `enableCrossref` | `true` | `SCHOLAR_SEARCH_ENABLE_CROSSREF` |
+| `enableUnpaywall` | `true` | `SCHOLAR_SEARCH_ENABLE_UNPAYWALL` |
+| `enableEcos` | `true` | `SCHOLAR_SEARCH_ENABLE_ECOS` |
+| `enableFederalRegister` | `true` | `SCHOLAR_SEARCH_ENABLE_FEDERAL_REGISTER` |
+| `enableGovinfoCfr` | `true` | `SCHOLAR_SEARCH_ENABLE_GOVINFO_CFR` |
+
+Note: setting `enableCore=true` also causes the scaffold to mount the
+`core-api-key` Key Vault secret into the container. That secret must exist in
+Key Vault before you run a `full` deployment with CORE enabled.
+
+### Provider contact / URL overrides
+
+| Parameter | Default | Controls env var |
+| --- | --- | --- |
+| `crossrefMailto` | `''` (use app default) | `CROSSREF_MAILTO` — only injected when non-empty |
+| `unpayWallEmail` | `''` (use app default) | `UNPAYWALL_EMAIL` — only injected when non-empty |
+| `ecosBaseUrl` | `''` (use app default) | `ECOS_BASE_URL` — only injected when non-empty |
+| `ecosVerifyTls` | `true` | `ECOS_VERIFY_TLS` |
+
+### Smart / agentic layer
+
+| Parameter | Default | Controls env var |
+| --- | --- | --- |
+| `enableAgentic` | `false` | `SCHOLAR_SEARCH_ENABLE_AGENTIC` |
+| `agenticProvider` | `openai` | `SCHOLAR_SEARCH_AGENTIC_PROVIDER` |
+| `plannerModel` | `gpt-5.4-mini` | `SCHOLAR_SEARCH_PLANNER_MODEL` |
+| `synthesisModel` | `gpt-5.4` | `SCHOLAR_SEARCH_SYNTHESIS_MODEL` |
+| `embeddingModel` | `text-embedding-3-large` | `SCHOLAR_SEARCH_EMBEDDING_MODEL` |
+| `disableEmbeddings` | `true` | `SCHOLAR_SEARCH_DISABLE_EMBEDDINGS` |
+| `agenticOpenAiTimeoutSeconds` | `30` | `SCHOLAR_SEARCH_AGENTIC_OPENAI_TIMEOUT_SECONDS` |
+| `agenticIndexBackend` | `memory` | `SCHOLAR_SEARCH_AGENTIC_INDEX_BACKEND` |
+| `sessionTtlSeconds` | `1800` | `SCHOLAR_SEARCH_SESSION_TTL_SECONDS` |
+| `enableAgenticTraceLog` | `false` | `SCHOLAR_SEARCH_ENABLE_AGENTIC_TRACE_LOG` |
 
 ## Deployment modes
 
@@ -81,6 +189,13 @@ names.
 - Runs on the private self-hosted runner.
 - Builds, scans, and pushes the container image.
 - Deploys the Container App and API Management.
+- Passes the checked-in smart-layer defaults through the Container App:
+  `SCHOLAR_SEARCH_ENABLE_AGENTIC`, `SCHOLAR_SEARCH_AGENTIC_PROVIDER`,
+  `SCHOLAR_SEARCH_PLANNER_MODEL`, `SCHOLAR_SEARCH_SYNTHESIS_MODEL`,
+  `SCHOLAR_SEARCH_EMBEDDING_MODEL`,
+  `SCHOLAR_SEARCH_AGENTIC_INDEX_BACKEND`,
+  `SCHOLAR_SEARCH_SESSION_TTL_SECONDS`, and
+  `SCHOLAR_SEARCH_ENABLE_AGENTIC_TRACE_LOG`.
 - Resolves the health-check URL from `SMOKE_TEST_HEALTH_URL` when provided, or
   falls back to Azure deployment outputs (`containerAppHealthUrl` first, then
   `containerAppFqdn`) for the first rollout.
@@ -98,7 +213,7 @@ Use this table as the deployment readiness checklist. The last two columns are t
 | Private self-hosted GitHub Actions runner | The build, Trivy scan, ACR push, deployment, and smoke test all run from a network that can reach private Azure endpoints | `.github/workflows/deploy-azure.yml` | GitHub runner administration plus network/DNS access to the private environment | No. The repo can target a runner, but it cannot provision or register one. | Yes if you cannot register runners or cannot place one on the trusted network. |
 | GitHub Actions variables: optional `AZURE_PRIVATE_RUNNER_LABELS_JSON` | Supplies the private-runner label override without committing values to git | `.github/workflows/deploy-azure.yml` | GitHub repository or environment variable management rights | No. The repo can document the name only. | Usually not, but choose generic labels if you do not want the label set itself to reveal network or platform details. |
 | GitHub Actions secrets: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP`, `ACR_NAME`, optional `IMAGE_REPOSITORY`, `SMOKE_TEST_HEALTH_URL` | Supplies deployment identifiers and the private health endpoint without treating them as public workflow metadata | `.github/workflows/deploy-azure.yml` and post-deploy smoke checks | GitHub repository or environment secret management rights | No. The repo cannot create or populate real secrets. | Yes if you cannot edit repository or environment secrets. |
-| Key Vault secret values: `core-api-key`, `semantic-scholar-api-key`, `openalex-api-key`, `openalex-mailto`, optional `serpapi-api-key`, `mcp-backend-auth-token` | Supplies upstream provider credentials and the APIM-to-backend shared token | `infra/main.bicep`, runtime secret references, APIM named value resolution | Azure Key Vault secret-set permissions plus access to the real credential values | No. The repo can reference the secret names, not provide their contents. | Yes if you do not own the provider accounts, do not have the actual secrets, or cannot write them into Key Vault. |
+| Key Vault secret values: optional `openai-api-key`, `core-api-key`, `semantic-scholar-api-key`, `openalex-api-key`, `openalex-mailto`, optional `serpapi-api-key`, `mcp-backend-auth-token` | Supplies upstream provider credentials and the APIM-to-backend shared token | `infra/main.bicep`, runtime secret references, APIM named value resolution | Azure Key Vault secret-set permissions plus access to the real credential values | No. The repo can reference the secret names, not provide their contents. | Yes if you do not own the provider accounts, do not have the actual secrets, or cannot write them into Key Vault. |
 | ACR push path and image scanning prerequisites | The workflow expects Docker, Trivy, and ACR login to succeed before deployment | `.github/workflows/deploy-azure.yml`, `scripts/validate_deployment.py`, `Dockerfile` | Runner access, ACR access, and the ability to fix image vulnerabilities when found | Partially. The repo provides the image and validation logic. | Sometimes. You may be blocked if you cannot push to ACR or cannot remediate policy-failing image findings. |
 | APIM client-access configuration | Private access is in place, but consumer authentication still needs operational setup such as subscription keys and optional JWT policy | `infra/modules/apim.bicep`, `docs/azure-security-model.md` | APIM administration rights | Partially. The repo defines the gateway and backend token path. | Yes if you need to manage client credentials but do not have APIM admin rights. |
 | A formal ACR quarantine and promotion process | This is the remaining hardening step beyond the current Trivy gate | Documented as a future step in this guide | Registry policy control plus a release workflow owner | Not yet. The repo does not currently implement end-to-end quarantine promotion. | Yes if your security bar requires quarantine-based promotion before release. |
@@ -167,6 +282,30 @@ If a setting is secret and the running application needs it, prefer Key Vault.
 If it is just metadata or a safe default, prefer a Bicep parameter or GitHub
 variable. The safest default is to keep git-tracked configuration about shape
 and behavior, and keep secrets in systems built for secrets.
+
+## Smart workflow deployment notes
+
+The Azure scaffold keeps the smart layer off by default and embeddings disabled
+by default. Turn on the smart layer only when you intend to pay for server-side
+planning and grounded synthesis. Opt in to embeddings only when you need
+embedding-based similarity ranking and have budgeted for the additional API
+calls.
+
+- Set `enableAgentic=true` to expose the additive smart tools.
+- Leave `agenticProvider=deterministic` if you want the smart-tool surface
+  without paid model calls.
+- Use `agenticProvider=openai` and seed the `openai-api-key` Key Vault secret
+  when you want the LangChain-backed OpenAI path.
+- Set `disableEmbeddings=false` to opt in to embedding-based ranking, frontier
+  scoring, and workspace indexing. Without this, smart workflows use lexical
+  similarity as the default scoring path.
+- Use `agenticOpenAiTimeoutSeconds` to cap OpenAI-backed planner, synthesis,
+  and embedding requests so smart calls degrade instead of hanging on the
+  request critical path.
+- Keep `agenticIndexBackend=memory` unless your runtime image includes the
+  optional FAISS extra and you have validated that path in your environment.
+  The current smart workflows cap saved result sets at relatively small sizes,
+  so FAISS is a scale-up option rather than the recommended default.
 
 ## Deployment flow
 

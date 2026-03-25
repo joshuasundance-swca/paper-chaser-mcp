@@ -5,11 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "scholar-search-mcp"
 version = "0.1.2"
-description = "Model Context Protocol server for Semantic Scholar, CORE, and arXiv paper search"
+description = "Model Context Protocol server for academic paper search across Semantic Scholar, CORE, arXiv, OpenAlex, SerpApi Google Scholar, Crossref, Unpaywall, ECOS species dossiers, and Federal Register / CFR regulatory text"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
-keywords = ["mcp", "semantic-scholar", "core", "arxiv", "academic", "papers", "research"]
+keywords = ["mcp", "semantic-scholar", "core", "arxiv", "openalex", "academic", "papers", "research", "federal-register", "ecos", "regulatory"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -25,11 +25,25 @@ dependencies = [
     "fastmcp>=3.1.0",
     "mcp>=1.24.0",
     "httpx>=0.25.0",
+    "markitdown[pdf]>=0.1.5",
     "pydantic>=2.11.0",
     "uvicorn>=0.35.0",
 ]
 
 [project.optional-dependencies]
+ai = [
+    "langchain>=1.2.13",
+    "langchain-openai>=1.1.11",
+    "langgraph>=1.1.3",
+    "langgraph-checkpoint>=4.0.1",
+    "openai>=1.109.0",
+    "numpy>=2.2.6,<2.4.0; python_version < '3.11'",
+    "numpy>=2.4.3; python_version >= '3.11'",
+]
+ai-faiss = [
+    "faiss-cpu>=1.13.2",
+    "langchain-community>=0.4.1",
+]
 dev = [
     "bandit>=1.8.0",
     "build>=1.4.0",
@@ -41,6 +55,9 @@ dev = [
     "pytest-cov>=7.0.0",
     "ruff>=0.12.0",
     "types-defusedxml>=0.7.0",
+]
+all = [
+    "scholar-search-mcp[ai,dev]",
 ]
 
 [project.scripts]
@@ -63,7 +80,7 @@ addopts = "-ra --strict-config --strict-markers"
 xfail_strict = true
 
 [tool.ruff]
-line-length = 88
+line-length = 120
 target-version = "py310"
 
 [tool.ruff.lint]
@@ -78,8 +95,18 @@ python_version = "3.10"
 files = ["scholar_search_mcp", "tests"]
 check_untyped_defs = true
 
+# Optional agentic extras (ai, ai-faiss) are not installed in CI base runs.
+# These imports are guarded at runtime, so silence mypy when stubs are absent.
 [[tool.mypy.overrides]]
-module = ["fastmcp", "fastmcp.*"]
+module = [
+    "openai.*",
+    "langchain.*",
+    "langchain_openai.*",
+    "langchain_community.*",
+    "langchain_core.*",
+    "langgraph.*",
+    "faiss.*",
+]
 ignore_missing_imports = true
 
 [tool.bandit]

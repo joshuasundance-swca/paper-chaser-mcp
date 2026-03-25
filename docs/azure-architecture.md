@@ -21,6 +21,8 @@ Azure Container Apps
   - scholar-search-mcp deployment-http -> scholar_search_mcp.deployment:app
   - /healthz for probes
   - /mcp for streamable HTTP MCP traffic
+  - optional server-side smart layer for concept-level discovery, grounded QA,
+    and searchSessionId workspaces
   - managed environment public network disabled; private endpoint on the environment
   - backend token still required at /mcp
    |
@@ -48,12 +50,23 @@ GitHub Actions private runner
 
 ### Upstream provider keys
 
-The server can use keys for CORE, Semantic Scholar, OpenAlex, and SerpApi. Those keys are **server-side only**.
+The server can use keys for CORE, Semantic Scholar, OpenAlex, SerpApi, and the
+optional OpenAI-backed smart layer. Those keys are **server-side only**.
 
 - They are stored in Azure Key Vault.
 - The Container App reads them through Key Vault references.
 - The Container App authenticates to Key Vault with a managed identity.
 - Clients calling the MCP server never receive these upstream provider keys.
+
+CORE is **disabled by default** (`enableCore=false` in the Bicep scaffold,
+matching the application default). When CORE is disabled, the `core-api-key`
+Key Vault secret is not mounted and does not need to exist. Set `enableCore=true`
+in the relevant `.bicepparam` file and seed `core-api-key` only when you want
+the CORE fallback hop.
+
+When the smart layer is enabled with `agenticProvider=openai`, the Container App
+also reads `OPENAI_API_KEY` from Key Vault and keeps all LangChain/LangGraph
+planning, embedding, and synthesis calls server-side.
 
 ### Client access credentials
 

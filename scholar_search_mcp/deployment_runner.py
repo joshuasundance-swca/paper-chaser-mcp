@@ -21,11 +21,7 @@ def resolve_bind_host(env: Mapping[str, str] | None = None) -> str:
 
 def resolve_bind_port(env: Mapping[str, str] | None = None) -> int:
     source = env or os.environ
-    raw_value = (
-        source.get("PORT")
-        or source.get("SCHOLAR_SEARCH_HTTP_PORT")
-        or str(DEFAULT_PORT)
-    )
+    raw_value = source.get("PORT") or source.get("SCHOLAR_SEARCH_HTTP_PORT") or str(DEFAULT_PORT)
     candidate = raw_value.strip()
     if not candidate:
         return DEFAULT_PORT

@@ -18,6 +18,15 @@ def run_server(*, app: Any, logger: Any, settings: AppSettings) -> None:
         settings.enable_serpapi,
         settings.enable_arxiv,
     )
+    logger.info(
+        "Smart workflows: enabled=%s provider=%s index=%s ttl=%ss trace=%s embeddings=%s",
+        settings.enable_agentic,
+        settings.agentic_provider,
+        settings.agentic_index_backend,
+        settings.session_ttl_seconds,
+        settings.enable_agentic_trace_log,
+        "disabled" if settings.disable_embeddings else "enabled",
+    )
     if settings.semantic_scholar_api_key:
         logger.info("Semantic Scholar API key detected")
     else:
@@ -25,10 +34,7 @@ def run_server(*, app: Any, logger: Any, settings: AppSettings) -> None:
     if settings.core_api_key:
         logger.info("CORE API key set (search tries CORE first with higher limits)")
     else:
-        logger.info(
-            "No CORE API key; search still tries CORE first "
-            "(subject to rate limits), then S2/arXiv"
-        )
+        logger.info("No CORE API key; search still tries CORE first (subject to rate limits), then S2/arXiv")
     if settings.enable_serpapi:
         if settings.serpapi_api_key:
             logger.info("SerpApi Google Scholar enabled with API key")
@@ -39,8 +45,7 @@ def run_server(*, app: Any, logger: Any, settings: AppSettings) -> None:
             )
     else:
         logger.info(
-            "SerpApi Google Scholar is disabled (set "
-            "SCHOLAR_SEARCH_ENABLE_SERPAPI=true and SERPAPI_API_KEY to enable)"
+            "SerpApi Google Scholar is disabled (set SCHOLAR_SEARCH_ENABLE_SERPAPI=true and SERPAPI_API_KEY to enable)"
         )
 
     if settings.transport == "stdio":

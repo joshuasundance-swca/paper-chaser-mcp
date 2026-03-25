@@ -64,9 +64,7 @@ async def test_search_papers_bulk_returns_structured_next_cursor(
     note = payload["retrievalNote"]
     assert note, "retrievalNote must be non-empty"
     # sort was specified (citationCount), so note should mention it
-    assert "citationCount" in note, (
-        "retrievalNote should mention the active sort parameter when one was given"
-    )
+    assert "citationCount" in note, "retrievalNote should mention the active sort parameter when one was given"
 
 
 @pytest.mark.asyncio
@@ -80,9 +78,7 @@ async def test_search_papers_bulk_retrieval_note_default_ordering(
         async def search_papers_bulk(self, **kwargs) -> dict:
             self.calls.append(("search_papers_bulk", kwargs))
             return dump_jsonable(
-                BulkSearchResponse.model_validate(
-                    {"total": 1, "token": None, "data": [{"paperId": "bulk-1"}]}
-                )
+                BulkSearchResponse.model_validate({"total": 1, "token": None, "data": [{"paperId": "bulk-1"}]})
             )
 
     fake_client = SimpleBulkClient()
@@ -94,18 +90,14 @@ async def test_search_papers_bulk_retrieval_note_default_ordering(
     )
     payload = json.loads(result[0].text)
 
-    assert "retrievalNote" in payload, (
-        "search_papers_bulk must include a retrievalNote field in every response."
-    )
+    assert "retrievalNote" in payload, "search_papers_bulk must include a retrievalNote field in every response."
     note = payload["retrievalNote"]
     assert note, "retrievalNote must be non-empty"
     assert "NOT relevance-ranked" in note or "not relevance-ranked" in note.lower(), (
         "retrievalNote must state that default bulk ordering is not relevance-ranked."
     )
     # The note should guide agents toward relevance-ranked alternatives
-    assert "search_papers" in note, (
-        "retrievalNote should mention search_papers as a relevance-ranked alternative."
-    )
+    assert "search_papers" in note, "retrievalNote should mention search_papers as a relevance-ranked alternative."
 
 
 def test_tool_descriptions_document_cursor_pagination_uniformly() -> None:
@@ -122,15 +114,11 @@ def test_tool_descriptions_document_cursor_pagination_uniformly() -> None:
     ]
     for name in paginated_tools:
         desc = TOOL_DESCRIPTIONS[name]
-        assert "cursor" in desc, (
-            f"Tool '{name}' description should mention the 'cursor' parameter"
-        )
+        assert "cursor" in desc, f"Tool '{name}' description should mention the 'cursor' parameter"
         assert "hasMore" in desc or "nextCursor" in desc, (
             f"Tool '{name}' description should mention hasMore or nextCursor"
         )
-        assert "opaque" in desc, (
-            f"Tool '{name}' description should describe nextCursor as opaque"
-        )
+        assert "opaque" in desc, f"Tool '{name}' description should describe nextCursor as opaque"
         assert "exactly as returned" in desc, (
             f"Tool '{name}' description should tell clients to reuse cursors unchanged"
         )
@@ -187,9 +175,7 @@ async def test_bulk_search_cursor_round_trips_for_same_query(
                     )
                 )
             return dump_jsonable(
-                BulkSearchResponse.model_validate(
-                    {"total": 2, "token": None, "data": [{"paperId": "bulk-2"}]}
-                )
+                BulkSearchResponse.model_validate({"total": 2, "token": None, "data": [{"paperId": "bulk-2"}]})
             )
 
     fake_client = PaginatedBulkClient()
@@ -460,9 +446,7 @@ async def test_offset_tool_response_has_structured_cursor(
             )
 
             return dump_jsonable(
-                PaperListResponse.model_validate(
-                    {"data": [{"paperId": "p1"}], "offset": 0, "next": 100}
-                )
+                PaperListResponse.model_validate({"data": [{"paperId": "p1"}], "offset": 0, "next": 100})
             )
 
     fake_client = PaginatedSemanticClient()
@@ -507,14 +491,10 @@ async def test_structured_cursor_round_trip_on_offset_tool(
 
             if call_count == 1:
                 return dump_jsonable(
-                    PaperListResponse.model_validate(
-                        {"data": [{"paperId": "p1"}], "offset": 0, "next": 100}
-                    )
+                    PaperListResponse.model_validate({"data": [{"paperId": "p1"}], "offset": 0, "next": 100})
                 )
             return dump_jsonable(
-                PaperListResponse.model_validate(
-                    {"data": [{"paperId": "p2"}], "offset": 100, "next": None}
-                )
+                PaperListResponse.model_validate({"data": [{"paperId": "p2"}], "offset": 100, "next": None})
             )
 
     fake_client = RoundTripClient()
@@ -555,9 +535,7 @@ async def test_cross_tool_cursor_reuse_raises_error(
             )
 
             return dump_jsonable(
-                PaperListResponse.model_validate(
-                    {"data": [{"paperId": "p1"}], "offset": 0, "next": 100}
-                )
+                PaperListResponse.model_validate({"data": [{"paperId": "p1"}], "offset": 0, "next": 100})
             )
 
     fake_client = PaginatedSemanticClient()
@@ -761,9 +739,7 @@ def test_compute_context_hash_ignores_cursor_and_limit() -> None:
 
     base = {"paper_id": "p1"}
     with_cursor = {"paper_id": "p1", "cursor": "100", "limit": 50}
-    assert compute_context_hash("get_paper_citations", base) == compute_context_hash(
-        "get_paper_citations", with_cursor
-    )
+    assert compute_context_hash("get_paper_citations", base) == compute_context_hash("get_paper_citations", with_cursor)
 
 
 def test_cursor_from_offset_embeds_context_hash() -> None:
@@ -858,14 +834,10 @@ async def test_context_hash_same_paper_accepts_cursor(
 
             if call_count == 1:
                 return dump_jsonable(
-                    PaperListResponse.model_validate(
-                        {"data": [{"paperId": "p1"}], "offset": 0, "next": 100}
-                    )
+                    PaperListResponse.model_validate({"data": [{"paperId": "p1"}], "offset": 0, "next": 100})
                 )
             return dump_jsonable(
-                PaperListResponse.model_validate(
-                    {"data": [{"paperId": "p2"}], "offset": 100, "next": None}
-                )
+                PaperListResponse.model_validate({"data": [{"paperId": "p2"}], "offset": 100, "next": None})
             )
 
     fake_client = PaginatedSemanticClient()

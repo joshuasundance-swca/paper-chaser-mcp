@@ -46,19 +46,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser = subparsers.add_parser(
         "run",
-        help=(
-            "Run the package-local MCP server using SCHOLAR_SEARCH_* settings "
-            "(defaults to stdio)."
-        ),
+        help=("Run the package-local MCP server using SCHOLAR_SEARCH_* settings (defaults to stdio)."),
     )
     run_parser.set_defaults(handler=_run_server)
 
     deployment_parser = subparsers.add_parser(
         "deployment-http",
-        help=(
-            "Run the HTTP deployment wrapper with /healthz and optional "
-            "Origin/auth enforcement."
-        ),
+        help=("Run the HTTP deployment wrapper with /healthz and optional Origin/auth enforcement."),
     )
     deployment_parser.set_defaults(handler=_run_deployment_http)
 

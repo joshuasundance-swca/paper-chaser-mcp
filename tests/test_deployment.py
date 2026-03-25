@@ -12,10 +12,7 @@ from scholar_search_mcp.settings import AppSettings
 
 
 def _request(path: str, headers: dict[str, str] | None = None) -> Request:
-    raw_headers = [
-        (key.lower().encode("latin-1"), value.encode("latin-1"))
-        for key, value in (headers or {}).items()
-    ]
+    raw_headers = [(key.lower().encode("latin-1"), value.encode("latin-1")) for key, value in (headers or {}).items()]
     return Request(
         {
             "type": "http",
@@ -60,12 +57,7 @@ def test_invalid_bearer_authorization_header_is_rejected() -> None:
         }
     )
 
-    assert (
-        middleware._authorized(
-            _request("/mcp", {"Authorization": "Basic super-secret"})
-        )
-        is False
-    )
+    assert middleware._authorized(_request("/mcp", {"Authorization": "Basic super-secret"})) is False
 
 
 def test_custom_auth_header_compares_raw_value() -> None:
@@ -77,10 +69,7 @@ def test_custom_auth_header_compares_raw_value() -> None:
         }
     )
 
-    assert (
-        middleware._authorized(_request("/mcp", {"X-Backend-Auth": "super-secret"}))
-        is True
-    )
+    assert middleware._authorized(_request("/mcp", {"X-Backend-Auth": "super-secret"})) is True
 
 
 def test_resolve_smoke_test_health_url_prefers_explicit_url() -> None:
@@ -101,15 +90,7 @@ def test_resolve_smoke_test_health_url_prefers_explicit_url() -> None:
 def test_resolve_smoke_test_health_url_uses_health_output() -> None:
     url = resolve_smoke_test_health_url(
         None,
-        {
-            "properties": {
-                "outputs": {
-                    "containerAppHealthUrl": {
-                        "value": "https://aca-dev.internal/healthz"
-                    }
-                }
-            }
-        },
+        {"properties": {"outputs": {"containerAppHealthUrl": {"value": "https://aca-dev.internal/healthz"}}}},
     )
 
     assert url == "https://aca-dev.internal/healthz"
@@ -153,9 +134,7 @@ def test_resolve_bind_host_uses_http_host_env() -> None:
 
 
 def test_resolve_bind_port_prefers_platform_port() -> None:
-    assert (
-        resolve_bind_port({"PORT": "9090", "SCHOLAR_SEARCH_HTTP_PORT": "8080"}) == 9090
-    )
+    assert resolve_bind_port({"PORT": "9090", "SCHOLAR_SEARCH_HTTP_PORT": "8080"}) == 9090
 
 
 def test_resolve_bind_port_falls_back_to_http_port() -> None:
@@ -176,9 +155,7 @@ def test_deployment_app_supports_exact_mcp_path_without_redirect() -> None:
     }
 
     with TestClient(create_deployment_app()) as client:
-        init_response = client.post(
-            "/mcp", json=initialize, headers=headers, follow_redirects=False
-        )
+        init_response = client.post("/mcp", json=initialize, headers=headers, follow_redirects=False)
         session_id = init_response.headers["mcp-session-id"]
         initialized_response = client.post(
             "/mcp",

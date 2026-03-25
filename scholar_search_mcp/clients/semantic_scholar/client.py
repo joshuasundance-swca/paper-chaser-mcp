@@ -6,6 +6,7 @@ import time
 from difflib import SequenceMatcher
 from typing import Any, Optional
 
+from ...citation_repair import build_match_metadata
 from ...constants import (
     API_BASE_URL,
     DEFAULT_AUTHOR_FIELDS,
@@ -28,7 +29,7 @@ from ...models import (
     SnippetSearchResponse,
     dump_jsonable,
 )
-from ...transport import asyncio, httpx
+from ...transport import asyncio, httpx, maybe_close_async_resource
 
 logger = logging.getLogger("scholar-search-mcp")
 _AUTHOR_QUERY_QUOTES_PATTERN = re.compile(r'["“”‘’`]+')
@@ -77,11 +78,17 @@ class SemanticScholarClient:
         # Lazily initialized in async context (avoids event-loop binding issues).
         self._rate_lock: Optional[asyncio.Lock] = None
         self._last_request_time: float = 0.0
+        self._http_client: Any | None = None
 
     def _get_rate_lock(self) -> asyncio.Lock:
         if self._rate_lock is None:
             self._rate_lock = asyncio.Lock()
         return self._rate_lock
+
+    def _get_http_client(self) -> Any:
+        if self._http_client is None:
+            self._http_client = httpx.AsyncClient(timeout=30.0)
+        return self._http_client
 
     async def _pace(self) -> None:
         """Enforce the 1 request/second ceiling before every outbound request."""
@@ -101,6 +108,7 @@ class SemanticScholarClient:
         json_data: Optional[dict[str, Any]] = None,
         base_url: Optional[str] = None,
         max_retries: int = 4,
+        max_429_retries: Optional[int] = None,
         base_delay: float = 1.0,
     ) -> Any:
         """Send HTTP request with rate pacing and exponential backoff on 429.
@@ -111,43 +119,45 @@ class SemanticScholarClient:
         """
         resolved_base = base_url if base_url is not None else API_BASE_URL
         url = f"{resolved_base}/{endpoint}"
-        total_attempts = max(max_retries, MAX_429_RETRIES) + 1
+        retry_429_limit = MAX_429_RETRIES if max_429_retries is None else max(0, max_429_retries)
+        total_attempts = max(max_retries, retry_429_limit) + 1
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            for attempt in range(total_attempts):
-                await self._pace()
-                response = await client.request(
-                    method=method,
-                    url=url,
-                    headers=self.headers,
-                    params=params,
-                    json=json_data,
-                )
+        client = self._get_http_client()
+        for attempt in range(total_attempts):
+            await self._pace()
+            response = await client.request(
+                method=method,
+                url=url,
+                headers=self.headers,
+                params=params,
+                json=json_data,
+            )
 
-                if response.status_code == 429:
-                    if attempt < MAX_429_RETRIES:
-                        delay = base_delay * (2**attempt)
-                        retry_after = response.headers.get("Retry-After")
-                        if retry_after and retry_after.isdigit():
-                            delay = max(delay, float(retry_after))
-                        logger.warning(
-                            "Rate limited (429), retrying in %.1fs (%s/%s)",
-                            delay,
-                            attempt + 1,
-                            MAX_429_RETRIES,
-                        )
-                        await asyncio.sleep(delay)
-                        continue
-
-                    response.raise_for_status()
+            if response.status_code == 429:
+                if attempt < retry_429_limit:
+                    delay = base_delay * (2**attempt)
+                    retry_after = response.headers.get("Retry-After")
+                    if retry_after and retry_after.isdigit():
+                        delay = max(delay, float(retry_after))
+                    logger.warning(
+                        "Rate limited (429), retrying in %.1fs (%s/%s)",
+                        delay,
+                        attempt + 1,
+                        retry_429_limit,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
 
                 response.raise_for_status()
-                return response.json()
+            response.raise_for_status()
+            return response.json()
 
         raise RuntimeError("Semantic Scholar request retry loop exited unexpectedly")
 
     async def aclose(self) -> None:
-        """No-op; kept for API symmetry with guide examples that call ``aclose``."""
+        """Close the shared HTTP client, if one has been created."""
+        client, self._http_client = self._http_client, None
+        await maybe_close_async_resource(client)
 
     # ------------------------------------------------------------------
     # Paper search
@@ -180,11 +190,26 @@ class SemanticScholarClient:
         if isinstance(response, dict):
             normalized = dict(response)
             raw_items = normalized.get("data")
+            if raw_items is None:
+                normalized["data"] = []
+                response = normalized
+                return PaperListResponse.model_validate(response)
             if isinstance(raw_items, list):
-                normalized["data"] = [
-                    item.get(nested_key, item) if isinstance(item, dict) else item
-                    for item in raw_items
-                ]
+                normalized_items: list[dict[str, Any]] = []
+                for item in raw_items:
+                    if not isinstance(item, dict):
+                        continue
+                    nested_paper = item.get(nested_key)
+                    if isinstance(nested_paper, dict):
+                        paper_payload = dict(nested_paper)
+                    elif "paperId" in item or "title" in item:
+                        paper_payload = dict(item)
+                    else:
+                        continue
+                    if paper_payload.get("authors") is None:
+                        paper_payload["authors"] = []
+                    normalized_items.append(paper_payload)
+                normalized["data"] = normalized_items
             response = normalized
         return PaperListResponse.model_validate(response)
 
@@ -249,9 +274,7 @@ class SemanticScholarClient:
         results expose the same ``recommendedExpansionId`` / ``expansionIdStatus``
         signals as brokered ``search_papers_semantic_scholar`` results.
         """
-        external_ids: dict[str, Any] = (paper.model_extra or {}).get(
-            "externalIds"
-        ) or {}
+        external_ids: dict[str, Any] = (paper.model_extra or {}).get("externalIds") or {}
         doi: str | None = external_ids.get("DOI") or None
         arxiv_id: str | None = external_ids.get("ArXiv") or None
         paper_id: str | None = paper.paper_id
@@ -335,6 +358,8 @@ class SemanticScholarClient:
         query: str,
         candidate_query: str,
         strategy: str,
+        candidate_count: int | None = None,
+        match_provider: str | None = None,
     ) -> dict[str, Any]:
         """Build a match payload for a fallback-found paper.
 
@@ -345,14 +370,114 @@ class SemanticScholarClient:
         payload = dump_jsonable(Paper.model_validate(matched))
         payload["matchFound"] = True
         payload["matchStrategy"] = strategy
+        if match_provider is not None:
+            payload["matchProvider"] = match_provider
         if candidate_query != query.strip():
             payload["normalizedQuery"] = candidate_query
+        payload.update(
+            build_match_metadata(
+                query=query,
+                paper=payload,
+                candidate_count=candidate_count,
+                resolution_strategy=strategy,
+            )
+        )
         return payload
+
+    @classmethod
+    def _pick_exact_title_match_candidate(
+        cls,
+        query: str,
+        candidates: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        target_key = cls._normalize_title_match_key(query)
+        if not target_key:
+            return None
+        for candidate in candidates:
+            title = candidate.get("title")
+            if not isinstance(title, str) or not title.strip():
+                continue
+            if cls._normalize_title_match_key(title) == target_key:
+                return candidate
+        return None
+
+    @staticmethod
+    def _normalize_crossref_work_to_paper(work: dict[str, Any]) -> dict[str, Any]:
+        doi = str(work.get("doi") or "").strip() or None
+        url = str(work.get("url") or "").strip() or None
+        recommended_expansion_id = f"DOI:{doi}" if doi else None
+        return {
+            "paperId": doi or url or str(work.get("title") or "crossref-match"),
+            "title": work.get("title"),
+            "year": work.get("year"),
+            "authors": work.get("authors") or [],
+            "citationCount": work.get("citationCount"),
+            "venue": work.get("venue"),
+            "publicationDate": work.get("publicationDate"),
+            "url": url,
+            "source": "crossref",
+            "sourceId": doi or url,
+            "canonicalId": doi or url,
+            "recommendedExpansionId": recommended_expansion_id,
+            "expansionIdStatus": "portable" if recommended_expansion_id is not None else "not_portable",
+        }
+
+    async def _recover_exact_title_cross_provider(
+        self,
+        query: str,
+        *,
+        openalex_client: Any | None,
+        enable_openalex: bool,
+        crossref_client: Any | None,
+        enable_crossref: bool,
+    ) -> dict[str, Any] | None:
+        if enable_openalex and openalex_client is not None:
+            try:
+                openalex_response = await openalex_client.search(query=query, limit=10)
+            except Exception:
+                openalex_response = None
+            openalex_data = (openalex_response or {}).get("data") or []
+            if isinstance(openalex_data, list):
+                matched = self._pick_exact_title_match_candidate(query, openalex_data)
+                if matched is not None:
+                    return self._build_fallback_match_payload(
+                        matched,
+                        query,
+                        query,
+                        "openalex_exact_title",
+                        candidate_count=len(openalex_data),
+                        match_provider="openalex",
+                    )
+
+        if enable_crossref and crossref_client is not None:
+            try:
+                crossref_match = await crossref_client.search_work(query)
+            except Exception:
+                crossref_match = None
+            if isinstance(crossref_match, dict):
+                normalized = self._normalize_crossref_work_to_paper(crossref_match)
+                matched = self._pick_exact_title_match_candidate(query, [normalized])
+                if matched is not None:
+                    return self._build_fallback_match_payload(
+                        matched,
+                        query,
+                        query,
+                        "crossref_exact_title",
+                        candidate_count=1,
+                        match_provider="crossref",
+                    )
+
+        return None
 
     async def _search_papers_match_fallback(
         self,
         query: str,
         fields: Optional[list[str]] = None,
+        *,
+        openalex_client: Any | None = None,
+        enable_openalex: bool = False,
+        crossref_client: Any | None = None,
+        enable_crossref: bool = False,
     ) -> dict[str, Any]:
         candidate_queries = self._title_lookup_queries(query)
         # Also try quoted-phrase variants so that Semantic Scholar treats the
@@ -380,8 +505,23 @@ class SemanticScholarClient:
             if matched is None:
                 continue
             return self._build_fallback_match_payload(
-                matched, query, candidate_query, "fuzzy_search"
+                matched,
+                query,
+                candidate_query,
+                "fuzzy_search",
+                candidate_count=len(fallback_response.get("data", [])),
+                match_provider="semantic_scholar",
             )
+
+        external_match = await self._recover_exact_title_cross_provider(
+            query,
+            openalex_client=openalex_client,
+            enable_openalex=enable_openalex,
+            crossref_client=crossref_client,
+            enable_crossref=enable_crossref,
+        )
+        if external_match is not None:
+            return external_match
 
         # Final fallback: citation-sorted bulk search.  Relevance-ranked search
         # may bury a very famous paper behind topic papers with higher textual
@@ -407,7 +547,12 @@ class SemanticScholarClient:
             if matched is None:
                 continue
             return self._build_fallback_match_payload(
-                matched, query, candidate_query, "citation_ranked"
+                matched,
+                query,
+                candidate_query,
+                "citation_ranked",
+                candidate_count=len(bulk_response.get("data", [])),
+                match_provider="semantic_scholar",
             )
 
         return {
@@ -416,6 +561,12 @@ class SemanticScholarClient:
             "query": query,
             "matchFound": False,
             "matchStrategy": "none",
+            "matchConfidence": "low",
+            "matchedFields": [],
+            "titleSimilarity": 0.0,
+            "yearDelta": None,
+            "authorOverlap": 0,
+            "candidateCount": 0,
             "normalizedQueriesTried": all_search_queries,
             "message": (
                 "No Semantic Scholar title match was found. If you have a DOI, "
@@ -528,9 +679,7 @@ class SemanticScholarClient:
                 # The bulk endpoint supports fewer fields than /paper/search.
                 # Retry with default fields so agents always get results.
                 params["fields"] = ",".join(DEFAULT_PAPER_FIELDS)
-                response = await self._request(
-                    "GET", "paper/search/bulk", params=params
-                )
+                response = await self._request("GET", "paper/search/bulk", params=params)
                 fields_dropped = True
             else:
                 raise
@@ -555,6 +704,11 @@ class SemanticScholarClient:
         self,
         query: str,
         fields: Optional[list[str]] = None,
+        *,
+        openalex_client: Any | None = None,
+        enable_openalex: bool = False,
+        crossref_client: Any | None = None,
+        enable_crossref: bool = False,
     ) -> dict[str, Any]:
         """Best title-match paper search (``/paper/search/match``).
 
@@ -577,9 +731,7 @@ class SemanticScholarClient:
                 "fields": fields_str,
             }
             try:
-                response = await self._request(
-                    "GET", "paper/search/match", params=params
-                )
+                response = await self._request("GET", "paper/search/match", params=params)
             except httpx.HTTPStatusError as exc:
                 status_code = self._status_code_from_error(exc)
                 if status_code in {400, 404}:
@@ -591,10 +743,26 @@ class SemanticScholarClient:
             result = dump_jsonable(paper)
             result["matchFound"] = True
             result["matchStrategy"] = "exact_title"
+            result["matchProvider"] = "semantic_scholar"
             if candidate_query != query:
                 result["normalizedQuery"] = candidate_query
+            result.update(
+                build_match_metadata(
+                    query=query,
+                    paper=result,
+                    candidate_count=1,
+                    resolution_strategy="exact_title",
+                )
+            )
             return result
-        return await self._search_papers_match_fallback(query, fields=fields)
+        return await self._search_papers_match_fallback(
+            query,
+            fields=fields,
+            openalex_client=openalex_client,
+            enable_openalex=enable_openalex,
+            crossref_client=crossref_client,
+            enable_crossref=enable_crossref,
+        )
 
     async def paper_autocomplete(self, query: str) -> dict[str, Any]:
         """Query completion for paper titles (``/paper/autocomplete``).
@@ -618,30 +786,20 @@ class SemanticScholarClient:
         normalized_id = self._normalize_paper_id(paper_id)
         params = {"fields": ",".join(fields or DEFAULT_PAPER_FIELDS)}
         try:
-            response = await self._request(
-                "GET", f"paper/{normalized_id}", params=params
-            )
+            response = await self._request("GET", f"paper/{normalized_id}", params=params)
         except httpx.HTTPStatusError as exc:
             status_code = self._status_code_from_error(exc)
             if status_code == 404:
                 raise ValueError(
                     f"Semantic Scholar could not find paper {paper_id!r}"
-                    + (
-                        f" (normalized to {normalized_id!r})"
-                        if normalized_id != paper_id
-                        else ""
-                    )
+                    + (f" (normalized to {normalized_id!r})" if normalized_id != paper_id else "")
                     + ". "
                     + self._paper_id_portability_hint()
                 ) from exc
             if status_code == 400:
                 raise ValueError(
                     f"Semantic Scholar rejected paper identifier {paper_id!r}"
-                    + (
-                        f" (normalized to {normalized_id!r})"
-                        if normalized_id != paper_id
-                        else ""
-                    )
+                    + (f" (normalized to {normalized_id!r})" if normalized_id != paper_id else "")
                     + " for get_paper_details. Use a Semantic Scholar-compatible "
                     "paper identifier. " + self._paper_id_portability_hint()
                 ) from exc
@@ -667,9 +825,7 @@ class SemanticScholarClient:
             f"paper/{paper_id}/citations",
             params=params,
         )
-        return dump_jsonable(
-            self._normalize_nested_paper_list_response(response, "citingPaper")
-        )
+        return dump_jsonable(self._normalize_nested_paper_list_response(response, "citingPaper"))
 
     async def get_paper_references(
         self,
@@ -690,9 +846,7 @@ class SemanticScholarClient:
             f"paper/{paper_id}/references",
             params=params,
         )
-        return dump_jsonable(
-            self._normalize_nested_paper_list_response(response, "citedPaper")
-        )
+        return dump_jsonable(self._normalize_nested_paper_list_response(response, "citedPaper"))
 
     async def get_paper_authors(
         self,
@@ -805,12 +959,10 @@ class SemanticScholarClient:
                     "'2020-01-01:2023-12-31'). Open-ended ranges require a trailing "
                     "colon ('2022:'), not a trailing hyphen."
                     if publication_date_or_year
-                    else " Use a Semantic Scholar authorId returned by "
-                    "search_authors or get_paper_authors."
+                    else " Use a Semantic Scholar authorId returned by search_authors or get_paper_authors."
                 )
                 raise ValueError(
-                    f"Semantic Scholar rejected get_author_papers for author "
-                    f"{author_id!r}.{filter_hint}"
+                    f"Semantic Scholar rejected get_author_papers for author {author_id!r}.{filter_hint}"
                 ) from exc
             if status_code == 404:
                 raise ValueError(
@@ -902,10 +1054,15 @@ class SemanticScholarClient:
         if venue:
             params["venue"] = venue
         try:
-            response = await self._request("GET", "snippet/search", params=params)
+            response = await self._request(
+                "GET",
+                "snippet/search",
+                params=params,
+                max_429_retries=0,
+            )
         except httpx.HTTPStatusError as exc:
             status_code = self._status_code_from_error(exc)
-            if status_code in {400, 404, 500, 502, 503, 504}:
+            if status_code in {400, 404, 429, 500, 502, 503, 504}:
                 payload = dump_jsonable(SnippetSearchResponse(data=[]))
                 payload["query"] = query
                 payload["degraded"] = True

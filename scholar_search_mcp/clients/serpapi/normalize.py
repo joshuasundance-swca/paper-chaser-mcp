@@ -56,6 +56,62 @@ def _parse_year_range(year: str) -> tuple[Optional[int], Optional[int]]:
     return None, None
 
 
+def _authors_from_text(text: str | None) -> list[Author]:
+    authors: list[Author] = []
+    if not isinstance(text, str):
+        return authors
+    for raw_name in text.split(","):
+        name = raw_name.strip()
+        if name:
+            authors.append(Author(name=name))
+    return authors
+
+
+def _build_paper(
+    *,
+    title: str,
+    paper_id: str | None,
+    source_id: str | None,
+    canonical_id: str | None,
+    recommended_expansion_id: str | None,
+    authors: list[Author],
+    abstract: str | None,
+    year: int | None,
+    venue: str | None,
+    url: str | None,
+    pdf_url: str | None = None,
+    citation_count: int | None = None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    expansion_id_status: Literal["portable", "not_portable"] = (
+        "portable" if recommended_expansion_id else "not_portable"
+    )
+    paper = Paper(
+        paperId=paper_id,
+        title=title,
+        abstract=abstract,
+        year=year,
+        authors=authors,
+        citationCount=citation_count,
+        referenceCount=None,
+        influentialCitationCount=None,
+        venue=venue,
+        publicationTypes=None,
+        publicationDate=None,
+        url=url,
+        pdfUrl=pdf_url,
+        source="serpapi_google_scholar",
+        sourceId=source_id,
+        canonicalId=canonical_id,
+        recommendedExpansionId=recommended_expansion_id,
+        expansionIdStatus=expansion_id_status,
+        scholarResultId=paper_id,
+    )
+    if extra:
+        paper = paper.model_copy(update=extra)
+    return dump_jsonable(paper)
+
+
 def normalize_organic_result(result: dict[str, Any]) -> Optional[dict[str, Any]]:
     """Convert one SerpApi organic Scholar result to a normalized paper dict.
 
@@ -71,14 +127,10 @@ def normalize_organic_result(result: dict[str, Any]) -> Optional[dict[str, Any]]
     inline_links: dict[str, Any] = result.get("inline_links") or {}
 
     versions: dict[str, Any] = inline_links.get("versions") or {}
-    cluster_id: Optional[str] = (
-        str(versions["cluster_id"]) if versions.get("cluster_id") else None
-    )
+    cluster_id: Optional[str] = str(versions["cluster_id"]) if versions.get("cluster_id") else None
 
     cited_by: dict[str, Any] = inline_links.get("cited_by") or {}
-    cites_id: Optional[str] = (
-        str(cited_by["cites_id"]) if cited_by.get("cites_id") else None
-    )
+    cites_id: Optional[str] = str(cited_by["cites_id"]) if cited_by.get("cites_id") else None
 
     # sourceId priority: result_id > cluster_id > cites_id
     source_id: Optional[str] = result_id or cluster_id or cites_id
@@ -92,9 +144,6 @@ def normalize_organic_result(result: dict[str, Any]) -> Optional[dict[str, Any]]
     # canonicalId priority: DOI > cluster_id > result_id > sourceId
     canonical_id: Optional[str] = doi or cluster_id or result_id or source_id
     recommended_expansion_id: Optional[str] = doi or None
-    expansion_id_status: Literal["portable", "not_portable"] = (
-        "portable" if recommended_expansion_id else "not_portable"
-    )
 
     # --- Authors ---
     authors: list[Author] = []
@@ -145,35 +194,74 @@ def normalize_organic_result(result: dict[str, Any]) -> Optional[dict[str, Any]]
         except (ValueError, TypeError):
             pass
 
-    paper = Paper(
-        paperId=result_id,
-        title=title,
-        abstract=abstract,
-        year=year,
-        authors=authors,
-        citationCount=citation_count,
-        referenceCount=None,
-        influentialCitationCount=None,
-        venue=venue,
-        publicationTypes=None,
-        publicationDate=None,
-        url=link,
-        pdfUrl=pdf_url,
-        source="serpapi_google_scholar",
-        sourceId=source_id,
-        canonicalId=canonical_id,
-        recommendedExpansionId=recommended_expansion_id,
-        expansionIdStatus=expansion_id_status,
-        scholarResultId=result_id,
-    )
-    # Preserve supplementary Scholar cluster/cite identifiers as extras for
-    # any downstream tool that may need them in the future.
     extra: dict[str, Any] = {}
     if cluster_id:
         extra["scholarClusterId"] = cluster_id
     if cites_id:
         extra["scholarCitesId"] = cites_id
-    if extra:
-        paper = paper.model_copy(update=extra)
+    return _build_paper(
+        title=title,
+        paper_id=result_id,
+        source_id=source_id,
+        canonical_id=canonical_id,
+        recommended_expansion_id=recommended_expansion_id,
+        authors=authors,
+        abstract=abstract,
+        year=year,
+        venue=venue,
+        url=link,
+        pdf_url=pdf_url,
+        citation_count=citation_count,
+        extra=extra,
+    )
 
-    return dump_jsonable(paper)
+
+def normalize_author_article_result(result: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """Convert one SerpApi author article entry to the shared Paper shape."""
+
+    title = (result.get("title") or "").strip()
+    if not title:
+        return None
+    link = result.get("link")
+    citation_id = result.get("citation_id")
+    doi = _extract_doi_from_link(link) if isinstance(link, str) else None
+    cited_by = result.get("cited_by") or {}
+    cites_id = str(cited_by.get("cites_id")) if cited_by.get("cites_id") else None
+    citation_count: Optional[int] = None
+    cited_by_value = cited_by.get("value")
+    if cited_by_value is not None:
+        try:
+            citation_count = int(cited_by_value)
+        except (TypeError, ValueError):
+            pass
+    year = None
+    raw_year = result.get("year")
+    if raw_year is not None:
+        try:
+            year = int(raw_year)
+        except (TypeError, ValueError):
+            year = None
+    publication = result.get("publication")
+    if isinstance(publication, str) and publication.strip():
+        venue = publication.strip()
+    else:
+        venue = None
+    extra: dict[str, Any] = {}
+    if cites_id:
+        extra["scholarCitesId"] = cites_id
+    if citation_id:
+        extra["scholarCitationId"] = citation_id
+    return _build_paper(
+        title=title,
+        paper_id=str(citation_id) if citation_id else None,
+        source_id=str(citation_id) if citation_id else cites_id,
+        canonical_id=doi or (str(citation_id) if citation_id else cites_id),
+        recommended_expansion_id=doi,
+        authors=_authors_from_text(result.get("authors")),
+        abstract=None,
+        year=year,
+        venue=venue,
+        url=link if isinstance(link, str) else None,
+        citation_count=citation_count,
+        extra=extra,
+    )

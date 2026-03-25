@@ -3,13 +3,16 @@
 This document captures the primary planning assumptions for the MCP surface so
 agents can choose the next tool with low context and high reliability.
 
-These same discovery, pagination, lookup, citation, and author-pivot paths are
-exercised by the agentic smoke test in `.github/workflows/test-scholar-search.md`.
+These same discovery, pagination, lookup, citation, author-pivot, and smart
+result-set paths are exercised by the agentic smoke test in
+`.github/workflows/test-scholar-search.md`.
 
 ## Primary Personas
 
 - **Quick discovery user**: wants a strong first page fast to decide whether to
   dig deeper.
+- **Concept-level researcher**: starts from a topic or question rather than a
+  known paper and wants a reusable result set with grounded follow-up paths.
 - **Researcher doing exhaustive retrieval**: wants many papers across pages to
   build a reading list or dataset.
 - **Citation chaser**: starts from one paper and expands outward through cited-by
@@ -21,7 +24,40 @@ exercised by the agentic smoke test in `.github/workflows/test-scholar-search.md
 
 ## Golden Paths
 
-### 1. Quick literature discovery
+### 1. Smart concept discovery and grounded follow-up
+
+1. Start with `search_papers_smart` when the task is concept-level discovery,
+   literature review, or a grounded follow-up workflow.
+2. Inspect `strategyMetadata`, especially `acceptedExpansions`,
+   `rejectedExpansions`, `speculativeExpansions`, and `providersUsed`.
+3. Save the returned `searchSessionId`.
+4. Use `ask_result_set` for grounded QA, `map_research_landscape` for themes,
+   and `expand_research_graph` for compact citation/reference/author expansion.
+5. If `mode="known_item"` does not confirm one exact anchor, the smart workflow
+  now returns a broader candidate set with warnings instead of a dead-end
+  error; verify title, year, and venue before treating that fallback set as
+  canonical.
+
+**Example request**: "Map the main research themes in retrieval-augmented generation for coding agents"
+
+**Tool sequence**:
+```text
+search_papers_smart(query="retrieval-augmented generation for coding agents", limit=10)
+→ inspect strategyMetadata, agentHints, resourceUris, searchSessionId
+→ ask_result_set(searchSessionId="...", question="What does this result set say about evaluation tradeoffs?")
+→ map_research_landscape(searchSessionId="...", maxThemes=4)
+→ expand_research_graph(seedSearchSessionId="...", direction="citations")
+```
+
+**Success signals**
+
+- The first smart result set is useful even when the starting query is concept-level.
+- `strategyMetadata` explains what the server tried instead of acting like a black box.
+- `searchSessionId` is enough to continue without rerunning the whole discovery step.
+- Grounded follow-up answers cite papers from the saved result set instead of guessing.
+- Known-item smart search degrades into a reviewable candidate set rather than a hard dead end when exact recovery is weak.
+
+### 2. Quick literature discovery
 
 1. Start with `search_papers`.
 2. Read `brokerMetadata.nextStepHint` for the recommended next move.
@@ -52,7 +88,7 @@ search_papers(query="large language model alignment", limit=10)
   results (treat with caution), `"lexical"` for CORE/arXiv keyword matches, or
   `"unknown"` for SerpApi / no-result paths.
 
-### 2. Exhaustive retrieval
+### 3. Exhaustive retrieval
 
 1. Start with `search_papers_bulk` when the request asks for all results, the
    first N results across pages, or a dataset-like collection.
@@ -83,7 +119,7 @@ search_papers_bulk(query="reinforcement learning from human feedback", year="202
 - The agent does not misuse bulk search for small targeted pages.
 - Pagination state is explained in user-facing language.
 
-### 3. Citation chasing
+### 4. Citation chasing
 
 1. Resolve or confirm the starting paper with `search_papers_match` or
    `get_paper_details` if needed.
@@ -113,20 +149,31 @@ search_papers_match(query="Attention Is All You Need")
 - Returned metadata is rich enough to rank or filter the expansion set.
 - The workflow naturally chains from a discovered or known paper.
 
-### 4. Known-item lookup
+### 5. Known-item lookup
 
-1. Use `search_papers_match` for messy or partial titles.
-2. Use `get_paper_details` for DOI, arXiv ID, URL, or canonical IDs.
-3. Fall back to `search_papers` only when the user is really asking a topical
+1. Use `resolve_citation` for broken bibliography lines, incomplete references,
+   quote fragments, and almost-right citations.
+2. Use `search_papers_match` for messy or partial titles.
+3. Use `get_paper_details` for DOI, arXiv ID, URL, or canonical IDs.
+4. Fall back to `search_papers` only when the user is really asking a topical
    question rather than an item lookup.
-4. Treat a structured no-match from `search_papers_match` as a signal that the
+5. Treat a structured no-match from `search_papers_match` as a signal that the
    item may be punctuation-variant metadata, a dissertation, software release,
    report, or other output outside the indexed paper surface. Verify externally
    when needed.
+6. When `resolve_citation` sees a report-style or non-paper-looking reference,
+  prefer abstention plus alternatives over forcing a weak canonical paper
+  match.
+7. When `resolve_citation` sees a clearly regulatory reference such as a
+  Federal Register or CFR citation, switch to `search_federal_register`,
+  `get_federal_register_document`, or `get_cfr_text` instead of continuing to
+  force scholarly-paper recovery.
 
 **Example requests and tool choices**:
 - "Find the paper called something like 'Scaling Laws for Neural Language Models'"
   → `search_papers_match(query="Scaling Laws for Neural Language Models")`
+- "Resolve this partial citation: 'Rockstrom et al planetary boundaries 2009 Nature 461 472'"
+  → `resolve_citation(citation="Rockstrom et al planetary boundaries 2009 Nature 461 472")`
 - "Get details for arxiv:1706.03762"
   → `get_paper_details(paper_id="arXiv:1706.03762")`
 - "Look up DOI 10.48550/arXiv.2005.14165"
@@ -135,10 +182,14 @@ search_papers_match(query="Attention Is All You Need")
 **Success signals**
 
 - Disambiguation stays minimal.
+- Citation repair returns alternatives and uncertainty instead of forcing a bad match.
+- Regulatory citations are redirected into the Federal Register / CFR workflow instead of being treated as papers.
+- Exact-title recovery can escalate beyond Semantic Scholar when the paper is
+  real but missing from Semantic Scholar title-match results.
 - DOI, URL, and identifier-based lookups feel low friction.
 - Agents do not spend multiple topic-search turns on a known-item request.
 
-### 5. Author-centric research
+### 6. Author-centric research
 
 1. Start with `search_authors`.
 2. Use `get_author_info` to confirm identity and profile metadata.
@@ -173,8 +224,21 @@ search_authors(query="Yoshua Bengio", limit=5)
 
 ## Secondary Workflows
 
+- **Regulatory follow-through from ECOS**: when an ECOS dossier or flattened
+  ECOS document inventory exposes `frCitation` or a GovInfo FR link, use
+  `get_federal_register_document` to anchor the Federal Register notice or
+  rule, then use `get_cfr_text` for the affected CFR part or section. Use
+  `search_federal_register` when the ECOS clue is still too broad and you need
+  agency/date/type narrowing before retrieval. Direct document numbers remain
+  the strongest anchor, but FR citation strings now retry broader Federal
+  Register discovery before giving up.
 - **Quote or snippet validation**: use `search_snippets` only when title or
-  keyword search is weak.
+  keyword search is weak, or when `resolve_citation` suggests a quote fragment
+  is the strongest remaining clue.
+- **Smart result-set refinement**: after `search_papers_smart`, prefer
+  `ask_result_set`, `map_research_landscape`, and `expand_research_graph`
+  before starting an entirely new search when the follow-up is still grounded
+  in the same corpus.
 - **Agent UX feedback loop**: the checked-in agentic workflow at
   `.github/workflows/test-scholar-search.md` now supports `smoke`,
   `comprehensive`, and `feature_probe` review modes. The workflow uses the
@@ -217,14 +281,25 @@ as part of the intended agent contract.
   search, and exhausted match attempts return a structured no-match payload
   instead of surfacing a raw provider 404.
 
-### 2. Default CORE first hop follows redirects
+### 2. Known-item recovery now prefers abstention and cross-provider exact-title confirmation
 
-- The default broker path now follows predictable CORE redirects instead of
-  recording an avoidable first-provider failure.
-- Treat new redirect-driven fallback in `brokerMetadata.attemptedProviders` as a
-  regression if it reappears.
+- `resolve_citation` now prefers abstention plus alternatives when report-like,
+  non-paper-looking, or otherwise weakly grounded inputs do not justify a
+  canonical paper match.
+- `search_papers_match` now tries strict OpenAlex exact-title recovery, then
+  strict Crossref exact-title recovery, before giving up on a real paper that
+  Semantic Scholar did not recover by title.
+- Agents should treat `matchProvider` and `matchStrategy` as useful provenance
+  when exact-title recovery succeeds outside the Semantic Scholar path.
 
-### 3. `nextStepHint` now distinguishes continuation from pivots
+### 3. CORE fallback follows redirects cleanly
+
+- When the broker reaches CORE, predictable redirects are followed instead of
+  recording an avoidable failed provider attempt.
+- Treat new redirect-driven CORE failures in `brokerMetadata.attemptedProviders`
+  as a regression if they reappear.
+
+### 4. `nextStepHint` now distinguishes continuation from pivots
 
 - Semantic Scholar results describe `search_papers_bulk` as the closest
   continuation path only when that preserves the research intent reasonably
@@ -234,7 +309,7 @@ as part of the intended agent contract.
 - Venue-filtered Semantic Scholar searches explicitly warn that bulk retrieval
   broadens the query semantics.
 
-### 4. Provider-specific schemas now match provider capability
+### 5. Provider-specific schemas now match provider capability
 
 - `search_papers_core`, `search_papers_serpapi`, and `search_papers_arxiv`
    expose only `query`, `limit`, and `year`.
@@ -244,7 +319,7 @@ as part of the intended agent contract.
 - `search_papers_semantic_scholar` continues to expose the wider Semantic
    Scholar-compatible filter set.
 
-### 5. Author and paper pivots now call out Semantic Scholar ID boundaries
+### 6. Author and paper pivots now call out Semantic Scholar ID boundaries
 
 - `search_authors` normalizes plain-text exact-name punctuation before calling
   Semantic Scholar.
@@ -257,14 +332,14 @@ as part of the intended agent contract.
   `paperId`/`sourceId`/`canonicalId` values still need a DOI or
   Semantic-Scholar-native lookup before expansion.
 
-### 6. Snippet-search provider failures now degrade cleanly
+### 7. Snippet-search provider failures now degrade cleanly
 
 - `search_snippets` now returns an empty degraded payload with retry guidance
   when Semantic Scholar rejects a phrase query or returns a transient 5xx.
 - Agents should prefer `search_papers_match` or `search_papers` before falling
   back to snippet search for quote recovery.
 
-### 7. Nonsense / low-relevance queries now surface an explicit weak-match signal
+### 8. Nonsense / low-relevance queries now surface an explicit weak-match signal
 
 - `search_papers` with Semantic Scholar now checks whether any distinctive
   query tokens (length ≥ 6, not a common academic term) appear in the returned
@@ -279,6 +354,23 @@ as part of the intended agent contract.
   Semantic Scholar returns papers that only match the generic words in the query.
 - `resultQuality="strong"` still means Semantic Scholar's semantic ranking was
   used and all inspected distinctive tokens appear in at least one result.
+
+### 9. Title-like broker misses now suppress obvious false positives
+
+- For title-like known-item queries, brokered `search_papers` now suppresses
+  obviously low-relevance Semantic Scholar hits instead of surfacing a bad
+  paper-shaped record.
+- Agents should treat this empty result plus `nextStepHint` as a prompt to
+  switch to `search_papers_match`, refine the title, or adjust `providerOrder`
+  rather than continuing with the brokered discovery set.
+
+### 10. Smart follow-up outputs are stricter about grounding and relevance
+
+- `ask_result_set(answerMode="comparison")` now prefers a grounded structured
+  comparison over a flat list of titles and venues.
+- `map_research_landscape` sanitizes weak theme labels before returning them.
+- `expand_research_graph` keeps saved-session intent in frontier scoring and
+  filters weak off-topic candidates before they become next-hop anchors.
 
 ### 8. `get_author_papers` open-ended `publicationDateOrYear` filter normalized
 
@@ -331,3 +423,10 @@ as part of the intended agent contract.
 - Consider whether the agentic workflow should eventually split into multiple
   checked-in workflows once the new manual mode/focus inputs settle and more
   specialized UX probes become routine.
+- Evaluate whether OpenAlex institution/source entity pivots (`search_entities_openalex`,
+  `search_papers_openalex_by_entity`) should appear more prominently in a dedicated
+  golden path — they are first-class tools but currently listed only under secondary
+  workflows.
+- Consider adding a dedicated ECOS-to-Federal-Register walkthrough golden path
+  now that the full species-dossier-to-regulatory-source chain
+  (ECOS → frCitation → GovInfo/FR) is stable and documented.
