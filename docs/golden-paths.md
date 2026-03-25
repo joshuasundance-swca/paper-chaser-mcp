@@ -423,3 +423,10 @@ as part of the intended agent contract.
 - Consider whether the agentic workflow should eventually split into multiple
   checked-in workflows once the new manual mode/focus inputs settle and more
   specialized UX probes become routine.
+- Evaluate whether OpenAlex institution/source entity pivots (`search_entities_openalex`,
+  `search_papers_openalex_by_entity`) should appear more prominently in a dedicated
+  golden path — they are first-class tools but currently listed only under secondary
+  workflows.
+- Consider adding a dedicated ECOS-to-Federal-Register walkthrough golden path
+  now that the full species-dossier-to-regulatory-source chain
+  (ECOS → frCitation → GovInfo/FR) is stable and documented.

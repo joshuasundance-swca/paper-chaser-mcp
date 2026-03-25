@@ -5,11 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "scholar-search-mcp"
 version = "0.1.2"
-description = "Model Context Protocol server for Semantic Scholar, CORE, and arXiv paper search"
+description = "Model Context Protocol server for academic paper search across Semantic Scholar, CORE, arXiv, OpenAlex, SerpApi Google Scholar, Crossref, Unpaywall, ECOS species dossiers, and Federal Register / CFR regulatory text"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
-keywords = ["mcp", "semantic-scholar", "core", "arxiv", "academic", "papers", "research"]
+keywords = ["mcp", "semantic-scholar", "core", "arxiv", "openalex", "academic", "papers", "research", "federal-register", "ecos", "regulatory"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

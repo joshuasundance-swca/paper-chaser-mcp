@@ -1,52 +1,134 @@
 # Scholar Search MCP
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/joshuasundance-swca/scholar-search-mcp)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A FastMCP-based MCP server that integrates the [CORE API v3](https://api.core.ac.uk/docs/v3), [Semantic Scholar API](https://www.semanticscholar.org/product/api), [OpenAlex API](https://developers.openalex.org/), [arXiv API](https://info.arxiv.org/help/api/user-manual.html), and optionally [SerpApi Google Scholar](https://serpapi.com/google-scholar-api) so AI assistants (e.g. Claude, Cursor) can search and fetch academic paper metadata.
+> **Fork status:** This repository is a divergent fork. A project rename,
+> new PyPI publication, updated versioning, and fresh registry metadata are
+> planned but not yet in progress. Until then, install from source or the
+> GHCR image rather than the upstream PyPI package.
 
-The package now uses FastMCP for tool/resource/prompt registration, Pydantic for strict tool inputs and normalized provider payloads, and provider clients organized as expandable subpackages under `scholar_search_mcp/clients/`.
+An MCP server for academic research — search papers, chase citations, look up authors, repair broken references, explore species dossiers, and retrieve regulatory text, all from one FastMCP server that AI assistants can call directly.
 
-## Features
+**Providers:** [Semantic Scholar](https://www.semanticscholar.org/product/api) · [arXiv](https://info.arxiv.org/help/api/user-manual.html) · [OpenAlex](https://developers.openalex.org/) · [CORE](https://api.core.ac.uk/docs/v3) · [SerpApi Google Scholar](https://serpapi.com/google-scholar-api) (opt-in, paid) · [Crossref](https://www.crossref.org/documentation/retrieve-metadata/rest-api/) · [Unpaywall](https://unpaywall.org/products/api) · [ECOS](https://ecos.fws.gov/) · [FederalRegister.gov](https://www.federalregister.gov/developers/documentation/api/v1) · [GovInfo](https://api.govinfo.gov/docs/)
 
-- **Search papers** – Keyword search with a configurable **fallback chain**: defaults to **Semantic Scholar** first, then **arXiv**, then optionally **CORE** (disabled by default until explicitly enabled), then optionally **SerpApi Google Scholar** (opt-in paid). You can keep the default broker behavior, set a `preferredProvider`, override `providerOrder`, or call provider-specific `search_papers_*` tools directly. Returns a single best-effort page — not paginated.
-- **Bulk paper search** – Boolean-syntax search via `/paper/search/bulk` with cursor-based pagination (up to 1,000 returned papers/call). **The default ordering is NOT relevance-ranked** — bulk retrieval uses exhaustive corpus traversal with an internal ordering; every response includes a `retrievalNote` field describing the active ordering contract. For citation-ranked traversal pass `sort='citationCount:desc'`. The upstream bulk endpoint may ignore small `limit` values internally, so this server truncates returned data to the requested limit; use `search_papers` or `search_papers_semantic_scholar` for small targeted pages. Treat `pagination.nextCursor` as opaque and pass it back unchanged as `cursor`
-- **Best-match / autocomplete** – Single best title match and typeahead completions
-- **Paper details** – Full metadata (title, authors, abstract, citations, etc.)
-- **Citations & references** – Papers that cite or are cited by a given paper; treat `pagination.nextCursor` as opaque and pass it back unchanged as `cursor`
-- **Paper authors** – Author listing for a specific paper; treat `pagination.nextCursor` as opaque and pass it back unchanged as `cursor`
-- **Author search & batch** – Search authors by name with cursor pagination, or fetch up to 1,000 author profiles in one call
-- **Snippet search** – Quote-like text snippet search returning snippet text, paper metadata, and score
-- **Batch lookup** – Fetch up to 500 papers in one call
-- **Recommendations** – Similar papers via single-seed GET or multi-seed POST
-- **Citation formats** – Get MLA, APA, BibTeX, and other citation export formats for a Google Scholar paper (requires SerpApi)
-- **OpenAlex-native workflows** – Explicit OpenAlex search, cursor-paginated retrieval, work lookup by DOI/OpenAlex ID, autocomplete, source/institution/topic pivots, cited-by/reference traversal, and author pivots without forcing OpenAlex into the brokered Semantic-Scholar-shaped flow
-- **ECOS species dossiers** – Explicit U.S. Fish and Wildlife Service ECOS tools for species discovery, per-entity species dossiers, recovery plans, five-year reviews, biological opinions, federal-register items, conservation-plan links, and on-demand document-to-Markdown extraction with bounded conversion timeouts and structured extraction statuses
-- **Federal Register + CFR workflows** – Keyless FederalRegister.gov discovery plus GovInfo-backed authoritative retrieval for individual Federal Register notices/rules and CFR part/section text, with ECOS `frCitation` enrichment to bridge species dossiers into regulatory primary sources
-- **Provider execution policy** – Shared retries with jitter, bounded concurrency, suppression/circuit-breaker state, normalized provider outcomes, and a diagnostics tool for live provider health
-- **Shared rate limiter** – One 1 req/s pacing lock shared across all Semantic Scholar endpoints
-- **Structured FastMCP outputs** – Tools return structured content instead of JSON blobs embedded in text
-- **Agent onboarding aids** – Ships a workflow guide resource and a planning prompt alongside the tools
-- **Additive smart research layer** – `search_papers_smart`, `ask_result_set`, `map_research_landscape`, and `expand_research_graph` add concept-level discovery, grounded follow-up QA, theme mapping, and compact graph expansion without changing the existing raw-tool contract
-- **Latency profiles and provider budgets** – Smart tools accept `latencyProfile` (`fast`, `balanced`, `deep`) and `search_papers_smart` also accepts an optional `providerBudget` for guarded multi-provider fanout
-- **Compatibility-first agent UX** – Primary read tools now surface `agentHints`, `clarification`, `resourceUris`, and reusable `searchSessionId` handles so agents can keep moving without reading the full docs
-- **Microsoft-facing packaging assets** – Ships `mcp-tools.core.json`, `mcp-tools.full.json`, and `microsoft-plugin.sample.json` for Streamable HTTP deployments and declarative-agent packaging
+---
+
+## Contents
+
+- [What can it do?](#what-can-it-do)
+- [Quick tool decision guide](#quick-tool-decision-guide)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Tools](#tools)
+- [Resources and prompts](#resources-and-prompts)
+- [Development](#development)
+- [Guides](#guides)
+- [License](#license)
+
+---
+
+## What can it do?
+
+### Academic paper search
+- **Brokered single-page search** (`search_papers`) — tries Semantic Scholar → arXiv → CORE → SerpApi in order; returns `brokerMetadata` with `nextStepHint` so agents know what to do next
+- **Exhaustive paginated retrieval** (`search_papers_bulk`) — cursor-based bulk traversal up to 1,000 papers/call; default ordering is **not relevance-ranked**, read `retrievalNote` each page
+- **Provider-specific searches** — `search_papers_semantic_scholar`, `search_papers_arxiv`, `search_papers_core`, `search_papers_serpapi`, `search_papers_openalex`, `search_papers_openalex_bulk`
+
+### Smart research layer *(requires `[ai]` extra + `SCHOLAR_SEARCH_ENABLE_AGENTIC=true`)*
+- **`search_papers_smart`** — concept-level discovery with query expansion, multi-provider fusion, reranking, and a reusable `searchSessionId`; supports `latencyProfile` (`fast` / `balanced` / `deep`) and an optional `providerBudget`
+- **`ask_result_set`** — grounded QA, claim checks, and comparisons over a saved result set
+- **`map_research_landscape`** — theme clustering, gaps, and suggested next searches
+- **`expand_research_graph`** — compact citation/reference/author graph expansion from anchors or a saved session
+
+### Known-item lookup and citation repair
+- **`resolve_citation`** — stages identifier extraction, title recovery, snippet search, and sparse metadata; abstains on regulatory or non-paper references and steers agents to the right tool
+- **`search_papers_match`** — messy-title lookup with fuzzy Semantic Scholar fallback and cross-provider exact-title confirmation
+- **`get_paper_details`** — lookup by DOI, arXiv ID, Semantic Scholar ID, or URL
+- **`paper_autocomplete`** — typeahead completions for partial titles
+
+### Citations, references, and authors
+- **`get_paper_citations`** / **`get_paper_references`** — cursor-paginated forward and backward citation chasing
+- **`search_authors`** → **`get_author_info`** → **`get_author_papers`** — full author pivot workflow
+- **`batch_get_papers`** / **`batch_get_authors`** — fetch up to 500 papers or 1,000 authors in one call
+- **`get_paper_recommendations`** / **`get_paper_recommendations_post`** — similar papers by single or multi-seed
+
+### Paper enrichment and OA discovery
+- **`enrich_paper`** — combined Crossref + Unpaywall orchestrator; opt in with `includeEnrichment=true` on lookup and smart tools
+- **`get_paper_metadata_crossref`** / **`get_paper_open_access_unpaywall`** — explicit per-provider enrichment
+
+### OpenAlex-native workflows
+- **`get_paper_details_openalex`** — work lookup by OpenAlex W-id or DOI with abstract reconstruction
+- **`get_paper_citations_openalex`** / **`get_paper_references_openalex`** — OpenAlex citation and reference traversal
+- **`search_authors_openalex`** → **`get_author_info_openalex`** → **`get_author_papers_openalex`** — explicit OpenAlex author pivot
+- **`search_entities_openalex`** / **`search_papers_openalex_by_entity`** — source, institution, and topic pivots
+- **`paper_autocomplete_openalex`** — OpenAlex typeahead
+
+### ECOS species dossiers *(U.S. Fish and Wildlife Service)*
+- **`search_species_ecos`** → **`get_species_profile_ecos`** → **`list_species_documents_ecos`** → **`get_document_text_ecos`**
+- Returns species listings, recovery plans, five-year reviews, biological opinions, and conservation-plan links; converts PDF/HTML documents to Markdown with bounded timeouts
+
+### Federal Register and CFR regulatory text
+- **`search_federal_register`** — keyless discovery on FederalRegister.gov
+- **`get_federal_register_document`** — authoritative GovInfo retrieval for one notice or rule, with FederalRegister.gov HTML fallback
+- **`get_cfr_text`** — authoritative CFR part/section XML from GovInfo; requires `GOVINFO_API_KEY`
+
+### SerpApi extras *(opt-in, paid)*
+- `search_papers_serpapi_cited_by`, `search_papers_serpapi_versions`, `get_author_profile_serpapi`, `get_author_articles_serpapi`, `get_paper_citation_formats`, `get_serpapi_account_status`
+
+### Infrastructure
+- **Provider execution policy** — shared retries with jitter, bounded concurrency, suppression/circuit-breaker state
+- **Agent UX metadata** — every primary read tool returns `agentHints`, `clarification`, `resourceUris`, and (where applicable) a reusable `searchSessionId`
+- **Structured outputs** — tools return structured content, not JSON-in-text blobs
+- **`get_provider_diagnostics`** — live provider health, throttle state, and retry counts
+
+---
+
+## Quick tool decision guide
+
+| Goal | Start here |
+|---|---|
+| Concept discovery or literature review | `search_papers_smart` (smart layer) |
+| Quick paper search | `search_papers` → read `brokerMetadata.nextStepHint` |
+| All papers on a topic / multi-page | `search_papers_bulk` (cursor loop) |
+| Broken or incomplete citation | `resolve_citation` |
+| Known paper by messy title | `search_papers_match` |
+| Known paper by DOI / arXiv ID / URL | `get_paper_details` |
+| Papers that cite X / refs behind X | `get_paper_citations` / `get_paper_references` |
+| Author's work | `search_authors` → `get_author_info` → `get_author_papers` |
+| OA status or full-text PDF | `get_paper_open_access_unpaywall` or `enrich_paper` |
+| OpenAlex DOI/ID, cursor pagination, entity pivots | `*_openalex` tools |
+| Species dossier / recovery documents | `search_species_ecos` → `get_species_profile_ecos` → `list_species_documents_ecos` |
+| Federal Register notice or rule | `search_federal_register` → `get_federal_register_document` |
+| CFR regulatory text | `get_cfr_text` |
+| Quote or phrase recovery (last resort) | `search_snippets` |
+| Provider health | `get_provider_diagnostics` |
+
+After `search_papers`: read `brokerMetadata.nextStepHint`.
+After `search_papers_smart`: reuse `searchSessionId` with `ask_result_set`, `map_research_landscape`, or `expand_research_graph`.
+For Semantic Scholar expansion tools: prefer `paper.recommendedExpansionId`; if `paper.expansionIdStatus` is `not_portable`, resolve through DOI first.
+
+---
 
 ## Installation
 
+Because this fork has diverged from the upstream PyPI package, install from
+source until the rename and republish are complete:
+
 ```bash
-pip install scholar-search-mcp
+pip install -e .
 ```
 
 Optional extras for the additive AI layer:
 
 ```bash
-pip install scholar-search-mcp[ai]
+pip install -e .[ai]
 ```
 
 Optional FAISS backend extras:
 
 ```bash
-pip install scholar-search-mcp[ai,ai-faiss]
+pip install -e .[ai,ai-faiss]
 ```
 
 ### Local Quick Start
@@ -70,9 +152,7 @@ Edit the config file:
 - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
 - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 
-Add:
-
-Set notes outside the JSON block so the example remains valid JSON. In the sample below, CORE is disabled and Semantic Scholar plus arXiv are enabled.
+Add the following. In this example CORE is disabled and Semantic Scholar plus arXiv are enabled:
 
 ```json
 {
@@ -267,7 +347,8 @@ Example: prefer Semantic Scholar first, then arXiv for this deployment:
 }
 ```
 
-### OpenAlex configuration
+<details>
+<summary><strong>OpenAlex configuration</strong></summary>
 
 OpenAlex is exposed through the explicit `*_openalex` tools rather than the
 default `search_papers` broker. The OpenAlex tools are enabled by default and do
@@ -284,7 +365,10 @@ OpenAlex tool year inputs currently accept `YYYY`, `YYYY:YYYY`, `YYYY-YYYY`,
 and retry defaults (`min_interval=0.05s`, `max_retries=2`) rather than extra
 environment variables.
 
-### Paper enrichment configuration
+</details>
+
+<details>
+<summary><strong>Paper enrichment configuration</strong></summary>
 
 Crossref and Unpaywall are exposed as explicit paper-enrichment tools rather
 than broker providers. They do not participate in `search_papers` ranking or
@@ -306,7 +390,10 @@ Known-item tools (`search_papers_match`, `get_paper_details`,
 final resolved paper or final smart hits. This enrichment is post-resolution and
 does not change provider ordering, retrieval, or ranking.
 
-### ECOS configuration
+</details>
+
+<details>
+<summary><strong>ECOS configuration</strong></summary>
 
 ECOS is exposed as a separate species/document tool family rather than a
 `search_papers` provider. It is enabled by default and uses structured Pull
@@ -327,7 +414,31 @@ The core package now includes `markitdown[pdf]` so `get_document_text_ecos` can
 convert PDF, HTML, and text-like ECOS documents to Markdown with plugins kept
 off by default.
 
-### AI augmentation configuration
+</details>
+
+<details>
+<summary><strong>Federal Register and GovInfo configuration</strong></summary>
+
+Federal Register discovery (`search_federal_register`) is keyless. GovInfo-backed
+retrieval (`get_federal_register_document`, `get_cfr_text`) uses `GOVINFO_API_KEY`
+for authoritative content. Without that key, Federal Register lookups can still
+fall back to FederalRegister.gov HTML when a document number is known, but CFR
+retrieval remains GovInfo-only.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `SCHOLAR_SEARCH_ENABLE_FEDERAL_REGISTER` | `true` | Enable or disable the Federal Register discovery tool family |
+| `SCHOLAR_SEARCH_ENABLE_GOVINFO_CFR` | `true` | Enable or disable GovInfo-backed Federal Register document and CFR retrieval |
+| `GOVINFO_API_KEY` | unset | Required for authoritative `get_federal_register_document` and `get_cfr_text` calls; without a key, Federal Register lookup falls back to FederalRegister.gov HTML for known document numbers |
+| `FEDERAL_REGISTER_TIMEOUT_SECONDS` | `30` | Timeout for FederalRegister.gov discovery requests |
+| `GOVINFO_TIMEOUT_SECONDS` | `30` | Timeout for GovInfo metadata and granule requests |
+| `GOVINFO_DOCUMENT_TIMEOUT_SECONDS` | `60` | Timeout for GovInfo document fetches before Markdown conversion |
+| `GOVINFO_MAX_DOCUMENT_SIZE_MB` | `25` | Maximum fetched GovInfo document size before returning a structured `too_large` warning |
+
+</details>
+
+<details>
+<summary><strong>AI augmentation configuration</strong></summary>
 
 The raw retrieval tools remain the contract of record. The smart layer is
 additive and opt-in.
@@ -353,7 +464,10 @@ When the smart layer is enabled, the new tools are:
 - `map_research_landscape` for theme clustering, gaps, and disagreements
 - `expand_research_graph` for compact citation/reference/author graph expansion
 
-### Transport configuration
+</details>
+
+<details>
+<summary><strong>Transport configuration</strong></summary>
 
 The server defaults to local **stdio** transport, which is the recommended mode for desktop MCP clients. FastMCP also supports HTTP-compatible transports for local development, integration testing, and controlled deployments:
 
@@ -419,6 +533,8 @@ In all of these local HTTP modes, clients talk only to your local MCP endpoint.
 They do **not** need upstream provider API keys. Those keys, when present, stay
 server-side and only let your local server use higher provider limits or
 optional paid providers such as SerpApi.
+
+</details>
 
 ### Docker MCP package (stdio)
 
@@ -535,78 +651,110 @@ IMAGE=ghcr.io/joshuasundance-swca/scholar-search-mcp:latest docker compose -f co
 
 ## Tools
 
-Primary defaults for agents:
+Full tool reference. See the [Quick tool decision guide](#quick-tool-decision-guide) above for where to start.
 
-- Start with `search_papers_smart` when the task is concept-level discovery, a literature review, or a grounded follow-up workflow that should reuse a `searchSessionId`.
-- Start with `search_papers` for quick literature discovery.
-- Switch to `search_papers_bulk` for exhaustive retrieval or multi-page collection.
-- For small targeted pages, prefer `search_papers` or `search_papers_semantic_scholar` instead of `search_papers_bulk`.
-- Use `resolve_citation` for incomplete references, broken bibliography lines, and almost-right citations.
-- Use `search_papers_match` or `get_paper_details` for known-item lookup.
-- Use `get_paper_metadata_crossref`, `get_paper_open_access_unpaywall`, or
-  `enrich_paper` once you already have a stable paper or DOI and want additive
-  metadata or OA/PDF discovery.
-- Expand with `get_paper_citations`, `get_paper_references`, and `search_authors`
-  once you have a paper or author anchor.
-- Use the `*_openalex` tools when you explicitly want OpenAlex-native DOI/ID
-  lookup, OpenAlex cursor pagination, or OpenAlex author/citation semantics.
-- Reach for `search_snippets` only when quote or phrase recovery is needed.
-- On primary read tools, inspect `agentHints`, `clarification`, `resourceUris`,
-  and `searchSessionId` before making the next tool call.
+### Smart research layer
 
+| Tool | Description |
+| --- | --- |
+| `search_papers_smart` | Concept-level discovery with query expansion, multi-provider fusion, reranking, and reusable `searchSessionId`. Supports `latencyProfile` (`fast`/`balanced`/`deep`) and optional `providerBudget`. |
+| `ask_result_set` | Grounded QA, claim checks, and comparisons over a saved `searchSessionId`. |
+| `map_research_landscape` | Cluster a saved result set into themes, gaps, disagreements, and next-search suggestions. |
+| `expand_research_graph` | Expand paper anchors or a saved session into a citation/reference/author graph with frontier ranking. |
 
-| Tool                             | Description                                                                                              |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `search_papers_smart`            | Additive smart discovery entry point for concept-level research, literature reviews, known-item routing, and saved-result-set workflows. Supports `latencyProfile` (`fast`, `balanced`, `deep`) plus optional `providerBudget`, and returns smart-ranked hits plus `strategyMetadata`, `resourceUris`, `agentHints`, and a reusable `searchSessionId`. In known-item mode, weak exact-resolution attempts now fall back to a broader candidate set instead of ending in a dead-end error. |
-| `ask_result_set`                 | Grounded follow-up over a saved `searchSessionId`. Supports `qa`, `claim_check`, and `comparison` modes, accepts optional `latencyProfile`, and returns paper-level evidence plus suggested next questions. `comparison` mode now prefers a grounded structured comparison over title-and-venue lists when the evidence set is small or heterogeneous. |
-| `map_research_landscape`         | Cluster a saved `searchSessionId` into 3-5 themes, representative papers, gaps, disagreements, and suggested next searches. Accepts optional `latencyProfile`. Theme labels are sanitized before response emission so low-signal labels like conjunction fragments are replaced with stronger deterministic labels. |
-| `expand_research_graph`          | Expand one or more paper anchors or a saved `searchSessionId` into a compact citation/reference/author graph with frontier ranking and reusable resource handles. Accepts optional `latencyProfile`. Saved-session graph expansion now keeps the original search intent in frontier scoring and filters weak off-topic frontier items before they become the next hop. |
-| `search_papers`                  | Primary entry point for quick literature discovery. Single-page best-effort brokered search. Default order: Semantic Scholar → arXiv → CORE → SerpApi Google Scholar, with CORE and SerpApi still subject to their enable flags. Use `brokerMetadata` to see where results came from and decide whether to broaden, narrow, paginate, or pivot. For title-like known-item queries, the broker now suppresses obviously low-relevance Semantic Scholar false positives instead of surfacing garbage records. Optional filters: `limit`, `fields`, `year`, `venue`, `preferredProvider`, `providerOrder`, `publicationDateOrYear`, `fieldsOfStudy`, `publicationTypes`, `openAccessPdf`, `minCitationCount`. No pagination — for paginated retrieval use `search_papers_bulk`. |
-| `search_papers_core`             | Single-page CORE-only search with the same normalized response shape as `search_papers`. Exposes only the inputs CORE actually honors: `query`, `limit`, and `year`. |
-| `search_papers_semantic_scholar` | Single-page Semantic Scholar-only search with the same normalized response shape as `search_papers`. Exposes the Semantic Scholar-compatible inputs: `query`, `limit`, `fields`, `year`, `venue`, `publicationDateOrYear`, `fieldsOfStudy`, `publicationTypes`, `openAccessPdf`, and `minCitationCount`. |
-| `search_papers_serpapi`          | Single-page SerpApi Google Scholar-only search. **Requires SerpApi** (`SCHOLAR_SEARCH_ENABLE_SERPAPI=true` + `SERPAPI_API_KEY`). Exposes only the inputs SerpApi actually honors: `query`, `limit`, and `year`. |
-| `search_papers_arxiv`            | Single-page arXiv-only search with the same normalized response shape as `search_papers`. Exposes only the inputs arXiv actually honors: `query`, `limit`, and `year`. |
-| `search_papers_openalex`         | Single-page OpenAlex-only search with the same normalized top-level response shape as `search_papers`. Exposes only the inputs OpenAlex explicitly honors here: `query`, `limit`, and `year`. |
-| `search_papers_openalex_bulk`    | Cursor-paginated OpenAlex search for explicit OpenAlex retrieval flows. Treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and keep it scoped to the same tool/query flow; supports `query`, `limit`, and `year`. |
-| `paper_autocomplete_openalex`    | Lightweight OpenAlex work autocomplete for typeahead and known-item disambiguation before committing to a full work search. |
-| `search_entities_openalex`       | Search OpenAlex `source`, `institution`, or `topic` entities for two-step pivot workflows. |
-| `search_papers_openalex_by_entity` | Retrieve OpenAlex works constrained to one OpenAlex `source`, `institution`, or `topic` entity ID, with cursor pagination for explicit disambiguation workflows. |
-| `search_papers_bulk`             | Primary exhaustive retrieval tool. Paginated bulk paper search (Semantic Scholar) with advanced boolean query syntax (up to 1,000 returned papers/call). The upstream bulk endpoint may ignore small `limit` values internally, so this server truncates returned data to the requested limit; prefer `search_papers` or `search_papers_semantic_scholar` for small targeted pages. Treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and do not derive/edit/fabricate it; `pagination.hasMore` signals more results. |
-| `resolve_citation`               | First-class citation-repair workflow for incomplete, malformed, or almost-right references. Stages identifier extraction, title recovery, quote/snippet recovery, and sparse metadata search; returns the best canonical paper candidate, alternatives, confidence, conflicts, and reusable `searchSessionId` metadata. Report-like or non-paper-looking inputs now prefer abstention plus alternatives over forcing a weak canonical paper match, and clearly regulatory references such as Federal Register or CFR citations now abstain early and steer agents toward `search_federal_register`, `get_federal_register_document`, or `get_cfr_text` instead. Optional `includeEnrichment=true` enriches only `bestMatch.paper` after resolution. |
-| `search_papers_match`            | Known-item lookup for messy or partial titles; finds the single paper whose title best matches the query string, falls back to fuzzy Semantic Scholar title search on exact-match 400/404 misses, then tries strict cross-provider exact-title recovery before returning a structured no-match payload. Optional `includeEnrichment=true` adds post-match Crossref + Unpaywall metadata to the final paper only. |
-| `paper_autocomplete`             | Return paper title completions for a partial query (typeahead)                                           |
-| `get_paper_details`              | Known-item lookup by identifier: get one paper by DOI, ArXiv ID, S2 ID, or URL. Optional `includeEnrichment=true` adds post-lookup Crossref + Unpaywall metadata without changing the base lookup path. |
-| `get_paper_metadata_crossref`    | Explicit Crossref enrichment for one known paper or DOI. DOI-first, with optional title/bibliographic query fallback when no DOI can be resolved from the inputs. Returns a normalized Crossref work summary plus additive enrichment fields. |
-| `get_paper_open_access_unpaywall` | Explicit Unpaywall enrichment for one known paper or DOI. DOI-only lookup for OA status, best OA URL, PDF URL, license, and DOAJ signal. Requires `UNPAYWALL_EMAIL`. |
-| `enrich_paper`                   | Combined Crossref + Unpaywall enrichment orchestrator for one paper, DOI, or DOI-bearing identifier. Resolves DOI first, runs Crossref, then Unpaywall, and returns one merged `enrichments` payload plus per-provider results. |
-| `get_paper_details_openalex`     | Known-item lookup using OpenAlex semantics: get one work by OpenAlex W-id, OpenAlex work URL, or DOI, with abstract reconstruction from OpenAlex's `abstract_inverted_index` when possible |
-| `get_paper_citations`            | Citation chasing outward: papers that cite the given paper (`cited by`); for Semantic Scholar expansion prefer `paper.recommendedExpansionId`, and if `paper.expansionIdStatus` is `not_portable` resolve the paper through DOI or a Semantic Scholar-native lookup before expanding; treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and keep it scoped to the same tool/query flow |
-| `get_paper_citations_openalex`   | OpenAlex cited-by expansion using the work's `cited_by_api_url`; treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and keep it scoped to the same tool/query flow |
-| `get_paper_references`           | Citation chasing backward: references behind the given paper; for Semantic Scholar expansion prefer `paper.recommendedExpansionId`, and if `paper.expansionIdStatus` is `not_portable` resolve the paper through DOI or a Semantic Scholar-native lookup before expanding; treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and keep it scoped to the same tool/query flow |
-| `get_paper_references_openalex`  | OpenAlex backward-reference expansion that hydrates `referenced_works` through batched OpenAlex ID lookups and returns an opaque server-issued cursor for the next slice |
-| `get_paper_authors`              | Authors of the given paper; for this Semantic Scholar expansion path prefer `paper.recommendedExpansionId`, and if `paper.expansionIdStatus` is `not_portable` resolve the paper through DOI or a Semantic Scholar-native lookup before expanding; treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and keep it scoped to the same tool/query flow |
-| `get_author_info`                | Author profile by Semantic Scholar author ID (typically from `search_authors` or `get_paper_authors`)   |
-| `get_author_info_openalex`       | OpenAlex author profile by OpenAlex A-id or OpenAlex author URL                                          |
-| `get_author_papers`              | Papers by author; requires a Semantic Scholar author ID; treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and keep it scoped to the same tool/query flow; supports `publicationDateOrYear` |
-| `search_authors`                 | Search for authors by name using a plain-text query; the server normalizes exact-name punctuation before calling Semantic Scholar, and common-name workflows should add affiliation, coauthor, venue, or topic clues before confirming the best candidate; treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and keep it scoped to the same tool/query flow |
-| `search_authors_openalex`        | Search OpenAlex authors by name for an explicit OpenAlex author workflow; confirm common-name matches with affiliation or profile metadata before expanding papers; treat `pagination.nextCursor` as opaque, pass it back unchanged as `cursor`, and keep it scoped to the same tool/query flow |
-| `get_author_papers_openalex`     | Papers by OpenAlex author with optional `year` filtering and OpenAlex cursor pagination; this keeps the two-step OpenAlex author flow explicit: `search_authors_openalex`/`get_author_info_openalex` first, then expand papers |
-| `batch_get_authors`              | Details for up to 1,000 author IDs in one call                                                           |
-| `search_snippets`                | Special-purpose recovery tool for quote or phrase validation when title/keyword search is weak; returns snippet text, paper metadata, and score, and degrades provider 4xx/5xx failures to an empty result with retry guidance |
-| `get_paper_recommendations`      | Similar papers for a given paper (GET single-seed)                                                       |
-| `get_paper_recommendations_post` | Similar papers from positive and negative seed sets (POST multi-seed)                                    |
-| `batch_get_papers`               | Details for up to 500 paper IDs                                                                          |
-| `search_papers_serpapi_cited_by` | Explicit Google Scholar cited-by expansion through SerpApi. Use when recall recovery or citation discovery matters more than latency. |
-| `search_papers_serpapi_versions` | Explicit Google Scholar all-versions expansion through SerpApi cluster IDs. |
-| `get_author_profile_serpapi`     | Google Scholar author profile retrieval through SerpApi for explicit author-centric workflows. |
-| `get_author_articles_serpapi`    | Paginated Google Scholar author article retrieval through SerpApi. |
-| `get_paper_citation_formats`     | Citation export step for MLA, APA, BibTeX, etc. from a Google Scholar paper. **Requires SerpApi** (`SCHOLAR_SEARCH_ENABLE_SERPAPI=true` + `SERPAPI_API_KEY`). Pass `result_id=paper.scholarResultId` (not `paper.sourceId`) from a `serpapi_google_scholar` result. Single non-paginated response. |
-| `get_serpapi_account_status`     | Read-only SerpApi quota and throughput snapshot for budget-aware routing and troubleshooting. Returns a sanitized public summary only; raw upstream credentials and secret-like account fields are never exposed. |
-| `search_species_ecos`            | Structured ECOS species discovery by common or scientific name. `matchMode=auto` tries exact matches first, then prefix matches. |
-| `get_species_profile_ecos`       | Full ECOS species dossier by species id or species URL. Returns species metadata, per-entity listings, life history, range summary, grouped documents, and conservation-plan links. |
-| `list_species_documents_ecos`    | Flatten one ECOS species dossier into a sorted document inventory. Supports recovery plans, five-year reviews, biological opinions, federal-register documents, other recovery docs, and conservation-plan links. |
-| `get_document_text_ecos`         | Fetch one ECOS or ECOS-linked document, follow redirects, detect content type, and convert PDF/HTML/text content to Markdown. Returns `extractionStatus` plus warnings for oversize, unsupported, empty/image-only, or fetch-failed cases. |
-| `get_provider_diagnostics`       | Live provider diagnostics showing recent status buckets, throttling/suppression state, retries, and fallback reasons across providers. |
+### Paper search
+
+| Tool | Description |
+| --- | --- |
+| `search_papers` | Brokered single-page search (Semantic Scholar → arXiv → CORE → SerpApi). Read `brokerMetadata.nextStepHint`. |
+| `search_papers_bulk` | Paginated bulk search (Semantic Scholar) up to 1,000 papers/call with boolean query syntax. |
+| `search_papers_semantic_scholar` | Single-page Semantic Scholar-only search with full filter support. |
+| `search_papers_arxiv` | Single-page arXiv-only search. |
+| `search_papers_core` | Single-page CORE-only search. |
+| `search_papers_serpapi` | Single-page SerpApi Google Scholar search. **Requires SerpApi.** |
+| `search_papers_openalex` | Single-page OpenAlex-only search. |
+| `search_papers_openalex_bulk` | Cursor-paginated OpenAlex search. |
+| `search_papers_openalex_by_entity` | OpenAlex works constrained to one source, institution, or topic entity ID. |
+
+### Known-item lookup and citation repair
+
+| Tool | Description |
+| --- | --- |
+| `resolve_citation` | Citation-repair workflow for incomplete or malformed references. Abstains on regulatory references. |
+| `search_papers_match` | Known-item lookup for messy or partial titles with cross-provider confirmation. |
+| `get_paper_details` | Lookup by DOI, arXiv ID, Semantic Scholar ID, or URL. Optional `includeEnrichment`. |
+| `get_paper_details_openalex` | OpenAlex work lookup by W-id, URL, or DOI with abstract reconstruction. |
+| `paper_autocomplete` | Paper title typeahead completions. |
+| `paper_autocomplete_openalex` | OpenAlex work typeahead for known-item disambiguation. |
+
+### Citations, references, and authors
+
+| Tool | Description |
+| --- | --- |
+| `get_paper_citations` | Papers that cite the given paper (Semantic Scholar). Cursor-paginated. |
+| `get_paper_citations_openalex` | OpenAlex cited-by expansion. Cursor-paginated. |
+| `get_paper_references` | References behind the given paper (Semantic Scholar). Cursor-paginated. |
+| `get_paper_references_openalex` | OpenAlex backward-reference expansion. Cursor-paginated. |
+| `get_paper_authors` | Authors of the given paper (Semantic Scholar). |
+| `search_authors` | Search authors by name (Semantic Scholar). |
+| `search_authors_openalex` | Search OpenAlex authors by name. |
+| `get_author_info` | Author profile by Semantic Scholar author ID. |
+| `get_author_info_openalex` | OpenAlex author profile by A-id or URL. |
+| `get_author_papers` | Papers by Semantic Scholar author. Cursor-paginated. |
+| `get_author_papers_openalex` | Papers by OpenAlex author with `year` filter and cursor pagination. |
+| `batch_get_papers` | Details for up to 500 paper IDs in one call. |
+| `batch_get_authors` | Details for up to 1,000 author IDs in one call. |
+| `get_paper_recommendations` | Similar papers by single seed (GET). |
+| `get_paper_recommendations_post` | Similar papers from positive/negative seed sets (POST). |
+
+### Paper enrichment and OA discovery
+
+| Tool | Description |
+| --- | --- |
+| `enrich_paper` | Combined Crossref + Unpaywall enrichment for one paper or DOI. |
+| `get_paper_metadata_crossref` | Explicit Crossref enrichment for a known paper or DOI. |
+| `get_paper_open_access_unpaywall` | Unpaywall OA status, PDF URL, and license lookup by DOI. Requires `UNPAYWALL_EMAIL`. |
+
+### OpenAlex entities
+
+| Tool | Description |
+| --- | --- |
+| `search_entities_openalex` | Search OpenAlex source, institution, or topic entities for pivot workflows. |
+
+### ECOS species dossiers
+
+| Tool | Description |
+| --- | --- |
+| `search_species_ecos` | ECOS species discovery by common or scientific name. |
+| `get_species_profile_ecos` | Full ECOS species dossier: listings, documents, and conservation plans. |
+| `list_species_documents_ecos` | Flatten one dossier into a sorted document inventory. |
+| `get_document_text_ecos` | Fetch and convert an ECOS document (PDF/HTML/text) to Markdown. |
+
+### Federal Register and CFR
+
+| Tool | Description |
+| --- | --- |
+| `search_federal_register` | Keyless Federal Register discovery for notices, rules, and proposed rules. |
+| `get_federal_register_document` | Retrieve one Federal Register document by number, FR citation, or GovInfo link. |
+| `get_cfr_text` | CFR part or section text from GovInfo. Requires `GOVINFO_API_KEY`. |
+
+### SerpApi extras *(opt-in, paid)*
+
+| Tool | Description |
+| --- | --- |
+| `search_papers_serpapi_cited_by` | Google Scholar cited-by expansion via SerpApi. |
+| `search_papers_serpapi_versions` | Google Scholar all-versions expansion via SerpApi cluster IDs. |
+| `get_author_profile_serpapi` | Google Scholar author profile via SerpApi. |
+| `get_author_articles_serpapi` | Paginated Google Scholar author articles via SerpApi. |
+| `get_paper_citation_formats` | Citation export (MLA, APA, BibTeX, etc.) from Google Scholar. **Requires SerpApi.** |
+| `get_serpapi_account_status` | SerpApi quota and throughput snapshot. |
+
+### Recovery and diagnostics
+
+| Tool | Description |
+| --- | --- |
+| `search_snippets` | Quote or phrase recovery when title/keyword search is weak. Last-resort tool. |
+| `get_provider_diagnostics` | Live provider health, throttling state, retries, and fallback reasons. |
 
 
 ### ECOS walkthrough

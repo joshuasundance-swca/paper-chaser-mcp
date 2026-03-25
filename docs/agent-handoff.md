@@ -160,6 +160,19 @@ This document is the current working handoff for the fork. It is intended to giv
   `mcp-tools.core.json`, `mcp-tools.full.json`, and
   `microsoft-plugin.sample.json` so one universal server can still ship a
   conservative or full Streamable HTTP packaging profile.
+- The README tool table now includes all three regulatory tools
+  (`search_federal_register`, `get_federal_register_document`, `get_cfr_text`)
+  and a dedicated Federal Register / GovInfo configuration section documents
+  `SCHOLAR_SEARCH_ENABLE_FEDERAL_REGISTER`, `SCHOLAR_SEARCH_ENABLE_GOVINFO_CFR`,
+  `GOVINFO_API_KEY`, `FEDERAL_REGISTER_TIMEOUT_SECONDS`,
+  `GOVINFO_TIMEOUT_SECONDS`, `GOVINFO_DOCUMENT_TIMEOUT_SECONDS`, and
+  `GOVINFO_MAX_DOCUMENT_SIZE_MB`.
+- OpenAlex institution/source/topic pivots are now first-class tools:
+  `search_entities_openalex` and `search_papers_openalex_by_entity` expose
+  explicit entity-scoped work retrieval with OpenAlex cursor pagination.
+- `pyproject.toml` project description and keywords are updated to reflect the
+  full current provider surface (Semantic Scholar, CORE, arXiv, OpenAlex,
+  SerpApi, Crossref, Unpaywall, ECOS, Federal Register, GovInfo).
 
 ## Module Map
 
@@ -495,45 +508,42 @@ gh aw compile test-scholar-search --dir .github/workflows
 4. Consider moving from per-request `httpx.AsyncClient` creation to shared clients if connection reuse becomes important.
 5. Decide whether the compatibility facade in `scholar_search_mcp/server.py` should remain broad or be narrowed with an explicit supported surface.
 6. Revisit `.github/copilot-instructions.md` and `docs/golden-paths.md` whenever future agent-facing search behavior materially changes.
-7. Consider whether OpenAlex institution/source pivots should become first-class
-   tools now that the base OpenAlex author/citation surface exists.
+7. ~~OpenAlex institution/source pivots~~ — **completed**: `search_entities_openalex`
+   and `search_papers_openalex_by_entity` are now first-class tools.
 8. Tune the smart discovery thresholds and trace logs once real-world
    `search_papers_smart` runs accumulate enough UX feedback.
 9. Expand the agentic workflow once stable secrets are available for deeper provider-specific assertions, for example optional SerpApi or OpenAI-backed smart-tool coverage.
 10. Act on the first UX friction report produced by the
-   `GH_AW_MODEL_AGENT_COPILOT`-configured verifier. Focus on the
-   highest-impact item from the structured "UX friction summary": likely a
-   round-trip reduction or a clearly missing feature rather than cosmetic work.
-11. Review labels in the repository (`agentic`, `needs-copilot`, `needs-human`,
-    `blocked`, `no-agent`, `automation`, `testing`) to ensure they exist before
-    the first verifier run creates an issue. Missing labels cause issue creation
-    to fail silently on the label assignment step.
-12. Set the `GH_AW_MODEL_AGENT_COPILOT` Actions variable to `gpt-5.4` in the
-    repository settings if you want to override the compiled default at runtime.
-13. Run the `Deploy Azure` workflow against `dev` in `bootstrap` mode first,
-    then seed Key Vault and run it again in `full` mode once GitHub
-    environment secrets, the optional runner-label variable, and the federated
-    credential are in place. Capture any environment-specific fixes back into
-    the docs.
+    `GH_AW_MODEL_AGENT_COPILOT`-configured verifier. Focus on the
+    highest-impact item from the structured "UX friction summary": likely a
+    round-trip reduction or a clearly missing feature rather than cosmetic work.
+11. Consider adding a dedicated ECOS-to-regulatory golden path in
+    `docs/golden-paths.md` covering the full chain from species dossier through
+    `frCitation` to GovInfo/FR retrieval, now that all three regulatory tools
+    are stable and documented.
+12. Evaluate whether a Federal Register walkthrough (analogous to the ECOS
+    California-least-tern walkthrough in the README) should be added to help
+    agents discover the discovery→direct-retrieval→CFR-text chain without
+    reading the full tool descriptions.
 
 ## Ready Handoff Prompt
 
-Use this prompt for the next agent if the goal is to act on the UX review directly:
+Use this prompt for the next agent if the goal is to act on the UX review or expand coverage:
 
 ```text
-You are picking up scholar-search-mcp after an agent UX review. Read README.md, docs/golden-paths.md, and docs/agent-handoff.md first.
+You are picking up scholar-search-mcp after a documentation refresh pass. Read README.md, docs/golden-paths.md, and docs/agent-handoff.md first.
 
-Focus on the remaining agent-facing follow-up after the recent UX fixes:
-1. Revisit budget-aware provider steering if future UX work needs stronger source control.
-2. Decide whether retry-recovered provider behavior should remain invisible or become broker metadata.
-3. Keep the durable onboarding surfaces aligned if the workflow contract changes again.
+Focus on the highest-value remaining work from the Suggested Next Steps list:
+1. Decide whether retry-recovered provider behavior should remain invisible or become broker metadata.
+2. Tune smart discovery thresholds and trace logging as real-world search_papers_smart runs accumulate UX feedback.
+3. Act on the UX friction summary produced by the GH_AW_MODEL_AGENT_COPILOT-configured verifier — start with the highest-impact item (likely a round-trip reduction or a missing feature signal) rather than cosmetic changes.
 
 Your task:
 - Inspect the broker, onboarding, and durable-doc surfaces that describe the
   intended workflow contract.
-- Implement the smallest complete change you can defend for any remaining
-  provider-steering or metadata decision you touch.
-- Add or update targeted tests and durable docs if the agent-facing behavior changes again.
+- Implement the smallest complete change you can defend for any provider-steering,
+  metadata, or UX contract decision you touch.
+- Add or update targeted tests and durable docs if agent-facing behavior changes.
 
 Validation target:
 - python -m pip check
