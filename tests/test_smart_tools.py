@@ -369,7 +369,9 @@ async def test_ask_result_set_runs_synthesis_and_scoring_concurrently(
     semantic = RecordingSemanticClient()
     openalex = RecordingOpenAlexClient()
     registry, runtime = _deterministic_runtime(
-        semantic=semantic, openalex=openalex, disable_embeddings=False,
+        semantic=semantic,
+        openalex=openalex,
+        disable_embeddings=False,
     )
     record = registry.save_result_set(
         source_tool="search_papers_smart",
