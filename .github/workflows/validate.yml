@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
       - name: Check out repository
@@ -27,7 +27,7 @@ jobs:
           persist-credentials: false
 
       - name: Install gh-aw
-        if: matrix.python-version == '3.12'
+        if: matrix.python-version == '3.13'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh extension install github/gh-aw --pin "$GH_AW_VERSION"
@@ -48,7 +48,7 @@ jobs:
         run: python -m pip check
 
       - name: Verify agentic workflow lockfile is up to date
-        if: matrix.python-version == '3.12'
+        if: matrix.python-version == '3.13'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -61,11 +61,11 @@ jobs:
         run: pre-commit run --all-files
 
       - name: Run tests
-        if: matrix.python-version != '3.12'
+        if: matrix.python-version != '3.13'
         run: python -m pytest
 
       - name: Run tests with coverage gate
-        if: matrix.python-version == '3.12'
+        if: matrix.python-version == '3.13'
         run: |
           python -m pytest \
             --cov=scholar_search_mcp \
@@ -74,15 +74,15 @@ jobs:
             --cov-fail-under=${{ env.COVERAGE_FAIL_UNDER }}
 
       - name: Validate deployment assets
-        if: matrix.python-version == '3.12'
+        if: matrix.python-version == '3.13'
         run: python scripts/validate_deployment.py --skip-docker
 
       - name: Build package
-        if: matrix.python-version == '3.12'
+        if: matrix.python-version == '3.13'
         run: python -m build
 
       - name: Audit dependencies
-        if: matrix.python-version == '3.12'
+        if: matrix.python-version == '3.13'
         run: |
           # Temporary ignore: pip-audit flags CVE-2026-4539 for transitive
           # Pygments releases, but no fixed upstream version is published yet.
