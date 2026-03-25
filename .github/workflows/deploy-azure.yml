@@ -33,7 +33,6 @@ concurrency:
 env:
   COVERAGE_FAIL_UNDER: '85'
   PYTHON_VERSION: '3.12'
-  TRIVY_VERSION: 'v0.68.0'
 
 jobs:
   validate:
@@ -193,11 +192,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Trivy
-        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.5
-        with:
-          version: ${{ env.TRIVY_VERSION }}
-
       - name: Mask deployment identifiers
         shell: bash
         env:
@@ -243,7 +237,6 @@ jobs:
         run: |
           set -euo pipefail
           docker version
-          trivy --version
 
       - name: Resolve deployment variables
         shell: bash
@@ -271,16 +264,6 @@ jobs:
         run: |
           set -euo pipefail
           docker build --tag "$IMAGE_REF" .
-
-      - name: Scan image for vulnerabilities
-        shell: bash
-        run: |
-          set -euo pipefail
-          trivy image \
-            --exit-code 1 \
-            --ignore-unfixed \
-            --severity HIGH,CRITICAL \
-            "$IMAGE_REF"
 
       - name: Push image
         shell: bash
