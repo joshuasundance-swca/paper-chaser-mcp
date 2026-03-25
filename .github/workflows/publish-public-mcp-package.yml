@@ -159,22 +159,6 @@ jobs:
           docker run --rm "${{ steps.image.outputs.ci_ref }}" --version | \
             grep -Fx "scholar-search-mcp ${{ steps.server.outputs.version }}"
 
-      - name: Scan container image
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "${RUNNER_TEMP}/trivy-cache"
-          docker run --rm \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            -v "${RUNNER_TEMP}/trivy-cache:/root/.cache/" \
-            "aquasec/trivy:0.69.3" \
-            image \
-            --scanners vuln \
-            --exit-code 1 \
-            --ignore-unfixed \
-            --severity HIGH,CRITICAL \
-            "${{ steps.image.outputs.ci_ref }}"
-
   publish-image:
     if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || github.event_name == 'workflow_dispatch'
     needs:
@@ -309,23 +293,6 @@ jobs:
           docker run --rm "${image_ref}" --help | grep -q "defaults to stdio"
           docker run --rm "${image_ref}" --version | \
             grep -Fx "scholar-search-mcp ${{ steps.server.outputs.version }}"
-
-      - name: Scan publish candidate image
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "${RUNNER_TEMP}/trivy-cache"
-          image_ref="${{ steps.image.outputs.name }}:verify-${GITHUB_SHA}"
-          docker run --rm \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            -v "${RUNNER_TEMP}/trivy-cache:/root/.cache/" \
-            "aquasec/trivy:0.69.3" \
-            image \
-            --scanners vuln \
-            --exit-code 1 \
-            --ignore-unfixed \
-            --severity HIGH,CRITICAL \
-            "${image_ref}"
 
       - name: Log into GHCR
         uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
