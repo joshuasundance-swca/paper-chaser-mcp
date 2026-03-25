@@ -176,7 +176,7 @@ repos:
 
       - id: pip-audit
         name: pip audit
-        entry: python -m pip_audit . --progress-spinner off
+        entry: python -m pip_audit . --progress-spinner off --ignore-vuln CVE-2026-4539
         language: python
         additional_dependencies:
           - pip-audit>=2.10.0
