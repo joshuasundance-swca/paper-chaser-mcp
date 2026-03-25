@@ -1,6 +1,6 @@
 import pytest
 
-from scholar_search_mcp.clients.crossref import CrossrefClient
+from paper_chaser_mcp.clients.crossref import CrossrefClient
 from tests.helpers import DummyResponse
 
 
@@ -37,7 +37,7 @@ async def test_crossref_get_work_normalizes_response_and_sets_contact_headers(
             )
 
     monkeypatch.setattr(
-        "scholar_search_mcp.clients.crossref.client.httpx.AsyncClient",
+        "paper_chaser_mcp.clients.crossref.client.httpx.AsyncClient",
         lambda timeout: CapturingAsyncClient(),
     )
 
@@ -93,11 +93,11 @@ async def test_crossref_get_work_retries_transient_server_error(
 
     queue = QueueAsyncClient()
     monkeypatch.setattr(
-        "scholar_search_mcp.clients.crossref.client.httpx.AsyncClient",
+        "paper_chaser_mcp.clients.crossref.client.httpx.AsyncClient",
         lambda timeout: queue,
     )
     monkeypatch.setattr(
-        "scholar_search_mcp.clients.crossref.client.asyncio.sleep",
+        "paper_chaser_mcp.clients.crossref.client.asyncio.sleep",
         fake_sleep,
     )
 
@@ -133,7 +133,7 @@ async def test_crossref_search_work_keeps_select_projection(
             )
 
     monkeypatch.setattr(
-        "scholar_search_mcp.clients.crossref.client.httpx.AsyncClient",
+        "paper_chaser_mcp.clients.crossref.client.httpx.AsyncClient",
         lambda timeout: CapturingAsyncClient(),
     )
 
@@ -161,7 +161,7 @@ async def test_crossref_get_work_returns_none_on_404(
             return DummyResponse(status_code=404)
 
     monkeypatch.setattr(
-        "scholar_search_mcp.clients.crossref.client.httpx.AsyncClient",
+        "paper_chaser_mcp.clients.crossref.client.httpx.AsyncClient",
         lambda timeout: NotFoundAsyncClient(),
     )
 
@@ -200,7 +200,7 @@ async def test_crossref_client_reuses_lazy_async_client_and_closes_it(
         return client
 
     monkeypatch.setattr(
-        "scholar_search_mcp.clients.crossref.client.httpx.AsyncClient",
+        "paper_chaser_mcp.clients.crossref.client.httpx.AsyncClient",
         _factory,
     )
 

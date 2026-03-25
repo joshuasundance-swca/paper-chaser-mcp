@@ -12,7 +12,7 @@ It assumes:
 
 Repo note:
 
-- `scholar-search-mcp` currently exposes `SEMANTIC_SCHOLAR_API_KEY` as the
+- `paper-chaser-mcp` currently exposes `SEMANTIC_SCHOLAR_API_KEY` as the
   public Semantic Scholar configuration knob
 - shared pacing, retries, and client construction are handled in code rather
   than through extra public env vars
@@ -773,7 +773,7 @@ class SemanticScholarClient:
         self._headers = {
             "x-api-key": API_KEY,
             "Accept": "application/json",
-            "User-Agent": "scholar-search-mcp/0.1",
+            "User-Agent": "paper-chaser-mcp/0.1",
         }
         self._limiter = SemanticScholarRateLimiter(
             min_interval_seconds=MIN_INTERVAL_SECONDS

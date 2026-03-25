@@ -3,11 +3,11 @@ import sys
 import types
 from typing import Any
 
-import scholar_search_mcp.deployment_runner as deployment_runner
-from scholar_search_mcp.parsing import _arxiv_id_from_url, _text
-from scholar_search_mcp.runtime import run_server
-from scholar_search_mcp.settings import AppSettings
-from scholar_search_mcp.tools import get_tool_definitions
+import paper_chaser_mcp.deployment_runner as deployment_runner
+from paper_chaser_mcp.parsing import _arxiv_id_from_url, _text
+from paper_chaser_mcp.runtime import run_server
+from paper_chaser_mcp.settings import AppSettings
+from paper_chaser_mcp.tools import get_tool_definitions
 
 
 class _RecordingApp:
@@ -37,15 +37,15 @@ def test_runtime_logs_remote_http_configuration_and_runs_app() -> None:
         {
             "SEMANTIC_SCHOLAR_API_KEY": "semantic-key",
             "CORE_API_KEY": "core-key",
-            "SCHOLAR_SEARCH_ENABLE_SERPAPI": "true",
+            "PAPER_CHASER_ENABLE_SERPAPI": "true",
             "SERPAPI_API_KEY": "serp-key",
-            "SCHOLAR_SEARCH_TRANSPORT": "streamable-http",
-            "SCHOLAR_SEARCH_HTTP_HOST": "remote.example",
-            "SCHOLAR_SEARCH_HTTP_PORT": "8081",
-            "SCHOLAR_SEARCH_HTTP_PATH": "/custom-mcp",
-            "SCHOLAR_SEARCH_HTTP_AUTH_TOKEN": "super-secret",
-            "SCHOLAR_SEARCH_HTTP_AUTH_HEADER": "x-backend-auth",
-            "SCHOLAR_SEARCH_ALLOWED_ORIGINS": ("https://allowed-one.example,https://allowed-two.example"),
+            "PAPER_CHASER_TRANSPORT": "streamable-http",
+            "PAPER_CHASER_HTTP_HOST": "remote.example",
+            "PAPER_CHASER_HTTP_PORT": "8081",
+            "PAPER_CHASER_HTTP_PATH": "/custom-mcp",
+            "PAPER_CHASER_HTTP_AUTH_TOKEN": "super-secret",
+            "PAPER_CHASER_HTTP_AUTH_HEADER": "x-backend-auth",
+            "PAPER_CHASER_ALLOWED_ORIGINS": ("https://allowed-one.example,https://allowed-two.example"),
         }
     )
 
@@ -76,7 +76,7 @@ def test_deployment_runner_helpers_and_main_entrypoint(monkeypatch) -> None:
         lambda app, host, port: recorded.append((app, host, port)),
     )
 
-    assert deployment_runner.resolve_bind_host({"SCHOLAR_SEARCH_HTTP_HOST": "  "}) == (deployment_runner.DEFAULT_HOST)
+    assert deployment_runner.resolve_bind_host({"PAPER_CHASER_HTTP_HOST": "  "}) == (deployment_runner.DEFAULT_HOST)
     assert deployment_runner.resolve_bind_port({"PORT": "  "}) == (deployment_runner.DEFAULT_PORT)
 
     deployment_runner.main()
@@ -88,11 +88,11 @@ def test_deployment_runner_helpers_and_main_entrypoint(monkeypatch) -> None:
         "uvicorn.run",
         _record_run,
     )
-    sys.modules.pop("scholar_search_mcp.deployment_runner", None)
-    runpy.run_module("scholar_search_mcp.deployment_runner", run_name="__main__")
+    sys.modules.pop("paper_chaser_mcp.deployment_runner", None)
+    runpy.run_module("paper_chaser_mcp.deployment_runner", run_name="__main__")
 
     assert recorded[0] == (
-        "scholar_search_mcp.deployment:app",
+        "paper_chaser_mcp.deployment:app",
         deployment_runner.DEFAULT_HOST,
         deployment_runner.DEFAULT_PORT,
     )

@@ -11,6 +11,6 @@ __pycache__
 .local-*
 build
 dist
-scholar_search_mcp.egg-info
+paper_chaser_mcp.egg-info
 tests
 docs

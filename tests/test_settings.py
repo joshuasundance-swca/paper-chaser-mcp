@@ -1,18 +1,18 @@
 import pytest
 
-from scholar_search_mcp import server
-from scholar_search_mcp.runtime import run_server
-from scholar_search_mcp.settings import AppSettings
+from paper_chaser_mcp import server
+from paper_chaser_mcp.runtime import run_server
+from paper_chaser_mcp.settings import AppSettings
 
 
 def test_app_settings_reads_provider_order_from_env() -> None:
-    settings = AppSettings.from_env({"SCHOLAR_SEARCH_PROVIDER_ORDER": "semantic_scholar,arxiv"})
+    settings = AppSettings.from_env({"PAPER_CHASER_PROVIDER_ORDER": "semantic_scholar,arxiv"})
 
     assert settings.provider_order == ("semantic_scholar", "arxiv")
 
 
 def test_app_settings_accepts_serpapi_alias_in_provider_order() -> None:
-    settings = AppSettings.from_env({"SCHOLAR_SEARCH_PROVIDER_ORDER": "semantic_scholar,serpapi,arxiv"})
+    settings = AppSettings.from_env({"PAPER_CHASER_PROVIDER_ORDER": "semantic_scholar,serpapi,arxiv"})
 
     assert settings.provider_order == (
         "semantic_scholar",
@@ -23,11 +23,11 @@ def test_app_settings_accepts_serpapi_alias_in_provider_order() -> None:
 
 def test_app_settings_rejects_duplicate_provider_order_entries() -> None:
     with pytest.raises(ValueError, match="cannot repeat providers"):
-        AppSettings.from_env({"SCHOLAR_SEARCH_PROVIDER_ORDER": "core,core,semantic_scholar"})
+        AppSettings.from_env({"PAPER_CHASER_PROVIDER_ORDER": "core,core,semantic_scholar"})
 
 
 def test_search_papers_args_accept_serpapi_alias() -> None:
-    from scholar_search_mcp.models.tools import SearchPapersArgs
+    from paper_chaser_mcp.models.tools import SearchPapersArgs
 
     args = SearchPapersArgs.model_validate(
         {
@@ -78,11 +78,11 @@ def test_app_settings_serpapi_disabled_by_default() -> None:
 
 
 def test_app_settings_serpapi_enabled_via_env() -> None:
-    """SCHOLAR_SEARCH_ENABLE_SERPAPI=true must enable the provider."""
+    """PAPER_CHASER_ENABLE_SERPAPI=true must enable the provider."""
 
     settings = AppSettings.from_env(
         {
-            "SCHOLAR_SEARCH_ENABLE_SERPAPI": "true",
+            "PAPER_CHASER_ENABLE_SERPAPI": "true",
             "SERPAPI_API_KEY": "my-api-key",
         }
     )
@@ -93,7 +93,7 @@ def test_app_settings_serpapi_enabled_via_env() -> None:
 def test_app_settings_openalex_enabled_with_optional_mailto_and_key() -> None:
     settings = AppSettings.from_env(
         {
-            "SCHOLAR_SEARCH_ENABLE_OPENALEX": "true",
+            "PAPER_CHASER_ENABLE_OPENALEX": "true",
             "OPENALEX_API_KEY": "openalex-key",
             "OPENALEX_MAILTO": "team@example.com",
         }
@@ -107,10 +107,10 @@ def test_app_settings_openalex_enabled_with_optional_mailto_and_key() -> None:
 def test_app_settings_parses_crossref_and_unpaywall_configuration() -> None:
     settings = AppSettings.from_env(
         {
-            "SCHOLAR_SEARCH_ENABLE_CROSSREF": "true",
+            "PAPER_CHASER_ENABLE_CROSSREF": "true",
             "CROSSREF_MAILTO": "ops@example.com",
             "CROSSREF_TIMEOUT_SECONDS": "12.5",
-            "SCHOLAR_SEARCH_ENABLE_UNPAYWALL": "true",
+            "PAPER_CHASER_ENABLE_UNPAYWALL": "true",
             "UNPAYWALL_EMAIL": "oa@example.com",
             "UNPAYWALL_TIMEOUT_SECONDS": "9",
         }
@@ -127,7 +127,7 @@ def test_app_settings_parses_crossref_and_unpaywall_configuration() -> None:
 def test_app_settings_parses_ecos_configuration() -> None:
     settings = AppSettings.from_env(
         {
-            "SCHOLAR_SEARCH_ENABLE_ECOS": "true",
+            "PAPER_CHASER_ENABLE_ECOS": "true",
             "ECOS_BASE_URL": "https://ecos.fws.gov",
             "ECOS_TIMEOUT_SECONDS": "12",
             "ECOS_DOCUMENT_TIMEOUT_SECONDS": "75",
@@ -152,8 +152,8 @@ def test_app_settings_parses_regulatory_configuration() -> None:
     settings = AppSettings.from_env(
         {
             "GOVINFO_API_KEY": "gov-key",
-            "SCHOLAR_SEARCH_ENABLE_FEDERAL_REGISTER": "true",
-            "SCHOLAR_SEARCH_ENABLE_GOVINFO_CFR": "true",
+            "PAPER_CHASER_ENABLE_FEDERAL_REGISTER": "true",
+            "PAPER_CHASER_ENABLE_GOVINFO_CFR": "true",
             "FEDERAL_REGISTER_TIMEOUT_SECONDS": "11",
             "GOVINFO_TIMEOUT_SECONDS": "14",
             "GOVINFO_DOCUMENT_TIMEOUT_SECONDS": "25",
@@ -182,7 +182,7 @@ def test_app_settings_normalizes_blank_optional_values_to_none() -> None:
             "CROSSREF_MAILTO": " ",
             "UNPAYWALL_EMAIL": " ",
             "OPENAI_API_KEY": "  ",
-            "SCHOLAR_SEARCH_HTTP_AUTH_TOKEN": "",
+            "PAPER_CHASER_HTTP_AUTH_TOKEN": "",
         }
     )
 
@@ -210,10 +210,10 @@ def test_app_settings_transport_defaults_to_stdio() -> None:
 def test_app_settings_parses_http_transport_configuration() -> None:
     settings = AppSettings.from_env(
         {
-            "SCHOLAR_SEARCH_TRANSPORT": "streamable-http",
-            "SCHOLAR_SEARCH_HTTP_HOST": "0.0.0.0",
-            "SCHOLAR_SEARCH_HTTP_PORT": "9000",
-            "SCHOLAR_SEARCH_HTTP_PATH": "/api/mcp",
+            "PAPER_CHASER_TRANSPORT": "streamable-http",
+            "PAPER_CHASER_HTTP_HOST": "0.0.0.0",
+            "PAPER_CHASER_HTTP_PORT": "9000",
+            "PAPER_CHASER_HTTP_PATH": "/api/mcp",
         }
     )
 
@@ -227,16 +227,16 @@ def test_app_settings_parses_agentic_configuration() -> None:
     settings = AppSettings.from_env(
         {
             "OPENAI_API_KEY": "sk-test",
-            "SCHOLAR_SEARCH_ENABLE_AGENTIC": "true",
-            "SCHOLAR_SEARCH_AGENTIC_PROVIDER": "openai",
-            "SCHOLAR_SEARCH_PLANNER_MODEL": "gpt-5.4-mini",
-            "SCHOLAR_SEARCH_SYNTHESIS_MODEL": "gpt-5.4",
-            "SCHOLAR_SEARCH_EMBEDDING_MODEL": "text-embedding-3-large",
-            "SCHOLAR_SEARCH_DISABLE_EMBEDDINGS": "true",
-            "SCHOLAR_SEARCH_AGENTIC_OPENAI_TIMEOUT_SECONDS": "18",
-            "SCHOLAR_SEARCH_AGENTIC_INDEX_BACKEND": "memory",
-            "SCHOLAR_SEARCH_SESSION_TTL_SECONDS": "900",
-            "SCHOLAR_SEARCH_ENABLE_AGENTIC_TRACE_LOG": "true",
+            "PAPER_CHASER_ENABLE_AGENTIC": "true",
+            "PAPER_CHASER_AGENTIC_PROVIDER": "openai",
+            "PAPER_CHASER_PLANNER_MODEL": "gpt-5.4-mini",
+            "PAPER_CHASER_SYNTHESIS_MODEL": "gpt-5.4",
+            "PAPER_CHASER_EMBEDDING_MODEL": "text-embedding-3-large",
+            "PAPER_CHASER_DISABLE_EMBEDDINGS": "true",
+            "PAPER_CHASER_AGENTIC_OPENAI_TIMEOUT_SECONDS": "18",
+            "PAPER_CHASER_AGENTIC_INDEX_BACKEND": "memory",
+            "PAPER_CHASER_SESSION_TTL_SECONDS": "900",
+            "PAPER_CHASER_ENABLE_AGENTIC_TRACE_LOG": "true",
         }
     )
 
@@ -256,8 +256,8 @@ def test_app_settings_parses_agentic_configuration() -> None:
 def test_run_server_logs_embedding_flag(caplog: pytest.LogCaptureFixture) -> None:
     settings = AppSettings.from_env(
         {
-            "SCHOLAR_SEARCH_ENABLE_AGENTIC": "true",
-            "SCHOLAR_SEARCH_DISABLE_EMBEDDINGS": "true",
+            "PAPER_CHASER_ENABLE_AGENTIC": "true",
+            "PAPER_CHASER_DISABLE_EMBEDDINGS": "true",
         }
     )
 
@@ -265,7 +265,7 @@ def test_run_server_logs_embedding_flag(caplog: pytest.LogCaptureFixture) -> Non
         def run(self, **kwargs: object) -> None:
             del kwargs
 
-    caplog.set_level("INFO", logger="scholar-search-mcp")
+    caplog.set_level("INFO", logger="paper-chaser-mcp")
 
     run_server(app=_App(), logger=server.logger, settings=settings)
 
@@ -279,9 +279,9 @@ def test_app_settings_ignores_unrelated_azure_workflow_metadata() -> None:
             "AZURE_CLIENT_ID": "client-id",
             "AZURE_TENANT_ID": "tenant-id",
             "AZURE_SUBSCRIPTION_ID": "subscription-id",
-            "AZURE_RESOURCE_GROUP": "rg-scholar-search-dev-01",
+            "AZURE_RESOURCE_GROUP": "rg-paper-chaser-dev-01",
             "ACR_NAME": "acrscholarsearchdev",
-            "IMAGE_REPOSITORY": "scholar-search-mcp",
+            "IMAGE_REPOSITORY": "paper-chaser-mcp",
             "AZURE_PRIVATE_RUNNER_LABELS_JSON": '["self-hosted","linux"]',
         }
     )

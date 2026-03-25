@@ -7,10 +7,10 @@ param location string = resourceGroup().location
 param environmentName string
 
 @description('Short application name used in resource names.')
-param appName string = 'scholar-search'
+param appName string = 'paper-chaser'
 
 @description('Container image repository name inside ACR.')
-param imageRepository string = 'scholar-search-mcp'
+param imageRepository string = 'paper-chaser-mcp'
 
 @description('Container image tag to deploy.')
 param imageTag string = 'latest'
@@ -124,10 +124,10 @@ param ecosVerifyTls bool = true
 param apiManagementSku string = 'StandardV2'
 
 @description('Relative API path exposed by API Management for the MCP service.')
-param apiManagementApiPath string = 'scholar-search'
+param apiManagementApiPath string = 'paper-chaser'
 
 @description('Publisher display name shown in API Management.')
-param apiManagementPublisherName string = 'Scholar Search MCP'
+param apiManagementPublisherName string = 'Paper Chaser MCP'
 
 @description('Publisher email shown in API Management. Use a non-secret operational inbox.')
 param apiManagementPublisherEmail string = 'owner@example.invalid'

@@ -5,7 +5,7 @@ def test_batch_get_papers_rejects_oversized_list() -> None:
     """batch_get_papers must raise a validation error for lists > 500."""
     from pydantic import ValidationError
 
-    from scholar_search_mcp.models.tools import BatchGetPapersArgs
+    from paper_chaser_mcp.models.tools import BatchGetPapersArgs
 
     with pytest.raises(ValidationError, match="500"):
         BatchGetPapersArgs(paper_ids=[f"p{i}" for i in range(501)])
@@ -15,7 +15,7 @@ def test_batch_get_authors_rejects_oversized_list() -> None:
     """batch_get_authors must raise a validation error for lists > 1000."""
     from pydantic import ValidationError
 
-    from scholar_search_mcp.models.tools import BatchGetAuthorsArgs
+    from paper_chaser_mcp.models.tools import BatchGetAuthorsArgs
 
     with pytest.raises(ValidationError, match="1000"):
         BatchGetAuthorsArgs(author_ids=[f"a{i}" for i in range(1001)])
@@ -25,7 +25,7 @@ def test_author_field_models_reject_unsupported_fields() -> None:
     """Author-facing tools must fail fast for unsupported author field names."""
     from pydantic import ValidationError
 
-    from scholar_search_mcp.models.tools import AuthorInfoArgs, AuthorSearchArgs
+    from paper_chaser_mcp.models.tools import AuthorInfoArgs, AuthorSearchArgs
 
     with pytest.raises(ValidationError, match="Unsupported author fields: aliases"):
         AuthorInfoArgs(author_id="9191855", fields=["aliases"])
@@ -36,7 +36,7 @@ def test_author_field_models_reject_unsupported_fields() -> None:
 
 def test_author_papers_args_accepts_paper_fields() -> None:
     """AuthorPapersArgs must accept paper fields, not author-profile fields."""
-    from scholar_search_mcp.models.tools import AuthorPapersArgs
+    from paper_chaser_mcp.models.tools import AuthorPapersArgs
 
     # Paper fields must be accepted without error
     args = AuthorPapersArgs(
@@ -71,7 +71,7 @@ def test_author_papers_args_rejects_author_profile_fields() -> None:
     """AuthorPapersArgs must reject author-profile fields with a clear error."""
     from pydantic import ValidationError
 
-    from scholar_search_mcp.models.tools import AuthorPapersArgs
+    from paper_chaser_mcp.models.tools import AuthorPapersArgs
 
     with pytest.raises(ValidationError, match="Unsupported paper fields"):
         AuthorPapersArgs(
@@ -88,7 +88,7 @@ def test_author_papers_args_rejects_author_profile_fields() -> None:
 
 def test_author_papers_args_fields_none_by_default() -> None:
     """AuthorPapersArgs.fields must default to None (use server defaults)."""
-    from scholar_search_mcp.models.tools import AuthorPapersArgs
+    from paper_chaser_mcp.models.tools import AuthorPapersArgs
 
     args = AuthorPapersArgs(author_id="1751762")
     assert args.fields is None
@@ -96,7 +96,7 @@ def test_author_papers_args_fields_none_by_default() -> None:
 
 def test_snippet_result_model_preserves_nested_snippet() -> None:
     """SnippetResult must keep the snippet sub-object, not hoist text to the top."""
-    from scholar_search_mcp.models import SnippetResult
+    from paper_chaser_mcp.models import SnippetResult
 
     raw = {
         "score": 0.95,
@@ -120,7 +120,7 @@ def test_snippet_result_model_preserves_nested_snippet() -> None:
 
 def test_semantic_search_response_preserves_next_field() -> None:
     """SemanticSearchResponse must propagate the next offset and pagination envelope."""
-    from scholar_search_mcp.models import SemanticSearchResponse
+    from paper_chaser_mcp.models import SemanticSearchResponse
 
     raw = {
         "total": 500,
@@ -139,7 +139,7 @@ def test_semantic_search_response_preserves_next_field() -> None:
 
 def test_semantic_search_response_next_is_none_when_absent() -> None:
     """next must be None and hasMore False when the API omits it (last page)."""
-    from scholar_search_mcp.models import SemanticSearchResponse
+    from paper_chaser_mcp.models import SemanticSearchResponse
 
     raw = {"total": 5, "offset": 0, "data": [{"paperId": "p1"}]}
     parsed = SemanticSearchResponse.model_validate(raw)
@@ -151,7 +151,7 @@ def test_semantic_search_response_next_is_none_when_absent() -> None:
 
 def test_paper_list_response_preserves_offset_and_next() -> None:
     """PaperListResponse must carry offset, next, and the pagination envelope."""
-    from scholar_search_mcp.models import PaperListResponse
+    from paper_chaser_mcp.models import PaperListResponse
 
     raw = {
         "offset": 100,
@@ -169,7 +169,7 @@ def test_paper_list_response_preserves_offset_and_next() -> None:
 
 def test_paper_list_response_next_is_none_on_last_page() -> None:
     """next must default to None and hasMore False on the last page."""
-    from scholar_search_mcp.models import PaperListResponse
+    from paper_chaser_mcp.models import PaperListResponse
 
     raw = {"offset": 900, "data": [{"paperId": "last-paper"}]}
     parsed = PaperListResponse.model_validate(raw)
@@ -181,7 +181,7 @@ def test_paper_list_response_next_is_none_on_last_page() -> None:
 
 def test_pagination_model_camelcase_serialization() -> None:
     """Pagination fields must serialize to camelCase for API consistency."""
-    from scholar_search_mcp.models import Pagination
+    from paper_chaser_mcp.models import Pagination
 
     p = Pagination(has_more=True, next_cursor="42")
     dumped = p.model_dump(by_alias=True)
@@ -191,7 +191,7 @@ def test_pagination_model_camelcase_serialization() -> None:
 
 def test_pagination_model_has_more_false_when_no_cursor() -> None:
     """Pagination with no cursor must have hasMore=False."""
-    from scholar_search_mcp.models import Pagination
+    from paper_chaser_mcp.models import Pagination
 
     p = Pagination(has_more=False)
     assert p.has_more is False
@@ -200,7 +200,7 @@ def test_pagination_model_has_more_false_when_no_cursor() -> None:
 
 def test_bulk_search_response_pagination_uses_token() -> None:
     """BulkSearchResponse pagination must encode the token as nextCursor."""
-    from scholar_search_mcp.models import BulkSearchResponse
+    from paper_chaser_mcp.models import BulkSearchResponse
 
     raw = {"total": 5000, "token": "tok-abc123", "data": []}
     parsed = BulkSearchResponse.model_validate(raw)
@@ -211,7 +211,7 @@ def test_bulk_search_response_pagination_uses_token() -> None:
 
 def test_bulk_search_response_no_token_means_last_page() -> None:
     """BulkSearchResponse without a token means hasMore=False."""
-    from scholar_search_mcp.models import BulkSearchResponse
+    from paper_chaser_mcp.models import BulkSearchResponse
 
     raw = {"total": 100, "data": [{"paperId": "p1"}]}
     parsed = BulkSearchResponse.model_validate(raw)
@@ -221,7 +221,7 @@ def test_bulk_search_response_no_token_means_last_page() -> None:
 
 def test_paper_model_serializes_optional_enrichments() -> None:
     """Paper.enrichments should round-trip as a first-class additive payload."""
-    from scholar_search_mcp.models import Paper
+    from paper_chaser_mcp.models import Paper
 
     paper = Paper.model_validate(
         {
@@ -249,7 +249,7 @@ def test_paper_model_serializes_optional_enrichments() -> None:
 
 def test_paper_enrichment_response_serializes_provider_results() -> None:
     """Combined enrichment responses should keep DOI state and provider payloads."""
-    from scholar_search_mcp.models import PaperEnrichmentResponse
+    from paper_chaser_mcp.models import PaperEnrichmentResponse
 
     response = PaperEnrichmentResponse.model_validate(
         {
@@ -281,8 +281,8 @@ def test_paper_enrichment_response_serializes_provider_results() -> None:
 
 def test_citation_formats_response_model_serializes_correctly() -> None:
     """CitationFormatsResponse must serialize with camelCase aliases."""
-    from scholar_search_mcp.models import CitationFormatsResponse
-    from scholar_search_mcp.models.common import CitationFormat, ExportLink
+    from paper_chaser_mcp.models import CitationFormatsResponse
+    from paper_chaser_mcp.models.common import CitationFormat, ExportLink
 
     resp = CitationFormatsResponse(
         result_id="r-001",
@@ -304,7 +304,7 @@ def test_paper_scholar_result_id_is_first_class_field() -> None:
     to get_paper_citation_formats. This test guards against regressions where the
     field is demoted back to an extra dict entry (invisible in schema).
     """
-    from scholar_search_mcp.models.common import Paper
+    from paper_chaser_mcp.models.common import Paper
 
     schema = Paper.model_json_schema()
     props = schema.get("properties", {})
@@ -332,7 +332,7 @@ def test_paper_scholar_result_id_is_first_class_field() -> None:
 
 def test_paper_scholar_result_id_set_for_serpapi_results() -> None:
     """Paper.scholarResultId must be set on SerpApi results and None otherwise."""
-    from scholar_search_mcp.models.common import Paper
+    from paper_chaser_mcp.models.common import Paper
 
     # SerpApi result: scholarResultId set from result_id
     serpapi_paper = Paper(
@@ -353,7 +353,7 @@ def test_paper_scholar_result_id_set_for_serpapi_results() -> None:
 
 def test_broker_metadata_next_step_hint_is_provider_specific() -> None:
     """BrokerMetadata.nextStepHint must vary by provider to guide agents."""
-    from scholar_search_mcp.search import _metadata
+    from paper_chaser_mcp.search import _metadata
 
     serpapi_meta = _metadata(
         provider_used="serpapi_google_scholar",
@@ -407,8 +407,8 @@ def test_broker_metadata_next_step_hint_is_provider_specific() -> None:
 
 def test_broker_metadata_next_step_hint_in_serialized_response() -> None:
     """brokerMetadata.nextStepHint must appear in the serialized search response."""
-    from scholar_search_mcp.models.common import SearchResponse
-    from scholar_search_mcp.search import _dump_search_response, _metadata
+    from paper_chaser_mcp.models.common import SearchResponse
+    from paper_chaser_mcp.search import _dump_search_response, _metadata
 
     meta = _metadata(
         provider_used="semantic_scholar",

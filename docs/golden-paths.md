@@ -1,11 +1,11 @@
-# Scholar Search Golden Paths
+# Paper Chaser Golden Paths
 
 This document captures the primary planning assumptions for the MCP surface so
 agents can choose the next tool with low context and high reliability.
 
 These same discovery, pagination, lookup, citation, author-pivot, and smart
 result-set paths are exercised by the agentic smoke test in
-`.github/workflows/test-scholar-search.md`.
+`.github/workflows/test-paper-chaser.md`.
 
 ## Primary Personas
 
@@ -240,7 +240,7 @@ search_authors(query="Yoshua Bengio", limit=5)
   before starting an entirely new search when the follow-up is still grounded
   in the same corpus.
 - **Agent UX feedback loop**: the checked-in agentic workflow at
-  `.github/workflows/test-scholar-search.md` now supports `smoke`,
+  `.github/workflows/test-paper-chaser.md` now supports `smoke`,
   `comprehensive`, and `feature_probe` review modes. The workflow uses the
   GitHub Copilot CLI engine and can be pointed at GPT-5.4 or another model via
   `GH_AW_MODEL_AGENT_COPILOT`. It explicitly evaluates agent UX in every step:

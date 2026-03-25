@@ -6,7 +6,7 @@ on:
       - Dockerfile
       - pyproject.toml
       - server.json
-      - scholar_search_mcp/**
+      - paper_chaser_mcp/**
       - .github/workflows/publish-public-mcp-package.yml
   push:
     branches:
@@ -18,7 +18,7 @@ on:
       - Dockerfile
       - pyproject.toml
       - server.json
-      - scholar_search_mcp/**
+      - paper_chaser_mcp/**
       - .github/workflows/publish-public-mcp-package.yml
   workflow_dispatch:
     inputs:
@@ -57,10 +57,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          repo_lc="$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          server_version="$(jq -re '.version' server.json)"
+          package_identifier="$(jq -re '.packages[0].identifier' server.json)"
+          image_name="${package_identifier%:${server_version}}"
           {
-            echo "name=ghcr.io/${repo_lc}"
-            echo "ci_ref=ghcr.io/${repo_lc}:ci-${GITHUB_SHA}"
+            echo "name=${image_name}"
+            echo "ci_ref=${image_name}:ci-${GITHUB_SHA}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Read MCP server metadata
@@ -86,7 +88,7 @@ jobs:
             exit 1
           fi
           if [ "$package_identifier" != "${{ steps.image.outputs.name }}:${server_version}" ]; then
-            echo "server.json OCI package identifier must match ghcr.io/<owner>/<repo>:<version>."
+            echo "server.json OCI package identifier must match ghcr.io/<owner>/<server-name>:<version>."
             exit 1
           fi
           if [ "$transport_type" != "stdio" ]; then
@@ -157,7 +159,7 @@ jobs:
           grep -q "defaults to stdio" "${help_file}"
           grep -q "deployment-http" "${help_file}"
           docker run --rm "${{ steps.image.outputs.ci_ref }}" --version | \
-            grep -Fx "scholar-search-mcp ${{ steps.server.outputs.version }}"
+            grep -Fx "paper-chaser-mcp ${{ steps.server.outputs.version }}"
 
       - name: Scan container image
         shell: bash
@@ -200,8 +202,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          repo_lc="$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
-          echo "name=ghcr.io/${repo_lc}" >> "$GITHUB_OUTPUT"
+          server_version="$(jq -re '.version' server.json)"
+          package_identifier="$(jq -re '.packages[0].identifier' server.json)"
+          echo "name=${package_identifier%:${server_version}}" >> "$GITHUB_OUTPUT"
 
       - name: Read MCP server metadata
         id: server
@@ -220,8 +223,7 @@ jobs:
             echo "server.json must define non-empty name and version."
             exit 1
           fi
-          repo_lc="$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
-          expected_identifier="ghcr.io/${repo_lc}:${server_version}"
+          expected_identifier="${{ steps.image.outputs.name }}:${server_version}"
           if [ "$package_identifier" != "$expected_identifier" ]; then
             echo "server.json OCI package identifier must match ${expected_identifier}."
             exit 1
@@ -308,7 +310,7 @@ jobs:
 
           docker run --rm "${image_ref}" --help | grep -q "defaults to stdio"
           docker run --rm "${image_ref}" --version | \
-            grep -Fx "scholar-search-mcp ${{ steps.server.outputs.version }}"
+            grep -Fx "paper-chaser-mcp ${{ steps.server.outputs.version }}"
 
       - name: Scan publish candidate image
         shell: bash

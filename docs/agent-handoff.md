@@ -16,7 +16,7 @@ This document is the current working handoff for the fork. It is intended to giv
   `infra/`, a manual OIDC deployment workflow with `bootstrap` and `full`
   modes, and operator-facing Azure docs.
 - The Docker image is now a reusable public MCP package surface as well: the
-  default image contract is stdio-first with a stable `scholar-search-mcp`
+  default image contract is stdio-first with a stable `paper-chaser-mcp`
   entrypoint, `server.json` tracks the public MCP/OCI metadata, and
   `.github/workflows/publish-public-mcp-package.yml` handles tag-driven GHCR
   publishing plus MCP Registry publication, with semver checks, OIDC auth, and
@@ -26,15 +26,15 @@ This document is the current working handoff for the fork. It is intended to giv
   lint/build the Bicep, validate the APIM policy XML, build the Docker image,
   and smoke-test the secured `/healthz` and `/mcp/` paths locally, including
   the APIM-style Origin allowlist and the Azure-scaffold
-  `SCHOLAR_SEARCH_HTTP_AUTH_HEADER=x-backend-auth` contract.
-- `scholar_search_mcp/deployment_runner.py` powers the explicit
-  `scholar-search-mcp deployment-http` command used by Compose and the Azure
-  deployment path. It wraps `scholar_search_mcp.deployment:app` with Uvicorn
-  and prefers `PORT` over `SCHOLAR_SEARCH_HTTP_PORT`.
-- `scholar_search_mcp/deployment_utils.py` resolves the post-deploy `/healthz`
+  `PAPER_CHASER_HTTP_AUTH_HEADER=x-backend-auth` contract.
+- `paper_chaser_mcp/deployment_runner.py` powers the explicit
+  `paper-chaser-mcp deployment-http` command used by Compose and the Azure
+  deployment path. It wraps `paper_chaser_mcp.deployment:app` with Uvicorn
+  and prefers `PORT` over `PAPER_CHASER_HTTP_PORT`.
+- `paper_chaser_mcp/deployment_utils.py` resolves the post-deploy `/healthz`
   smoke-test target from `SMOKE_TEST_HEALTH_URL`, `containerAppHealthUrl`, or
   `containerAppFqdn`.
-- `scholar_search_mcp/server.py` is now a compatibility facade over smaller modules.
+- `paper_chaser_mcp/server.py` is now a compatibility facade over smaller modules.
 - The repo now exposes a compatibility-first smart layer on top of the stable
   raw MCP surface: `search_papers_smart`, `ask_result_set`,
   `map_research_landscape`, and `expand_research_graph`.
@@ -114,9 +114,9 @@ This document is the current working handoff for the fork. It is intended to giv
   rather than the raw SerpApi account payload.
 - `search_snippets` now degrades provider 4xx/5xx failures to an empty payload
   with retry guidance instead of surfacing the raw provider error.
-- `.github/workflows/test-scholar-search.md` now defines a GitHub Agentic
+- `.github/workflows/test-paper-chaser.md` now defines a GitHub Agentic
   Workflow smoke test for the MCP server, with the compiled workflow checked in
-  as `.github/workflows/test-scholar-search.lock.yml`.
+  as `.github/workflows/test-paper-chaser.lock.yml`.
 - That workflow now targets the primary golden paths explicitly: quick
   discovery, known-item lookup, pagination, citation chasing, author pivot,
   and optional SerpApi citation export when credentials are available.
@@ -124,7 +124,7 @@ This document is the current working handoff for the fork. It is intended to giv
   `comprehensive`, and `feature_probe` runs, plus an optional focus prompt so
   maintainers can direct UX review loops and turn the findings into actionable
   issues for GitHub Copilot coding agents.
-- The GitHub Agentic Workflow MCP config for `scholar-search` must stay
+- The GitHub Agentic Workflow MCP config for `paper-chaser` must stay
   containerized. Current `gh-aw` MCP Gateway releases reject legacy stdio
   `command`/`args` server definitions and require `container`-based config.
 - The verifier workflow is now manual-only on purpose because it can consume
@@ -138,7 +138,7 @@ This document is the current working handoff for the fork. It is intended to giv
 - A new `agentic-assign.yml` workflow assigns GitHub Copilot only when an issue
   carries both `agentic` and `needs-copilot` labels but not `needs-human`,
   `blocked`, or `no-agent`. It listens to direct `issues` events and completed
-  `Test Scholar Search MCP` runs because issues created from the verifier
+  `Test Paper Chaser MCP` runs because issues created from the verifier
   workflow do not reliably fan out into a second `issues`-triggered workflow.
 - The Copilot auto-assignment path must use GitHub's Copilot-specific issue
   assignment contract (`copilot-swe-agent[bot]` plus `agent_assignment`). A
@@ -163,7 +163,7 @@ This document is the current working handoff for the fork. It is intended to giv
 - The README tool table now includes all three regulatory tools
   (`search_federal_register`, `get_federal_register_document`, `get_cfr_text`)
   and a dedicated Federal Register / GovInfo configuration section documents
-  `SCHOLAR_SEARCH_ENABLE_FEDERAL_REGISTER`, `SCHOLAR_SEARCH_ENABLE_GOVINFO_CFR`,
+  `PAPER_CHASER_ENABLE_FEDERAL_REGISTER`, `PAPER_CHASER_ENABLE_GOVINFO_CFR`,
   `GOVINFO_API_KEY`, `FEDERAL_REGISTER_TIMEOUT_SECONDS`,
   `GOVINFO_TIMEOUT_SECONDS`, `GOVINFO_DOCUMENT_TIMEOUT_SECONDS`, and
   `GOVINFO_MAX_DOCUMENT_SIZE_MB`.
@@ -174,38 +174,65 @@ This document is the current working handoff for the fork. It is intended to giv
   full current provider surface (Semantic Scholar, CORE, arXiv, OpenAlex,
   SerpApi, Crossref, Unpaywall, ECOS, Federal Register, GovInfo).
 
+## Required Future Changes After Repo Rename
+
+The in-repo Paper Chaser rebrand is complete except for references that must
+remain aligned with the current live GitHub repository slug until the repo is
+actually renamed. Public package and GHCR identity are already decoupled from
+the repo slug and derive from `server.json` server metadata instead.
+
+Once the repository slug changes from `scholar-search-mcp` to
+`paper-chaser-mcp`, make this follow-up pass in one PR:
+
+1. Update repo URL metadata and links that must match the live GitHub slug:
+  `README.md`, `pyproject.toml`, `server.json`, and Docker OCI labels in
+  `Dockerfile`.
+2. Update local operator docs that still intentionally reference the current
+  GitHub repo path or repo name variables, especially the `.local-azure-*`
+  runbooks and PowerShell snippets using `$Repo`, `$RepoName`, or explicit
+  `https://github.com/joshuasundance-swca/scholar-search-mcp` URLs.
+3. Re-scan for exact old-slug references with a search like
+  `scholar-search-mcp|scholar_search_mcp|SCHOLAR_SEARCH_` and confirm that no
+  non-provider old-brand identifiers remain.
+4. Re-run the rebrand-sensitive validation subset:
+  `python -m pytest tests/test_mcp_package_contract.py tests/test_local_config_contract.py tests/test_microsoft_assets.py`
+  and `python scripts/validate_deployment.py --skip-az --skip-docker`.
+5. Review any external integrations or marketplace settings that are not stored
+  in this repo, such as the actual GitHub repository rename, MCP Registry
+  listing metadata, and any future GHCR package description settings.
+
 ## Module Map
 
-- `scholar_search_mcp/__main__.py` is the `python -m` entrypoint.
-- `scholar_search_mcp/server.py` is the public MCP facade and compatibility layer used by tests and package entrypoints.
-- `scholar_search_mcp/compat.py` owns schema sanitization plus additive
+- `paper_chaser_mcp/__main__.py` is the `python -m` entrypoint.
+- `paper_chaser_mcp/server.py` is the public MCP facade and compatibility layer used by tests and package entrypoints.
+- `paper_chaser_mcp/compat.py` owns schema sanitization plus additive
   `agentHints` / `clarification` / `resourceUris` / `searchSessionId`
   enrichment for raw-tool responses.
-- `scholar_search_mcp/dispatch.py` routes MCP tool calls through a dispatch map.
-- `scholar_search_mcp/search.py` owns the `search_papers` fallback chain and merged response helpers.
-- `scholar_search_mcp/tools.py` defines MCP tool schemas.
-- `scholar_search_mcp/runtime.py` owns stdio startup.
-- `scholar_search_mcp/settings.py` contains environment parsing helpers.
-- `scholar_search_mcp/agentic/` contains the additive smart-tool runtime:
+- `paper_chaser_mcp/dispatch.py` routes MCP tool calls through a dispatch map.
+- `paper_chaser_mcp/search.py` owns the `search_papers` fallback chain and merged response helpers.
+- `paper_chaser_mcp/tools.py` defines MCP tool schemas.
+- `paper_chaser_mcp/runtime.py` owns stdio startup.
+- `paper_chaser_mcp/settings.py` contains environment parsing helpers.
+- `paper_chaser_mcp/agentic/` contains the additive smart-tool runtime:
   config, models, provider adapters, planner, retrieval, ranking, workspace,
   and LangGraph scaffolding.
-- `scholar_search_mcp/clients/federal_register/` contains the keyless
+- `paper_chaser_mcp/clients/federal_register/` contains the keyless
   FederalRegister.gov discovery client.
-- `scholar_search_mcp/clients/govinfo/` contains the GovInfo retrieval client
+- `paper_chaser_mcp/clients/govinfo/` contains the GovInfo retrieval client
   for authoritative Federal Register and CFR text.
-- `scholar_search_mcp/deployment.py` wraps the HTTP app with `/healthz`,
+- `paper_chaser_mcp/deployment.py` wraps the HTTP app with `/healthz`,
   optional backend-token auth, and optional Origin allowlisting for hosted
   deployments.
-- `scholar_search_mcp/deployment_runner.py` powers the explicit
-  `scholar-search-mcp deployment-http` runtime used for HTTP-wrapper hosting in
+- `paper_chaser_mcp/deployment_runner.py` powers the explicit
+  `paper-chaser-mcp deployment-http` runtime used for HTTP-wrapper hosting in
   Compose and Azure-hosted deployments.
-- `scholar_search_mcp/deployment_utils.py` resolves smoke-test endpoints from
+- `paper_chaser_mcp/deployment_utils.py` resolves smoke-test endpoints from
   Azure deployment outputs or an explicit environment override.
-- `scholar_search_mcp/clients/` contains provider clients for Semantic Scholar,
+- `paper_chaser_mcp/clients/` contains provider clients for Semantic Scholar,
   arXiv, CORE, OpenAlex, SerpApi, Crossref, Unpaywall, ECOS, Federal Register,
   and GovInfo.
-- `scholar_search_mcp/models/common.py` contains shared Pydantic models including `Paper` (with `scholarResultId`).
-- `scholar_search_mcp/parsing.py`, `scholar_search_mcp/constants.py`, and `scholar_search_mcp/transport.py` hold shared helper code and compatibility imports.
+- `paper_chaser_mcp/models/common.py` contains shared Pydantic models including `Paper` (with `scholarResultId`).
+- `paper_chaser_mcp/parsing.py`, `paper_chaser_mcp/constants.py`, and `paper_chaser_mcp/transport.py` hold shared helper code and compatibility imports.
 - `scripts/validate_deployment.py` validates the Azure/Docker deployment path.
 - `infra/` contains the Azure Container Apps + API Management Bicep scaffold
   and parameter files for `dev`, `staging`, and `prod`.
@@ -223,10 +250,10 @@ Then run:
 ```bash
 python -m pip check
 pre-commit run --all-files
-python -m pytest --cov=scholar_search_mcp --cov-report=term-missing --cov-fail-under=85
+python -m pytest --cov=paper_chaser_mcp --cov-report=term-missing --cov-fail-under=85
 python -m mypy --config-file pyproject.toml
 python -m ruff check .
-python -m bandit -c pyproject.toml -r scholar_search_mcp
+python -m bandit -c pyproject.toml -r paper_chaser_mcp
 python -m build
 python -m pip_audit . --progress-spinner off
 ```
@@ -246,15 +273,15 @@ python scripts/validate_deployment.py --skip-docker
 For full parity with the `Deploy Azure` workflow's full-deployment path, run:
 
 ```bash
-python scripts/validate_deployment.py --require-az --require-docker --image-tag scholar-search-mcp:ci-validate
+python scripts/validate_deployment.py --require-az --require-docker --image-tag paper-chaser-mcp:ci-validate
 ```
 
-If you edit `.github/workflows/test-scholar-search.md`, recompile it before
+If you edit `.github/workflows/test-paper-chaser.md`, recompile it before
 finishing and then rerun the standard validation stack so pre-commit can
 normalize the generated lock file:
 
 ```bash
-gh aw compile test-scholar-search --dir .github/workflows
+gh aw compile test-paper-chaser --dir .github/workflows
 ```
 
 ## What Was Added In This Pass
@@ -262,7 +289,7 @@ gh aw compile test-scholar-search --dir .github/workflows
 - `Paper.scholarResultId` is now a first-class model field (not just an extra). This
   makes it visible in the JSON schema so agents can discover it without reading long
   tool descriptions. The field is always `None` for non-SerpApi results.
-- The additive smart-tool layer now exists under `scholar_search_mcp/agentic/`.
+- The additive smart-tool layer now exists under `paper_chaser_mcp/agentic/`.
   It keeps the raw MCP tools stable while adding concept-level discovery,
   grounded follow-up QA, landscape mapping, and compact graph expansion
   through reusable `searchSessionId` workspaces.
@@ -291,8 +318,8 @@ gh aw compile test-scholar-search --dir .github/workflows
   agent scanning: QUICK DISCOVERY → EXHAUSTIVE → CITATION REPAIR → KNOWN ITEM
   → CITATION → AUTHOR → SNIPPET.
 - `AGENT_WORKFLOW_GUIDE` was rewritten with a quick-decision-table format under
-  `guide://scholar-search/agent-workflows`.
-- `plan_scholar_search` prompt was updated to reference `brokerMetadata.nextStepHint`.
+  `guide://paper-chaser/agent-workflows`.
+- `plan_paper_chaser_search` prompt was updated to reference `brokerMetadata.nextStepHint`.
 - `docs/golden-paths.md` now includes concrete example requests and tool sequences
   for each golden path.
 - `search_papers_match` now normalizes wrapped Semantic Scholar match responses
@@ -320,7 +347,7 @@ gh aw compile test-scholar-search --dir .github/workflows
 - CORE search now retries short-lived 5xx responses, which was required after
   live broker smoke testing exposed transient backend shard failures on the
   CORE fallback hop.
-- A hosted deployment path now exists for Azure: `scholar_search_mcp.deployment`
+- A hosted deployment path now exists for Azure: `paper_chaser_mcp.deployment`
   adds `/healthz`, optional backend-token auth, and optional Origin allowlists
   in front of the FastMCP HTTP app.
 - The repo now ships a Dockerfile, Bicep infrastructure scaffold, APIM policy
@@ -333,7 +360,7 @@ gh aw compile test-scholar-search --dir .github/workflows
 ## Progress Snapshot
 
 - Baseline validation (`python -m pytest`, `python -m mypy --config-file pyproject.toml`,
-  `python -m ruff check .`, and `python -m bandit -c pyproject.toml -r scholar_search_mcp`)
+  `python -m ruff check .`, and `python -m bandit -c pyproject.toml -r paper_chaser_mcp`)
   passed in this environment after installing `.[dev]`.
 - The current pass keeps runtime behavior stable and focuses on schema discoverability,
   structured hints, and tighter agent guidance.
@@ -367,7 +394,7 @@ gh aw compile test-scholar-search --dir .github/workflows
   `enableOpenAlex`, `enableSerpApi`, `enableCrossref`, `enableUnpaywall`,
   `enableEcos`, `enableFederalRegister`, `enableGovinfoCfr`) are controlled by named Bicep parameters in `infra/main.bicep`
   and threaded through to the Container App. The previously-hardcoded
-  `SCHOLAR_SEARCH_ENABLE_CORE=true` mismatch is fixed: CORE now defaults to
+  `PAPER_CHASER_ENABLE_CORE=true` mismatch is fixed: CORE now defaults to
   `false` in Bicep, `.bicepparam` files, and both Compose files, matching the
   application default in `settings.py`. The `core-api-key` Key Vault secret is
   also now conditional — it is only mounted when `enableCore=true`, so
@@ -390,7 +417,7 @@ gh aw compile test-scholar-search --dir .github/workflows
   through `search_papers`, because the OpenAlex guide's citation, author, and
   cursor semantics differ enough from Semantic Scholar to warrant a separate
   provider-specific surface.
-- The agentic workflow now runs `scholar-search` through a `python:3.12`
+- The agentic workflow now runs `paper-chaser` through a `python:3.12`
   container mounted to `${GITHUB_WORKSPACE}` so the generated MCP Gateway
   config matches the current schema.
 - `search_papers_bulk` now truncates returned data to the requested `limit`
@@ -492,7 +519,7 @@ gh aw compile test-scholar-search --dir .github/workflows
 ## Known Hotspots
 
 - `CoreApiClient._result_to_paper()` remains the densest parsing logic and should keep getting defensive tests before behavior changes.
-- The compatibility contract in `scholar_search_mcp/server.py` is now important. Future cleanup should avoid removing re-exported symbols that tests and downstream imports still rely on.
+- The compatibility contract in `paper_chaser_mcp/server.py` is now important. Future cleanup should avoid removing re-exported symbols that tests and downstream imports still rely on.
 - `pyproject.toml` is the single source of truth for Python dependencies; no parallel runtime dependency file should be reintroduced casually.
 - Dependency version ranges remain intentionally loose.
 - `search.py::_metadata()` now carries product-level UX weight because agents use `nextStepHint` as operational guidance rather than decorative metadata.
@@ -506,7 +533,7 @@ gh aw compile test-scholar-search --dir .github/workflows
 2. Decide whether retry-recovered provider behavior should remain invisible or become broker metadata.
 3. Add more negative tests for CORE schema drift, especially malformed author shapes, journal fields, and URL containers.
 4. Consider moving from per-request `httpx.AsyncClient` creation to shared clients if connection reuse becomes important.
-5. Decide whether the compatibility facade in `scholar_search_mcp/server.py` should remain broad or be narrowed with an explicit supported surface.
+5. Decide whether the compatibility facade in `paper_chaser_mcp/server.py` should remain broad or be narrowed with an explicit supported surface.
 6. Revisit `.github/copilot-instructions.md` and `docs/golden-paths.md` whenever future agent-facing search behavior materially changes.
 7. ~~OpenAlex institution/source pivots~~ — **completed**: `search_entities_openalex`
    and `search_papers_openalex_by_entity` are now first-class tools.
@@ -525,13 +552,16 @@ gh aw compile test-scholar-search --dir .github/workflows
     California-least-tern walkthrough in the README) should be added to help
     agents discover the discovery→direct-retrieval→CFR-text chain without
     reading the full tool descriptions.
+13. After the GitHub repo slug is actually renamed, execute the
+  `Required Future Changes After Repo Rename` checklist above and then remove
+  the README fork-status note that still acknowledges the old repo slug.
 
 ## Ready Handoff Prompt
 
 Use this prompt for the next agent if the goal is to act on the UX review or expand coverage:
 
 ```text
-You are picking up scholar-search-mcp after a documentation refresh pass. Read README.md, docs/golden-paths.md, and docs/agent-handoff.md first.
+You are picking up paper-chaser-mcp after a documentation refresh pass. Read README.md, docs/golden-paths.md, and docs/agent-handoff.md first.
 
 Focus on the highest-value remaining work from the Suggested Next Steps list:
 1. Decide whether retry-recovered provider behavior should remain invisible or become broker metadata.
@@ -548,10 +578,10 @@ Your task:
 Validation target:
 - python -m pip check
 - pre-commit run --all-files
-- python -m pytest --cov=scholar_search_mcp --cov-report=term-missing --cov-fail-under=85
+- python -m pytest --cov=paper_chaser_mcp --cov-report=term-missing --cov-fail-under=85
 - python -m mypy --config-file pyproject.toml
 - python -m ruff check .
-- python -m bandit -c pyproject.toml -r scholar_search_mcp
+- python -m bandit -c pyproject.toml -r paper_chaser_mcp
 - python -m build
 - python -m pip_audit . --progress-spinner off
 

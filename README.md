@@ -1,12 +1,12 @@
-# Scholar Search MCP
+# Paper Chaser MCP
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/joshuasundance-swca/scholar-search-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> **Fork status:** This repository is a divergent fork. A project rename,
-> new PyPI publication, updated versioning, and fresh registry metadata are
-> planned but not yet in progress. Until then, install from source or the
-> GHCR image rather than the upstream PyPI package.
+> **Fork status:** This repository is a divergent fork mid-rename. The code,
+> package, CLI, public MCP branding, and package/image identifiers now use
+> `paper-chaser-mcp`. The only remaining old-project reference is the current
+> GitHub repository slug, which still uses `scholar-search-mcp` until the repo
+> itself is renamed.
 
 An MCP server for academic research — search papers, chase citations, look up authors, repair broken references, explore species dossiers, and retrieve regulatory text, all from one FastMCP server that AI assistants can call directly.
 
@@ -35,7 +35,7 @@ An MCP server for academic research — search papers, chase citations, look up 
 - **Exhaustive paginated retrieval** (`search_papers_bulk`) — cursor-based bulk traversal up to 1,000 papers/call; default ordering is **not relevance-ranked**, read `retrievalNote` each page
 - **Provider-specific searches** — `search_papers_semantic_scholar`, `search_papers_arxiv`, `search_papers_core`, `search_papers_serpapi`, `search_papers_openalex`, `search_papers_openalex_bulk`
 
-### Smart research layer *(requires `[ai]` extra + `SCHOLAR_SEARCH_ENABLE_AGENTIC=true`)*
+### Smart research layer *(requires `[ai]` extra + `PAPER_CHASER_ENABLE_AGENTIC=true`)*
 - **`search_papers_smart`** — concept-level discovery with query expansion, multi-provider fusion, reranking, and a reusable `searchSessionId`; supports `latencyProfile` (`fast` / `balanced` / `deep`) and an optional `providerBudget`
 - **`ask_result_set`** — grounded QA, claim checks, and comparisons over a saved result set
 - **`map_research_landscape`** — theme clustering, gaps, and suggested next searches
@@ -133,7 +133,7 @@ pip install -e .[ai,ai-faiss]
 
 ### Local Quick Start
 
-The Azure deployment scaffold is optional. Local `python -m scholar_search_mcp`
+The Azure deployment scaffold is optional. Local `python -m paper_chaser_mcp`
 still defaults to `stdio` transport and does not require any Azure deployment
 variables.
 
@@ -157,13 +157,13 @@ Add the following. In this example CORE is disabled and Semantic Scholar plus ar
 ```json
 {
   "mcpServers": {
-    "scholar-search": {
+    "paper-chaser": {
       "command": "python",
-      "args": ["-m", "scholar_search_mcp"],
+      "args": ["-m", "paper_chaser_mcp"],
       "env": {
-        "SCHOLAR_SEARCH_ENABLE_CORE": "false",
-        "SCHOLAR_SEARCH_ENABLE_SEMANTIC_SCHOLAR": "true",
-        "SCHOLAR_SEARCH_ENABLE_ARXIV": "true"
+        "PAPER_CHASER_ENABLE_CORE": "false",
+        "PAPER_CHASER_ENABLE_SEMANTIC_SCHOLAR": "true",
+        "PAPER_CHASER_ENABLE_ARXIV": "true"
       }
     }
   }
@@ -177,15 +177,15 @@ The next example is also valid JSON. It enables all three search providers and s
 ```json
 {
   "mcpServers": {
-    "scholar-search": {
+    "paper-chaser": {
       "command": "python",
-      "args": ["-m", "scholar_search_mcp"],
+      "args": ["-m", "paper_chaser_mcp"],
       "env": {
         "CORE_API_KEY": "your-core-api-key-here",
         "SEMANTIC_SCHOLAR_API_KEY": "your-semantic-scholar-api-key-here",
-        "SCHOLAR_SEARCH_ENABLE_CORE": "true",
-        "SCHOLAR_SEARCH_ENABLE_SEMANTIC_SCHOLAR": "true",
-        "SCHOLAR_SEARCH_ENABLE_ARXIV": "true"
+        "PAPER_CHASER_ENABLE_CORE": "true",
+        "PAPER_CHASER_ENABLE_SEMANTIC_SCHOLAR": "true",
+        "PAPER_CHASER_ENABLE_ARXIV": "true"
       }
     }
   }
@@ -221,8 +221,8 @@ context.
 
 1. **Semantic Scholar** – Primary scholarly graph. Works without a key with lower limits; set `SEMANTIC_SCHOLAR_API_KEY` for higher limits.
 2. **arXiv** – Free preprint and recency fallback; no key required.
-3. **CORE API** – Disabled by default until explicitly enabled. Set `SCHOLAR_SEARCH_ENABLE_CORE=true` to include it in the broker. `CORE_API_KEY` is optional and raises limits when present.
-4. **SerpApi Google Scholar** – Optional paid recall-recovery provider, disabled by default. Enable with `SCHOLAR_SEARCH_ENABLE_SERPAPI=true` and set `SERPAPI_API_KEY`. See [SerpApi pricing](https://serpapi.com/pricing).
+3. **CORE API** – Disabled by default until explicitly enabled. Set `PAPER_CHASER_ENABLE_CORE=true` to include it in the broker. `CORE_API_KEY` is optional and raises limits when present.
+4. **SerpApi Google Scholar** – Optional paid recall-recovery provider, disabled by default. Enable with `PAPER_CHASER_ENABLE_SERPAPI=true` and set `SERPAPI_API_KEY`. See [SerpApi pricing](https://serpapi.com/pricing).
 
 OpenAlex remains an explicit provider surface rather than a default broker hop. Use the `*_openalex` tools for autocomplete, institution/source/topic pivots, or OpenAlex-native citation and author workflows.
 
@@ -230,10 +230,10 @@ OpenAlex remains an explicit provider surface rather than a default broker hop. 
 
 - set `preferredProvider` to try one provider first and then fall back through the rest of the configured chain
 - set `providerOrder` to override the provider chain for a single call (omitted providers are skipped for that request)
-- set `SCHOLAR_SEARCH_PROVIDER_ORDER` to override the default broker order for a deployment
+- set `PAPER_CHASER_PROVIDER_ORDER` to override the default broker order for a deployment
 - use `search_papers_core`, `search_papers_semantic_scholar`, `search_papers_serpapi`, or `search_papers_arxiv` for single-provider searches
 
-Provider names accepted in `preferredProvider`, `providerOrder`, and `SCHOLAR_SEARCH_PROVIDER_ORDER` are `core`, `semantic_scholar`, `arxiv`, and either `serpapi` or `serpapi_google_scholar`. Broker metadata continues to report the SerpApi provider as `serpapi_google_scholar`.
+Provider names accepted in `preferredProvider`, `providerOrder`, and `PAPER_CHASER_PROVIDER_ORDER` are `core`, `semantic_scholar`, `arxiv`, and either `serpapi` or `serpapi_google_scholar`. Broker metadata continues to report the SerpApi provider as `serpapi_google_scholar`.
 
 Every response includes a `brokerMetadata` field that makes this contract explicit:
 
@@ -311,11 +311,11 @@ Control which sources are used in the `search_papers` fallback chain via environ
 
 | Variable                                 | Default | Description                                                            |
 | ---------------------------------------- | ------- | ---------------------------------------------------------------------- |
-| `SCHOLAR_SEARCH_ENABLE_CORE`             | `false` | Use CORE API. Disabled by default until explicitly enabled.             |
-| `SCHOLAR_SEARCH_ENABLE_SEMANTIC_SCHOLAR` | `true`  | Use Semantic Scholar.                                                  |
-| `SCHOLAR_SEARCH_ENABLE_SERPAPI`          | `false` | Use SerpApi Google Scholar (opt-in, **paid**). Set `SERPAPI_API_KEY`.  |
-| `SCHOLAR_SEARCH_ENABLE_ARXIV`            | `true`  | Use arXiv as the default free fallback after Semantic Scholar.         |
-| `SCHOLAR_SEARCH_PROVIDER_ORDER`          | `semantic_scholar,arxiv,core,serpapi_google_scholar` | Comma-separated default broker order for `search_papers`. Omit a provider to remove it from the default broker chain. Accepts `serpapi` as a shorthand for `serpapi_google_scholar`. |
+| `PAPER_CHASER_ENABLE_CORE`             | `false` | Use CORE API. Disabled by default until explicitly enabled.             |
+| `PAPER_CHASER_ENABLE_SEMANTIC_SCHOLAR` | `true`  | Use Semantic Scholar.                                                  |
+| `PAPER_CHASER_ENABLE_SERPAPI`          | `false` | Use SerpApi Google Scholar (opt-in, **paid**). Set `SERPAPI_API_KEY`.  |
+| `PAPER_CHASER_ENABLE_ARXIV`            | `true`  | Use arXiv as the default free fallback after Semantic Scholar.         |
+| `PAPER_CHASER_PROVIDER_ORDER`          | `semantic_scholar,arxiv,core,serpapi_google_scholar` | Comma-separated default broker order for `search_papers`. Omit a provider to remove it from the default broker chain. Accepts `serpapi` as a shorthand for `serpapi_google_scholar`. |
 
 SerpApi is disabled by default to prevent unexpected costs. When enabled without an API key, affected tool calls return a clear error rather than silently failing.
 
@@ -325,7 +325,7 @@ Example: enable SerpApi as an additional coverage fallback:
 
 ```json
 "env": {
-  "SCHOLAR_SEARCH_ENABLE_SERPAPI": "true",
+  "PAPER_CHASER_ENABLE_SERPAPI": "true",
   "SERPAPI_API_KEY": "your-serpapi-key-here"
 }
 ```
@@ -335,7 +335,7 @@ Example: CORE and arXiv only (skip Semantic Scholar):
 
 ```json
 "env": {
-  "SCHOLAR_SEARCH_ENABLE_SEMANTIC_SCHOLAR": "false"
+  "PAPER_CHASER_ENABLE_SEMANTIC_SCHOLAR": "false"
 }
 ```
 
@@ -343,7 +343,7 @@ Example: prefer Semantic Scholar first, then arXiv for this deployment:
 
 ```json
 "env": {
-  "SCHOLAR_SEARCH_PROVIDER_ORDER": "semantic_scholar,arxiv"
+  "PAPER_CHASER_PROVIDER_ORDER": "semantic_scholar,arxiv"
 }
 ```
 
@@ -356,7 +356,7 @@ not require an API key, but you can configure them with:
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `SCHOLAR_SEARCH_ENABLE_OPENALEX` | `true` | Enable or disable the explicit OpenAlex tool family |
+| `PAPER_CHASER_ENABLE_OPENALEX` | `true` | Enable or disable the explicit OpenAlex tool family |
 | `OPENALEX_API_KEY` | unset | Optional OpenAlex premium API key |
 | `OPENALEX_MAILTO` | unset | Optional contact email for the OpenAlex polite pool; recommended for production use |
 
@@ -377,10 +377,10 @@ identifier.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `SCHOLAR_SEARCH_ENABLE_CROSSREF` | `true` | Enable explicit Crossref paper enrichment |
+| `PAPER_CHASER_ENABLE_CROSSREF` | `true` | Enable explicit Crossref paper enrichment |
 | `CROSSREF_MAILTO` | unset | Optional contact email included in Crossref requests and user agent metadata |
 | `CROSSREF_TIMEOUT_SECONDS` | `30` | Timeout for Crossref enrichment requests |
-| `SCHOLAR_SEARCH_ENABLE_UNPAYWALL` | `true` | Enable explicit Unpaywall OA enrichment |
+| `PAPER_CHASER_ENABLE_UNPAYWALL` | `true` | Enable explicit Unpaywall OA enrichment |
 | `UNPAYWALL_EMAIL` | unset | Required contact email for Unpaywall lookups |
 | `UNPAYWALL_TIMEOUT_SECONDS` | `30` | Timeout for Unpaywall enrichment requests |
 
@@ -401,7 +401,7 @@ Reports plus the species-profile JSON that powers the public ECOS species page.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `SCHOLAR_SEARCH_ENABLE_ECOS` | `true` | Enable or disable the ECOS species/document tool family |
+| `PAPER_CHASER_ENABLE_ECOS` | `true` | Enable or disable the ECOS species/document tool family |
 | `ECOS_BASE_URL` | `https://ecos.fws.gov` | Base URL for ECOS species, Pull Reports, and document links |
 | `ECOS_TIMEOUT_SECONDS` | `30` | Timeout for ECOS species/Pull Reports requests |
 | `ECOS_DOCUMENT_TIMEOUT_SECONDS` | `60` | Timeout for ECOS document fetches before Markdown conversion |
@@ -427,8 +427,8 @@ retrieval remains GovInfo-only.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `SCHOLAR_SEARCH_ENABLE_FEDERAL_REGISTER` | `true` | Enable or disable the Federal Register discovery tool family |
-| `SCHOLAR_SEARCH_ENABLE_GOVINFO_CFR` | `true` | Enable or disable GovInfo-backed Federal Register document and CFR retrieval |
+| `PAPER_CHASER_ENABLE_FEDERAL_REGISTER` | `true` | Enable or disable the Federal Register discovery tool family |
+| `PAPER_CHASER_ENABLE_GOVINFO_CFR` | `true` | Enable or disable GovInfo-backed Federal Register document and CFR retrieval |
 | `GOVINFO_API_KEY` | unset | Required for authoritative `get_federal_register_document` and `get_cfr_text` calls; without a key, Federal Register lookup falls back to FederalRegister.gov HTML for known document numbers |
 | `FEDERAL_REGISTER_TIMEOUT_SECONDS` | `30` | Timeout for FederalRegister.gov discovery requests |
 | `GOVINFO_TIMEOUT_SECONDS` | `30` | Timeout for GovInfo metadata and granule requests |
@@ -446,16 +446,16 @@ additive and opt-in.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `OPENAI_API_KEY` | unset | Optional API key for the OpenAI-backed smart layer. If the smart layer is enabled without a key, the runtime falls back to deterministic planning/synthesis helpers. |
-| `SCHOLAR_SEARCH_ENABLE_AGENTIC` | `false` | Enable additive smart tools such as `search_papers_smart`. |
-| `SCHOLAR_SEARCH_AGENTIC_PROVIDER` | `openai` | Provider bundle for the smart layer. Current supported values are `openai` and `deterministic`. |
-| `SCHOLAR_SEARCH_PLANNER_MODEL` | `gpt-5.4-mini` | Planning / routing model for smart discovery. Lower-latency GPT-5.4 tier for query analysis and routing. |
-| `SCHOLAR_SEARCH_SYNTHESIS_MODEL` | `gpt-5.4` | Synthesis model for grounded answers and theme labeling. |
-| `SCHOLAR_SEARCH_EMBEDDING_MODEL` | `text-embedding-3-large` | Embedding model name for smart ranking/indexing metadata. |
-| `SCHOLAR_SEARCH_DISABLE_EMBEDDINGS` | `true` | Disable all embedding generation and embedding-based similarity paths. Smart workflows fall back to lexical scoring, and FAISS-backed workspace indexing is effectively disabled even if selected. |
-| `SCHOLAR_SEARCH_AGENTIC_OPENAI_TIMEOUT_SECONDS` | `30` | Client-side timeout for OpenAI-backed smart-layer requests. Keeps planner, synthesis, and embedding calls from hanging on the critical path for minutes before degrading to deterministic or lexical fallbacks. |
-| `SCHOLAR_SEARCH_AGENTIC_INDEX_BACKEND` | `memory` | Workspace index backend. `memory` is the recommended default for the current small saved result sets; `faiss` is an optional upgrade when the `ai-faiss` extra is installed and the deployment image includes it. |
-| `SCHOLAR_SEARCH_SESSION_TTL_SECONDS` | `1800` | TTL for cached reusable `searchSessionId` result sets. |
-| `SCHOLAR_SEARCH_ENABLE_AGENTIC_TRACE_LOG` | `false` | Emit local JSONL-style trace events for smart workflows. |
+| `PAPER_CHASER_ENABLE_AGENTIC` | `false` | Enable additive smart tools such as `search_papers_smart`. |
+| `PAPER_CHASER_AGENTIC_PROVIDER` | `openai` | Provider bundle for the smart layer. Current supported values are `openai` and `deterministic`. |
+| `PAPER_CHASER_PLANNER_MODEL` | `gpt-5.4-mini` | Planning / routing model for smart discovery. Lower-latency GPT-5.4 tier for query analysis and routing. |
+| `PAPER_CHASER_SYNTHESIS_MODEL` | `gpt-5.4` | Synthesis model for grounded answers and theme labeling. |
+| `PAPER_CHASER_EMBEDDING_MODEL` | `text-embedding-3-large` | Embedding model name for smart ranking/indexing metadata. |
+| `PAPER_CHASER_DISABLE_EMBEDDINGS` | `true` | Disable all embedding generation and embedding-based similarity paths. Smart workflows fall back to lexical scoring, and FAISS-backed workspace indexing is effectively disabled even if selected. |
+| `PAPER_CHASER_AGENTIC_OPENAI_TIMEOUT_SECONDS` | `30` | Client-side timeout for OpenAI-backed smart-layer requests. Keeps planner, synthesis, and embedding calls from hanging on the critical path for minutes before degrading to deterministic or lexical fallbacks. |
+| `PAPER_CHASER_AGENTIC_INDEX_BACKEND` | `memory` | Workspace index backend. `memory` is the recommended default for the current small saved result sets; `faiss` is an optional upgrade when the `ai-faiss` extra is installed and the deployment image includes it. |
+| `PAPER_CHASER_SESSION_TTL_SECONDS` | `1800` | TTL for cached reusable `searchSessionId` result sets. |
+| `PAPER_CHASER_ENABLE_AGENTIC_TRACE_LOG` | `false` | Emit local JSONL-style trace events for smart workflows. |
 
 When the smart layer is enabled, the new tools are:
 
@@ -473,13 +473,13 @@ The server defaults to local **stdio** transport, which is the recommended mode 
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `SCHOLAR_SEARCH_TRANSPORT` | `stdio` | One of `stdio`, `http`, `streamable-http`, or `sse` |
-| `SCHOLAR_SEARCH_HTTP_HOST` | `127.0.0.1` | Host to bind when using an HTTP transport |
-| `SCHOLAR_SEARCH_HTTP_PORT` | `8000` | Port to bind when using an HTTP transport |
-| `SCHOLAR_SEARCH_HTTP_PATH` | `/mcp` | MCP endpoint path when using an HTTP transport |
-| `SCHOLAR_SEARCH_HTTP_AUTH_TOKEN` | unset | Optional shared token required by the deployment wrapper for requests to the MCP endpoint |
-| `SCHOLAR_SEARCH_HTTP_AUTH_HEADER` | `authorization` | Header name checked by the deployment wrapper; `authorization` expects `Bearer <token>` |
-| `SCHOLAR_SEARCH_ALLOWED_ORIGINS` | unset | Optional comma-separated Origin allowlist enforced by the deployment wrapper |
+| `PAPER_CHASER_TRANSPORT` | `stdio` | One of `stdio`, `http`, `streamable-http`, or `sse` |
+| `PAPER_CHASER_HTTP_HOST` | `127.0.0.1` | Host to bind when using an HTTP transport |
+| `PAPER_CHASER_HTTP_PORT` | `8000` | Port to bind when using an HTTP transport |
+| `PAPER_CHASER_HTTP_PATH` | `/mcp` | MCP endpoint path when using an HTTP transport |
+| `PAPER_CHASER_HTTP_AUTH_TOKEN` | unset | Optional shared token required by the deployment wrapper for requests to the MCP endpoint |
+| `PAPER_CHASER_HTTP_AUTH_HEADER` | `authorization` | Header name checked by the deployment wrapper; `authorization` expects `Bearer <token>` |
+| `PAPER_CHASER_ALLOWED_ORIGINS` | unset | Optional comma-separated Origin allowlist enforced by the deployment wrapper |
 
 > [!IMPORTANT]
 > HTTP transport compatibility is available, but this repository does **not**
@@ -489,11 +489,11 @@ The server defaults to local **stdio** transport, which is the recommended mode 
 > confirmed via Context7: servers must validate `Origin` and should implement
 > authentication for HTTP transports.
 
-Use `scholar_search_mcp.server.build_http_app(...)` if you need to inject
+Use `paper_chaser_mcp.server.build_http_app(...)` if you need to inject
 deployment-specific Starlette middleware around the FastMCP ASGI app.
 
 For private Azure hosting, this repository also ships
-`scholar_search_mcp.deployment:app`, an ASGI wrapper that adds `/healthz`,
+`paper_chaser_mcp.deployment:app`, an ASGI wrapper that adds `/healthz`,
 optional shared-token authentication, and optional Origin allowlisting in front
 of the MCP app. The Azure deployment scaffold in [docs/azure-deployment.md](docs/azure-deployment.md)
 uses that wrapper behind private Azure API Management and private endpoints so
@@ -504,10 +504,10 @@ first-time environment bring-up before the `full` private-runner deployment.
 Example local/integration HTTP run:
 
 ```bash
-SCHOLAR_SEARCH_TRANSPORT=streamable-http \
-SCHOLAR_SEARCH_HTTP_HOST=0.0.0.0 \
-SCHOLAR_SEARCH_HTTP_PORT=8000 \
-python -m scholar_search_mcp
+PAPER_CHASER_TRANSPORT=streamable-http \
+PAPER_CHASER_HTTP_HOST=0.0.0.0 \
+PAPER_CHASER_HTTP_PORT=8000 \
+python -m paper_chaser_mcp
 ```
 
 That path serves the FastMCP app directly over streamable HTTP at
@@ -518,15 +518,15 @@ If you want local parity with the HTTP wrapper used by Compose and Azure,
 run:
 
 ```bash
-PORT=8000 SCHOLAR_SEARCH_HTTP_HOST=127.0.0.1 scholar-search-mcp deployment-http
+PORT=8000 PAPER_CHASER_HTTP_HOST=127.0.0.1 paper-chaser-mcp deployment-http
 ```
 
-`scholar-search-mcp deployment-http` launches the same
-`scholar_search_mcp.deployment:app` wrapper used by hosted HTTP deployments.
+`paper-chaser-mcp deployment-http` launches the same
+`paper_chaser_mcp.deployment:app` wrapper used by hosted HTTP deployments.
 It prefers `PORT` when it is set, and otherwise falls back to
-`SCHOLAR_SEARCH_HTTP_PORT`. That wrapper keeps the same streamable HTTP MCP
+`PAPER_CHASER_HTTP_PORT`. That wrapper keeps the same streamable HTTP MCP
 transport, adds `/healthz`, and optionally enforces
-`SCHOLAR_SEARCH_HTTP_AUTH_TOKEN` and `SCHOLAR_SEARCH_ALLOWED_ORIGINS` for
+`PAPER_CHASER_HTTP_AUTH_TOKEN` and `PAPER_CHASER_ALLOWED_ORIGINS` for
 `/mcp`.
 
 In all of these local HTTP modes, clients talk only to your local MCP endpoint.
@@ -539,17 +539,17 @@ optional paid providers such as SerpApi.
 ### Docker MCP package (stdio)
 
 For local MCP clients that launch servers as subprocesses, use the image in
-stdio mode. For unpublished local iteration, build and run `scholar-search-mcp:local`.
+stdio mode. For unpublished local iteration, build and run `paper-chaser-mcp:local`.
 For the reusable public package, use the published GHCR tag:
 
 ```bash
-docker run --rm -i ghcr.io/joshuasundance-swca/scholar-search-mcp:latest
+docker run --rm -i ghcr.io/joshuasundance-swca/paper-chaser-mcp:latest
 ```
 
 For a locally built image:
 
 ```bash
-docker run --rm -i scholar-search-mcp:local
+docker run --rm -i paper-chaser-mcp:local
 ```
 
 A Docker-backed MCP client entry typically looks like:
@@ -557,9 +557,9 @@ A Docker-backed MCP client entry typically looks like:
 ```json
 {
   "mcpServers": {
-    "scholar-search": {
+    "paper-chaser": {
       "command": "docker",
-      "args": ["run", "--rm", "-i", "ghcr.io/joshuasundance-swca/scholar-search-mcp:latest"]
+      "args": ["run", "--rm", "-i", "ghcr.io/joshuasundance-swca/paper-chaser-mcp:latest"]
     }
   }
 }
@@ -606,12 +606,12 @@ The service listens on `http://127.0.0.1:8000` by default, serves
 curl http://127.0.0.1:8000/healthz
 ```
 
-If you set `SCHOLAR_SEARCH_HTTP_AUTH_TOKEN` and leave
-`SCHOLAR_SEARCH_HTTP_AUTH_HEADER=authorization`, the deployment wrapper expects
+If you set `PAPER_CHASER_HTTP_AUTH_TOKEN` and leave
+`PAPER_CHASER_HTTP_AUTH_HEADER=authorization`, the deployment wrapper expects
 `Authorization: Bearer <token>` on `/mcp`. The checked-in Azure scaffold
 overrides the header name to `x-backend-auth` and has API Management inject
 that header for backend-only traffic. The published host defaults to
-`127.0.0.1`; only change `SCHOLAR_SEARCH_PUBLISHED_HOST` when you intentionally
+`127.0.0.1`; only change `PAPER_CHASER_PUBLISHED_HOST` when you intentionally
 want the container reachable beyond the local machine.
 
 If you leave the provider key fields blank, local clients still work. The
@@ -639,14 +639,14 @@ session token that Inspector prints on startup.
 
 Inside Inspector, connect using Streamable HTTP and set:
 
-- URL: `http://scholar-search-mcp:8080/mcp`
+- URL: `http://paper-chaser-mcp:8080/mcp`
 - Transport: `streamable-http`
 
 `compose.inspector.yaml` accepts `IMAGE` overrides, so you can test a specific
 tag without editing files:
 
 ```bash
-IMAGE=ghcr.io/joshuasundance-swca/scholar-search-mcp:latest docker compose -f compose.inspector.yaml up
+IMAGE=ghcr.io/joshuasundance-swca/paper-chaser-mcp:latest docker compose -f compose.inspector.yaml up
 ```
 
 ## Tools
@@ -768,13 +768,13 @@ California least tern is a representative end-to-end ECOS flow:
 
 ## Resources and prompts
 
-- Resource: `guide://scholar-search/agent-workflows` - compact onboarding guide for choosing tools and following pagination safely
+- Resource: `guide://paper-chaser/agent-workflows` - compact onboarding guide for choosing tools and following pagination safely
 - Resource: `paper://{paper_id}` - compact markdown + structured payload for a resolved paper
 - Resource: `author://{author_id}` - compact markdown + structured payload for a resolved author
 - Resource: `search://{searchSessionId}` - saved result set surfaced from tool outputs
 - Resource: `trail://paper/{paper_id}?direction=citations|references` - compact citation/reference trail resource
-- Prompt: `plan_scholar_search` - reusable planning prompt for raw-vs-smart literature-search workflows
-- Prompt: `plan_smart_scholar_search` - smart-tool-first planning prompt for concept discovery
+- Prompt: `plan_paper_chaser_search` - reusable planning prompt for raw-vs-smart literature-search workflows
+- Prompt: `plan_smart_paper_chaser_search` - smart-tool-first planning prompt for concept discovery
 - Prompt: `triage_literature` - compact triage workflow for theme mapping and next-step selection
 - Prompt: `plan_citation_chase` - citation-expansion planning prompt
 - Prompt: `refine_query` - bounded query-refinement prompt for broad or noisy searches
@@ -814,7 +814,7 @@ If you prefer a host-installed Inspector, you can still run:
 
 ```bash
 npm install -g @modelcontextprotocol/inspector
-mcp-inspector python -m scholar_search_mcp
+mcp-inspector python -m paper_chaser_mcp
 ```
 
 ## Development
@@ -841,10 +841,10 @@ thorough local pass, run:
 ```bash
 python -m pip check
 pre-commit run --all-files
-python -m pytest --cov=scholar_search_mcp --cov-report=term-missing --cov-fail-under=85
+python -m pytest --cov=paper_chaser_mcp --cov-report=term-missing --cov-fail-under=85
 python -m mypy --config-file pyproject.toml
 python -m ruff check .
-python -m bandit -c pyproject.toml -r scholar_search_mcp
+python -m bandit -c pyproject.toml -r paper_chaser_mcp
 python -m build
 python -m pip_audit . --progress-spinner off
 ```
@@ -866,24 +866,24 @@ For parity with the `Deploy Azure` workflow's full deployment validation path,
 run:
 
 ```bash
-python scripts/validate_deployment.py --require-az --require-docker --image-tag scholar-search-mcp:ci-validate
+python scripts/validate_deployment.py --require-az --require-docker --image-tag paper-chaser-mcp:ci-validate
 ```
 
 ### GitHub Agentic Workflow smoke test
 
 The repository now includes an agentic regression workflow source at
-`.github/workflows/test-scholar-search.md` and its compiled lock file at
-`.github/workflows/test-scholar-search.lock.yml`. After editing the Markdown
+`.github/workflows/test-paper-chaser.md` and its compiled lock file at
+`.github/workflows/test-paper-chaser.lock.yml`. After editing the Markdown
 workflow, recompile it and then run the normal validation stack so pre-commit
 can normalize the generated lock file:
 
 ```bash
-gh aw compile test-scholar-search --dir .github/workflows
+gh aw compile test-paper-chaser --dir .github/workflows
 ```
 
 What this workflow does:
 
-- Runs the agent against the local `scholar-search` MCP server inside GitHub
+- Runs the agent against the local `paper-chaser` MCP server inside GitHub
   Actions. Set the `GH_AW_MODEL_AGENT_COPILOT` Actions variable to `gpt-5.4`
   (or another model) to control which model is used.
 - Exercises the primary golden paths instead of every tool: quick discovery,
@@ -904,8 +904,8 @@ What this workflow does:
 
 How it runs in GitHub:
 
-- The editable source of truth is `.github/workflows/test-scholar-search.md`.
-- `gh aw compile ...` generates `.github/workflows/test-scholar-search.lock.yml`,
+- The editable source of truth is `.github/workflows/test-paper-chaser.md`.
+- `gh aw compile ...` generates `.github/workflows/test-paper-chaser.lock.yml`,
   which is the Actions workflow file GitHub actually runs.
 - Once both files are committed to the default branch and the required secrets
   are configured, maintainers run the workflow manually with
@@ -926,12 +926,12 @@ Required secrets and variables for this workflow:
 
 How to update and use it:
 
-1. Edit `.github/workflows/test-scholar-search.md`.
-2. Recompile it with `gh aw compile test-scholar-search --dir .github/workflows`.
+1. Edit `.github/workflows/test-paper-chaser.md`.
+2. Recompile it with `gh aw compile test-paper-chaser --dir .github/workflows`.
 3. Run the normal validation stack so pre-commit can normalize the generated
    lock file.
 4. Commit both the `.md` source and `.lock.yml` output together.
-5. Push the branch, then run `Test Scholar Search MCP` from the GitHub Actions
+5. Push the branch, then run `Test Paper Chaser MCP` from the GitHub Actions
    UI. For on-demand UX reviews, use `workflow_dispatch` inputs to choose the
    run mode and provide an optional focus prompt such as a new feature, a
    provider-specific flow, or a confusing agent interaction to probe.
@@ -940,7 +940,7 @@ The repository also includes `.github/workflows/agentic-assign.yml`, a
 lightweight workflow that automatically assigns GitHub Copilot to any issue
 labeled both `agentic` and `needs-copilot`, unless the issue also carries
 `needs-human`, `blocked`, or `no-agent`. It listens to direct `issues` events
-and to completed `Test Scholar Search MCP` runs so verifier-created issues still
+and to completed `Test Paper Chaser MCP` runs so verifier-created issues still
 get assigned even when the original issue event does not fan out into a second
 workflow run. For the actual Copilot assignment API call it prefers
 `GH_AW_GITHUB_TOKEN`, then falls back to `COPILOT_GITHUB_TOKEN`, then to the
@@ -948,8 +948,8 @@ default Actions token. This avoids 403 failures on repositories where the
 default `GITHUB_TOKEN` cannot perform Copilot issue assignment even though the
 workflow has `issues: write` permissions.
 
-The normal `Validate` workflow now also recompiles `test-scholar-search.md` on
-CI and fails if `.github/workflows/test-scholar-search.lock.yml` is stale, so
+The normal `Validate` workflow now also recompiles `test-paper-chaser.md` on
+CI and fails if `.github/workflows/test-paper-chaser.lock.yml` is stale, so
 pull requests cannot silently drift out of sync.
 
 See [SECURITY.md](SECURITY.md) for the public-repo security posture and the
@@ -977,13 +977,13 @@ The development extras now include `pytest`, `pytest-asyncio`, `pytest-cov`,
 
 GitHub dependency automation is configured for both Python packages and GitHub Actions via Dependabot, with pull requests checked by the dependency review workflow.
 
-For maintainer orientation after the module split, start with `docs/agent-handoff.md`. The public MCP surface stays in `scholar_search_mcp/server.py`, while implementation now lives in `scholar_search_mcp/dispatch.py`, `scholar_search_mcp/search.py`, `scholar_search_mcp/tools.py`, `scholar_search_mcp/runtime.py`, `scholar_search_mcp/models/`, and provider subpackages under `scholar_search_mcp/clients/`.
+For maintainer orientation after the module split, start with `docs/agent-handoff.md`. The public MCP surface stays in `paper_chaser_mcp/server.py`, while implementation now lives in `paper_chaser_mcp/dispatch.py`, `paper_chaser_mcp/search.py`, `paper_chaser_mcp/tools.py`, `paper_chaser_mcp/runtime.py`, `paper_chaser_mcp/models/`, and provider subpackages under `paper_chaser_mcp/clients/`.
 
 ## Guides
 
 - [GitHub Copilot Instructions](.github/copilot-instructions.md) - repo-specific guidance for GitHub Copilot and the GitHub cloud coding agent, including workflow defaults and durable planning expectations.
 - [Agent Handoff](docs/agent-handoff.md) - current repo status, validation commands, and next recommended work for follow-on agents.
-- [Scholar Search Golden Paths](docs/golden-paths.md) - primary personas, workflow defaults, success signals, and future workflow-oriented follow-up work.
+- [Paper Chaser Golden Paths](docs/golden-paths.md) - primary personas, workflow defaults, success signals, and future workflow-oriented follow-up work.
 - [Azure Deployment](docs/azure-deployment.md) - deployment modes, required secrets and variables, and validation paths for the private Azure rollout.
 - [Azure Architecture](docs/azure-architecture.md) - trust boundaries, runtime topology, and credential separation for the Azure scaffold.
 - [Azure Security Model](docs/azure-security-model.md) - credential classes, Key Vault usage, and backend-auth separation in the Azure rollout.

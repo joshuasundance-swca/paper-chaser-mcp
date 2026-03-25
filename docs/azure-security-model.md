@@ -27,7 +27,7 @@ This is the credential APIM uses when it forwards traffic to the actual Containe
   before forwarding traffic to FastMCP
 
 The deployment wrapper itself supports a configurable header name via
-`SCHOLAR_SEARCH_HTTP_AUTH_HEADER` and defaults to `authorization` when you do
+`PAPER_CHASER_HTTP_AUTH_HEADER` and defaults to `authorization` when you do
 not override it. The Azure scaffold intentionally sets that value to
 `x-backend-auth` so backend gateway credentials stay separate from
 client-facing authorization headers.

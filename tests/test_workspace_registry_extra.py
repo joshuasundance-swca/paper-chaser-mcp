@@ -6,8 +6,8 @@ from typing import Any
 
 import pytest
 
-from scholar_search_mcp.agentic import workspace as workspace_module
-from scholar_search_mcp.agentic.workspace import (
+from paper_chaser_mcp.agentic import workspace as workspace_module
+from paper_chaser_mcp.agentic.workspace import (
     ExpiredSearchSessionError,
     IndexedPaper,
     SearchSessionNotFoundError,
@@ -189,7 +189,7 @@ def _install_fake_langchain_modules(
 def test_workspace_registry_renders_resources_and_tracks_entities(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    caplog.set_level(logging.INFO, logger="scholar-search-mcp")
+    caplog.set_level(logging.INFO, logger="paper-chaser-mcp")
 
     registry = WorkspaceRegistry(ttl_seconds=1800, enable_trace_log=True)
     record = registry.save_result_set(

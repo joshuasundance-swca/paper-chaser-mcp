@@ -5,7 +5,7 @@ import types
 
 import pytest
 
-from scholar_search_mcp.document_markdown import DocumentMarkdownConverter
+from paper_chaser_mcp.document_markdown import DocumentMarkdownConverter
 
 
 def test_document_markdown_converter_extracts_html_without_markitdown(

@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from scholar_search_mcp import server
-from scholar_search_mcp.provider_runtime import ProviderDiagnosticsRegistry
+from paper_chaser_mcp import server
+from paper_chaser_mcp.provider_runtime import ProviderDiagnosticsRegistry
 from tests.helpers import DummyResponse, DummySerpApiAsyncClient
 
 
@@ -14,7 +14,7 @@ def _reset_provider_registry(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_serpapi_normalize_organic_result_minimal() -> None:
     """Minimal valid organic result should normalize to a Paper dict."""
-    from scholar_search_mcp.clients.serpapi.normalize import normalize_organic_result
+    from paper_chaser_mcp.clients.serpapi.normalize import normalize_organic_result
 
     result = {
         "title": "Attention Is All You Need",
@@ -54,7 +54,7 @@ def test_serpapi_normalize_organic_result_minimal() -> None:
 
 def test_serpapi_normalize_extracts_doi_canonical_id() -> None:
     """When a DOI is present in the URL, it should be used as canonicalId."""
-    from scholar_search_mcp.clients.serpapi.normalize import normalize_organic_result
+    from paper_chaser_mcp.clients.serpapi.normalize import normalize_organic_result
 
     result = {
         "title": "DOI Paper",
@@ -74,7 +74,7 @@ def test_serpapi_normalize_extracts_doi_canonical_id() -> None:
 
 def test_serpapi_normalize_returns_none_for_missing_title() -> None:
     """Results without a title must be silently dropped."""
-    from scholar_search_mcp.clients.serpapi.normalize import normalize_organic_result
+    from paper_chaser_mcp.clients.serpapi.normalize import normalize_organic_result
 
     assert normalize_organic_result({}) is None
     assert normalize_organic_result({"title": "", "result_id": "x"}) is None
@@ -82,7 +82,7 @@ def test_serpapi_normalize_returns_none_for_missing_title() -> None:
 
 def test_serpapi_normalize_pdf_url_from_resources() -> None:
     """PDF URL should be extracted from the resources list when available."""
-    from scholar_search_mcp.clients.serpapi.normalize import normalize_organic_result
+    from paper_chaser_mcp.clients.serpapi.normalize import normalize_organic_result
 
     result = {
         "title": "PDF Paper",
@@ -105,7 +105,7 @@ def test_serpapi_normalize_pdf_url_from_resources() -> None:
 
 def test_serpapi_normalize_year_range_parser() -> None:
     """_parse_year_range must correctly handle all expected input formats."""
-    from scholar_search_mcp.clients.serpapi.normalize import _parse_year_range
+    from paper_chaser_mcp.clients.serpapi.normalize import _parse_year_range
 
     assert _parse_year_range("2023") == (2023, 2023)
     assert _parse_year_range("2020-2023") == (2020, 2023)
@@ -120,7 +120,7 @@ def test_serpapi_normalize_year_range_parser() -> None:
 
 def test_serpapi_normalize_source_id_fallback_chain() -> None:
     """sourceId must follow result_id > cluster_id > cites_id priority."""
-    from scholar_search_mcp.clients.serpapi.normalize import normalize_organic_result
+    from paper_chaser_mcp.clients.serpapi.normalize import normalize_organic_result
 
     # Only cites_id available
     paper = normalize_organic_result(
@@ -151,7 +151,7 @@ async def test_serpapi_client_raises_key_missing_error_without_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Client must raise SerpApiKeyMissingError immediately if no key is set."""
-    from scholar_search_mcp.clients.serpapi import (
+    from paper_chaser_mcp.clients.serpapi import (
         SerpApiKeyMissingError,
         SerpApiScholarClient,
     )
@@ -167,7 +167,7 @@ async def test_serpapi_client_raises_quota_error_on_429(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """SerpApiQuotaError must be raised for HTTP 429 responses."""
-    from scholar_search_mcp.clients.serpapi import (
+    from paper_chaser_mcp.clients.serpapi import (
         SerpApiQuotaError,
         SerpApiScholarClient,
     )
@@ -185,7 +185,7 @@ async def test_serpapi_client_raises_upstream_error_on_5xx(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """SerpApiUpstreamError must be raised for HTTP 5xx responses."""
-    from scholar_search_mcp.clients.serpapi import (
+    from paper_chaser_mcp.clients.serpapi import (
         SerpApiScholarClient,
         SerpApiUpstreamError,
     )
@@ -203,7 +203,7 @@ async def test_serpapi_client_raises_key_error_for_application_auth_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Application-level SerpApi auth errors must raise SerpApiKeyMissingError."""
-    from scholar_search_mcp.clients.serpapi import (
+    from paper_chaser_mcp.clients.serpapi import (
         SerpApiKeyMissingError,
         SerpApiScholarClient,
     )
@@ -221,7 +221,7 @@ async def test_serpapi_client_search_returns_normalized_papers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A successful SerpApi search must return a list of normalized paper dicts."""
-    from scholar_search_mcp.clients.serpapi import SerpApiScholarClient
+    from paper_chaser_mcp.clients.serpapi import SerpApiScholarClient
 
     serpapi_payload = {
         "organic_results": [
@@ -261,8 +261,8 @@ async def test_serpapi_client_get_account_status_sanitizes_secret_like_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Account status must expose only the public allowlisted quota fields."""
-    from scholar_search_mcp.clients.serpapi import SerpApiScholarClient
-    from scholar_search_mcp.clients.serpapi import client as serpapi_client_module
+    from paper_chaser_mcp.clients.serpapi import SerpApiScholarClient
+    from paper_chaser_mcp.clients.serpapi import client as serpapi_client_module
 
     serpapi_payload = {
         "account_id": "acct-123",
@@ -306,7 +306,7 @@ async def test_serpapi_client_search_with_year_range(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Year range should be translated to as_ylo/as_yhi in the request params."""
-    from scholar_search_mcp.clients.serpapi import SerpApiScholarClient
+    from paper_chaser_mcp.clients.serpapi import SerpApiScholarClient
 
     captured_params: list[dict] = []
 
@@ -338,7 +338,7 @@ async def test_serpapi_client_get_citation_formats_returns_structured_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """get_citation_formats must return the raw SerpApi response dict."""
-    from scholar_search_mcp.clients.serpapi import SerpApiScholarClient
+    from paper_chaser_mcp.clients.serpapi import SerpApiScholarClient
 
     cite_payload = {
         "citations": [
@@ -362,7 +362,7 @@ async def test_serpapi_client_get_citation_formats_returns_structured_response(
 @pytest.mark.asyncio
 async def test_serpapi_client_get_citation_formats_rejects_empty_result_id() -> None:
     """Empty result_id must raise ValueError before any HTTP call."""
-    from scholar_search_mcp.clients.serpapi import SerpApiScholarClient
+    from paper_chaser_mcp.clients.serpapi import SerpApiScholarClient
 
     client = SerpApiScholarClient(api_key="test-key")
 
@@ -580,7 +580,7 @@ async def test_search_papers_serpapi_broker_metadata(
 
 def test_serpapi_paper_provenance_fields_correct() -> None:
     """SerpApi results must carry source, sourceId, canonicalId."""
-    from scholar_search_mcp.clients.serpapi.normalize import normalize_organic_result
+    from paper_chaser_mcp.clients.serpapi.normalize import normalize_organic_result
 
     result = {
         "title": "Provenance Test Paper",
@@ -599,7 +599,7 @@ def test_serpapi_paper_provenance_fields_correct() -> None:
 
 def test_serpapi_paper_canonical_id_falls_back_to_cluster_id() -> None:
     """When no DOI is available, cluster_id is the canonicalId."""
-    from scholar_search_mcp.clients.serpapi.normalize import normalize_organic_result
+    from paper_chaser_mcp.clients.serpapi.normalize import normalize_organic_result
 
     result = {
         "title": "No DOI Paper",
@@ -622,7 +622,7 @@ async def test_call_tool_get_citation_formats_requires_serpapi_enabled(
     """get_paper_citation_formats must raise when SerpApi is disabled."""
     monkeypatch.setattr(server, "enable_serpapi", False)
 
-    with pytest.raises(ValueError, match="SCHOLAR_SEARCH_ENABLE_SERPAPI"):
+    with pytest.raises(ValueError, match="PAPER_CHASER_ENABLE_SERPAPI"):
         await server.call_tool("get_paper_citation_formats", {"result_id": "abc123"})
 
 
@@ -670,7 +670,7 @@ async def test_call_tool_get_citation_formats_propagates_key_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """SerpApiKeyMissingError from the client must propagate through dispatch."""
-    from scholar_search_mcp.clients.serpapi import (
+    from paper_chaser_mcp.clients.serpapi import (
         SerpApiKeyMissingError,
         SerpApiScholarClient,
     )
@@ -692,7 +692,7 @@ async def test_search_papers_raises_when_serpapi_enabled_without_key(
     an actionable error rather than silently getting arXiv results that the
     agent cannot correlate with the configured provider.
     """
-    from scholar_search_mcp.clients.serpapi import (
+    from paper_chaser_mcp.clients.serpapi import (
         SerpApiKeyMissingError,
         SerpApiScholarClient,
     )
@@ -742,7 +742,7 @@ async def test_search_papers_serpapi_transient_error_still_falls_back_to_arxiv(
     Only config/auth errors should bubble; all other failures continue the
     normal fallback chain.
     """
-    from scholar_search_mcp.clients.serpapi import (
+    from paper_chaser_mcp.clients.serpapi import (
         SerpApiUpstreamError,
     )
 
@@ -783,7 +783,7 @@ async def test_search_papers_serpapi_transient_error_still_falls_back_to_arxiv(
 
 def test_serpapi_normalize_scholar_result_id_preserved_as_extra() -> None:
     """scholarResultId extra must always be the raw result_id, never cluster_id."""
-    from scholar_search_mcp.clients.serpapi.normalize import normalize_organic_result
+    from paper_chaser_mcp.clients.serpapi.normalize import normalize_organic_result
 
     # result_id present: scholarResultId == result_id, sourceId == result_id
     paper = normalize_organic_result(
@@ -816,7 +816,7 @@ def test_serpapi_normalize_source_id_not_same_as_result_id_when_absent() -> None
     This confirms the contract: agents MUST use scholarResultId (not sourceId)
     when calling get_paper_citation_formats.
     """
-    from scholar_search_mcp.clients.serpapi.normalize import normalize_organic_result
+    from paper_chaser_mcp.clients.serpapi.normalize import normalize_organic_result
 
     paper = normalize_organic_result(
         {
@@ -873,7 +873,7 @@ async def test_search_papers_serpapi_all_provenance_fields_in_response(
     and scholarCitesId are all present in the call_tool response when SerpApi is the
     provider — not just in normalize_organic_result unit tests.
     """
-    from scholar_search_mcp.clients.serpapi.normalize import normalize_organic_result
+    from paper_chaser_mcp.clients.serpapi.normalize import normalize_organic_result
 
     # Build a normalized result the same way the real client does
     normalized = normalize_organic_result(
@@ -984,7 +984,7 @@ async def test_search_papers_serpapi_quota_error_falls_back_to_arxiv(
     Quota exhaustion is a transient operational state, not a config/auth error;
     arXiv must still be tried so the user gets useful results.
     """
-    from scholar_search_mcp.clients.serpapi import SerpApiQuotaError
+    from paper_chaser_mcp.clients.serpapi import SerpApiQuotaError
 
     class QuotaSerpApiClient:
         async def search(self, **kwargs) -> list[dict]:

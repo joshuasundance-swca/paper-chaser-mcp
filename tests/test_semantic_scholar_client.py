@@ -1,7 +1,7 @@
 import pytest
 
-from scholar_search_mcp import server
-from scholar_search_mcp.transport import httpx
+from paper_chaser_mcp import server
+from paper_chaser_mcp.transport import httpx
 from tests.helpers import DummyAsyncClient, DummyResponse
 
 
@@ -66,7 +66,7 @@ async def test_semantic_scholar_rate_limiter_paces_requests(
     monkeypatch.setattr(server.httpx, "AsyncClient", lambda timeout: dummy_client)
     monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
     monkeypatch.setattr(
-        "scholar_search_mcp.clients.semantic_scholar.client.time.monotonic",
+        "paper_chaser_mcp.clients.semantic_scholar.client.time.monotonic",
         fake_monotonic,
     )
 
@@ -400,7 +400,7 @@ async def test_search_papers_bulk_400_with_custom_fields_retries_with_defaults(
     assert result["fieldsDropped"] is True
     assert "default field set" in result["message"]
     # First attempt used the custom fields; retry used DEFAULT_PAPER_FIELDS.
-    from scholar_search_mcp.constants import DEFAULT_PAPER_FIELDS
+    from paper_chaser_mcp.constants import DEFAULT_PAPER_FIELDS
 
     assert set(captured_params[0]["fields"].split(",")) == {"paperId", "title", "tldr"}
     assert set(captured_params[1]["fields"].split(",")) == set(DEFAULT_PAPER_FIELDS)

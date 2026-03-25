@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from scholar_search_mcp.agentic import WorkspaceRegistry
-from scholar_search_mcp.dispatch import dispatch_tool
+from paper_chaser_mcp.agentic import WorkspaceRegistry
+from paper_chaser_mcp.dispatch import dispatch_tool
 from tests.helpers import RecordingOpenAlexClient, RecordingSemanticClient
 
 

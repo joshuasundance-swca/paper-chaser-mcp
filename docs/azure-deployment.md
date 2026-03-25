@@ -1,6 +1,6 @@
 # Azure Deployment
 
-This guide describes how to deploy the Scholar Search MCP server to Azure with
+This guide describes how to deploy the Paper Chaser MCP server to Azure with
 private ingress, private secret access, and a private delivery path. The
 tracked workflow supports a two-phase rollout: a GitHub-hosted bootstrap for
 control-plane infrastructure, then a private-runner full deployment for image
@@ -25,12 +25,12 @@ build/push, workload rollout, and smoke testing.
 The Azure Container App should explicitly run:
 
 ```text
-scholar-search-mcp deployment-http
+paper-chaser-mcp deployment-http
 ```
 
-`scholar-search-mcp deployment-http` launches the
-`scholar_search_mcp.deployment:app` wrapper, binds to `PORT` when the platform
-provides it, and otherwise falls back to `SCHOLAR_SEARCH_HTTP_PORT` (default
+`paper-chaser-mcp deployment-http` launches the
+`paper_chaser_mcp.deployment:app` wrapper, binds to `PORT` when the platform
+provides it, and otherwise falls back to `PAPER_CHASER_HTTP_PORT` (default
 `8080` in the deployment path). The deployment wrapper adds:
 
 - `/healthz`
@@ -105,8 +105,8 @@ in Key Vault, never in `.bicepparam`.
 | --- | --- | --- |
 | `location` | resource group location | Azure region for all resources |
 | `environmentName` | *(required)* | Environment label used in resource names (e.g. `dev`, `staging`, `prod`) |
-| `appName` | `scholar-search` | Short application name prefix for resource names |
-| `imageRepository` | `scholar-search-mcp` | Container image name inside ACR |
+| `appName` | `paper-chaser` | Short application name prefix for resource names |
+| `imageRepository` | `paper-chaser-mcp` | Container image name inside ACR |
 | `imageTag` | `latest` | Container image tag to deploy |
 | `deployMode` | `full` | `bootstrap` (first run) or `full` (image + workload) |
 | `containerCpu` | `1` | CPU cores for the Container App container |
@@ -120,24 +120,24 @@ in Key Vault, never in `.bicepparam`.
 | Parameter | Default | Purpose |
 | --- | --- | --- |
 | `apiManagementSku` | `StandardV2` | APIM SKU (`StandardV2` or `PremiumV2`) |
-| `apiManagementApiPath` | `scholar-search` | Relative API path in APIM |
-| `apiManagementPublisherName` | `Scholar Search MCP` | Publisher display name in APIM |
+| `apiManagementApiPath` | `paper-chaser` | Relative API path in APIM |
+| `apiManagementPublisherName` | `Paper Chaser MCP` | Publisher display name in APIM |
 | `apiManagementPublisherEmail` | `owner@example.invalid` | Publisher email in APIM; use a non-secret operational inbox |
 
 ### Provider enable flags
 
 | Parameter | Default | Controls env var |
 | --- | --- | --- |
-| `enableSemanticScholar` | `true` | `SCHOLAR_SEARCH_ENABLE_SEMANTIC_SCHOLAR` |
-| `enableArxiv` | `true` | `SCHOLAR_SEARCH_ENABLE_ARXIV` |
-| `enableCore` | **`false`** | `SCHOLAR_SEARCH_ENABLE_CORE` |
-| `enableOpenAlex` | `true` | `SCHOLAR_SEARCH_ENABLE_OPENALEX` |
-| `enableSerpApi` | `false` | `SCHOLAR_SEARCH_ENABLE_SERPAPI` |
-| `enableCrossref` | `true` | `SCHOLAR_SEARCH_ENABLE_CROSSREF` |
-| `enableUnpaywall` | `true` | `SCHOLAR_SEARCH_ENABLE_UNPAYWALL` |
-| `enableEcos` | `true` | `SCHOLAR_SEARCH_ENABLE_ECOS` |
-| `enableFederalRegister` | `true` | `SCHOLAR_SEARCH_ENABLE_FEDERAL_REGISTER` |
-| `enableGovinfoCfr` | `true` | `SCHOLAR_SEARCH_ENABLE_GOVINFO_CFR` |
+| `enableSemanticScholar` | `true` | `PAPER_CHASER_ENABLE_SEMANTIC_SCHOLAR` |
+| `enableArxiv` | `true` | `PAPER_CHASER_ENABLE_ARXIV` |
+| `enableCore` | **`false`** | `PAPER_CHASER_ENABLE_CORE` |
+| `enableOpenAlex` | `true` | `PAPER_CHASER_ENABLE_OPENALEX` |
+| `enableSerpApi` | `false` | `PAPER_CHASER_ENABLE_SERPAPI` |
+| `enableCrossref` | `true` | `PAPER_CHASER_ENABLE_CROSSREF` |
+| `enableUnpaywall` | `true` | `PAPER_CHASER_ENABLE_UNPAYWALL` |
+| `enableEcos` | `true` | `PAPER_CHASER_ENABLE_ECOS` |
+| `enableFederalRegister` | `true` | `PAPER_CHASER_ENABLE_FEDERAL_REGISTER` |
+| `enableGovinfoCfr` | `true` | `PAPER_CHASER_ENABLE_GOVINFO_CFR` |
 
 Note: setting `enableCore=true` also causes the scaffold to mount the
 `core-api-key` Key Vault secret into the container. That secret must exist in
@@ -156,16 +156,16 @@ Key Vault before you run a `full` deployment with CORE enabled.
 
 | Parameter | Default | Controls env var |
 | --- | --- | --- |
-| `enableAgentic` | `false` | `SCHOLAR_SEARCH_ENABLE_AGENTIC` |
-| `agenticProvider` | `openai` | `SCHOLAR_SEARCH_AGENTIC_PROVIDER` |
-| `plannerModel` | `gpt-5.4-mini` | `SCHOLAR_SEARCH_PLANNER_MODEL` |
-| `synthesisModel` | `gpt-5.4` | `SCHOLAR_SEARCH_SYNTHESIS_MODEL` |
-| `embeddingModel` | `text-embedding-3-large` | `SCHOLAR_SEARCH_EMBEDDING_MODEL` |
-| `disableEmbeddings` | `true` | `SCHOLAR_SEARCH_DISABLE_EMBEDDINGS` |
-| `agenticOpenAiTimeoutSeconds` | `30` | `SCHOLAR_SEARCH_AGENTIC_OPENAI_TIMEOUT_SECONDS` |
-| `agenticIndexBackend` | `memory` | `SCHOLAR_SEARCH_AGENTIC_INDEX_BACKEND` |
-| `sessionTtlSeconds` | `1800` | `SCHOLAR_SEARCH_SESSION_TTL_SECONDS` |
-| `enableAgenticTraceLog` | `false` | `SCHOLAR_SEARCH_ENABLE_AGENTIC_TRACE_LOG` |
+| `enableAgentic` | `false` | `PAPER_CHASER_ENABLE_AGENTIC` |
+| `agenticProvider` | `openai` | `PAPER_CHASER_AGENTIC_PROVIDER` |
+| `plannerModel` | `gpt-5.4-mini` | `PAPER_CHASER_PLANNER_MODEL` |
+| `synthesisModel` | `gpt-5.4` | `PAPER_CHASER_SYNTHESIS_MODEL` |
+| `embeddingModel` | `text-embedding-3-large` | `PAPER_CHASER_EMBEDDING_MODEL` |
+| `disableEmbeddings` | `true` | `PAPER_CHASER_DISABLE_EMBEDDINGS` |
+| `agenticOpenAiTimeoutSeconds` | `30` | `PAPER_CHASER_AGENTIC_OPENAI_TIMEOUT_SECONDS` |
+| `agenticIndexBackend` | `memory` | `PAPER_CHASER_AGENTIC_INDEX_BACKEND` |
+| `sessionTtlSeconds` | `1800` | `PAPER_CHASER_SESSION_TTL_SECONDS` |
+| `enableAgenticTraceLog` | `false` | `PAPER_CHASER_ENABLE_AGENTIC_TRACE_LOG` |
 
 ## Deployment modes
 
@@ -190,12 +190,12 @@ names.
 - Builds, scans, and pushes the container image.
 - Deploys the Container App and API Management.
 - Passes the checked-in smart-layer defaults through the Container App:
-  `SCHOLAR_SEARCH_ENABLE_AGENTIC`, `SCHOLAR_SEARCH_AGENTIC_PROVIDER`,
-  `SCHOLAR_SEARCH_PLANNER_MODEL`, `SCHOLAR_SEARCH_SYNTHESIS_MODEL`,
-  `SCHOLAR_SEARCH_EMBEDDING_MODEL`,
-  `SCHOLAR_SEARCH_AGENTIC_INDEX_BACKEND`,
-  `SCHOLAR_SEARCH_SESSION_TTL_SECONDS`, and
-  `SCHOLAR_SEARCH_ENABLE_AGENTIC_TRACE_LOG`.
+  `PAPER_CHASER_ENABLE_AGENTIC`, `PAPER_CHASER_AGENTIC_PROVIDER`,
+  `PAPER_CHASER_PLANNER_MODEL`, `PAPER_CHASER_SYNTHESIS_MODEL`,
+  `PAPER_CHASER_EMBEDDING_MODEL`,
+  `PAPER_CHASER_AGENTIC_INDEX_BACKEND`,
+  `PAPER_CHASER_SESSION_TTL_SECONDS`, and
+  `PAPER_CHASER_ENABLE_AGENTIC_TRACE_LOG`.
 - Resolves the health-check URL from `SMOKE_TEST_HEALTH_URL` when provided, or
   falls back to Azure deployment outputs (`containerAppHealthUrl` first, then
   `containerAppFqdn`) for the first rollout.
@@ -256,7 +256,7 @@ Configure these as environment secrets rather than variables:
 - `AZURE_SUBSCRIPTION_ID`
 - `AZURE_RESOURCE_GROUP`
 - `ACR_NAME`
-- `IMAGE_REPOSITORY` (optional; defaults to `scholar-search-mcp`)
+- `IMAGE_REPOSITORY` (optional; defaults to `paper-chaser-mcp`)
 - `SMOKE_TEST_HEALTH_URL` (optional on the first full deployment, recommended afterward)
 
 These values are not all credentials, but they are still deployment-specific
@@ -329,10 +329,10 @@ Use these validation layers before you deploy anything real.
 
 - `python -m pip check`
 - `pre-commit run --all-files`
-- `python -m pytest --cov=scholar_search_mcp --cov-report=term-missing --cov-fail-under=85`
+- `python -m pytest --cov=paper_chaser_mcp --cov-report=term-missing --cov-fail-under=85`
 - `python -m mypy --config-file pyproject.toml`
 - `python -m ruff check .`
-- `python -m bandit -c pyproject.toml -r scholar_search_mcp`
+- `python -m bandit -c pyproject.toml -r paper_chaser_mcp`
 - `python -m build`
 - `python -m pip_audit . --progress-spinner off`
 
@@ -354,7 +354,7 @@ Use this command when you want parity with the `Deploy Azure` workflow's full
 deployment validation path:
 
 ```text
-python scripts/validate_deployment.py --require-az --require-docker --image-tag scholar-search-mcp:ci-validate
+python scripts/validate_deployment.py --require-az --require-docker --image-tag paper-chaser-mcp:ci-validate
 ```
 
 `scripts/validate_deployment.py` currently validates:
@@ -375,7 +375,7 @@ python scripts/validate_deployment.py --require-az --require-docker --image-tag 
 - allowed-origin `/mcp/` request with the configured backend auth header is allowed past the deployment wrapper
 
 The validator currently models the checked-in Azure scaffold, so its Docker
-smoke test sets `SCHOLAR_SEARCH_HTTP_AUTH_HEADER=x-backend-auth` and expects
+smoke test sets `PAPER_CHASER_HTTP_AUTH_HEADER=x-backend-auth` and expects
 `X-Backend-Auth` specifically.
 
 ### Pre-deploy Azure checks
@@ -388,7 +388,7 @@ smoke test sets `SCHOLAR_SEARCH_HTTP_AUTH_HEADER=x-backend-auth` and expects
 - remember that the bootstrap workflow path runs
   `scripts/validate_deployment.py --require-az --skip-docker`, while the full
   workflow reruns the validator with Docker enabled and the fixed validation
-  image tag `scholar-search-mcp:ci-validate`
+  image tag `paper-chaser-mcp:ci-validate`
 - keep the GitHub Actions workflow on suppressed CLI output so successful
   runs do not publish Azure resource identifiers
 
@@ -416,7 +416,7 @@ The scaffold separates credentials by trust boundary.
 - The shared token stays in Key Vault and is referenced by both the Container App and APIM through managed identities.
 
 The wrapper itself supports a configurable backend header via
-`SCHOLAR_SEARCH_HTTP_AUTH_HEADER` and defaults to `authorization` when you do
+`PAPER_CHASER_HTTP_AUTH_HEADER` and defaults to `authorization` when you do
 not override it. The Azure scaffold deliberately sets that header name to
 `x-backend-auth` so APIM can keep backend credentials separate from
 client-facing authorization.

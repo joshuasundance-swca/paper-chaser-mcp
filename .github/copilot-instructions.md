@@ -60,8 +60,8 @@ Before changing code, read these files in order:
 - When you change workflow guidance, update the durable docs in the repo, not
   just inline code strings.
 - Keep these three surfaces aligned:
-  - `scholar_search_mcp/server.py` (`SERVER_INSTRUCTIONS`,
-    `AGENT_WORKFLOW_GUIDE`, `plan_scholar_search`)
+  - `paper_chaser_mcp/server.py` (`SERVER_INSTRUCTIONS`,
+    `AGENT_WORKFLOW_GUIDE`, `plan_paper_chaser_search`)
   - `docs/golden-paths.md`
   - `docs/agent-handoff.md`
 - Keep the checked-in agentic workflow guidance aligned too when the
@@ -84,10 +84,10 @@ Then run:
 ```bash
 python -m pip check
 pre-commit run --all-files
-python -m pytest --cov=scholar_search_mcp --cov-report=term-missing --cov-fail-under=85
+python -m pytest --cov=paper_chaser_mcp --cov-report=term-missing --cov-fail-under=85
 python -m mypy --config-file pyproject.toml
 python -m ruff check .
-python -m bandit -c pyproject.toml -r scholar_search_mcp
+python -m bandit -c pyproject.toml -r paper_chaser_mcp
 python -m build
 python -m pip_audit . --progress-spinner off
 ```
@@ -105,11 +105,11 @@ python scripts/validate_deployment.py --skip-docker
 ```
 
 Use
-`python scripts/validate_deployment.py --require-az --require-docker --image-tag scholar-search-mcp:ci-validate`
+`python scripts/validate_deployment.py --require-az --require-docker --image-tag paper-chaser-mcp:ci-validate`
 when you need parity with the full `Deploy Azure` workflow.
 
-If you edit `.github/workflows/test-scholar-search.md`, also rerun
-`gh aw compile test-scholar-search --dir .github/workflows` so the checked-in
+If you edit `.github/workflows/test-paper-chaser.md`, also rerun
+`gh aw compile test-paper-chaser --dir .github/workflows` so the checked-in
 `.lock.yml` stays synchronized with the editable Markdown workflow source, then
 run the normal validation stack so pre-commit can normalize the generated file.
 

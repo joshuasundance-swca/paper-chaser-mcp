@@ -1,5 +1,5 @@
 default_install_hook_types: [pre-commit, pre-push]
-exclude: ^(build/|scholar_search_mcp\.egg-info/)
+exclude: ^(build/|paper_chaser_mcp\.egg-info/)
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -116,7 +116,7 @@ repos:
         name: mypy
         entry: python scripts/run_in_repo_venv.py -m mypy --config-file pyproject.toml --no-incremental
         language: system
-        files: ^(scholar_search_mcp/.*\.py|tests/.*\.py|pyproject\.toml)$
+        files: ^(paper_chaser_mcp/.*\.py|tests/.*\.py|pyproject\.toml)$
         pass_filenames: false
 
       # The stock hadolint docker_image hook can wedge under Docker Desktop on
@@ -148,7 +148,7 @@ repos:
 
       - id: pytest-coverage
         name: pytest coverage
-        entry: python -m pytest --cov=scholar_search_mcp --cov-report=term-missing --cov-fail-under=85
+        entry: python -m pytest --cov=paper_chaser_mcp --cov-report=term-missing --cov-fail-under=85
         language: python
         additional_dependencies:
           - anyio>=4.0.0
@@ -196,4 +196,4 @@ repos:
         entry: python scripts/validate_deployment.py --skip-docker
         language: system
         pass_filenames: false
-        files: ^(infra/.*\.(bicep|bicepparam)|infra/policies/.*\.xml|\.github/workflows/deploy-azure\.yml|Dockerfile|scholar_search_mcp/deployment\.py|docs/azure-(architecture|deployment|security-model)\.md|scripts/validate_deployment\.py)$
+        files: ^(infra/.*\.(bicep|bicepparam)|infra/policies/.*\.xml|\.github/workflows/deploy-azure\.yml|Dockerfile|paper_chaser_mcp/deployment\.py|docs/azure-(architecture|deployment|security-model)\.md|scripts/validate_deployment\.py)$

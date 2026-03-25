@@ -7,9 +7,9 @@ from typing import Any, cast
 import httpx
 import pytest
 
-from scholar_search_mcp.clients.ecos import EcosClient
-from scholar_search_mcp.ecos_markdown import EcosDocumentConversionError, EcosMarkdownConverter
-from scholar_search_mcp.provider_runtime import ProviderDiagnosticsRegistry
+from paper_chaser_mcp.clients.ecos import EcosClient
+from paper_chaser_mcp.ecos_markdown import EcosDocumentConversionError, EcosMarkdownConverter
+from paper_chaser_mcp.provider_runtime import ProviderDiagnosticsRegistry
 
 CALIFORNIA_LEAST_TERN_PROFILE = {
     "id": 8104,
@@ -363,7 +363,7 @@ async def test_ecos_get_document_text_logs_fetch_and_conversion_steps(
         follow_redirects=True,
     )
 
-    with caplog.at_level("INFO", logger="scholar-search-mcp"):
+    with caplog.at_level("INFO", logger="paper-chaser-mcp"):
         payload = await client.get_document_text(url="https://ecos.fws.gov/docs/example.pdf")
 
     assert payload["extractionStatus"] == "ok"
@@ -559,7 +559,7 @@ async def test_ecos_api_retries_with_system_trust_store_on_tls_verify_failure(
             return None
 
     monkeypatch.setattr(
-        "scholar_search_mcp.clients.ecos.client.httpx.AsyncClient",
+        "paper_chaser_mcp.clients.ecos.client.httpx.AsyncClient",
         FakeAsyncClient,
     )
 
@@ -593,7 +593,7 @@ def test_ecos_client_uses_explicit_tls_overrides(
             )
 
     monkeypatch.setattr(
-        "scholar_search_mcp.clients.ecos.client.httpx.AsyncClient",
+        "paper_chaser_mcp.clients.ecos.client.httpx.AsyncClient",
         FakeAsyncClient,
     )
 

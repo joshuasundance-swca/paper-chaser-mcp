@@ -3,7 +3,7 @@ import pytest
 openai_pydantic = pytest.importorskip("openai.lib._pydantic", reason="openai not installed")
 to_strict_json_schema = openai_pydantic.to_strict_json_schema
 
-from scholar_search_mcp.agentic.providers import (  # noqa: E402
+from paper_chaser_mcp.agentic.providers import (  # noqa: E402
     _PlannerConstraintsSchema,
     _PlannerResponseSchema,
 )

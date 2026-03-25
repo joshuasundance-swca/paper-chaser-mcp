@@ -1,6 +1,6 @@
 # Azure Architecture
 
-This repository includes a private-network Azure hosting scaffold for the Scholar Search MCP server.
+This repository includes a private-network Azure hosting scaffold for the Paper Chaser MCP server.
 
 ## Recommended topology
 
@@ -18,7 +18,7 @@ Azure API Management
    |
    v
 Azure Container Apps
-  - scholar-search-mcp deployment-http -> scholar_search_mcp.deployment:app
+  - paper-chaser-mcp deployment-http -> paper_chaser_mcp.deployment:app
   - /healthz for probes
   - /mcp for streamable HTTP MCP traffic
   - optional server-side smart layer for concept-level discovery, grounded QA,
@@ -81,13 +81,13 @@ Clients should authenticate to Azure API Management, not to the Container App di
 
 The Container App also enforces a separate backend-only shared token.
 
-- The deployment wrapper reads `SCHOLAR_SEARCH_HTTP_AUTH_TOKEN` from a Key Vault-backed Container App secret.
-- The checked-in Azure scaffold sets `SCHOLAR_SEARCH_HTTP_AUTH_HEADER=x-backend-auth`.
+- The deployment wrapper reads `PAPER_CHASER_HTTP_AUTH_TOKEN` from a Key Vault-backed Container App secret.
+- The checked-in Azure scaffold sets `PAPER_CHASER_HTTP_AUTH_HEADER=x-backend-auth`.
 - APIM injects that value into the `X-Backend-Auth` header.
 - Direct requests to the Container App fail without that token, even if the app URL is discovered.
 
 Outside the Azure scaffold, the wrapper still defaults to
-`Authorization: Bearer <token>` when `SCHOLAR_SEARCH_HTTP_AUTH_HEADER` is left
+`Authorization: Bearer <token>` when `PAPER_CHASER_HTTP_AUTH_HEADER` is left
 at `authorization`.
 
 This means client credentials and backend credentials are intentionally different:

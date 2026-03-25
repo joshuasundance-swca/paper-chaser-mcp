@@ -4,8 +4,8 @@ from typing import Any
 
 import pytest
 
-from scholar_search_mcp import server
-from scholar_search_mcp.provider_runtime import ProviderDiagnosticsRegistry
+from paper_chaser_mcp import server
+from paper_chaser_mcp.provider_runtime import ProviderDiagnosticsRegistry
 from tests.helpers import RecordingSemanticClient, _payload
 
 
@@ -323,7 +323,7 @@ async def test_search_papers_hedges_next_provider_when_first_is_slow_and_empty(
                 ],
             }
 
-    monkeypatch.setattr("scholar_search_mcp.search.BROKER_HEDGE_DELAY_SECONDS", 0.01)
+    monkeypatch.setattr("paper_chaser_mcp.search.BROKER_HEDGE_DELAY_SECONDS", 0.01)
     monkeypatch.setattr(server, "enable_core", False)
     monkeypatch.setattr(server, "enable_semantic_scholar", True)
     monkeypatch.setattr(server, "enable_arxiv", True)
@@ -447,7 +447,7 @@ async def test_search_papers_explicit_routing_disables_hedging(
 
     spy_core = SpyCoreClient()
     spy_arxiv = SpyArxivClient()
-    monkeypatch.setattr("scholar_search_mcp.search.BROKER_HEDGE_DELAY_SECONDS", 0.01)
+    monkeypatch.setattr("paper_chaser_mcp.search.BROKER_HEDGE_DELAY_SECONDS", 0.01)
     monkeypatch.setattr(server, "enable_core", True)
     monkeypatch.setattr(server, "enable_semantic_scholar", True)
     monkeypatch.setattr(server, "enable_arxiv", True)
@@ -491,7 +491,7 @@ async def test_search_papers_never_starts_serpapi_speculatively(
             return [{"paperId": "serpapi-1", "title": "SerpApi result"}]
 
     spy_serpapi = SpySerpApiClient()
-    monkeypatch.setattr("scholar_search_mcp.search.BROKER_HEDGE_DELAY_SECONDS", 0.01)
+    monkeypatch.setattr("paper_chaser_mcp.search.BROKER_HEDGE_DELAY_SECONDS", 0.01)
     monkeypatch.setattr(server, "enable_semantic_scholar", False)
     monkeypatch.setattr(server, "enable_core", True)
     monkeypatch.setattr(server, "enable_arxiv", False)
@@ -879,8 +879,8 @@ async def test_search_papers_broker_metadata_continuation_always_false(
 
 def test_ss_paper_has_provenance_fields_with_doi() -> None:
     """Semantic Scholar papers with a DOI must prefer the DOI as canonicalId."""
-    from scholar_search_mcp.models import Paper
-    from scholar_search_mcp.search import _enrich_ss_paper
+    from paper_chaser_mcp.models import Paper
+    from paper_chaser_mcp.search import _enrich_ss_paper
 
     paper = Paper.model_validate(
         {
@@ -903,8 +903,8 @@ def test_ss_paper_has_provenance_fields_with_doi() -> None:
 
 def test_ss_paper_canonical_id_falls_back_to_paper_id_without_doi() -> None:
     """SS papers without a DOI must fall back to paperId as canonicalId."""
-    from scholar_search_mcp.models import Paper
-    from scholar_search_mcp.search import _enrich_ss_paper
+    from paper_chaser_mcp.models import Paper
+    from paper_chaser_mcp.search import _enrich_ss_paper
 
     paper = Paper.model_validate(
         {
@@ -924,8 +924,8 @@ def test_ss_paper_canonical_id_falls_back_to_paper_id_without_doi() -> None:
 
 def test_ss_paper_canonical_id_uses_arxiv_id_when_no_doi_or_paper_id() -> None:
     """When paperId is absent, arXiv ID is used as canonicalId."""
-    from scholar_search_mcp.models import Paper
-    from scholar_search_mcp.search import _enrich_ss_paper
+    from paper_chaser_mcp.models import Paper
+    from paper_chaser_mcp.search import _enrich_ss_paper
 
     paper = Paper.model_validate(
         {
@@ -1396,7 +1396,7 @@ async def test_broker_metadata_result_quality_unknown_for_no_results(
 
 def test_result_quality_helper_covers_all_providers() -> None:
     """_result_quality must map every expected provider string without raising."""
-    from scholar_search_mcp.search import _result_quality
+    from paper_chaser_mcp.search import _result_quality
 
     assert _result_quality("semantic_scholar") == "strong"
     assert _result_quality("core") == "lexical"
@@ -1407,8 +1407,8 @@ def test_result_quality_helper_covers_all_providers() -> None:
 
 def test_broker_metadata_fields_serialized() -> None:
     """resultQuality and bulkSearchIsProviderPivot must appear in serialized output."""
-    from scholar_search_mcp.models.common import SearchResponse
-    from scholar_search_mcp.search import _dump_search_response, _metadata
+    from paper_chaser_mcp.models.common import SearchResponse
+    from paper_chaser_mcp.search import _dump_search_response, _metadata
 
     meta = _metadata(
         provider_used="core",

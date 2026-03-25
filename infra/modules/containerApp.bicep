@@ -113,43 +113,43 @@ var containerEnv = concat([
     value: '8080'
   }
   {
-    name: 'SCHOLAR_SEARCH_ALLOWED_ORIGINS'
+    name: 'PAPER_CHASER_ALLOWED_ORIGINS'
     value: allowedOrigins
   }
   {
-    name: 'SCHOLAR_SEARCH_ENABLE_ARXIV'
+    name: 'PAPER_CHASER_ENABLE_ARXIV'
     value: string(enableArxiv)
   }
   {
-    name: 'SCHOLAR_SEARCH_ENABLE_CORE'
+    name: 'PAPER_CHASER_ENABLE_CORE'
     value: string(enableCore)
   }
   {
-    name: 'SCHOLAR_SEARCH_ENABLE_CROSSREF'
+    name: 'PAPER_CHASER_ENABLE_CROSSREF'
     value: string(enableCrossref)
   }
   {
-    name: 'SCHOLAR_SEARCH_ENABLE_ECOS'
+    name: 'PAPER_CHASER_ENABLE_ECOS'
     value: string(enableEcos)
   }
   {
-    name: 'SCHOLAR_SEARCH_ENABLE_FEDERAL_REGISTER'
+    name: 'PAPER_CHASER_ENABLE_FEDERAL_REGISTER'
     value: string(enableFederalRegister)
   }
   {
-    name: 'SCHOLAR_SEARCH_ENABLE_GOVINFO_CFR'
+    name: 'PAPER_CHASER_ENABLE_GOVINFO_CFR'
     value: string(enableGovinfoCfr)
   }
   {
-    name: 'SCHOLAR_SEARCH_ENABLE_OPENALEX'
+    name: 'PAPER_CHASER_ENABLE_OPENALEX'
     value: string(enableOpenAlex)
   }
   {
-    name: 'SCHOLAR_SEARCH_ENABLE_SEMANTIC_SCHOLAR'
+    name: 'PAPER_CHASER_ENABLE_SEMANTIC_SCHOLAR'
     value: string(enableSemanticScholar)
   }
   {
-    name: 'SCHOLAR_SEARCH_ENABLE_UNPAYWALL'
+    name: 'PAPER_CHASER_ENABLE_UNPAYWALL'
     value: string(enableUnpaywall)
   }
   {
@@ -157,71 +157,71 @@ var containerEnv = concat([
     value: string(ecosVerifyTls)
   }
   {
-    name: 'SCHOLAR_SEARCH_ENABLE_SERPAPI'
+    name: 'PAPER_CHASER_ENABLE_SERPAPI'
     value: string(enableSerpApi)
   }
   {
-    name: 'SCHOLAR_SEARCH_ENABLE_AGENTIC'
+    name: 'PAPER_CHASER_ENABLE_AGENTIC'
     value: string(enableAgentic)
   }
   {
-    name: 'SCHOLAR_SEARCH_AGENTIC_PROVIDER'
+    name: 'PAPER_CHASER_AGENTIC_PROVIDER'
     value: agenticProvider
   }
   {
-    name: 'SCHOLAR_SEARCH_PLANNER_MODEL'
+    name: 'PAPER_CHASER_PLANNER_MODEL'
     value: plannerModel
   }
   {
-    name: 'SCHOLAR_SEARCH_SYNTHESIS_MODEL'
+    name: 'PAPER_CHASER_SYNTHESIS_MODEL'
     value: synthesisModel
   }
   {
-    name: 'SCHOLAR_SEARCH_EMBEDDING_MODEL'
+    name: 'PAPER_CHASER_EMBEDDING_MODEL'
     value: embeddingModel
   }
   {
-    name: 'SCHOLAR_SEARCH_DISABLE_EMBEDDINGS'
+    name: 'PAPER_CHASER_DISABLE_EMBEDDINGS'
     value: string(disableEmbeddings)
   }
   {
-    name: 'SCHOLAR_SEARCH_AGENTIC_OPENAI_TIMEOUT_SECONDS'
+    name: 'PAPER_CHASER_AGENTIC_OPENAI_TIMEOUT_SECONDS'
     value: string(agenticOpenAiTimeoutSeconds)
   }
   {
-    name: 'SCHOLAR_SEARCH_AGENTIC_INDEX_BACKEND'
+    name: 'PAPER_CHASER_AGENTIC_INDEX_BACKEND'
     value: agenticIndexBackend
   }
   {
-    name: 'SCHOLAR_SEARCH_SESSION_TTL_SECONDS'
+    name: 'PAPER_CHASER_SESSION_TTL_SECONDS'
     value: string(sessionTtlSeconds)
   }
   {
-    name: 'SCHOLAR_SEARCH_ENABLE_AGENTIC_TRACE_LOG'
+    name: 'PAPER_CHASER_ENABLE_AGENTIC_TRACE_LOG'
     value: string(enableAgenticTraceLog)
   }
   {
-    name: 'SCHOLAR_SEARCH_HTTP_AUTH_HEADER'
+    name: 'PAPER_CHASER_HTTP_AUTH_HEADER'
     value: 'x-backend-auth'
   }
   {
-    name: 'SCHOLAR_SEARCH_HTTP_AUTH_TOKEN'
+    name: 'PAPER_CHASER_HTTP_AUTH_TOKEN'
     secretRef: backendAuthSecretName
   }
   {
-    name: 'SCHOLAR_SEARCH_HTTP_HOST'
+    name: 'PAPER_CHASER_HTTP_HOST'
     value: '0.0.0.0'
   }
   {
-    name: 'SCHOLAR_SEARCH_HTTP_PATH'
+    name: 'PAPER_CHASER_HTTP_PATH'
     value: '/mcp'
   }
   {
-    name: 'SCHOLAR_SEARCH_HTTP_PORT'
+    name: 'PAPER_CHASER_HTTP_PORT'
     value: '8080'
   }
   {
-    name: 'SCHOLAR_SEARCH_TRANSPORT'
+    name: 'PAPER_CHASER_TRANSPORT'
     value: 'streamable-http'
   }
   {
@@ -300,7 +300,7 @@ resource app 'Microsoft.App/containerApps@2025-07-01' = {
           ]
           env: containerEnv
           image: image
-          name: 'scholar-search'
+          name: 'paper-chaser'
           probes: [
             {
               type: 'Liveness'

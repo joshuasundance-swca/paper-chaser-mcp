@@ -1,6 +1,6 @@
 import pytest
 
-from scholar_search_mcp.clients.unpaywall import UnpaywallClient
+from paper_chaser_mcp.clients.unpaywall import UnpaywallClient
 from tests.helpers import DummyResponse
 
 
@@ -42,7 +42,7 @@ async def test_unpaywall_get_open_access_normalizes_payload(
             )
 
     monkeypatch.setattr(
-        "scholar_search_mcp.clients.unpaywall.client.httpx.AsyncClient",
+        "paper_chaser_mcp.clients.unpaywall.client.httpx.AsyncClient",
         lambda timeout: CapturingAsyncClient(),
     )
 
@@ -97,11 +97,11 @@ async def test_unpaywall_get_open_access_retries_transient_server_error(
 
     queue = QueueAsyncClient()
     monkeypatch.setattr(
-        "scholar_search_mcp.clients.unpaywall.client.httpx.AsyncClient",
+        "paper_chaser_mcp.clients.unpaywall.client.httpx.AsyncClient",
         lambda timeout: queue,
     )
     monkeypatch.setattr(
-        "scholar_search_mcp.clients.unpaywall.client.asyncio.sleep",
+        "paper_chaser_mcp.clients.unpaywall.client.asyncio.sleep",
         fake_sleep,
     )
 
@@ -132,7 +132,7 @@ async def test_unpaywall_get_open_access_returns_none_on_404(
             return DummyResponse(status_code=404)
 
     monkeypatch.setattr(
-        "scholar_search_mcp.clients.unpaywall.client.httpx.AsyncClient",
+        "paper_chaser_mcp.clients.unpaywall.client.httpx.AsyncClient",
         lambda timeout: NotFoundAsyncClient(),
     )
 
@@ -177,7 +177,7 @@ async def test_unpaywall_client_reuses_lazy_async_client_and_closes_it(
         return client
 
     monkeypatch.setattr(
-        "scholar_search_mcp.clients.unpaywall.client.httpx.AsyncClient",
+        "paper_chaser_mcp.clients.unpaywall.client.httpx.AsyncClient",
         _factory,
     )
 
