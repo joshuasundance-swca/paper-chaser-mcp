@@ -33,9 +33,15 @@
     "search_authors_openalex",
     "get_author_info_openalex",
     "get_author_papers_openalex",
+    "search_entities_openalex",
+    "search_papers_openalex_by_entity",
     "search_federal_register",
     "get_federal_register_document",
     "get_cfr_text",
+    "search_species_ecos",
+    "get_species_profile_ecos",
+    "list_species_documents_ecos",
+    "get_document_text_ecos",
     "search_snippets",
     "get_paper_citation_formats"
   ]

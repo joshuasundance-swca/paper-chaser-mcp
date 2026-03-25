@@ -16,3 +16,5 @@ param enableOpenAlex = true
 param enableCrossref = true
 param enableUnpaywall = true
 param enableEcos = true
+param enableFederalRegister = true
+param enableGovinfoCfr = true

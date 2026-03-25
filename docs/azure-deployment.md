@@ -62,10 +62,14 @@ usage.
    - `serpapi-api-key` if `enableSerpApi=true`
    - `mcp-backend-auth-token`
 
-   Crossref, Unpaywall, and ECOS are enabled by default but **do not require
-   Key Vault secrets**. Their polite-pool contact values (`crossrefMailto`,
-   `unpayWallEmail`) are plain Bicep string params and can be left empty to use
-   the application defaults.
+   Crossref, Unpaywall, ECOS, and Federal Register are enabled by default but
+   **do not require Key Vault secrets**. Their polite-pool contact values
+   (`crossrefMailto`, `unpayWallEmail`) are plain Bicep string params and can
+   be left empty to use the application defaults.
+
+   GovInfo CFR is enabled by default and works without a key (falls back to
+   degraded HTML recovery), but provisioning a `govinfo-api-key` in Key Vault
+   grants authoritative XML access.
 
 ## Provider enablement matrix
 
@@ -83,6 +87,8 @@ secret.
 | Crossref | **on** | `enableCrossref` | No (optional `crossrefMailto` plain param) |
 | Unpaywall | **on** | `enableUnpaywall` | No (optional `unpayWallEmail` plain param) |
 | ECOS | **on** | `enableEcos` | No |
+| Federal Register | **on** | `enableFederalRegister` | No |
+| GovInfo CFR | **on** | `enableGovinfoCfr` | Optional (`govinfo-api-key`) — authoritative XML; degrades to HTML without it |
 
 The smart layer (`enableAgentic=true` with `agenticProvider=openai`) adds a
 separate `openai-api-key` requirement.
@@ -130,6 +136,8 @@ in Key Vault, never in `.bicepparam`.
 | `enableCrossref` | `true` | `SCHOLAR_SEARCH_ENABLE_CROSSREF` |
 | `enableUnpaywall` | `true` | `SCHOLAR_SEARCH_ENABLE_UNPAYWALL` |
 | `enableEcos` | `true` | `SCHOLAR_SEARCH_ENABLE_ECOS` |
+| `enableFederalRegister` | `true` | `SCHOLAR_SEARCH_ENABLE_FEDERAL_REGISTER` |
+| `enableGovinfoCfr` | `true` | `SCHOLAR_SEARCH_ENABLE_GOVINFO_CFR` |
 
 Note: setting `enableCore=true` also causes the scaffold to mount the
 `core-api-key` Key Vault secret into the container. That secret must exist in

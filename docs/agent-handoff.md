@@ -363,9 +363,9 @@ gh aw compile test-scholar-search --dir .github/workflows
   this workspace. It confirmed the new hint wording live and exposed a
   transient CORE 500, which is now mitigated by short retries in the client.
 - Provider enablement is now fully parameterized in the Azure Bicep scaffold.
-  All eight providers (`enableSemanticScholar`, `enableArxiv`, `enableCore`,
+  All ten providers (`enableSemanticScholar`, `enableArxiv`, `enableCore`,
   `enableOpenAlex`, `enableSerpApi`, `enableCrossref`, `enableUnpaywall`,
-  `enableEcos`) are controlled by named Bicep parameters in `infra/main.bicep`
+  `enableEcos`, `enableFederalRegister`, `enableGovinfoCfr`) are controlled by named Bicep parameters in `infra/main.bicep`
   and threaded through to the Container App. The previously-hardcoded
   `SCHOLAR_SEARCH_ENABLE_CORE=true` mismatch is fixed: CORE now defaults to
   `false` in Bicep, `.bicepparam` files, and both Compose files, matching the

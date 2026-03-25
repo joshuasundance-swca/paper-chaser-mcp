@@ -554,6 +554,13 @@ def test_openai_provider_sync_high_level_methods_cover_direct_and_model_fallback
         def with_structured_output(self, schema: Any, method: str) -> _StructuredInvoker:
             assert schema is not None
             assert method == "function_calling"
+            # Return expansion-compatible payload when the schema has an
+            # ``expansions`` field so the LangChain fallback path inside
+            # suggest_speculative_expansions is exercised correctly.
+            if any(f == "expansions" for f in getattr(schema, "model_fields", {})):
+                return _StructuredInvoker(
+                    _ExpansionPayload(expansions=[_ExpansionItem(variant="langchain fallback expansion")])
+                )
             return _StructuredInvoker(self._response)
 
     class _SynthesizerModel:
@@ -613,8 +620,9 @@ def test_openai_provider_sync_high_level_methods_cover_direct_and_model_fallback
 
     assert fallback_plan.intent == "author"
     assert fallback_expansions
+    assert fallback_expansions[0].variant == "langchain fallback expansion"
     assert fallback_label == "Graph Retrieval"
-    assert "These papers share overlapping terms" in fallback_summary
+    assert "groups 1 papers" in fallback_summary
     assert fallback_answer["confidence"] == "medium"
 
 
@@ -770,7 +778,7 @@ async def test_openai_provider_async_high_level_methods_and_close(
     assert isinstance(fallback_plan, PlannerDecision)
     assert fallback_expansions
     assert fallback_label == "Graph Retrieval"
-    assert "These papers share overlapping terms" in fallback_summary
+    assert "groups 1 papers" in fallback_summary
     assert fallback_answer["confidence"] == "low"
 
     closed: list[str] = []

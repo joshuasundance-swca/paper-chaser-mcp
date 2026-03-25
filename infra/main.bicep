@@ -98,6 +98,12 @@ param enableUnpaywall bool = true
 @description('Whether to enable the ECOS provider for species and environmental document retrieval.')
 param enableEcos bool = true
 
+@description('Whether to enable the Federal Register provider for regulatory document search.')
+param enableFederalRegister bool = true
+
+@description('Whether to enable the GovInfo CFR provider for Code of Federal Regulations retrieval. Requires a govinfo-api-key Key Vault secret for authoritative access; falls back to degraded HTML recovery without it.')
+param enableGovinfoCfr bool = true
+
 @description('Polite pool email sent as User-Agent to Crossref APIs. Optional; leave empty to use the application default.')
 param crossrefMailto string = ''
 
@@ -260,6 +266,7 @@ module containerApp './modules/containerApp.bicep' = if (deployFull) {
     keyVaultOpenAlexMailtoSecretUri: '${keyVault.outputs.vaultUri}secrets/openalex-mailto'
     keyVaultSemanticScholarApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/semantic-scholar-api-key'
     keyVaultSerpApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/serpapi-api-key'
+    keyVaultGovInfoApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/govinfo-api-key'
     location: location
     managedIdentityResourceId: identity.outputs.resourceId
     maxReplicas: maxReplicas
@@ -277,6 +284,8 @@ module containerApp './modules/containerApp.bicep' = if (deployFull) {
     enableCrossref: enableCrossref
     enableUnpaywall: enableUnpaywall
     enableEcos: enableEcos
+    enableFederalRegister: enableFederalRegister
+    enableGovinfoCfr: enableGovinfoCfr
     crossrefMailto: crossrefMailto
     unpayWallEmail: unpayWallEmail
     ecosBaseUrl: ecosBaseUrl

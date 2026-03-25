@@ -22,6 +22,7 @@ param keyVaultOpenAlexApiKeySecretUri string
 param keyVaultOpenAlexMailtoSecretUri string
 param keyVaultSemanticScholarApiKeySecretUri string
 param keyVaultSerpApiKeySecretUri string
+param keyVaultGovInfoApiKeySecretUri string
 param location string
 param managedIdentityResourceId string
 param maxReplicas int
@@ -40,6 +41,8 @@ param enableOpenAlex bool = true
 param enableCrossref bool = true
 param enableUnpaywall bool = true
 param enableEcos bool = true
+param enableFederalRegister bool = true
+param enableGovinfoCfr bool = true
 param crossrefMailto string = ''
 param unpayWallEmail string = ''
 param ecosBaseUrl string = ''
@@ -84,6 +87,12 @@ var secretDefinitions = concat([
     keyVaultUrl: keyVaultOpenAiApiKeySecretUri
     name: 'openai-api-key'
   }
+] : [], enableGovinfoCfr ? [
+  {
+    identity: managedIdentityResourceId
+    keyVaultUrl: keyVaultGovInfoApiKeySecretUri
+    name: 'govinfo-api-key'
+  }
 ] : [])
 
 var containerEnv = concat([
@@ -122,6 +131,14 @@ var containerEnv = concat([
   {
     name: 'SCHOLAR_SEARCH_ENABLE_ECOS'
     value: string(enableEcos)
+  }
+  {
+    name: 'SCHOLAR_SEARCH_ENABLE_FEDERAL_REGISTER'
+    value: string(enableFederalRegister)
+  }
+  {
+    name: 'SCHOLAR_SEARCH_ENABLE_GOVINFO_CFR'
+    value: string(enableGovinfoCfr)
   }
   {
     name: 'SCHOLAR_SEARCH_ENABLE_OPENALEX'
@@ -225,6 +242,11 @@ var containerEnv = concat([
   {
     name: 'OPENAI_API_KEY'
     secretRef: 'openai-api-key'
+  }
+] : [], enableGovinfoCfr ? [
+  {
+    name: 'GOVINFO_API_KEY'
+    secretRef: 'govinfo-api-key'
   }
 ] : [], !empty(crossrefMailto) ? [
   {
