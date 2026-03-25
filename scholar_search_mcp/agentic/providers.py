@@ -1270,7 +1270,8 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         return max(0.0, min(1.0, 0.55 * semantic + 0.45 * lexical))
 
     def batched_similarity(self, query: str, texts: list[str]) -> list[float]:
-        lexical_scores = [super().similarity(query, text) for text in texts]
+        _parent_similarity = super().similarity
+        lexical_scores = [_parent_similarity(query, text) for text in texts]
         query_embedding = self.embed_query(query)
         if query_embedding is None:
             return lexical_scores
@@ -1358,7 +1359,8 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         request_outcomes: list[dict[str, Any]] | None = None,
         request_id: str | None = None,
     ) -> list[float]:
-        lexical_scores = [super().similarity(query, text) for text in texts]
+        _parent_similarity = super().similarity
+        lexical_scores = [_parent_similarity(query, text) for text in texts]
         query_embedding = await self.aembed_query(
             query,
             request_outcomes=request_outcomes,
