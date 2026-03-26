@@ -205,17 +205,16 @@ class GovInfoClient:
                 return candidate
         return None
 
-    async def _govinfo_search(self, query: str) -> dict[str, Any]:
-        return await self._request_json(
-            "POST",
-            "/search",
-            json_payload={
-                "query": query,
-                "pageSize": 10,
-                "offsetMark": "*",
-                "sorts": [{"field": "score", "sortOrder": "DESC"}],
-            },
-        )
+    async def _govinfo_search(self, query: str, *, historical: bool = False) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "query": query,
+            "pageSize": 10,
+            "offsetMark": "*",
+            "sorts": [{"field": "score", "sortOrder": "DESC"}],
+        }
+        if historical:
+            payload["historical"] = True
+        return await self._request_json("POST", "/search", json_payload=payload)
 
     async def _resolve_fr_from_citation(self, citation: str) -> tuple[str | None, str | None, dict[str, Any] | None]:
         search = await self._govinfo_search(f'collection:(FR) and frcitation:"{citation}"')
@@ -500,10 +499,13 @@ class GovInfoClient:
             if match:
                 resolved_revision_year = int(match.group("year"))
         citation = self._cfr_citation(title_number, part_number, section_number)
-        query = f'collection:(CFR) and citation:"{citation}"'
+        query_parts = ["collection:(CFR)", f"cfrtitlenum:{title_number}", f"cfrpartnum:{part_number}"]
+        if section_number:
+            query_parts.append(f'cfrsectionnum:"{part_number}.{section_number}"')
         if resolved_revision_year is not None:
-            query += f" and dateIssued:{resolved_revision_year}-01-01"
-        search = await self._govinfo_search(query)
+            query_parts.append(f"publishdate:{resolved_revision_year}")
+        query = " and ".join(query_parts)
+        search = await self._govinfo_search(query, historical=resolved_revision_year is not None)
         results = search.get("results") or []
         if not isinstance(results, list) or not results:
             raise ValueError(f"No GovInfo CFR result matched {citation}.")
