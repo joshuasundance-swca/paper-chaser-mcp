@@ -76,6 +76,8 @@ Decision tree for tool selection:
    default bulk ordering is not relevance-ranked)
 4. CITATION REPAIR / ALMOST-RIGHT REFERENCES → resolve_citation
 5. KNOWN ITEM (messy title) → search_papers_match
+   (takes only a query string — the title text — not separate author/year/venue
+   fields; use resolve_citation for multi-field bibliographic references)
 6. KNOWN ITEM (DOI / arXiv / URL) → get_paper_details
 7. PAPER ENRICHMENT / OA CHECK → get_paper_metadata_crossref,
    get_paper_open_access_unpaywall, or enrich_paper after you already have a
@@ -98,7 +100,9 @@ Decision tree for tool selection:
    Service ECOS system
 15. REGULATORY PRIMARY SOURCES → search_federal_register for discovery,
     get_federal_register_document for one notice or rule, and get_cfr_text for
-    authoritative CFR part/section text
+    authoritative CFR part/section text. NOTE: Biological opinions, Section 7
+    consultation records, and incidental take permits live in ECOS, not the
+    Federal Register — use the ECOS species dossier chain for those.
 16. PROVIDER HEALTH / DEBUGGING → get_provider_diagnostics
 
 After search_papers: read brokerMetadata.nextStepHint for the recommended next move.
@@ -174,7 +178,10 @@ AGENT_WORKFLOW_GUIDE = """
 - **Small targeted Semantic Scholar page**: `search_papers_semantic_scholar` (or
   `search_papers` if brokered discovery is fine) instead of bulk retrieval.
 - **Citation repair / incomplete references**: `resolve_citation`
-- **Known-item lookup (messy title)**: `search_papers_match`
+- **Known-item lookup (messy title)**: `search_papers_match` — pass only a
+  `query` string (the title text to match); this tool does NOT accept separate
+  author, year, or venue fields. Use `resolve_citation` for multi-field
+  bibliographic references.
 - **Known-item lookup (DOI / arXiv / URL / S2 ID)**: `get_paper_details`
 - **Post-resolution paper enrichment**: `get_paper_metadata_crossref`,
   `get_paper_open_access_unpaywall`, or `enrich_paper` after you already have a
@@ -229,7 +236,10 @@ AGENT_WORKFLOW_GUIDE = """
 - **Regulatory primary sources**: `search_federal_register` for discovery,
     `get_federal_register_document` for one notice or rule, and `get_cfr_text`
     for authoritative CFR text. This is the preferred path after an ECOS
-    document exposes `frCitation` or a GovInfo FR link.
+    document exposes `frCitation` or a GovInfo FR link. NOTE: Biological
+    opinions, Section 7 consultation records, and incidental take permits are
+    NOT published in the Federal Register — use the ECOS species dossier chain
+    (`search_species_ecos` → `list_species_documents_ecos`) for those.
 - **Grounded follow-up over a saved result set**: `ask_result_set` for QA,
   claim checks, or comparisons; `map_research_landscape` for themes, gaps, and
   disagreements; `expand_research_graph` for a compact citation or author graph.
