@@ -17,11 +17,16 @@ An MCP server for academic research — search papers, chase citations, look up 
 ## Contents
 
 - [What can it do?](#what-can-it-do)
+- [Quick start](#quick-start)
 - [Quick tool decision guide](#quick-tool-decision-guide)
+- [Core workflows](#core-workflows)
+- [Agent response contract](#agent-response-contract)
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [Tools](#tools)
 - [Resources and prompts](#resources-and-prompts)
+- [Microsoft packaging assets](#microsoft-packaging-assets)
+- [Testing with MCP Inspector](#testing-with-mcp-inspector)
 - [Development](#development)
 - [Guides](#guides)
 - [License](#license)
@@ -30,57 +35,47 @@ An MCP server for academic research — search papers, chase citations, look up 
 
 ## What can it do?
 
-### Academic paper search
-- **Brokered single-page search** (`search_papers`) — tries Semantic Scholar → arXiv → CORE → SerpApi in order; returns `brokerMetadata` with `nextStepHint` so agents know what to do next
-- **Exhaustive paginated retrieval** (`search_papers_bulk`) — cursor-based bulk traversal up to 1,000 papers/call; default ordering is **not relevance-ranked**, read `retrievalNote` each page
-- **Provider-specific searches** — `search_papers_semantic_scholar`, `search_papers_arxiv`, `search_papers_core`, `search_papers_serpapi`, `search_papers_openalex`, `search_papers_openalex_bulk`
+Paper Chaser MCP combines one stable research-oriented MCP surface with an additive smart layer and a few specialized non-paper workflows:
 
-### Smart research layer *(requires `[ai]` extra + `PAPER_CHASER_ENABLE_AGENTIC=true`)*
-- **`search_papers_smart`** — concept-level discovery with query expansion, multi-provider fusion, reranking, and a reusable `searchSessionId`; supports `latencyProfile` (`fast` / `balanced` / `deep`) and an optional `providerBudget`
-- **`ask_result_set`** — grounded QA, claim checks, and comparisons over a saved result set
-- **`map_research_landscape`** — theme clustering, gaps, and suggested next searches
-- **`expand_research_graph`** — compact citation/reference/author graph expansion from anchors or a saved session
+- **Discovery**: `search_papers` for a fast brokered first page, `search_papers_bulk` for exhaustive retrieval, and provider-specific search tools when you need explicit source control.
+- **Concept-level research**: `search_papers_smart` plus `ask_result_set`, `map_research_landscape`, and `expand_research_graph` for grounded follow-up over a reusable `searchSessionId`.
+- **Known-item recovery**: `resolve_citation`, `search_papers_match`, `get_paper_details`, and autocomplete tools for messy titles, incomplete references, DOIs, arXiv IDs, and URLs.
+- **Citation and author pivots**: citation/reference traversal, recommendations, batch lookups, and author workflows across Semantic Scholar and explicit OpenAlex tool families.
+- **Enrichment and access**: Crossref and Unpaywall enrichment for metadata, open-access status, and PDF discovery.
+- **Regulatory and species workflows**: ECOS dossiers plus Federal Register and CFR retrieval for primary-source research outside the normal paper graph.
+- **Agent-friendly outputs**: structured responses, `brokerMetadata.nextStepHint`, `agentHints`, `clarification`, `resourceUris`, `searchSessionId`, and provider diagnostics.
 
-### Known-item lookup and citation repair
-- **`resolve_citation`** — stages identifier extraction, title recovery, snippet search, and sparse metadata; abstains on regulatory or non-paper references and steers agents to the right tool
-- **`search_papers_match`** — messy-title lookup with fuzzy Semantic Scholar fallback and cross-provider exact-title confirmation
-- **`get_paper_details`** — lookup by DOI, arXiv ID, Semantic Scholar ID, or URL
-- **`paper_autocomplete`** — typeahead completions for partial titles
+## Quick start
 
-### Citations, references, and authors
-- **`get_paper_citations`** / **`get_paper_references`** — cursor-paginated forward and backward citation chasing
-- **`search_authors`** → **`get_author_info`** → **`get_author_papers`** — full author pivot workflow
-- **`batch_get_papers`** / **`batch_get_authors`** — fetch up to 500 papers or 1,000 authors in one call
-- **`get_paper_recommendations`** / **`get_paper_recommendations_post`** — similar papers by single or multi-seed
+If you want the fastest local path, install from source and add the server to your MCP client in stdio mode:
 
-### Paper enrichment and OA discovery
-- **`enrich_paper`** — combined Crossref + Unpaywall orchestrator; opt in with `includeEnrichment=true` on lookup and smart tools
-- **`get_paper_metadata_crossref`** / **`get_paper_open_access_unpaywall`** — explicit per-provider enrichment
+```bash
+pip install -e .
+```
 
-### OpenAlex-native workflows
-- **`get_paper_details_openalex`** — work lookup by OpenAlex W-id or DOI with abstract reconstruction
-- **`get_paper_citations_openalex`** / **`get_paper_references_openalex`** — OpenAlex citation and reference traversal
-- **`search_authors_openalex`** → **`get_author_info_openalex`** → **`get_author_papers_openalex`** — explicit OpenAlex author pivot
-- **`search_entities_openalex`** / **`search_papers_openalex_by_entity`** — source, institution, and topic pivots
-- **`paper_autocomplete_openalex`** — OpenAlex typeahead
+```json
+{
+  "mcpServers": {
+    "paper-chaser": {
+      "command": "python",
+      "args": ["-m", "paper_chaser_mcp"],
+      "env": {
+        "PAPER_CHASER_ENABLE_SEMANTIC_SCHOLAR": "true",
+        "PAPER_CHASER_ENABLE_ARXIV": "true",
+        "PAPER_CHASER_ENABLE_CORE": "false"
+      }
+    }
+  }
+}
+```
 
-### ECOS species dossiers *(U.S. Fish and Wildlife Service)*
-- **`search_species_ecos`** → **`get_species_profile_ecos`** → **`list_species_documents_ecos`** → **`get_document_text_ecos`**
-- Returns species listings, recovery plans, five-year reviews, biological opinions, and conservation-plan links; converts PDF/HTML documents to Markdown with bounded timeouts
+Then start with one of these prompts in your MCP client:
 
-### Federal Register and CFR regulatory text
-- **`search_federal_register`** — keyless discovery on FederalRegister.gov
-- **`get_federal_register_document`** — authoritative GovInfo retrieval for one notice or rule, with FederalRegister.gov HTML fallback
-- **`get_cfr_text`** — authoritative CFR part/section XML from GovInfo; requires `GOVINFO_API_KEY`
+- `Find recent papers on language-model alignment.`
+- `Resolve this citation: Vaswani et al. 2017 Attention Is All You Need.`
+- `Map the research themes in retrieval-augmented generation for coding agents.`
 
-### SerpApi extras *(opt-in, paid)*
-- `search_papers_serpapi_cited_by`, `search_papers_serpapi_versions`, `get_author_profile_serpapi`, `get_author_articles_serpapi`, `get_paper_citation_formats`, `get_serpapi_account_status`
-
-### Infrastructure
-- **Provider execution policy** — shared retries with jitter, bounded concurrency, suppression/circuit-breaker state
-- **Agent UX metadata** — every primary read tool returns `agentHints`, `clarification`, `resourceUris`, and (where applicable) a reusable `searchSessionId`
-- **Structured outputs** — tools return structured content, not JSON-in-text blobs
-- **`get_provider_diagnostics`** — live provider health, throttle state, and retry counts
+If you want a local env template for shell runs or Docker Compose, copy `.env.example` to `.env` and fill in only the providers you use.
 
 ---
 
@@ -108,6 +103,72 @@ After `search_papers`: read `brokerMetadata.nextStepHint`.
 After `search_papers_smart`: reuse `searchSessionId` with `ask_result_set`, `map_research_landscape`, or `expand_research_graph`.
 For Semantic Scholar expansion tools: prefer `paper.recommendedExpansionId`; if `paper.expansionIdStatus` is `not_portable`, resolve through DOI first.
 
+## Core workflows
+
+### Quick discovery
+
+Use `search_papers` when you want a strong first page quickly. It is a brokered single-page search, not a pagination entry point.
+
+```text
+search_papers(query="large language model alignment", limit=10)
+→ inspect brokerMetadata.providerUsed and brokerMetadata.nextStepHint
+→ if you need exhaustive retrieval, switch to search_papers_bulk
+→ if you find a promising anchor paper, pivot to citations, references, or authors
+```
+
+### Concept discovery and grounded follow-up
+
+Use `search_papers_smart` for literature reviews, concept discovery, and question-driven exploration.
+
+```text
+search_papers_smart(query="retrieval-augmented generation for coding agents", limit=10)
+→ save searchSessionId
+→ ask_result_set(searchSessionId="...", question="What evaluation tradeoffs show up here?")
+→ map_research_landscape(searchSessionId="...")
+→ expand_research_graph(seedSearchSessionId="...", direction="citations")
+```
+
+### Known-item lookup and citation chasing
+
+Use `resolve_citation` for broken references, `search_papers_match` for messy titles, and `get_paper_details` for DOI/arXiv/URL lookup.
+
+```text
+resolve_citation(citation="Rockstrom et al planetary boundaries 2009 Nature 461 472")
+→ confirm the canonical paper or alternatives
+→ get_paper_citations(paper_id=paper.recommendedExpansionId)
+→ cursor-loop with pagination.nextCursor if you need more results
+```
+
+### Regulatory and species follow-through
+
+Use the non-paper tools when the source is clearly regulatory or species-oriented rather than scholarly.
+
+```text
+search_species_ecos(query="California least tern")
+→ get_species_profile_ecos(species_id="8104")
+→ list_species_documents_ecos(species_id="8104")
+→ get_document_text_ecos(...)
+
+search_federal_register(query="California least tern")
+→ get_federal_register_document(...)
+→ get_cfr_text(...) when you need the affected CFR text
+```
+
+## Agent response contract
+
+These fields are the high-value response contracts to pay attention to:
+
+| Field or pattern | Where it appears | What to do with it |
+| --- | --- | --- |
+| `brokerMetadata.nextStepHint` | `search_papers` | Treat it as the server's recommended next move after the first page |
+| `searchSessionId` | smart workflows and saved result sets | Reuse it for grounded follow-up instead of rerunning discovery |
+| `agentHints` | primary read tools | Use for retry guidance, follow-on tool suggestions, and warning handling |
+| `clarification` | ambiguous cases | Ask the user only when the server surfaces a bounded clarification request |
+| `resourceUris` | primary read tools | Open follow-on resources directly when your MCP client supports them |
+| `pagination.nextCursor` | paginated tools | Pass it back exactly as returned; it is opaque and tool-specific |
+| `paper.recommendedExpansionId` | brokered and known-item flows | Prefer this for Semantic Scholar expansion tools |
+| `paper.expansionIdStatus=not_portable` | non-Semantic-Scholar results | Resolve through DOI or a Semantic Scholar-native lookup before citation/reference expansion |
+
 ---
 
 ## Installation
@@ -131,450 +192,64 @@ Optional FAISS backend extras:
 pip install -e .[ai,ai-faiss]
 ```
 
-### Local Quick Start
-
-The Azure deployment scaffold is optional. Local `python -m paper_chaser_mcp`
-still defaults to `stdio` transport and does not require any Azure deployment
-variables.
-
-If you want a local env template for shell runs or Docker, copy
-`.env.example` to `.env`, fill in only the providers you use, and keep the
-resulting file uncommitted. The repo ignores `.env`, `.env.local`, other
-`.env.*` variants except `.env.example`, and `.local-*` planning/artifact
-files. Docker now keeps those local-only files out of the image build context.
-
 ## Configuration
 
-### Configuration overview
+The full local environment-variable contract lives in `.env.example`. That file mirrors the public local knobs supported by `docker-compose.yaml`. Azure-specific identifiers, secrets, and Bicep parameters are intentionally documented separately in [docs/azure-deployment.md](docs/azure-deployment.md).
 
-The repo supports four common setup patterns:
+### Desktop MCP clients
 
-| Setup | Default transport | Start here | Main configuration knobs |
+Use stdio transport for desktop MCP clients unless you specifically need HTTP.
+See the [Quick start](#quick-start) JSON example above for the server definition.
+
+- **Claude Desktop** config path:
+  - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+  - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- **Cursor**: add the same MCP server definition in Cursor settings.
+
+### Search broker and feature flags
+
+`search_papers` is a brokered single-page search. It returns the first successful provider in the active chain and does **not** paginate. Use `search_papers_bulk` for exhaustive retrieval.
+
+| Area | Default | Main variables | Notes |
 | --- | --- | --- | --- |
-| Desktop MCP client (`python -m` / `paper-chaser-mcp`) | `stdio` | Claude Desktop or Cursor examples below | Provider toggles, provider API keys, optional smart-layer settings |
-| Direct local HTTP run | `streamable-http` or `http` when you opt in | Transport section below | `PAPER_CHASER_TRANSPORT`, `PAPER_CHASER_HTTP_HOST`, `PAPER_CHASER_HTTP_PORT`, `PAPER_CHASER_HTTP_PATH` |
-| Local Docker Compose | HTTP wrapper over `streamable-http` | `docker-compose.yaml` section below | `.env.example` values plus `PAPER_CHASER_PUBLISHED_HOST` / `PAPER_CHASER_PUBLISHED_PORT` |
-| Private Azure deployment | HTTP wrapper behind APIM | [docs/azure-deployment.md](docs/azure-deployment.md) | App env vars plus Azure secrets, Bicep params, and deployment workflow settings |
-
-For local development, copy `.env.example` to `.env` or `.env.local` and fill in only the providers you actually use. That file is the public local-config contract for shell runs and Docker Compose. Azure deployment identifiers and secrets are intentionally documented separately in [docs/azure-deployment.md](docs/azure-deployment.md), not in `.env.example`.
-
-### Environment variable map
-
-The application-level variables are grouped like this:
-
-| Group | Variables | Notes |
-| --- | --- | --- |
-| Search broker | `PAPER_CHASER_ENABLE_CORE`, `PAPER_CHASER_ENABLE_SEMANTIC_SCHOLAR`, `PAPER_CHASER_ENABLE_ARXIV`, `PAPER_CHASER_ENABLE_SERPAPI`, `PAPER_CHASER_PROVIDER_ORDER`, provider API keys | Controls the default `search_papers` fallback chain |
-| Explicit provider/tool families | `PAPER_CHASER_ENABLE_OPENALEX`, `PAPER_CHASER_ENABLE_CROSSREF`, `PAPER_CHASER_ENABLE_UNPAYWALL`, `PAPER_CHASER_ENABLE_ECOS`, `PAPER_CHASER_ENABLE_FEDERAL_REGISTER`, `PAPER_CHASER_ENABLE_GOVINFO_CFR` | These families are explicit tool surfaces rather than broker hops |
-| Provider runtime tuning | `CROSSREF_TIMEOUT_SECONDS`, `UNPAYWALL_TIMEOUT_SECONDS`, `ECOS_TIMEOUT_SECONDS`, `ECOS_DOCUMENT_TIMEOUT_SECONDS`, `ECOS_DOCUMENT_CONVERSION_TIMEOUT_SECONDS`, `ECOS_MAX_DOCUMENT_SIZE_MB`, `ECOS_VERIFY_TLS`, `ECOS_CA_BUNDLE`, `FEDERAL_REGISTER_TIMEOUT_SECONDS`, `GOVINFO_TIMEOUT_SECONDS`, `GOVINFO_DOCUMENT_TIMEOUT_SECONDS`, `GOVINFO_MAX_DOCUMENT_SIZE_MB` | Timeouts, size bounds, and TLS behavior |
-| Smart layer | `OPENAI_API_KEY`, `PAPER_CHASER_ENABLE_AGENTIC`, `PAPER_CHASER_AGENTIC_PROVIDER`, `PAPER_CHASER_PLANNER_MODEL`, `PAPER_CHASER_SYNTHESIS_MODEL`, `PAPER_CHASER_EMBEDDING_MODEL`, `PAPER_CHASER_DISABLE_EMBEDDINGS`, `PAPER_CHASER_AGENTIC_OPENAI_TIMEOUT_SECONDS`, `PAPER_CHASER_AGENTIC_INDEX_BACKEND`, `PAPER_CHASER_SESSION_TTL_SECONDS`, `PAPER_CHASER_ENABLE_AGENTIC_TRACE_LOG` | Additive smart workflows only |
-| Direct HTTP runtime | `PAPER_CHASER_TRANSPORT`, `PAPER_CHASER_HTTP_HOST`, `PAPER_CHASER_HTTP_PORT`, `PAPER_CHASER_HTTP_PATH` | Used for direct shell runs and hosted HTTP bindings |
-| HTTP wrapper security | `PAPER_CHASER_HTTP_AUTH_TOKEN`, `PAPER_CHASER_HTTP_AUTH_HEADER`, `PAPER_CHASER_ALLOWED_ORIGINS` | Enforced by the deployment wrapper rather than the raw stdio runtime |
-| Docker Compose publish settings | `PAPER_CHASER_PUBLISHED_HOST`, `PAPER_CHASER_PUBLISHED_PORT` | Controls the host-side port mapping only |
-
-The distinction that tends to look inconsistent at first is intentional:
-
-- `.env.example` includes the shared local-shell and compose-facing knobs.
-- `PAPER_CHASER_HTTP_HOST` and `PAPER_CHASER_HTTP_PORT` are supported runtime variables for direct shell runs and hosted deployments, but Compose intentionally does not expose them because the container bind host and internal port stay fixed at `0.0.0.0:8080`.
-- Compose exposes `PAPER_CHASER_PUBLISHED_HOST` and `PAPER_CHASER_PUBLISHED_PORT` instead, because those are the user-facing knobs for local HTTP access.
-
-### Claude Desktop
-
-Edit the config file:
-
-- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-
-Add the following. In this example CORE is disabled and Semantic Scholar plus arXiv are enabled:
-
-```json
-{
-  "mcpServers": {
-    "paper-chaser": {
-      "command": "python",
-      "args": ["-m", "paper_chaser_mcp"],
-      "env": {
-        "PAPER_CHASER_ENABLE_CORE": "false",
-        "PAPER_CHASER_ENABLE_SEMANTIC_SCHOLAR": "true",
-        "PAPER_CHASER_ENABLE_ARXIV": "true"
-      }
-    }
-  }
-}
-```
-
-If you have API keys (optional but recommended for search):
-
-The next example is also valid JSON. It enables all three search providers and supplies API keys for the services that support them.
-
-```json
-{
-  "mcpServers": {
-    "paper-chaser": {
-      "command": "python",
-      "args": ["-m", "paper_chaser_mcp"],
-      "env": {
-        "CORE_API_KEY": "your-core-api-key-here",
-        "SEMANTIC_SCHOLAR_API_KEY": "your-semantic-scholar-api-key-here",
-        "PAPER_CHASER_ENABLE_CORE": "true",
-        "PAPER_CHASER_ENABLE_SEMANTIC_SCHOLAR": "true",
-        "PAPER_CHASER_ENABLE_ARXIV": "true"
-      }
-    }
-  }
-}
-```
-
-For regulation-oriented workflows, `search_federal_register` is keyless, while
-`get_federal_register_document` and `get_cfr_text` use `GOVINFO_API_KEY` for
-authoritative GovInfo retrieval. Without that key, Federal Register lookups can
-still fall back to FederalRegister.gov HTML when a document number is known, but
-CFR retrieval remains GovInfo-only.
-
-### Cursor
-
-Add an MCP server in Cursor settings with the same `command`, `args`, and `env` as above.
-
-### Pagination cursor contract
-
-For every paginated tool:
-
-- `pagination.nextCursor` is an **opaque** server-issued token
-- pass it back as `cursor` **exactly as returned**
-- do **not** derive, edit, increment, or fabricate it
-- do **not** reuse it across a different tool or different query flow
-
-The server validates those boundaries and returns an actionable `INVALID_CURSOR`
-error if a cursor is malformed, cross-tool, or stale for the current query
-context.
-
-### Search broker configuration
-
-These settings control the default `search_papers` broker path. Provider-specific
-families such as OpenAlex, Crossref, Unpaywall, ECOS, Federal Register, and
-GovInfo are documented separately below because they are explicit tool surfaces,
-not broker fallbacks.
-
-**Default search fallback order:** When you call `search_papers`, the server tries sources in order and uses the first that succeeds:
-
-1. **Semantic Scholar** – Primary scholarly graph. Works without a key with lower limits; set `SEMANTIC_SCHOLAR_API_KEY` for higher limits.
-2. **arXiv** – Free preprint and recency fallback; no key required.
-3. **CORE API** – Disabled by default until explicitly enabled. Set `PAPER_CHASER_ENABLE_CORE=true` to include it in the broker. `CORE_API_KEY` is optional and raises limits when present.
-4. **SerpApi Google Scholar** – Optional paid recall-recovery provider, disabled by default. Enable with `PAPER_CHASER_ENABLE_SERPAPI=true` and set `SERPAPI_API_KEY`. See [SerpApi pricing](https://serpapi.com/pricing).
-
-OpenAlex remains an explicit provider surface rather than a default broker hop. Use the `*_openalex` tools for autocomplete, institution/source/topic pivots, or OpenAlex-native citation and author workflows.
-
-`search_papers` is a **brokered single-page search**: it returns results from the first provider in the effective chain that succeeds and does **not** support cursor-based pagination. By default the effective chain is the order above, but you can:
-
-- set `preferredProvider` to try one provider first and then fall back through the rest of the configured chain
-- set `providerOrder` to override the provider chain for a single call (omitted providers are skipped for that request)
-- set `PAPER_CHASER_PROVIDER_ORDER` to override the default broker order for a deployment
-- use `search_papers_core`, `search_papers_semantic_scholar`, `search_papers_serpapi`, or `search_papers_arxiv` for single-provider searches
-
-Provider names accepted in `preferredProvider`, `providerOrder`, and `PAPER_CHASER_PROVIDER_ORDER` are `core`, `semantic_scholar`, `arxiv`, and either `serpapi` or `serpapi_google_scholar`. Broker metadata continues to report the SerpApi provider as `serpapi_google_scholar`.
-
-Every response includes a `brokerMetadata` field that makes this contract explicit:
-
-```json
-{
-  "data": [...],
-  "brokerMetadata": {
-    "mode": "brokered_single_page",
-    "providerUsed": "semantic_scholar",
-    "continuationSupported": false
-  }
-}
-```
-
-| Field                  | Description                                                                                          |
-| ---------------------- | ---------------------------------------------------------------------------------------------------- |
-| `mode`                 | Always `"brokered_single_page"` for `search_papers`.                                                 |
-| `providerUsed`         | Which provider supplied the results: `core`, `semantic_scholar`, `serpapi_google_scholar`, `arxiv`, or `none` if no provider returned results. |
-| `continuationSupported`| Always `false` — use `search_papers_bulk` for paginated retrieval.                                   |
-
-When SerpApi supplies the results, the response looks like:
-
-```json
-{
-  "data": [
-    {
-      "title": "Attention Is All You Need",
-      "source": "serpapi_google_scholar",
-      "sourceId": "result_id_from_scholar",
-      "canonicalId": "10.xxxx/cluster-or-doi",
-      "year": 2017,
-      "citationCount": 80000
-    }
-  ],
-  "brokerMetadata": {
-    "mode": "brokered_single_page",
-    "providerUsed": "serpapi_google_scholar",
-    "continuationSupported": false
-  }
-}
-```
-
-`brokerMetadata` now also exposes:
-
-- `attemptedProviders` - ordered provider decisions (`returned_results`, `returned_no_results`, `failed`, `skipped`)
-- `semanticScholarOnlyFilters` - which requested filters forced the broker to skip non-compatible providers
-- `recommendedPaginationTool` - currently always `search_papers_bulk` for exhaustive retrieval
-
-#### Cross-provider paper ID portability
-
-Brokered `search_papers` results normalize metadata across providers, but raw
-provider IDs are **not automatically portable** into Semantic Scholar expansion
-tools such as `get_paper_citations`, `get_paper_references`, `get_paper_authors`,
-or the author-pivot flow that follows them. When a brokered result did **not**
-come from Semantic Scholar:
-
-- prefer `paper.recommendedExpansionId` when it is present
-- check `paper.expansionIdStatus` before reusing any returned identifier
-- if `paper.expansionIdStatus` is `not_portable`, do **not** retry with
-  brokered `paperId`, `sourceId`, or `canonicalId`; resolve the paper through a
-  DOI or a Semantic Scholar-native lookup first
-
-This matters for brokered CORE results in particular: when no DOI is available,
-`paper.canonicalId` may still be only a CORE-native identifier rather than a
-Semantic Scholar-compatible expansion ID.
-
-#### Provider order and filter-based skipping
-
-Provider order controls *which providers are eligible and in what order they are attempted*, but compatibility rules still apply. If you request Semantic Scholar-only filters such as `publicationDateOrYear`, `fieldsOfStudy`, `publicationTypes`, `openAccessPdf`, or `minCitationCount`, the broker will skip `core` and `serpapi(_google_scholar)` even if they appear earlier in `providerOrder`. Example: `providerOrder=["core","semantic_scholar","arxiv"]` with `publicationDateOrYear="2020:2024"` will skip CORE and continue to Semantic Scholar because CORE cannot honor that filter.
-
-### Enable/disable search channels
-
-Control which sources are used in the `search_papers` fallback chain via environment variables:
-
-
-| Variable                                 | Default | Description                                                            |
-| ---------------------------------------- | ------- | ---------------------------------------------------------------------- |
-| `PAPER_CHASER_ENABLE_CORE`             | `false` | Use CORE API. Disabled by default until explicitly enabled.             |
-| `PAPER_CHASER_ENABLE_SEMANTIC_SCHOLAR` | `true`  | Use Semantic Scholar.                                                  |
-| `PAPER_CHASER_ENABLE_SERPAPI`          | `false` | Use SerpApi Google Scholar (opt-in, **paid**). Set `SERPAPI_API_KEY`.  |
-| `PAPER_CHASER_ENABLE_ARXIV`            | `true`  | Use arXiv as the default free fallback after Semantic Scholar.         |
-| `PAPER_CHASER_PROVIDER_ORDER`          | `semantic_scholar,arxiv,core,serpapi_google_scholar` | Comma-separated default broker order for `search_papers`. Omit a provider to remove it from the default broker chain. Accepts `serpapi` as a shorthand for `serpapi_google_scholar`. |
-
-SerpApi is disabled by default to prevent unexpected costs. When enabled without an API key, affected tool calls return a clear error rather than silently failing.
-
-SerpApi-specific filters (`publicationDateOrYear`, `fieldsOfStudy`, `publicationTypes`, `openAccessPdf`, `minCitationCount`) bypass SerpApi in the fallback chain (same behaviour as CORE).
-
-Example: enable SerpApi as an additional coverage fallback:
-
-```json
-"env": {
-  "PAPER_CHASER_ENABLE_SERPAPI": "true",
-  "SERPAPI_API_KEY": "your-serpapi-key-here"
-}
-```
-
-
-Example: CORE and arXiv only (skip Semantic Scholar):
-
-```json
-"env": {
-  "PAPER_CHASER_ENABLE_SEMANTIC_SCHOLAR": "false"
-}
-```
-
-Example: prefer Semantic Scholar first, then arXiv for this deployment:
-
-```json
-"env": {
-  "PAPER_CHASER_PROVIDER_ORDER": "semantic_scholar,arxiv"
-}
-```
-
-<details>
-<summary><strong>OpenAlex configuration</strong></summary>
-
-OpenAlex is exposed through the explicit `*_openalex` tools rather than the
-default `search_papers` broker. The OpenAlex tools are enabled by default and do
-not require an API key, but you can configure them with:
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `PAPER_CHASER_ENABLE_OPENALEX` | `true` | Enable or disable the explicit OpenAlex tool family |
-| `OPENALEX_API_KEY` | unset | Optional OpenAlex premium API key |
-| `OPENALEX_MAILTO` | unset | Optional contact email for the OpenAlex polite pool; recommended for production use |
-
-OpenAlex tool year inputs currently accept `YYYY`, `YYYY:YYYY`, `YYYY-YYYY`,
-`YYYY-`, and `-YYYY`. The client currently uses conservative built-in pacing
-and retry defaults (`min_interval=0.05s`, `max_retries=2`) rather than extra
-environment variables.
-
-</details>
-
-<details>
-<summary><strong>Paper enrichment configuration</strong></summary>
-
-Crossref and Unpaywall are exposed as explicit paper-enrichment tools rather
-than broker providers. They do not participate in `search_papers` ranking or
-fallback order. Use them after you already have a paper, DOI, or DOI-bearing
-identifier.
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `PAPER_CHASER_ENABLE_CROSSREF` | `true` | Enable explicit Crossref paper enrichment |
-| `CROSSREF_MAILTO` | unset | Optional contact email included in Crossref requests and user agent metadata |
-| `CROSSREF_TIMEOUT_SECONDS` | `30` | Timeout for Crossref enrichment requests |
-| `PAPER_CHASER_ENABLE_UNPAYWALL` | `true` | Enable explicit Unpaywall OA enrichment |
-| `UNPAYWALL_EMAIL` | unset | Required contact email for Unpaywall lookups |
-| `UNPAYWALL_TIMEOUT_SECONDS` | `30` | Timeout for Unpaywall enrichment requests |
-
-Known-item tools (`search_papers_match`, `get_paper_details`,
-`resolve_citation`) and `search_papers_smart` also expose
-`includeEnrichment=true` for opt-in Crossref + Unpaywall augmentation on the
-final resolved paper or final smart hits. This enrichment is post-resolution and
-does not change provider ordering, retrieval, or ranking.
-
-</details>
-
-<details>
-<summary><strong>ECOS configuration</strong></summary>
-
-ECOS is exposed as a separate species/document tool family rather than a
-`search_papers` provider. It is enabled by default and uses structured Pull
-Reports plus the species-profile JSON that powers the public ECOS species page.
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `PAPER_CHASER_ENABLE_ECOS` | `true` | Enable or disable the ECOS species/document tool family |
-| `ECOS_BASE_URL` | `https://ecos.fws.gov` | Base URL for ECOS species, Pull Reports, and document links |
-| `ECOS_TIMEOUT_SECONDS` | `30` | Timeout for ECOS species/Pull Reports requests |
-| `ECOS_DOCUMENT_TIMEOUT_SECONDS` | `60` | Timeout for ECOS document fetches before Markdown conversion |
-| `ECOS_DOCUMENT_CONVERSION_TIMEOUT_SECONDS` | `60` | Timeout for ECOS Markdown conversion after the document bytes have been fetched |
-| `ECOS_MAX_DOCUMENT_SIZE_MB` | `25` | Maximum fetched document size before returning `extractionStatus=too_large` |
-| `ECOS_VERIFY_TLS` | `true` | Verify TLS certificates for ECOS species, Pull Reports, and document requests |
-| `ECOS_CA_BUNDLE` | unset | Optional CA bundle path to use when ECOS TLS verification needs a custom trust store |
-
-The core package now includes `markitdown[pdf]` so `get_document_text_ecos` can
-convert PDF, HTML, and text-like ECOS documents to Markdown with plugins kept
-off by default.
-
-</details>
-
-<details>
-<summary><strong>Federal Register and GovInfo configuration</strong></summary>
-
-Federal Register discovery (`search_federal_register`) is keyless. GovInfo-backed
-retrieval (`get_federal_register_document`, `get_cfr_text`) uses `GOVINFO_API_KEY`
-for authoritative content. Without that key, Federal Register lookups can still
-fall back to FederalRegister.gov HTML when a document number is known, but CFR
-retrieval remains GovInfo-only.
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `PAPER_CHASER_ENABLE_FEDERAL_REGISTER` | `true` | Enable or disable the Federal Register discovery tool family |
-| `PAPER_CHASER_ENABLE_GOVINFO_CFR` | `true` | Enable or disable GovInfo-backed Federal Register document and CFR retrieval |
-| `GOVINFO_API_KEY` | unset | Required for authoritative `get_federal_register_document` and `get_cfr_text` calls; without a key, Federal Register lookup falls back to FederalRegister.gov HTML for known document numbers |
-| `FEDERAL_REGISTER_TIMEOUT_SECONDS` | `30` | Timeout for FederalRegister.gov discovery requests |
-| `GOVINFO_TIMEOUT_SECONDS` | `30` | Timeout for GovInfo metadata and granule requests |
-| `GOVINFO_DOCUMENT_TIMEOUT_SECONDS` | `60` | Timeout for GovInfo document fetches before Markdown conversion |
-| `GOVINFO_MAX_DOCUMENT_SIZE_MB` | `25` | Maximum fetched GovInfo document size before returning a structured `too_large` warning |
-
-</details>
-
-<details>
-<summary><strong>AI augmentation configuration</strong></summary>
-
-The raw retrieval tools remain the contract of record. The smart layer is
-additive and opt-in.
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `OPENAI_API_KEY` | unset | Optional API key for the OpenAI-backed smart layer. If the smart layer is enabled without a key, the runtime falls back to deterministic planning/synthesis helpers. |
-| `PAPER_CHASER_ENABLE_AGENTIC` | `false` | Enable additive smart tools such as `search_papers_smart`. |
-| `PAPER_CHASER_AGENTIC_PROVIDER` | `openai` | Provider bundle for the smart layer. Current supported values are `openai` and `deterministic`. |
-| `PAPER_CHASER_PLANNER_MODEL` | `gpt-5.4-mini` | Planning / routing model for smart discovery. Lower-latency GPT-5.4 tier for query analysis and routing. |
-| `PAPER_CHASER_SYNTHESIS_MODEL` | `gpt-5.4` | Synthesis model for grounded answers and theme labeling. |
-| `PAPER_CHASER_EMBEDDING_MODEL` | `text-embedding-3-large` | Embedding model name for smart ranking/indexing metadata. |
-| `PAPER_CHASER_DISABLE_EMBEDDINGS` | `true` | Disable all embedding generation and embedding-based similarity paths. Smart workflows fall back to lexical scoring, and FAISS-backed workspace indexing is effectively disabled even if selected. |
-| `PAPER_CHASER_AGENTIC_OPENAI_TIMEOUT_SECONDS` | `30` | Client-side timeout for OpenAI-backed smart-layer requests. Keeps planner, synthesis, and embedding calls from hanging on the critical path for minutes before degrading to deterministic or lexical fallbacks. |
-| `PAPER_CHASER_AGENTIC_INDEX_BACKEND` | `memory` | Workspace index backend. `memory` is the recommended default for the current small saved result sets; `faiss` is an optional upgrade when the `ai-faiss` extra is installed and the deployment image includes it. |
-| `PAPER_CHASER_SESSION_TTL_SECONDS` | `1800` | TTL for cached reusable `searchSessionId` result sets. |
-| `PAPER_CHASER_ENABLE_AGENTIC_TRACE_LOG` | `false` | Emit local JSONL-style trace events for smart workflows. |
-
-When the smart layer is enabled, the new tools are:
-
-- `search_papers_smart` for concept-level discovery, query expansion, and multi-provider fusion
-- `ask_result_set` for grounded QA, claim checks, and comparisons over a saved `searchSessionId`
-- `map_research_landscape` for theme clustering, gaps, and disagreements
-- `expand_research_graph` for compact citation/reference/author graph expansion
-
-</details>
-
-<details>
-<summary><strong>Transport configuration</strong></summary>
-
-The server defaults to local **stdio** transport, which is the recommended mode for desktop MCP clients. FastMCP also supports HTTP-compatible transports for local development, integration testing, and controlled deployments:
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `PAPER_CHASER_TRANSPORT` | `stdio` | One of `stdio`, `http`, `streamable-http`, or `sse` |
-| `PAPER_CHASER_HTTP_HOST` | `127.0.0.1` | Host to bind when using an HTTP transport |
-| `PAPER_CHASER_HTTP_PORT` | `8000` | Port to bind when using an HTTP transport |
-| `PAPER_CHASER_HTTP_PATH` | `/mcp` | MCP endpoint path when using an HTTP transport |
-| `PAPER_CHASER_HTTP_AUTH_TOKEN` | unset | Optional shared token required by the deployment wrapper for requests to the MCP endpoint |
-| `PAPER_CHASER_HTTP_AUTH_HEADER` | `authorization` | Header name checked by the deployment wrapper; `authorization` expects `Bearer <token>` |
-| `PAPER_CHASER_ALLOWED_ORIGINS` | unset | Optional comma-separated Origin allowlist enforced by the deployment wrapper |
-
-`.env.example` intentionally documents `PAPER_CHASER_TRANSPORT` and `PAPER_CHASER_HTTP_PATH`, but not `PAPER_CHASER_HTTP_HOST` or `PAPER_CHASER_HTTP_PORT`. For direct shell runs you can still set those two variables explicitly; Compose keeps the container binding fixed and instead exposes `PAPER_CHASER_PUBLISHED_HOST` / `PAPER_CHASER_PUBLISHED_PORT` for the local host-side mapping.
-
-> [!IMPORTANT]
-> HTTP transport compatibility is available, but this repository does **not**
-> yet ship a hardened public deployment profile. Before exposing the server
-> beyond localhost, add Origin validation/allowlisting, authentication, and
-> TLS in front of the ASGI app. This follows the MCP HTTP transport guidance
-> confirmed via Context7: servers must validate `Origin` and should implement
-> authentication for HTTP transports.
-
-Use `paper_chaser_mcp.server.build_http_app(...)` if you need to inject
-deployment-specific Starlette middleware around the FastMCP ASGI app.
-
-For private Azure hosting, this repository also ships
-`paper_chaser_mcp.deployment:app`, an ASGI wrapper that adds `/healthz`,
-optional shared-token authentication, and optional Origin allowlisting in front
-of the MCP app. The Azure deployment scaffold in [docs/azure-deployment.md](docs/azure-deployment.md)
-uses that wrapper behind private Azure API Management and private endpoints so
-trusted clients never see the backend token or upstream provider API keys.
-The tracked Azure workflow is manual-only and supports a `bootstrap` mode for
-first-time environment bring-up before the `full` private-runner deployment.
-
-Example local/integration HTTP run:
+| Search broker | `semantic_scholar,arxiv,core,serpapi_google_scholar` | `PAPER_CHASER_ENABLE_SEMANTIC_SCHOLAR`, `PAPER_CHASER_ENABLE_ARXIV`, `PAPER_CHASER_ENABLE_CORE`, `PAPER_CHASER_ENABLE_SERPAPI`, `PAPER_CHASER_PROVIDER_ORDER` | SerpApi is opt-in and paid; CORE is off by default |
+| OpenAlex tool family | enabled | `PAPER_CHASER_ENABLE_OPENALEX`, `OPENALEX_API_KEY`, `OPENALEX_MAILTO` | Explicit tool family, not a default broker hop |
+| Enrichment | enabled | `PAPER_CHASER_ENABLE_CROSSREF`, `CROSSREF_MAILTO`, `CROSSREF_TIMEOUT_SECONDS`, `PAPER_CHASER_ENABLE_UNPAYWALL`, `UNPAYWALL_EMAIL`, `UNPAYWALL_TIMEOUT_SECONDS` | Used after you already have a paper or DOI |
+| ECOS | enabled | `PAPER_CHASER_ENABLE_ECOS`, `ECOS_BASE_URL`, `ECOS_TIMEOUT_SECONDS`, document timeout and size vars, TLS vars | Species and document workflows |
+| Federal Register / GovInfo | enabled | `PAPER_CHASER_ENABLE_FEDERAL_REGISTER`, `PAPER_CHASER_ENABLE_GOVINFO_CFR`, `GOVINFO_API_KEY`, GovInfo timeout and size vars | Federal Register search is keyless; authoritative CFR retrieval uses GovInfo |
+| Smart layer | disabled | `OPENAI_API_KEY`, `PAPER_CHASER_ENABLE_AGENTIC`, model and index vars | Additive only; raw tools remain the stable contract |
+
+Broker rules that matter most:
+
+- Default search fallback order is Semantic Scholar, then arXiv, then CORE, then SerpApi when enabled.
+- `preferredProvider`, `providerOrder`, and `PAPER_CHASER_PROVIDER_ORDER` accept `core`, `semantic_scholar`, `arxiv`, and `serpapi` or `serpapi_google_scholar`.
+- Semantic Scholar-only filters such as `publicationDateOrYear`, `fieldsOfStudy`, `publicationTypes`, `openAccessPdf`, and `minCitationCount` can force the broker to skip incompatible providers.
+- Broker responses surface `brokerMetadata.providerUsed`, `brokerMetadata.attemptedProviders`, and `brokerMetadata.recommendedPaginationTool` so agents can follow the right next step.
+
+### Transport and deployment modes
+
+| Mode | Default | Main variables | Use when |
+| --- | --- | --- | --- |
+| Desktop stdio | `stdio` | none required | Claude Desktop, Cursor, local MCP subprocess launches |
+| Direct HTTP run | opt in | `PAPER_CHASER_TRANSPORT`, `PAPER_CHASER_HTTP_HOST`, `PAPER_CHASER_HTTP_PORT`, `PAPER_CHASER_HTTP_PATH` | Local integration testing without the deployment wrapper |
+| HTTP wrapper | opt in | `PAPER_CHASER_HTTP_AUTH_TOKEN`, `PAPER_CHASER_HTTP_AUTH_HEADER`, `PAPER_CHASER_ALLOWED_ORIGINS` | Local parity with hosted HTTP deployments |
+| Docker Compose publish settings | localhost defaults | `PAPER_CHASER_PUBLISHED_HOST`, `PAPER_CHASER_PUBLISHED_PORT` | Control the host-side HTTP port mapping only |
+
+Key distinctions:
+
+- `PAPER_CHASER_HTTP_HOST` and `PAPER_CHASER_HTTP_PORT` control the direct shell and hosted deployments. Docker Compose keeps the container bind at `0.0.0.0:8080` and uses `PAPER_CHASER_PUBLISHED_HOST` / `PAPER_CHASER_PUBLISHED_PORT` for the host-side mapping.
+- `paper-chaser-mcp deployment-http` runs the deployment wrapper used by Compose and Azure. It adds `/healthz` plus optional auth and Origin enforcement in front of the MCP endpoint.
+
+Example direct local HTTP run:
 
 ```bash
 PAPER_CHASER_TRANSPORT=streamable-http \
-PAPER_CHASER_HTTP_HOST=0.0.0.0 \
+PAPER_CHASER_HTTP_HOST=127.0.0.1 \
 PAPER_CHASER_HTTP_PORT=8000 \
 python -m paper_chaser_mcp
 ```
 
-That path serves the FastMCP app directly over streamable HTTP at
-`http://127.0.0.1:8000/mcp` by default. It is the simplest local option when
-you want HTTP transport without the deployment wrapper.
-
-If you want local parity with the HTTP wrapper used by Compose and Azure,
-run:
-
-```bash
-PORT=8000 PAPER_CHASER_HTTP_HOST=127.0.0.1 paper-chaser-mcp deployment-http
-```
-
-`paper-chaser-mcp deployment-http` launches the same
-`paper_chaser_mcp.deployment:app` wrapper used by hosted HTTP deployments.
-It prefers `PORT` when it is set, and otherwise falls back to
-`PAPER_CHASER_HTTP_PORT`. That wrapper keeps the same streamable HTTP MCP
-transport, adds `/healthz`, and optionally enforces
-`PAPER_CHASER_HTTP_AUTH_TOKEN` and `PAPER_CHASER_ALLOWED_ORIGINS` for
-`/mcp`.
-
-In all of these local HTTP modes, clients talk only to your local MCP endpoint.
-They do **not** need upstream provider API keys. Those keys, when present, stay
-server-side and only let your local server use higher provider limits or
-optional paid providers such as SerpApi.
-
-</details>
+If you need the full Azure deployment story, including the `bootstrap` and `full` workflow modes, read [docs/azure-deployment.md](docs/azure-deployment.md), [docs/azure-architecture.md](docs/azure-architecture.md), and [docs/azure-security-model.md](docs/azure-security-model.md).
 
 ### Docker MCP package (stdio)
 
@@ -617,21 +292,16 @@ GitHub OIDC.
 ### Docker Compose (HTTP wrapper mode)
 
 For local HTTP testing, MCP Inspector, or bridge-style integrations, this repo
-ships `docker-compose.yaml` with localhost-only defaults. Compose now
+ships `docker-compose.yaml` with localhost-only defaults. Compose
 explicitly starts the `deployment-http` subcommand, so HTTP wrapper behavior
 does not depend on the image's default transport.
 
-Compose intentionally keeps the container bind host and internal port fixed at
-`0.0.0.0:8080`, because those are container-runtime details rather than
-consumer-facing behavior. The compose file still lets downstream users override
-the user-facing knobs that matter locally: transport, MCP path, provider keys,
-provider toggles, auth, and the published host port mapping.
-
-Compose also intentionally overrides the app default transport to `streamable-http` inside the container. The underlying application default remains `stdio`; the compose file opts into HTTP wrapper mode so browser tools and bridge-style clients can connect over `http://127.0.0.1:8000/mcp` without extra shell flags.
-
-As a rule of thumb for this repo: make behavior configurable, keep secrets out
-of git, and avoid exposing infrastructure internals as knobs unless a
-downstream consumer actually benefits from changing them.
+Compose keeps the container bind host and internal port fixed at
+`0.0.0.0:8080` and overrides the app default transport to `streamable-http`,
+so browser tools and bridge-style clients can connect over
+`http://127.0.0.1:8000/mcp` without extra shell flags. The compose file
+exposes the user-facing knobs: transport, MCP path, provider keys, provider
+toggles, auth, and the published host port mapping.
 
 1. Copy `.env.example` to `.env`.
 2. Fill in any optional provider keys you want to use.
@@ -821,14 +491,14 @@ California least tern is a representative end-to-end ECOS flow:
 - Prompt: `plan_citation_chase` - citation-expansion planning prompt
 - Prompt: `refine_query` - bounded query-refinement prompt for broad or noisy searches
 
-Primary read-tool responses now also surface:
+Primary read-tool responses also surface:
 
 - `agentHints` - recommended next tools, retry guidance, and warnings
 - `clarification` - bounded clarification fallback when the server cannot safely disambiguate on its own
 - `resourceUris` - follow-on resources that compatible clients can open directly
 - `searchSessionId` - reusable result-set handle for smart follow-up workflows and cached expansion/search trails
 
-## Microsoft Packaging Assets
+## Microsoft packaging assets
 
 This repository keeps one universal MCP server surface and ships additive
 packaging assets for Microsoft-oriented clients:
@@ -875,6 +545,24 @@ Run the local test suite:
 pytest
 ```
 
+Install and run the configured pre-commit hooks:
+
+```bash
+pre-commit install
+pre-commit run --all-files
+```
+
+`pre-commit install` installs both the fast `pre-commit` hooks and the
+heavier `pre-push` gates configured in `.pre-commit-config.yaml`. Manual-stage
+hooks are not invoked automatically; run `pre-commit run --hook-stage manual
+--all-files` (or the direct commands above) when you want the full local gate.
+
+The development extras include `pytest`, `pytest-asyncio`, `pytest-cov`,
+`ruff`, `mypy`, `bandit`, `build`, `pip-audit`, `types-defusedxml`, and
+`pre-commit`. GitHub dependency automation is configured for both Python
+packages and GitHub Actions via Dependabot, with pull requests checked by the
+dependency review workflow.
+
 ### Full local validation
 
 The repo's CI-equivalent local gate is broader than `pytest` alone. For a
@@ -913,113 +601,43 @@ python scripts/validate_deployment.py --require-az --require-docker --image-tag 
 
 ### GitHub Agentic Workflow smoke test
 
-The repository now includes an agentic regression workflow source at
-`.github/workflows/test-paper-chaser.md` and its compiled lock file at
-`.github/workflows/test-paper-chaser.lock.yml`. After editing the Markdown
-workflow, recompile it and then run the normal validation stack so pre-commit
-can normalize the generated lock file:
+The repository includes an agentic regression workflow at
+`.github/workflows/test-paper-chaser.md` (source) and
+`.github/workflows/test-paper-chaser.lock.yml` (compiled lock file). It runs
+the agent against the local MCP server inside GitHub Actions, exercises the
+primary golden paths, evaluates agent UX quality, and can file actionable
+issues for follow-on work.
+
+After editing the Markdown workflow, recompile and validate:
 
 ```bash
 gh aw compile test-paper-chaser --dir .github/workflows
+pre-commit run --all-files
 ```
 
-What this workflow does:
+Commit both the `.md` source and `.lock.yml` output together, then run
+`Test Paper Chaser MCP` from the GitHub Actions UI.
 
-- Runs the agent against the local `paper-chaser` MCP server inside GitHub
-  Actions. Set the `GH_AW_MODEL_AGENT_COPILOT` Actions variable to `gpt-5.4`
-  (or another model) to control which model is used.
-- Exercises the primary golden paths instead of every tool: quick discovery,
-  known-item lookup, bulk pagination, citation chasing, author pivot, and
-  optional SerpApi citation export.
-- **Evaluates agent UX quality** in every step: intuitiveness, unnecessary
-  round trips, missing features, confusing field contracts, and dead-end
-  responses. Produces a structured "UX friction summary" before creating any
-  issue.
-- Supports manual `workflow_dispatch` inputs so maintainers can run a default
-  `smoke` pass, a broader `comprehensive` UX review, or a `feature_probe` with
-  an optional focus prompt for a new feature or suspected rough edge.
-- Produces a high-level smoke test that catches agent-facing workflow regressions
-  that unit tests can miss and can turn concrete findings into one actionable
-  GitHub issue for follow-on coding-agent work.
-- Runs manually only. This is intentional because the workflow can consume
-  repository secrets in a public repo.
+**Workflow modes:** `smoke` (default), `comprehensive` (broader UX review), or
+`feature_probe` (with an optional focus prompt). Select via `workflow_dispatch`
+inputs.
 
-How it runs in GitHub:
+**Required secrets:** `COPILOT_GITHUB_TOKEN` is required.
+`GH_AW_MODEL_AGENT_COPILOT` (Actions variable, optional) controls the agent
+model. `CORE_API_KEY` and `SEMANTIC_SCHOLAR_API_KEY` are optional.
 
-- The editable source of truth is `.github/workflows/test-paper-chaser.md`.
-- `gh aw compile ...` generates `.github/workflows/test-paper-chaser.lock.yml`,
-  which is the Actions workflow file GitHub actually runs.
-- Once both files are committed to the default branch and the required secrets
-  are configured, maintainers run the workflow manually with
-  `workflow_dispatch` from the Actions tab.
-- Manual dispatches can select `smoke`, `comprehensive`, or `feature_probe`
-  mode and optionally pass a free-form focus prompt.
-
-Required secrets and variables for this workflow:
-
-- `COPILOT_GITHUB_TOKEN` is required. The GitHub Copilot CLI engine fails in
-  the activation job before the repo checkout or MCP startup steps if this
-  secret is not present.
-- `GH_AW_MODEL_AGENT_COPILOT` (Actions variable, optional): controls the
-  agent model. Set to `gpt-5.4` to use GPT-5.4. If unset, the engine uses
-  its default model.
-- `CORE_API_KEY` is optional.
-- `SEMANTIC_SCHOLAR_API_KEY` is optional.
-
-How to update and use it:
-
-1. Edit `.github/workflows/test-paper-chaser.md`.
-2. Recompile it with `gh aw compile test-paper-chaser --dir .github/workflows`.
-3. Run the normal validation stack so pre-commit can normalize the generated
-   lock file.
-4. Commit both the `.md` source and `.lock.yml` output together.
-5. Push the branch, then run `Test Paper Chaser MCP` from the GitHub Actions
-   UI. For on-demand UX reviews, use `workflow_dispatch` inputs to choose the
-   run mode and provide an optional focus prompt such as a new feature, a
-   provider-specific flow, or a confusing agent interaction to probe.
-
-The repository also includes `.github/workflows/agentic-assign.yml`, a
-lightweight workflow that automatically assigns GitHub Copilot to any issue
-labeled both `agentic` and `needs-copilot`, unless the issue also carries
-`needs-human`, `blocked`, or `no-agent`. It listens to direct `issues` events
-and to completed `Test Paper Chaser MCP` runs so verifier-created issues still
-get assigned even when the original issue event does not fan out into a second
-workflow run. For the actual Copilot assignment API call it prefers
-`GH_AW_GITHUB_TOKEN`, then falls back to `COPILOT_GITHUB_TOKEN`, then to the
-default Actions token. This avoids 403 failures on repositories where the
-default `GITHUB_TOKEN` cannot perform Copilot issue assignment even though the
-workflow has `issues: write` permissions.
-
-The normal `Validate` workflow now also recompiles `test-paper-chaser.md` on
-CI and fails if `.github/workflows/test-paper-chaser.lock.yml` is stale, so
-pull requests cannot silently drift out of sync.
+The repository also includes `.github/workflows/agentic-assign.yml`, which
+automatically assigns GitHub Copilot to issues labeled `agentic` and
+`needs-copilot` (unless also labeled `needs-human`, `blocked`, or `no-agent`).
+The `Validate` workflow recompiles `test-paper-chaser.md` on CI and fails if
+the lock file is stale, so pull requests cannot silently drift out of sync.
+The workflow is "deployed" when GitHub Actions sees the committed `.lock.yml`
+on the branch where it should run.
 
 See [SECURITY.md](SECURITY.md) for the public-repo security posture and the
 recommended private reporting path for vulnerabilities.
 
-For this repo, there is no separate deployment step beyond checking in the
-workflow source and compiled lock file. The workflow is "deployed" when GitHub
-Actions sees the committed `.lock.yml` on the branch where it should run.
-
-Install and run the configured pre-commit hooks:
-
-```bash
-pre-commit install
-pre-commit run --all-files
-```
-
-`pre-commit install` now installs both the fast `pre-commit` hooks and the
-heavier `pre-push` gates configured in `.pre-commit-config.yaml`. Manual-stage
-hooks are not invoked automatically; run `pre-commit run --hook-stage manual
---all-files` (or the direct commands above) when you want the full local gate.
-
-The development extras now include `pytest`, `pytest-asyncio`, `pytest-cov`,
-`ruff`, `mypy`, `bandit`, `build`, `pip-audit`, `types-defusedxml`, and
-`pre-commit`.
-
-GitHub dependency automation is configured for both Python packages and GitHub Actions via Dependabot, with pull requests checked by the dependency review workflow.
-
-For maintainer orientation after the module split, start with `docs/agent-handoff.md`. The public MCP surface stays in `paper_chaser_mcp/server.py`, while implementation now lives in `paper_chaser_mcp/dispatch.py`, `paper_chaser_mcp/search.py`, `paper_chaser_mcp/tools.py`, `paper_chaser_mcp/runtime.py`, `paper_chaser_mcp/models/`, and provider subpackages under `paper_chaser_mcp/clients/`.
+For maintainer orientation after the module split, start with `docs/agent-handoff.md`. The public MCP surface stays in `paper_chaser_mcp/server.py`, while implementation lives in `paper_chaser_mcp/dispatch.py`, `paper_chaser_mcp/search.py`, `paper_chaser_mcp/tools.py`, `paper_chaser_mcp/runtime.py`, `paper_chaser_mcp/models/`, and provider subpackages under `paper_chaser_mcp/clients/`.
 
 ## Guides
 
@@ -1032,7 +650,7 @@ For maintainer orientation after the module split, start with `docs/agent-handof
 - [Provider Upgrade Program](docs/provider-upgrade-program.md) - provider roles, latency profiles, diagnostics, benchmark corpus, and acceptance gates for the reliability-first provider upgrade.
 - [OpenAlex API Guide](docs/openalex-api-guide.md) - implementation-focused guidance for the repo's explicit OpenAlex MCP surface, including authentication, credit-based limits, paging, `/works` semantics, and normalization caveats.
 - [Semantic Scholar API Guide](docs/semantic-scholar-api-guide.md) - practical guidance for respectful and effective Semantic Scholar API usage with async rate limiting, retries, and `.env`-based local development.
-- [SerpApi Google Scholar Guide](docs/serpapi-google-scholar-api-guide.md) - deep research notes on SerpApi capabilities, tradeoffs, and cost/compliance considerations; the repo now ships the explicit cited-by, versions, author, account, and citation-format flows documented there.
+- [SerpApi Google Scholar Guide](docs/serpapi-google-scholar-api-guide.md) - deep research notes on SerpApi capabilities, tradeoffs, and cost/compliance considerations; the repo ships the explicit cited-by, versions, author, account, and citation-format flows documented there.
 - [FastMCP Migration Plan](docs/fastmcp-migration-plan.md) - historical architecture rationale for the FastMCP migration and compatibility surface.
 
 ## License
