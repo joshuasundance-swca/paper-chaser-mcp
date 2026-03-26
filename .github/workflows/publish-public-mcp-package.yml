@@ -59,7 +59,7 @@ jobs:
           set -euo pipefail
           server_version="$(jq -re '.version' server.json)"
           package_identifier="$(jq -re '.packages[0].identifier' server.json)"
-          image_name="${package_identifier%:${server_version}}"
+          image_name="${package_identifier%":${server_version}"}"
           {
             echo "name=${image_name}"
             echo "ci_ref=${image_name}:ci-${GITHUB_SHA}"
@@ -188,7 +188,7 @@ jobs:
           set -euo pipefail
           server_version="$(jq -re '.version' server.json)"
           package_identifier="$(jq -re '.packages[0].identifier' server.json)"
-          echo "name=${package_identifier%:${server_version}}" >> "$GITHUB_OUTPUT"
+          echo "name=${package_identifier%":${server_version}"}" >> "$GITHUB_OUTPUT"
 
       - name: Read MCP server metadata
         id: server
