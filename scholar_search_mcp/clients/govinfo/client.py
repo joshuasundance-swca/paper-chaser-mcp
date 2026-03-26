@@ -501,7 +501,7 @@ class GovInfoClient:
         citation = self._cfr_citation(title_number, part_number, section_number)
         query_parts = ["collection:(CFR)", f"cfrtitlenum:{title_number}", f"cfrpartnum:{part_number}"]
         if section_number:
-            query_parts.append(f"cfrsectionnum:\"{part_number}.{section_number}\"")
+            query_parts.append(f'cfrsectionnum:"{part_number}.{section_number}"')
         if resolved_revision_year is not None:
             query_parts.append(f"publishdate:{resolved_revision_year}")
         query = " and ".join(query_parts)
