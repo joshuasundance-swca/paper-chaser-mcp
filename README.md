@@ -145,6 +145,39 @@ files. Docker now keeps those local-only files out of the image build context.
 
 ## Configuration
 
+### Configuration overview
+
+The repo supports four common setup patterns:
+
+| Setup | Default transport | Start here | Main configuration knobs |
+| --- | --- | --- | --- |
+| Desktop MCP client (`python -m` / `paper-chaser-mcp`) | `stdio` | Claude Desktop or Cursor examples below | Provider toggles, provider API keys, optional smart-layer settings |
+| Direct local HTTP run | `streamable-http` or `http` when you opt in | Transport section below | `PAPER_CHASER_TRANSPORT`, `PAPER_CHASER_HTTP_HOST`, `PAPER_CHASER_HTTP_PORT`, `PAPER_CHASER_HTTP_PATH` |
+| Local Docker Compose | HTTP wrapper over `streamable-http` | `docker-compose.yaml` section below | `.env.example` values plus `PAPER_CHASER_PUBLISHED_HOST` / `PAPER_CHASER_PUBLISHED_PORT` |
+| Private Azure deployment | HTTP wrapper behind APIM | [docs/azure-deployment.md](docs/azure-deployment.md) | App env vars plus Azure secrets, Bicep params, and deployment workflow settings |
+
+For local development, copy `.env.example` to `.env` or `.env.local` and fill in only the providers you actually use. That file is the public local-config contract for shell runs and Docker Compose. Azure deployment identifiers and secrets are intentionally documented separately in [docs/azure-deployment.md](docs/azure-deployment.md), not in `.env.example`.
+
+### Environment variable map
+
+The application-level variables are grouped like this:
+
+| Group | Variables | Notes |
+| --- | --- | --- |
+| Search broker | `PAPER_CHASER_ENABLE_CORE`, `PAPER_CHASER_ENABLE_SEMANTIC_SCHOLAR`, `PAPER_CHASER_ENABLE_ARXIV`, `PAPER_CHASER_ENABLE_SERPAPI`, `PAPER_CHASER_PROVIDER_ORDER`, provider API keys | Controls the default `search_papers` fallback chain |
+| Explicit provider/tool families | `PAPER_CHASER_ENABLE_OPENALEX`, `PAPER_CHASER_ENABLE_CROSSREF`, `PAPER_CHASER_ENABLE_UNPAYWALL`, `PAPER_CHASER_ENABLE_ECOS`, `PAPER_CHASER_ENABLE_FEDERAL_REGISTER`, `PAPER_CHASER_ENABLE_GOVINFO_CFR` | These families are explicit tool surfaces rather than broker hops |
+| Provider runtime tuning | `CROSSREF_TIMEOUT_SECONDS`, `UNPAYWALL_TIMEOUT_SECONDS`, `ECOS_TIMEOUT_SECONDS`, `ECOS_DOCUMENT_TIMEOUT_SECONDS`, `ECOS_DOCUMENT_CONVERSION_TIMEOUT_SECONDS`, `ECOS_MAX_DOCUMENT_SIZE_MB`, `ECOS_VERIFY_TLS`, `ECOS_CA_BUNDLE`, `FEDERAL_REGISTER_TIMEOUT_SECONDS`, `GOVINFO_TIMEOUT_SECONDS`, `GOVINFO_DOCUMENT_TIMEOUT_SECONDS`, `GOVINFO_MAX_DOCUMENT_SIZE_MB` | Timeouts, size bounds, and TLS behavior |
+| Smart layer | `OPENAI_API_KEY`, `PAPER_CHASER_ENABLE_AGENTIC`, `PAPER_CHASER_AGENTIC_PROVIDER`, `PAPER_CHASER_PLANNER_MODEL`, `PAPER_CHASER_SYNTHESIS_MODEL`, `PAPER_CHASER_EMBEDDING_MODEL`, `PAPER_CHASER_DISABLE_EMBEDDINGS`, `PAPER_CHASER_AGENTIC_OPENAI_TIMEOUT_SECONDS`, `PAPER_CHASER_AGENTIC_INDEX_BACKEND`, `PAPER_CHASER_SESSION_TTL_SECONDS`, `PAPER_CHASER_ENABLE_AGENTIC_TRACE_LOG` | Additive smart workflows only |
+| Direct HTTP runtime | `PAPER_CHASER_TRANSPORT`, `PAPER_CHASER_HTTP_HOST`, `PAPER_CHASER_HTTP_PORT`, `PAPER_CHASER_HTTP_PATH` | Used for direct shell runs and hosted HTTP bindings |
+| HTTP wrapper security | `PAPER_CHASER_HTTP_AUTH_TOKEN`, `PAPER_CHASER_HTTP_AUTH_HEADER`, `PAPER_CHASER_ALLOWED_ORIGINS` | Enforced by the deployment wrapper rather than the raw stdio runtime |
+| Docker Compose publish settings | `PAPER_CHASER_PUBLISHED_HOST`, `PAPER_CHASER_PUBLISHED_PORT` | Controls the host-side port mapping only |
+
+The distinction that tends to look inconsistent at first is intentional:
+
+- `.env.example` includes the shared local-shell and compose-facing knobs.
+- `PAPER_CHASER_HTTP_HOST` and `PAPER_CHASER_HTTP_PORT` are supported runtime variables for direct shell runs and hosted deployments, but Compose intentionally does not expose them because the container bind host and internal port stay fixed at `0.0.0.0:8080`.
+- Compose exposes `PAPER_CHASER_PUBLISHED_HOST` and `PAPER_CHASER_PUBLISHED_PORT` instead, because those are the user-facing knobs for local HTTP access.
+
 ### Claude Desktop
 
 Edit the config file:
@@ -215,7 +248,12 @@ The server validates those boundaries and returns an actionable `INVALID_CURSOR`
 error if a cursor is malformed, cross-tool, or stale for the current query
 context.
 
-### API keys (optional)
+### Search broker configuration
+
+These settings control the default `search_papers` broker path. Provider-specific
+families such as OpenAlex, Crossref, Unpaywall, ECOS, Federal Register, and
+GovInfo are documented separately below because they are explicit tool surfaces,
+not broker fallbacks.
 
 **Default search fallback order:** When you call `search_papers`, the server tries sources in order and uses the first that succeeds:
 
@@ -481,6 +519,8 @@ The server defaults to local **stdio** transport, which is the recommended mode 
 | `PAPER_CHASER_HTTP_AUTH_HEADER` | `authorization` | Header name checked by the deployment wrapper; `authorization` expects `Bearer <token>` |
 | `PAPER_CHASER_ALLOWED_ORIGINS` | unset | Optional comma-separated Origin allowlist enforced by the deployment wrapper |
 
+`.env.example` intentionally documents `PAPER_CHASER_TRANSPORT` and `PAPER_CHASER_HTTP_PATH`, but not `PAPER_CHASER_HTTP_HOST` or `PAPER_CHASER_HTTP_PORT`. For direct shell runs you can still set those two variables explicitly; Compose keeps the container binding fixed and instead exposes `PAPER_CHASER_PUBLISHED_HOST` / `PAPER_CHASER_PUBLISHED_PORT` for the local host-side mapping.
+
 > [!IMPORTANT]
 > HTTP transport compatibility is available, but this repository does **not**
 > yet ship a hardened public deployment profile. Before exposing the server
@@ -586,6 +626,8 @@ Compose intentionally keeps the container bind host and internal port fixed at
 consumer-facing behavior. The compose file still lets downstream users override
 the user-facing knobs that matter locally: transport, MCP path, provider keys,
 provider toggles, auth, and the published host port mapping.
+
+Compose also intentionally overrides the app default transport to `streamable-http` inside the container. The underlying application default remains `stdio`; the compose file opts into HTTP wrapper mode so browser tools and bridge-style clients can connect over `http://127.0.0.1:8000/mcp` without extra shell flags.
 
 As a rule of thumb for this repo: make behavior configurable, keep secrets out
 of git, and avoid exposing infrastructure internals as knobs unless a
@@ -999,6 +1041,24 @@ MIT
 
 ## Links
 
-- [CORE API v3 Documentation](https://api.core.ac.uk/docs/v3)
+### Protocol and runtime
+
+- [Model Context Protocol](https://modelcontextprotocol.io/)
+- [FastMCP](https://gofastmcp.com/)
+- [SerpApi pricing](https://serpapi.com/pricing)
+
+### Scholarly providers
+
 - [Semantic Scholar API](https://api.semanticscholar.org/api-docs)
 - [arXiv API User's Manual](https://info.arxiv.org/help/api/user-manual.html)
+- [CORE API v3 Documentation](https://api.core.ac.uk/docs/v3)
+- [OpenAlex API docs](https://docs.openalex.org/)
+- [SerpApi Google Scholar API](https://serpapi.com/google-scholar-api)
+- [Crossref REST API](https://www.crossref.org/documentation/retrieve-metadata/rest-api/)
+- [Unpaywall API](https://unpaywall.org/products/api)
+
+### Regulatory and species sources
+
+- [ECOS](https://ecos.fws.gov/)
+- [FederalRegister.gov API](https://www.federalregister.gov/developers/documentation/api/v1)
+- [GovInfo API](https://api.govinfo.gov/docs/)
