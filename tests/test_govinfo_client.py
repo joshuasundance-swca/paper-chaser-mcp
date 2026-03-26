@@ -18,6 +18,14 @@ async def test_govinfo_get_cfr_text_uses_x_api_key_and_prefers_xml() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["x-api-key"] == "gov-key"
         if request.method == "POST" and request.url.path == "/search":
+            import json
+
+            body = json.loads(request.content)
+            assert "cfrtitlenum:40" in body["query"]
+            assert "cfrpartnum:122" in body["query"]
+            assert 'cfrsectionnum:"122.26"' in body["query"]
+            assert "publishdate:2025" in body["query"]
+            assert body.get("historical") is True
             return httpx.Response(
                 200,
                 json={
@@ -70,6 +78,14 @@ async def test_govinfo_get_cfr_text_extracts_cfr_xml_without_markitdown() -> Non
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST" and request.url.path == "/search":
+            import json
+
+            body = json.loads(request.content)
+            assert "cfrtitlenum:50" in body["query"]
+            assert "cfrpartnum:17" in body["query"]
+            assert 'cfrsectionnum:"17.11"' in body["query"]
+            assert "publishdate:2024" in body["query"]
+            assert body.get("historical") is True
             return httpx.Response(
                 200,
                 json={
@@ -127,6 +143,14 @@ async def test_govinfo_get_cfr_text_returns_warning_when_conversion_times_out() 
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST" and request.url.path == "/search":
+            import json
+
+            body = json.loads(request.content)
+            assert "cfrtitlenum:40" in body["query"]
+            assert "cfrpartnum:122" in body["query"]
+            assert "cfrsectionnum" not in body["query"]
+            assert "publishdate:2025" in body["query"]
+            assert body.get("historical") is True
             return httpx.Response(
                 200,
                 json={
@@ -161,6 +185,57 @@ async def test_govinfo_get_cfr_text_returns_warning_when_conversion_times_out() 
     assert payload["markdown"] is None
     assert payload["warnings"]
     assert "timed out" in payload["warnings"][0].lower()
+
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_govinfo_get_cfr_text_without_revision_year_omits_historical_flag() -> None:
+    client = GovInfoClient(api_key="gov-key")
+    client._markdown_converter = cast(Any, types.SimpleNamespace(convert=lambda **kwargs: "# CFR\n\nText."))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/search":
+            import json
+
+            body = json.loads(request.content)
+            assert "cfrtitlenum:40" in body["query"]
+            assert "cfrpartnum:122" in body["query"]
+            assert "publishdate" not in body["query"]
+            assert "historical" not in body
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "packageId": "CFR-2025-title40-vol24",
+                            "granuleId": "CFR-2025-title40-vol24-part122",
+                            "download": {
+                                "xmlLink": "https://api.govinfo.gov/packages/CFR-2025-title40-vol24/granules/CFR-2025-title40-vol24-part122/xml"
+                            },
+                        }
+                    ]
+                },
+                request=request,
+            )
+        if request.method == "GET" and request.url.path.endswith("/xml"):
+            return httpx.Response(
+                200,
+                content=b"<SECTION><P>Current text.</P></SECTION>",
+                headers={"content-type": "application/xml"},
+                request=request,
+            )
+        raise AssertionError(f"Unexpected request: {request.method} {request.url}")
+
+    transport = httpx.MockTransport(handler)
+    client._http_client = httpx.AsyncClient(transport=transport, follow_redirects=True)
+    client._document_client = httpx.AsyncClient(transport=transport, follow_redirects=True)
+
+    payload = await client.get_cfr_text(title_number=40, part_number=122)
+
+    assert payload["citation"] == "40 CFR Part 122"
+    assert payload["contentSource"] == "govinfo_xml"
+    assert payload["markdown"] == "Current text."
 
     await client.aclose()
 
