@@ -35,7 +35,7 @@ def _sanitize_schema_node(node: Any) -> Any:
 
     sanitized: dict[str, Any] = {}
     for key, value in node.items():
-        if key in {"default", "examples"}:
+        if key in {"default", "examples", "additionalProperties"}:
             continue
         sanitized[key] = _sanitize_schema_node(value)
     return sanitized

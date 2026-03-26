@@ -96,12 +96,15 @@ TOOL_DESCRIPTIONS = {
         f"{OPAQUE_CURSOR_CONTRACT}"
     ),
     "search_papers_match": (
-        "Known-item lookup for messy or partial titles. Find the single paper "
-        "whose title best matches the query string. If the upstream exact-match "
-        "endpoint misses a punctuation-heavy title, the server falls back to a "
-        "fuzzy Semantic Scholar title search instead of surfacing a raw 404, "
-        "then tries strict OpenAlex and Crossref exact-title recovery before "
-        "returning a structured no-match payload. "
+        "Known-item lookup for messy or partial titles. Takes a single query "
+        "string (the paper title or partial title text) and finds the single "
+        "paper whose title best matches. This tool does NOT accept separate "
+        "author, year, or venue fields; use resolve_citation when you have a "
+        "multi-field bibliographic reference to repair. If the upstream "
+        "exact-match endpoint misses a punctuation-heavy title, the server "
+        "falls back to a fuzzy Semantic Scholar title search instead of "
+        "surfacing a raw 404, then tries strict OpenAlex and Crossref "
+        "exact-title recovery before returning a structured no-match payload. "
         "Optional includeEnrichment=true adds Crossref and Unpaywall metadata "
         "only to the final matched paper, never to the candidate-selection path. "
         "A no-match payload can still mean the item is a dissertation, software "
@@ -357,7 +360,11 @@ TOOL_DESCRIPTIONS = {
         "stable document number yet. If you already have an exact document number, "
         "prefer get_federal_register_document for direct retrieval. Multi-filter "
         "queries are supported, but the best low-round-trip path is usually query + "
-        "agency/date narrowing first, then exact document retrieval."
+        "agency/date narrowing first, then exact document retrieval. "
+        "NOTE: Biological opinions, Section 7 consultation records, and incidental "
+        "take permits are NOT published in the Federal Register; they live in the "
+        "USFWS ECOS/TAILS system. For agency consultation history, use "
+        "search_species_ecos -> list_species_documents_ecos instead of this tool."
     ),
     "get_federal_register_document": (
         "Resolve one Federal Register document from a document number, FR citation, "
@@ -415,7 +422,11 @@ TOOL_DESCRIPTIONS = {
     ),
     "expand_research_graph": (
         "Expand a saved search session or explicit paper seeds into a compact "
-        "citation, reference, or author graph. Returns nodes, edges, a ranked "
+        "citation, reference, or author graph. Provide either seedSearchSessionId "
+        "(from a prior search_papers_smart call) or seedPaperIds (a list of "
+        "Semantic Scholar paper IDs). At least one seed source is required. "
+        "direction controls the expansion axis: 'citations' (cited-by), "
+        "'references' (backward), or 'authors'. Returns nodes, edges, a ranked "
         "frontier, agentHints, and resourceUris for continued exploration. "
         "latencyProfile controls graph scoring cost without changing the explicit "
         "seed, direction, or hop inputs. Saved-session expansion keeps the "
