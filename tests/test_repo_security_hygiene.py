@@ -130,7 +130,7 @@ def test_github_release_workflow_validates_prs_and_publishes_on_tags_or_manual()
     assert "- v*" in text
     assert "python -m build" in text
     assert "python -m twine check --strict dist/*" in text
-    assert "sha256sum * > SHA256SUMS" in text
+    assert "sha256sum -- * > SHA256SUMS" in text
     assert "gh release create" in text
     assert "gh release upload" in text
     assert "--draft" in text
