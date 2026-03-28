@@ -5,6 +5,8 @@ This document is the current working handoff for the fork. It is intended to giv
 ## Current Status
 
 - Local development baseline is configured through `pyproject.toml` and `.pre-commit-config.yaml`.
+- Dev extras now include `shellcheck-py`, and local workflow-file parity expects
+  `shellcheck` on `PATH` so `actionlint` can lint inline bash before CI.
 - The default free broker path is `Semantic Scholar -> arXiv -> CORE` for
   `search_papers`; SerpApi remains an optional paid recovery hop at the end of
   the broker order when enabled, but it is disabled by default.
