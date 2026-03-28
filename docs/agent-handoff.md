@@ -427,7 +427,7 @@ gh aw compile test-paper-chaser --dir .github/workflows
   through `search_papers`, because the OpenAlex guide's citation, author, and
   cursor semantics differ enough from Semantic Scholar to warrant a separate
   provider-specific surface.
-- The agentic workflow now runs `paper-chaser` through a `python:3.12`
+- The agentic workflow now runs `paper-chaser` through a `python:3.13`
   container mounted to `${GITHUB_WORKSPACE}` so the generated MCP Gateway
   config matches the current schema.
 - `search_papers_bulk` now truncates returned data to the requested `limit`

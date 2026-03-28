@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-ARG PYTHON_VERSION=3.12
+ARG PYTHON_VERSION=3.13
 
 FROM python:${PYTHON_VERSION}-slim AS builder
 

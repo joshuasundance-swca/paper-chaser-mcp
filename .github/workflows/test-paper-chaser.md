@@ -47,7 +47,7 @@ tools:
 mcp-servers:
   paper-chaser:
     type: stdio
-    container: python:3.12
+    container: python:3.13
     entrypoint: sh
     entrypointArgs:
       - -lc
