@@ -3,7 +3,7 @@ from typing import Any
 
 import pytest
 
-from scholar_search_mcp import server
+from paper_chaser_mcp import server
 from tests.helpers import RecordingSemanticClient, _streamable_http_event_payload
 
 
@@ -15,8 +15,8 @@ def test_build_http_app_uses_requested_path() -> None:
 
 
 def test_run_server_uses_http_transport_settings() -> None:
-    from scholar_search_mcp.runtime import run_server
-    from scholar_search_mcp.settings import AppSettings
+    from paper_chaser_mcp.runtime import run_server
+    from paper_chaser_mcp.settings import AppSettings
 
     calls: list[dict[str, Any]] = []
 
@@ -36,10 +36,10 @@ def test_run_server_uses_http_transport_settings() -> None:
         logger=DummyLogger(),
         settings=AppSettings.from_env(
             {
-                "SCHOLAR_SEARCH_TRANSPORT": "streamable-http",
-                "SCHOLAR_SEARCH_HTTP_HOST": "0.0.0.0",
-                "SCHOLAR_SEARCH_HTTP_PORT": "9000",
-                "SCHOLAR_SEARCH_HTTP_PATH": "/custom-mcp",
+                "PAPER_CHASER_TRANSPORT": "streamable-http",
+                "PAPER_CHASER_HTTP_HOST": "0.0.0.0",
+                "PAPER_CHASER_HTTP_PORT": "9000",
+                "PAPER_CHASER_HTTP_PATH": "/custom-mcp",
             }
         ),
     )
@@ -179,13 +179,13 @@ async def test_fastmcp_resource_and_prompt_support_agent_onboarding() -> None:
         resources = await client.list_resources()
         resource_templates = await client.list_resource_templates()
         prompts = await client.list_prompts()
-        guide = await client.read_resource("guide://scholar-search/agent-workflows")
+        guide = await client.read_resource("guide://paper-chaser/agent-workflows")
         plan = await client.get_prompt(
-            "plan_scholar_search",
+            "plan_paper_chaser_search",
             {"topic": "transformers"},
         )
         feature_plan = await client.get_prompt(
-            "plan_scholar_search",
+            "plan_paper_chaser_search",
             {
                 "topic": "transformers",
                 "mode": "feature_probe",
@@ -193,15 +193,15 @@ async def test_fastmcp_resource_and_prompt_support_agent_onboarding() -> None:
             },
         )
 
-    assert any(str(resource.uri) == "guide://scholar-search/agent-workflows" for resource in resources)
+    assert any(str(resource.uri) == "guide://paper-chaser/agent-workflows" for resource in resources)
     assert any(str(template.uriTemplate) == "paper://{paper_id}" for template in resource_templates)
     assert any(str(template.uriTemplate) == "author://{author_id}" for template in resource_templates)
     assert any(str(template.uriTemplate) == "search://{search_session_id}" for template in resource_templates)
     assert any(
         str(template.uriTemplate) == "trail://paper/{paper_id}?direction={direction}" for template in resource_templates
     )
-    assert any(prompt.name == "plan_scholar_search" for prompt in prompts)
-    assert any(prompt.name == "plan_smart_scholar_search" for prompt in prompts)
+    assert any(prompt.name == "plan_paper_chaser_search" for prompt in prompts)
+    assert any(prompt.name == "plan_smart_paper_chaser_search" for prompt in prompts)
     assert any(prompt.name == "triage_literature" for prompt in prompts)
     assert any(prompt.name == "plan_citation_chase" for prompt in prompts)
     assert any(prompt.name == "refine_query" for prompt in prompts)
@@ -234,7 +234,7 @@ async def test_fastmcp_resource_and_prompt_support_agent_onboarding() -> None:
 
 
 def test_tool_descriptions_include_workflow_guidance() -> None:
-    from scholar_search_mcp.tools import TOOL_DESCRIPTIONS
+    from paper_chaser_mcp.tools import TOOL_DESCRIPTIONS
 
     assert "quick literature discovery" in TOOL_DESCRIPTIONS["search_papers"]
     assert "exhaustive retrieval" in TOOL_DESCRIPTIONS["search_papers_bulk"]
@@ -268,7 +268,7 @@ def test_tool_descriptions_include_workflow_guidance() -> None:
 def test_deployment_app_exposes_health_endpoint() -> None:
     from starlette.testclient import TestClient
 
-    from scholar_search_mcp.deployment import create_deployment_app
+    from paper_chaser_mcp.deployment import create_deployment_app
 
     with TestClient(create_deployment_app()) as client:
         response = client.get("/healthz")
@@ -282,10 +282,10 @@ def test_deployment_app_rejects_missing_auth_token(
 ) -> None:
     from starlette.testclient import TestClient
 
-    monkeypatch.setenv("SCHOLAR_SEARCH_HTTP_AUTH_TOKEN", "super-secret")
-    monkeypatch.setenv("SCHOLAR_SEARCH_HTTP_PATH", "/mcp")
+    monkeypatch.setenv("PAPER_CHASER_HTTP_AUTH_TOKEN", "super-secret")
+    monkeypatch.setenv("PAPER_CHASER_HTTP_PATH", "/mcp")
 
-    import scholar_search_mcp.deployment as deployment
+    import paper_chaser_mcp.deployment as deployment
 
     importlib.reload(deployment)
 
@@ -300,10 +300,10 @@ def test_deployment_app_allows_expected_bearer_token(
 ) -> None:
     from starlette.testclient import TestClient
 
-    monkeypatch.setenv("SCHOLAR_SEARCH_HTTP_AUTH_TOKEN", "super-secret")
-    monkeypatch.setenv("SCHOLAR_SEARCH_HTTP_PATH", "/mcp")
+    monkeypatch.setenv("PAPER_CHASER_HTTP_AUTH_TOKEN", "super-secret")
+    monkeypatch.setenv("PAPER_CHASER_HTTP_PATH", "/mcp")
 
-    import scholar_search_mcp.deployment as deployment
+    import paper_chaser_mcp.deployment as deployment
 
     importlib.reload(deployment)
 
@@ -325,9 +325,9 @@ def test_deployment_app_rejects_unlisted_origin(
 ) -> None:
     from starlette.testclient import TestClient
 
-    monkeypatch.setenv("SCHOLAR_SEARCH_ALLOWED_ORIGINS", "https://allowed.example")
+    monkeypatch.setenv("PAPER_CHASER_ALLOWED_ORIGINS", "https://allowed.example")
 
-    import scholar_search_mcp.deployment as deployment
+    import paper_chaser_mcp.deployment as deployment
 
     importlib.reload(deployment)
 
@@ -346,11 +346,11 @@ def test_deployment_app_allows_expected_backend_header_and_origin(
 ) -> None:
     from starlette.testclient import TestClient
 
-    monkeypatch.setenv("SCHOLAR_SEARCH_HTTP_AUTH_TOKEN", "super-secret")
-    monkeypatch.setenv("SCHOLAR_SEARCH_HTTP_AUTH_HEADER", "x-backend-auth")
-    monkeypatch.setenv("SCHOLAR_SEARCH_ALLOWED_ORIGINS", "https://allowed.example")
+    monkeypatch.setenv("PAPER_CHASER_HTTP_AUTH_TOKEN", "super-secret")
+    monkeypatch.setenv("PAPER_CHASER_HTTP_AUTH_HEADER", "x-backend-auth")
+    monkeypatch.setenv("PAPER_CHASER_ALLOWED_ORIGINS", "https://allowed.example")
 
-    import scholar_search_mcp.deployment as deployment
+    import paper_chaser_mcp.deployment as deployment
 
     importlib.reload(deployment)
 
@@ -416,7 +416,7 @@ async def test_agent_workflow_resource_mentions_pivots_and_provider_contracts() 
     from fastmcp import Client
 
     async with Client(server.app) as client:
-        guide = await client.read_resource("guide://scholar-search/agent-workflows")
+        guide = await client.read_resource("guide://paper-chaser/agent-workflows")
 
     guide_text = guide[0].text
     assert "search_papers_smart" in guide_text
@@ -445,7 +445,7 @@ async def test_plan_prompt_mentions_continuation_vs_pivot_and_schema_limits() ->
 
     async with Client(server.app) as client:
         plan = await client.get_prompt(
-            "plan_scholar_search",
+            "plan_paper_chaser_search",
             {"topic": "transformers"},
         )
 

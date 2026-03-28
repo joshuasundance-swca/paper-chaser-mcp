@@ -4,33 +4,33 @@ from typing import Any, cast
 
 import pytest
 
-from scholar_search_mcp import server
-from scholar_search_mcp.agentic import (
+from paper_chaser_mcp import server
+from paper_chaser_mcp.agentic import (
     AgenticConfig,
     AgenticRuntime,
     WorkspaceRegistry,
     resolve_provider_bundle,
 )
-from scholar_search_mcp.agentic.graphs import (
+from paper_chaser_mcp.agentic.graphs import (
     _build_grounded_comparison_answer,
     _finalize_theme_label,
     _graph_frontier_scores,
 )
-from scholar_search_mcp.agentic.models import PlannerDecision
-from scholar_search_mcp.agentic.planner import (
+from paper_chaser_mcp.agentic.models import PlannerDecision
+from paper_chaser_mcp.agentic.planner import (
     classify_query,
     grounded_expansion_candidates,
     looks_like_exact_title,
 )
-from scholar_search_mcp.agentic.providers import OpenAIProviderBundle
-from scholar_search_mcp.agentic.ranking import merge_candidates, rerank_candidates
-from scholar_search_mcp.agentic.retrieval import (
+from paper_chaser_mcp.agentic.providers import OpenAIProviderBundle
+from paper_chaser_mcp.agentic.ranking import merge_candidates, rerank_candidates
+from paper_chaser_mcp.agentic.retrieval import (
     RetrievedCandidate,
     provider_limits,
     retrieve_variant,
 )
-from scholar_search_mcp.enrichment import PaperEnrichmentService
-from scholar_search_mcp.provider_runtime import (
+from paper_chaser_mcp.enrichment import PaperEnrichmentService
+from paper_chaser_mcp.provider_runtime import (
     ProviderDiagnosticsRegistry,
     ProviderPolicy,
     execute_provider_call,
@@ -282,7 +282,7 @@ async def test_search_papers_smart_emits_progress_logs_and_provider_events(
     _, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
     ctx = RecordingContext()
 
-    caplog.set_level(logging.INFO, logger="scholar-search-mcp")
+    caplog.set_level(logging.INFO, logger="paper-chaser-mcp")
 
     payload = await runtime.search_papers_smart(
         query="transformers",
@@ -874,7 +874,7 @@ async def test_search_papers_smart_records_embedding_timeout_provider_outcome(
         provider_registry=provider_registry,
     )
 
-    caplog.set_level(logging.INFO, logger="scholar-search-mcp")
+    caplog.set_level(logging.INFO, logger="paper-chaser-mcp")
 
     payload = await runtime.search_papers_smart(
         query="transformers",
@@ -1390,7 +1390,7 @@ async def test_expand_research_graph_uses_scored_frontier_for_next_hop(
         return [0.8 for _ in related_papers]
 
     monkeypatch.setattr(
-        "scholar_search_mcp.agentic.graphs._graph_frontier_scores",
+        "paper_chaser_mcp.agentic.graphs._graph_frontier_scores",
         _fake_frontier_scores,
     )
 
@@ -1604,7 +1604,7 @@ async def test_search_papers_smart_known_item_falls_back_to_title_match_instead_
             "matchStrategy": "fuzzy_search",
         }
 
-    monkeypatch.setattr("scholar_search_mcp.agentic.graphs.resolve_citation", fake_resolve_citation)
+    monkeypatch.setattr("paper_chaser_mcp.agentic.graphs.resolve_citation", fake_resolve_citation)
     semantic.search_papers_match = fake_search_papers_match  # type: ignore[method-assign]
 
     smart = await runtime.search_papers_smart(
@@ -1662,7 +1662,7 @@ async def test_search_papers_smart_known_item_uses_openalex_autocomplete_when_ot
             "expansionIdStatus": "portable",
         }
 
-    monkeypatch.setattr("scholar_search_mcp.agentic.graphs.resolve_citation", fake_resolve_citation)
+    monkeypatch.setattr("paper_chaser_mcp.agentic.graphs.resolve_citation", fake_resolve_citation)
     semantic.search_papers_match = fake_search_papers_match  # type: ignore[method-assign]
     openalex.paper_autocomplete = fake_openalex_autocomplete  # type: ignore[method-assign]
     openalex.get_paper_details = fake_openalex_details  # type: ignore[method-assign]

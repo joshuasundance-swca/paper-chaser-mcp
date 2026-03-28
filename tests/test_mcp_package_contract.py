@@ -44,16 +44,14 @@ def _read_pyproject_version() -> str:
 
 
 def _expected_ghcr_identifier(payload: dict[str, Any]) -> str:
-    repository = payload.get("repository")
-    assert isinstance(repository, dict), "server.json must define repository metadata."
-    repository_url = repository.get("url")
-    assert isinstance(repository_url, str) and repository_url, "server.json repository.url must be present."
-    match = re.match(r"^https://github\.com/([^/]+)/([^/]+?)/?$", repository_url)
-    assert match is not None, "server.json repository.url must point at a GitHub owner/repo."
-    owner, repo = match.groups()
+    name = payload.get("name")
+    assert isinstance(name, str) and name, "server.json must define a non-empty public server name."
+    match = re.match(r"^io\.github\.([^/]+)/([^/]+)$", name)
+    assert match is not None, "server.json name must follow io.github.<owner>/<server>."
+    owner, server_name = match.groups()
     version = payload.get("version")
     assert isinstance(version, str) and version
-    return f"ghcr.io/{owner.lower()}/{repo.lower()}:{version}"
+    return f"ghcr.io/{owner.lower()}/{server_name.lower()}:{version}"
 
 
 def test_server_json_declares_public_name_and_semver_version() -> None:
@@ -90,7 +88,7 @@ def test_server_json_version_matches_pyproject_version() -> None:
     assert payload["version"] == _read_pyproject_version()
 
 
-def test_server_json_primary_package_matches_repo_backed_ghcr_identifier() -> None:
+def test_server_json_primary_package_matches_public_server_name_ghcr_identifier() -> None:
     payload = _read_server_json()
     packages = payload.get("packages")
     assert isinstance(packages, list) and packages, "server.json must define at least one package entry."
@@ -122,12 +120,12 @@ def test_dockerfile_is_stdio_first_and_uses_explicit_entrypoint() -> None:
     assert re.search(r"^ENTRYPOINT\s+\[", text, re.MULTILINE), (
         "Dockerfile must use an explicit ENTRYPOINT for MCP package launches."
     )
-    assert "scholar_search_mcp.deployment_runner" not in text, (
+    assert "paper_chaser_mcp.deployment_runner" not in text, (
         "Dockerfile default command should not force HTTP deployment runner mode."
     )
-    assert "SCHOLAR_SEARCH_TRANSPORT=streamable-http" not in text, (
+    assert "PAPER_CHASER_TRANSPORT=streamable-http" not in text, (
         "Dockerfile should not hardcode streamable-http as the default transport."
     )
 
-    for default in re.findall(r"SCHOLAR_SEARCH_TRANSPORT=([^\s\\]+)", text):
-        assert default.lower() in {"stdio", "${scholar_search_transport:-stdio}"}
+    for default in re.findall(r"PAPER_CHASER_TRANSPORT=([^\s\\]+)", text):
+        assert default.lower() in {"stdio", "${paper_chaser_transport:-stdio}"}

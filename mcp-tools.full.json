@@ -1,6 +1,6 @@
 {
-  "name": "scholar-search-full",
-  "title": "Scholar Search MCP Full Tool Set",
+  "name": "paper-chaser-full",
+  "title": "Paper Chaser MCP Full Tool Set",
   "description": "Full Microsoft-facing tool package for the recommended end-to-end workflow: smart discovery first, grounded follow-up and graph expansion second, plus explicit OpenAlex, ECOS, Federal Register, and CFR retrieval paths when the task needs provider-native semantics or regulatory primary sources.",
   "transport": {
     "type": "streamable-http",

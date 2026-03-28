@@ -6,10 +6,10 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, Field
 
-from scholar_search_mcp.agentic import providers as providers_module
-from scholar_search_mcp.agentic.config import AgenticConfig
-from scholar_search_mcp.agentic.models import ExpansionCandidate, PlannerDecision
-from scholar_search_mcp.agentic.providers import (
+from paper_chaser_mcp.agentic import providers as providers_module
+from paper_chaser_mcp.agentic.config import AgenticConfig
+from paper_chaser_mcp.agentic.models import ExpansionCandidate, PlannerDecision
+from paper_chaser_mcp.agentic.providers import (
     COMMON_QUERY_WORDS,
     DeterministicProviderBundle,
     OpenAIProviderBundle,
@@ -23,7 +23,7 @@ from scholar_search_mcp.agentic.providers import (
     _top_terms,
     resolve_provider_bundle,
 )
-from scholar_search_mcp.provider_runtime import (
+from paper_chaser_mcp.provider_runtime import (
     ProviderCallResult,
     ProviderDiagnosticsRegistry,
     ProviderOutcomeEnvelope,
@@ -827,7 +827,7 @@ def test_openai_provider_loader_failures_and_sync_wrapper_none_paths(
         return real_import(name, globals, locals, fromlist, level)
 
     monkeypatch.setattr(builtins, "__import__", _raising_import)
-    caplog.set_level("INFO", logger="scholar-search-mcp")
+    caplog.set_level("INFO", logger="paper-chaser-mcp")
 
     import_error_bundle = OpenAIProviderBundle(_config(), api_key="sk-test")
     assert import_error_bundle._load_openai_client() is None
@@ -902,7 +902,7 @@ def test_openai_provider_sync_wrapper_error_and_embedding_edge_paths(
             endpoint=kwargs["endpoint"],
         )
 
-    caplog.set_level("WARNING", logger="scholar-search-mcp")
+    caplog.set_level("WARNING", logger="paper-chaser-mcp")
     monkeypatch.setattr(providers_module, "execute_provider_call_sync", _payload_none)
     assert (
         bundle._responses_parse(
@@ -1076,7 +1076,7 @@ async def test_openai_provider_async_wrapper_and_embedding_success_paths(
             del kwargs
             return types.SimpleNamespace(output_text="async text")
 
-    caplog.set_level("WARNING", logger="scholar-search-mcp")
+    caplog.set_level("WARNING", logger="paper-chaser-mcp")
     bundle._async_openai_client = types.SimpleNamespace(responses=_AsyncFullResponses())
     monkeypatch.setattr(providers_module, "execute_provider_call", _payload_none)
     assert (

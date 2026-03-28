@@ -64,12 +64,12 @@ jobs:
         run: |
           pre-commit run --all-files
           python -m pytest \
-            --cov=scholar_search_mcp \
+            --cov=paper_chaser_mcp \
             --cov-report=term-missing \
             --cov-fail-under=${{ env.COVERAGE_FAIL_UNDER }}
           python -m mypy --config-file pyproject.toml
           python -m ruff check .
-          python -m bandit -c pyproject.toml -r scholar_search_mcp
+          python -m bandit -c pyproject.toml -r paper_chaser_mcp
           python -m build
           python -m pip_audit . --progress-spinner off
 
@@ -185,7 +185,7 @@ jobs:
       AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
       ACR_NAME: ${{ secrets.ACR_NAME }}
-      IMAGE_REPOSITORY: ${{ secrets.IMAGE_REPOSITORY || 'scholar-search-mcp' }}
+      IMAGE_REPOSITORY: ${{ secrets.IMAGE_REPOSITORY || 'paper-chaser-mcp' }}
     steps:
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -254,7 +254,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Validate deployment assets locally
-        run: python scripts/validate_deployment.py --require-az --require-docker --image-tag scholar-search-mcp:ci-validate
+        run: python scripts/validate_deployment.py --require-az --require-docker --image-tag paper-chaser-mcp:ci-validate
 
       - name: Log into Azure Container Registry
         run: az acr login --name "$ACR_NAME" --only-show-errors
@@ -310,7 +310,7 @@ jobs:
         run: |
           set -euo pipefail
           resolved_url="$(
-            python -c "from pathlib import Path; import json, os; from scholar_search_mcp.deployment_utils import resolve_smoke_test_health_url; payload = json.loads(Path(os.environ['AZURE_DEPLOYMENT_OUTPUT']).read_text(encoding='utf-8')); print(resolve_smoke_test_health_url(os.environ.get('SMOKE_TEST_HEALTH_URL'), payload))"
+            python -c "from pathlib import Path; import json, os; from paper_chaser_mcp.deployment_utils import resolve_smoke_test_health_url; payload = json.loads(Path(os.environ['AZURE_DEPLOYMENT_OUTPUT']).read_text(encoding='utf-8')); print(resolve_smoke_test_health_url(os.environ.get('SMOKE_TEST_HEALTH_URL'), payload))"
           )"
           echo "::add-mask::${resolved_url}"
           echo "RESOLVED_SMOKE_TEST_HEALTH_URL=${resolved_url}" >> "$GITHUB_ENV"

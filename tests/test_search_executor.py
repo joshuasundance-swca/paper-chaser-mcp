@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from scholar_search_mcp.provider_runtime import ProviderDiagnosticsRegistry
+from paper_chaser_mcp.provider_runtime import ProviderDiagnosticsRegistry
 from tests.helpers import RecordingOpenAlexClient, RecordingSemanticClient
 
 
 def test_search_executor_reports_missing_serpapi_client_as_skipped() -> None:
-    from scholar_search_mcp.search_executor import SearchClientBundle, SearchExecutor
+    from paper_chaser_mcp.search_executor import SearchClientBundle, SearchExecutor
 
     executor = SearchExecutor()
     attempt = executor.disabled_attempt(
@@ -30,7 +30,7 @@ def test_search_executor_reports_missing_serpapi_client_as_skipped() -> None:
 
 @pytest.mark.asyncio
 async def test_search_executor_parallel_search_shapes_semantic_and_openalex_results() -> None:
-    from scholar_search_mcp.search_executor import (
+    from paper_chaser_mcp.search_executor import (
         ProviderSearchRequest,
         SearchClientBundle,
         SearchExecutor,

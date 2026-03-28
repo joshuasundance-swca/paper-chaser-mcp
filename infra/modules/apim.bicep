@@ -126,10 +126,10 @@ resource backendAuthNamedValue 'Microsoft.ApiManagement/service/namedValues@2024
 
 resource api 'Microsoft.ApiManagement/service/apis@2024-10-01-preview' = {
   parent: service
-  name: 'scholar-search-mcp'
+  name: 'paper-chaser-mcp'
   properties: {
     apiType: 'http'
-    displayName: 'Scholar Search MCP'
+    displayName: 'Paper Chaser MCP'
     path: apiPath
     protocols: [
       'https'
@@ -154,7 +154,7 @@ resource apiPolicy 'Microsoft.ApiManagement/service/apis/policies@2024-10-01-pre
   name: 'policy'
   properties: {
     format: 'xml'
-    value: loadTextContent('../policies/scholar-search-policy.xml')
+    value: loadTextContent('../policies/paper-chaser-policy.xml')
   }
 }
 

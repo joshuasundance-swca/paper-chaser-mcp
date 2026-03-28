@@ -4,7 +4,7 @@ on:
   issues:
     types: [opened, reopened, labeled]
   workflow_run:
-    workflows: ["Test Scholar Search MCP"]
+    workflows: ["Test Paper Chaser MCP"]
     types: [completed]
 
 permissions:

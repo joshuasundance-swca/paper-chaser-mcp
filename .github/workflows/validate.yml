@@ -52,10 +52,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh aw compile test-scholar-search --dir .github/workflows
-          pre-commit run --files .github/workflows/test-scholar-search.lock.yml || true
-          pre-commit run --files .github/workflows/test-scholar-search.lock.yml
-          git diff --exit-code -- .github/workflows/test-scholar-search.lock.yml
+          gh aw compile test-paper-chaser --dir .github/workflows
+          pre-commit run --files .github/workflows/test-paper-chaser.lock.yml || true
+          pre-commit run --files .github/workflows/test-paper-chaser.lock.yml
+          git diff --exit-code -- .github/workflows/test-paper-chaser.lock.yml
 
       - name: Run pre-commit
         run: pre-commit run --all-files
@@ -68,7 +68,7 @@ jobs:
         if: matrix.python-version == '3.13'
         run: |
           python -m pytest \
-            --cov=scholar_search_mcp \
+            --cov=paper_chaser_mcp \
             --cov-report=term-missing \
             --cov-report=xml \
             --cov-fail-under=${{ env.COVERAGE_FAIL_UNDER }}
@@ -92,4 +92,4 @@ jobs:
         run: python -m mypy --config-file pyproject.toml
 
       - name: Run Bandit
-        run: python -m bandit -c pyproject.toml -r scholar_search_mcp
+        run: python -m bandit -c pyproject.toml -r paper_chaser_mcp

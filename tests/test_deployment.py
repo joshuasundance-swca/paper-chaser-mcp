@@ -2,13 +2,13 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.testclient import TestClient
 
-from scholar_search_mcp.deployment import (
+from paper_chaser_mcp.deployment import (
     DeploymentSecurityMiddleware,
     create_deployment_app,
 )
-from scholar_search_mcp.deployment_runner import resolve_bind_host, resolve_bind_port
-from scholar_search_mcp.deployment_utils import resolve_smoke_test_health_url
-from scholar_search_mcp.settings import AppSettings
+from paper_chaser_mcp.deployment_runner import resolve_bind_host, resolve_bind_port
+from paper_chaser_mcp.deployment_utils import resolve_smoke_test_health_url
+from paper_chaser_mcp.settings import AppSettings
 
 
 def _request(path: str, headers: dict[str, str] | None = None) -> Request:
@@ -36,14 +36,14 @@ def _middleware(env: dict[str, str] | None = None) -> DeploymentSecurityMiddlewa
 
 
 def test_root_mcp_path_protects_all_paths() -> None:
-    middleware = _middleware({"SCHOLAR_SEARCH_HTTP_PATH": "/"})
+    middleware = _middleware({"PAPER_CHASER_HTTP_PATH": "/"})
 
     assert middleware._is_protected_path("/")
     assert middleware._is_protected_path("/healthz")
 
 
 def test_missing_auth_token_short_circuits_authorization() -> None:
-    middleware = _middleware({"SCHOLAR_SEARCH_HTTP_PATH": "/mcp"})
+    middleware = _middleware({"PAPER_CHASER_HTTP_PATH": "/mcp"})
 
     assert middleware._authorized(_request("/mcp")) is True
 
@@ -51,9 +51,9 @@ def test_missing_auth_token_short_circuits_authorization() -> None:
 def test_invalid_bearer_authorization_header_is_rejected() -> None:
     middleware = _middleware(
         {
-            "SCHOLAR_SEARCH_HTTP_AUTH_TOKEN": "super-secret",
-            "SCHOLAR_SEARCH_HTTP_AUTH_HEADER": "authorization",
-            "SCHOLAR_SEARCH_HTTP_PATH": "/mcp",
+            "PAPER_CHASER_HTTP_AUTH_TOKEN": "super-secret",
+            "PAPER_CHASER_HTTP_AUTH_HEADER": "authorization",
+            "PAPER_CHASER_HTTP_PATH": "/mcp",
         }
     )
 
@@ -63,9 +63,9 @@ def test_invalid_bearer_authorization_header_is_rejected() -> None:
 def test_custom_auth_header_compares_raw_value() -> None:
     middleware = _middleware(
         {
-            "SCHOLAR_SEARCH_HTTP_AUTH_TOKEN": "super-secret",
-            "SCHOLAR_SEARCH_HTTP_AUTH_HEADER": "x-backend-auth",
-            "SCHOLAR_SEARCH_HTTP_PATH": "/mcp",
+            "PAPER_CHASER_HTTP_AUTH_TOKEN": "super-secret",
+            "PAPER_CHASER_HTTP_AUTH_HEADER": "x-backend-auth",
+            "PAPER_CHASER_HTTP_PATH": "/mcp",
         }
     )
 
@@ -130,15 +130,15 @@ def test_resolve_smoke_test_health_url_requires_outputs_when_explicit_missing() 
 
 
 def test_resolve_bind_host_uses_http_host_env() -> None:
-    assert resolve_bind_host({"SCHOLAR_SEARCH_HTTP_HOST": "0.0.0.0"}) == "0.0.0.0"
+    assert resolve_bind_host({"PAPER_CHASER_HTTP_HOST": "0.0.0.0"}) == "0.0.0.0"
 
 
 def test_resolve_bind_port_prefers_platform_port() -> None:
-    assert resolve_bind_port({"PORT": "9090", "SCHOLAR_SEARCH_HTTP_PORT": "8080"}) == 9090
+    assert resolve_bind_port({"PORT": "9090", "PAPER_CHASER_HTTP_PORT": "8080"}) == 9090
 
 
 def test_resolve_bind_port_falls_back_to_http_port() -> None:
-    assert resolve_bind_port({"SCHOLAR_SEARCH_HTTP_PORT": "8181"}) == 8181
+    assert resolve_bind_port({"PAPER_CHASER_HTTP_PORT": "8181"}) == 8181
 
 
 def test_deployment_app_supports_exact_mcp_path_without_redirect() -> None:

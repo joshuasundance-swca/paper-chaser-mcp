@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from scholar_search_mcp.agentic.workspace import WorkspaceRegistry
+from paper_chaser_mcp.agentic.workspace import WorkspaceRegistry
 
 
 def _embedding(text: str) -> tuple[float, ...]:

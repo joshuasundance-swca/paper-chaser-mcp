@@ -1,6 +1,6 @@
 import pytest
 
-from scholar_search_mcp.identifiers import (
+from paper_chaser_mcp.identifiers import (
     normalize_doi,
     resolve_doi_from_paper_payload,
     resolve_doi_inputs,

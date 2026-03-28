@@ -1,6 +1,6 @@
 {
-  "name": "Scholar Search MCP",
-  "description_for_model": "Use Scholar Search MCP for concept-level literature discovery, citation repair, known-item resolution, citation chasing, author pivots, grounded follow-up over saved searchSessionId result sets, and regulatory primary-source retrieval through ECOS, Federal Register, and CFR workflows. Best path: search_papers_smart for concept discovery, resolve_citation for broken references, search_papers_match or get_paper_details for known items, and search_federal_register or get_cfr_text for clearly regulatory citations.",
+  "name": "Paper Chaser MCP",
+  "description_for_model": "Use Paper Chaser MCP for concept-level literature discovery, citation repair, known-item resolution, citation chasing, author pivots, grounded follow-up over saved searchSessionId result sets, and regulatory primary-source retrieval through ECOS, Federal Register, and CFR workflows. Best path: search_papers_smart for concept discovery, resolve_citation for broken references, search_papers_match or get_paper_details for known items, and search_federal_register or get_cfr_text for clearly regulatory citations.",
   "transport": {
     "type": "streamable-http",
     "path": "/mcp"

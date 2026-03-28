@@ -1,11 +1,11 @@
-# FastMCP migration analysis for `scholar-search-mcp`
+# FastMCP migration analysis for `paper-chaser-mcp`
 
 This document ties the recommended FastMCP design directly to the current repository implementation. It is intended to help maintainers understand what was preserved, what was redesigned, and what should come next.
 
 > [!NOTE]
 > This is historical design context. Most of the migration described here has
 > already landed. Use `README.md`, `docs/agent-handoff.md`, and
-> `scholar_search_mcp/server.py` for the current runtime contract.
+> `paper_chaser_mcp/server.py` for the current runtime contract.
 
 ## Context7-backed decisions used here
 
@@ -18,20 +18,20 @@ This document ties the recommended FastMCP design directly to the current reposi
 
 ### What the repo already did well
 
-- `scholar_search_mcp/dispatch.py` already centralizes tool routing and keeps provider calls predictable.
-- `scholar_search_mcp/models/tools.py` already gives the server a strong typed contract with strict input validation (`extra="forbid"`), useful aliases, and limit clamping.
-- `scholar_search_mcp/models/common.py` already normalizes provider payloads into stable `Paper`, `Author`, pagination, and response models.
-- `scholar_search_mcp/search.py` already contains a sensible broker/fallback chain and correctly avoids returning unfiltered CORE/SerpApi results when Semantic Scholar-only filters are requested.
-- The provider split under `scholar_search_mcp/clients/` is good and worth preserving.
+- `paper_chaser_mcp/dispatch.py` already centralizes tool routing and keeps provider calls predictable.
+- `paper_chaser_mcp/models/tools.py` already gives the server a strong typed contract with strict input validation (`extra="forbid"`), useful aliases, and limit clamping.
+- `paper_chaser_mcp/models/common.py` already normalizes provider payloads into stable `Paper`, `Author`, pagination, and response models.
+- `paper_chaser_mcp/search.py` already contains a sensible broker/fallback chain and correctly avoids returning unfiltered CORE/SerpApi results when Semantic Scholar-only filters are requested.
+- The provider split under `paper_chaser_mcp/clients/` is good and worth preserving.
 - Tests in `tests/test_server.py` already cover a large amount of dispatch, pagination, and provider-normalization behavior.
 
 ### Where the old design created agent friction
 
-- `scholar_search_mcp/server.py` previously wrapped every tool result in `TextContent(text=json.dumps(...))`. That forced agents to parse JSON from text instead of receiving structured content.
+- `paper_chaser_mcp/server.py` previously wrapped every tool result in `TextContent(text=json.dumps(...))`. That forced agents to parse JSON from text instead of receiving structured content.
 - `search_papers` hid too much routing behavior. Agents could see `providerUsed`, but they could not see which providers were skipped, failed, or bypassed due to filter compatibility.
-- Offset-backed tool argument descriptions in `scholar_search_mcp/models/tools.py` still described cursors as stringified offsets even though the server had already moved to opaque server-issued cursors.
+- Offset-backed tool argument descriptions in `paper_chaser_mcp/models/tools.py` still described cursors as stringified offsets even though the server had already moved to opaque server-issued cursors.
 - The server surface only exposed tools. There was no first-class workflow guide or reusable planning prompt to help agents choose between `search_papers`, `search_papers_bulk`, citation expansion, or author expansion.
-- Runtime startup in `scholar_search_mcp/runtime.py` only supported low-level stdio boot. That was fine for local use but not ideal for a production-minded FastMCP deployment story.
+- Runtime startup in `paper_chaser_mcp/runtime.py` only supported low-level stdio boot. That was fine for local use but not ideal for a production-minded FastMCP deployment story.
 
 ## Target FastMCP architecture
 
@@ -39,7 +39,7 @@ This document ties the recommended FastMCP design directly to the current reposi
 
 - Keep `dispatch.py` as the single execution switchboard.
 - Keep `search.py` as the broker/fallback layer.
-- Keep provider clients under `scholar_search_mcp/clients/`.
+- Keep provider clients under `paper_chaser_mcp/clients/`.
 - Keep Pydantic response models and normalized provider payloads.
 - Keep the existing compatibility helpers (`server.list_tools()` / `server.call_tool()`) so internal tests and direct module users do not break unnecessarily.
 
@@ -49,7 +49,7 @@ This document ties the recommended FastMCP design directly to the current reposi
 - Register all MCP tools on the FastMCP app while still dispatching through the existing typed Pydantic models.
 - Use FastMCP structured tool responses so MCP clients receive `structured_content` / `data` instead of JSON-in-text only.
 - Add `TimingMiddleware` for basic observability with minimal code.
-- Expose a resource (`guide://scholar-search/agent-workflows`) and prompt (`plan_scholar_search`) to reduce agent discovery friction.
+- Expose a resource (`guide://paper-chaser/agent-workflows`) and prompt (`plan_paper_chaser_search`) to reduce agent discovery friction.
 - Expand `brokerMetadata` to include `attemptedProviders`, `semanticScholarOnlyFilters`, and `recommendedPaginationTool`.
 - Add transport settings so the same codebase supports stdio and HTTP-oriented deployment paths, while keeping the default messaging scoped to local/dev/integration use.
 
@@ -115,36 +115,36 @@ This document ties the recommended FastMCP design directly to the current reposi
 
 ### Suggested module shape
 
-- `scholar_search_mcp/server.py`
+- `paper_chaser_mcp/server.py`
   - FastMCP app construction
   - dynamic tool registration
   - onboarding resource/prompt
   - compatibility helpers
-- `scholar_search_mcp/runtime.py`
+- `paper_chaser_mcp/runtime.py`
   - transport-aware `run_server(...)`
-- `scholar_search_mcp/settings.py`
+- `paper_chaser_mcp/settings.py`
   - provider settings plus transport settings
-- `scholar_search_mcp/dispatch.py`
+- `paper_chaser_mcp/dispatch.py`
   - typed execution router
-- `scholar_search_mcp/search.py`
+- `paper_chaser_mcp/search.py`
   - broker/fallback policy and broker metadata shaping
 
 ### Representative FastMCP pattern
 
 ```python
 app = FastMCP(
-    "scholar-search",
+    "paper-chaser",
     instructions=SERVER_INSTRUCTIONS,
     strict_input_validation=True,
 )
 app.add_middleware(TimingMiddleware(logger=logger))
 
-@app.resource("guide://scholar-search/agent-workflows")
+@app.resource("guide://paper-chaser/agent-workflows")
 def agent_workflows() -> str:
     return AGENT_WORKFLOW_GUIDE
 
-@app.prompt(name="plan_scholar_search")
-def plan_scholar_search(topic: str) -> str:
+@app.prompt(name="plan_paper_chaser_search")
+def plan_paper_chaser_search(topic: str) -> str:
     return f"Start with search_papers for {topic}, then paginate with search_papers_bulk if needed."
 ```
 

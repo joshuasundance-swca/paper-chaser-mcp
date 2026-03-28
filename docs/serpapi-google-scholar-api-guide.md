@@ -521,7 +521,7 @@ sequenceDiagram
   participant S as SerpApi Search API
   participant A as Search Archive API
 
-  C->>M: POST /jobs/scholar-search {params...}
+  C->>M: POST /jobs/paper-chaser {params...}
   M->>S: GET /search?engine=google_scholar&...&async=true
   S-->>M: 200 JSON (search_metadata.id, status=Processing)
   M-->>C: 202 Accepted {job_id, search_id}

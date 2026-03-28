@@ -7,7 +7,7 @@ from typing import Any, cast
 import httpx
 import pytest
 
-from scholar_search_mcp.clients.govinfo.client import GovInfoAuthError, GovInfoClient
+from paper_chaser_mcp.clients.govinfo.client import GovInfoAuthError, GovInfoClient
 
 
 @pytest.mark.asyncio

@@ -12,10 +12,10 @@ CONTAINER_APP_BICEP = REPO_ROOT / "infra" / "modules" / "containerApp.bicep"
 AZURE_DEPLOYMENT_DOC = REPO_ROOT / "docs" / "azure-deployment.md"
 
 
-def test_expected_ghcr_identifier_accepts_canonical_https_github_repo_url() -> None:
+def test_expected_ghcr_identifier_accepts_canonical_server_name() -> None:
     assert (
         validate_deployment._expected_ghcr_identifier(
-            "https://github.com/Owner/Repo",
+            "io.github.Owner/Repo",
             "1.2.3",
         )
         == "ghcr.io/owner/repo:1.2.3"
@@ -23,22 +23,23 @@ def test_expected_ghcr_identifier_accepts_canonical_https_github_repo_url() -> N
 
 
 @pytest.mark.parametrize(
-    "repository_url",
+    "server_name",
     [
-        "http://github.com/owner/repo",
-        "https://www.github.com/owner/repo",
-        "https://github.com/owner",
-        "https://github.com/owner/repo/tree/main",
+        "not.github.owner/repo",
+        "io.github.owner",
+        "io.github.",
+        "io.github.owner/repo/extra",
+        "https://github.com/owner/repo",
     ],
 )
-def test_expected_ghcr_identifier_rejects_non_canonical_repository_urls(
-    repository_url: str,
+def test_expected_ghcr_identifier_rejects_invalid_server_names(
+    server_name: str,
 ) -> None:
     with pytest.raises(
         SystemExit,
-        match=("server.json repository.url must point to an https://github.com/<owner>/<repo> path"),
+        match=("server.json name must follow io.github.<owner>/<server>"),
     ):
-        validate_deployment._expected_ghcr_identifier(repository_url, "1.2.3")
+        validate_deployment._expected_ghcr_identifier(server_name, "1.2.3")
 
 
 def test_azure_container_app_bicep_wires_agentic_env_contract() -> None:
@@ -61,16 +62,16 @@ def test_azure_container_app_bicep_wires_agentic_env_contract() -> None:
 
     for expected in (
         "OPENAI_API_KEY",
-        "SCHOLAR_SEARCH_ENABLE_AGENTIC",
-        "SCHOLAR_SEARCH_AGENTIC_PROVIDER",
-        "SCHOLAR_SEARCH_PLANNER_MODEL",
-        "SCHOLAR_SEARCH_SYNTHESIS_MODEL",
-        "SCHOLAR_SEARCH_EMBEDDING_MODEL",
-        "SCHOLAR_SEARCH_DISABLE_EMBEDDINGS",
-        "SCHOLAR_SEARCH_AGENTIC_OPENAI_TIMEOUT_SECONDS",
-        "SCHOLAR_SEARCH_AGENTIC_INDEX_BACKEND",
-        "SCHOLAR_SEARCH_SESSION_TTL_SECONDS",
-        "SCHOLAR_SEARCH_ENABLE_AGENTIC_TRACE_LOG",
+        "PAPER_CHASER_ENABLE_AGENTIC",
+        "PAPER_CHASER_AGENTIC_PROVIDER",
+        "PAPER_CHASER_PLANNER_MODEL",
+        "PAPER_CHASER_SYNTHESIS_MODEL",
+        "PAPER_CHASER_EMBEDDING_MODEL",
+        "PAPER_CHASER_DISABLE_EMBEDDINGS",
+        "PAPER_CHASER_AGENTIC_OPENAI_TIMEOUT_SECONDS",
+        "PAPER_CHASER_AGENTIC_INDEX_BACKEND",
+        "PAPER_CHASER_SESSION_TTL_SECONDS",
+        "PAPER_CHASER_ENABLE_AGENTIC_TRACE_LOG",
     ):
         assert expected in container_text
 

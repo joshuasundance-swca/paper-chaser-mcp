@@ -3,7 +3,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from scholar_search_mcp.clients.federal_register import FederalRegisterClient
+from paper_chaser_mcp.clients.federal_register import FederalRegisterClient
 
 
 @pytest.mark.asyncio

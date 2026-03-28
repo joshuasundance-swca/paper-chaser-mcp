@@ -5,12 +5,12 @@ from typing import Any
 
 import pytest
 
-from scholar_search_mcp.clients.serpapi import (
+from paper_chaser_mcp.clients.serpapi import (
     SerpApiKeyMissingError,
     SerpApiQuotaError,
     SerpApiUpstreamError,
 )
-from scholar_search_mcp.provider_runtime import (
+from paper_chaser_mcp.provider_runtime import (
     ProviderBudgetState,
     ProviderDiagnosticsRegistry,
     ProviderOutcomeEnvelope,
@@ -147,7 +147,7 @@ def test_provider_runtime_helper_functions(
     assert _classify_exception(RuntimeError("HTTP 503")) == "provider_error"
     assert _classify_exception(RuntimeError("network transport failure")) == ("provider_error")
 
-    monkeypatch.setattr("scholar_search_mcp.provider_runtime.random.uniform", lambda a, b: 0.1)
+    monkeypatch.setattr("paper_chaser_mcp.provider_runtime.random.uniform", lambda a, b: 0.1)
     assert _retry_delay_seconds(2, policy=ProviderPolicy(base_delay_seconds=0.5)) == 2.1
 
     assert _empty_payload(None) is True
@@ -183,7 +183,7 @@ def test_provider_runtime_helper_functions(
     assert _format_exception(RuntimeError("boom")) == "RuntimeError: boom"
     assert _format_exception(RuntimeError()) == "RuntimeError"
 
-    caplog.set_level(logging.INFO, logger="scholar-search-mcp")
+    caplog.set_level(logging.INFO, logger="paper-chaser-mcp")
     _log_request_scoped_provider_event(
         request_id=None,
         provider="openalex",
@@ -222,7 +222,7 @@ def test_provider_runtime_helper_functions(
             return "not-a-number"
 
     monkeypatch.setattr(
-        "scholar_search_mcp.provider_runtime.re.search",
+        "paper_chaser_mcp.provider_runtime.re.search",
         lambda pattern, text: _FakeMatch(),
     )
     assert parse_retry_after_seconds("retry after sometime") is None
@@ -234,7 +234,7 @@ def test_provider_diagnostics_registry_clears_expired_suppression(
     registry = ProviderDiagnosticsRegistry()
     registry._suppressed_until["openalex"] = 10.0
 
-    monkeypatch.setattr("scholar_search_mcp.provider_runtime.time.time", lambda: 11.0)
+    monkeypatch.setattr("paper_chaser_mcp.provider_runtime.time.time", lambda: 11.0)
 
     assert registry.suppressed_until("openalex") is None
     assert "openalex" not in registry._suppressed_until
@@ -247,8 +247,8 @@ async def test_execute_provider_call_async_paths(
     async def _no_sleep(_: float) -> None:
         return None
 
-    monkeypatch.setattr("scholar_search_mcp.provider_runtime.asyncio.sleep", _no_sleep)
-    monkeypatch.setattr("scholar_search_mcp.provider_runtime.random.uniform", lambda a, b: 0.0)
+    monkeypatch.setattr("paper_chaser_mcp.provider_runtime.asyncio.sleep", _no_sleep)
+    monkeypatch.setattr("paper_chaser_mcp.provider_runtime.random.uniform", lambda a, b: 0.0)
 
     registry = ProviderDiagnosticsRegistry()
     registry._suppressed_until["core"] = time.time() + 60.0
@@ -319,7 +319,7 @@ async def test_execute_provider_call_async_paths(
 async def test_execute_provider_call_records_budget_skips_and_waits_for_slots(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    caplog.set_level(logging.INFO, logger="scholar-search-mcp")
+    caplog.set_level(logging.INFO, logger="paper-chaser-mcp")
 
     registry = ProviderDiagnosticsRegistry()
     outcomes: list[dict[str, Any]] = []
@@ -366,8 +366,8 @@ async def test_execute_provider_call_records_budget_skips_and_waits_for_slots(
 def test_execute_provider_call_sync_paths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("scholar_search_mcp.provider_runtime.time.sleep", lambda seconds: None)
-    monkeypatch.setattr("scholar_search_mcp.provider_runtime.random.uniform", lambda a, b: 0.0)
+    monkeypatch.setattr("paper_chaser_mcp.provider_runtime.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("paper_chaser_mcp.provider_runtime.random.uniform", lambda a, b: 0.0)
 
     registry = ProviderDiagnosticsRegistry()
     registry._suppressed_until["crossref"] = time.time() + 60.0

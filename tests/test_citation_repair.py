@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import pytest
 
-from scholar_search_mcp import server
-from scholar_search_mcp.agentic import WorkspaceRegistry
-from scholar_search_mcp.citation_repair import (
+from paper_chaser_mcp import server
+from paper_chaser_mcp.agentic import WorkspaceRegistry
+from paper_chaser_mcp.citation_repair import (
     RankedCitationCandidate,
     _filtered_alternative_candidates,
     parse_citation,
     resolve_citation,
 )
-from scholar_search_mcp.enrichment import PaperEnrichmentService
+from paper_chaser_mcp.enrichment import PaperEnrichmentService
 from tests.helpers import (
     RecordingCrossrefClient,
     RecordingOpenAlexClient,

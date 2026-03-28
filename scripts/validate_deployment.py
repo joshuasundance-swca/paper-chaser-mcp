@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import socket
 import subprocess  # nosec B404 - local validator shells out to trusted CLI tools
@@ -21,13 +22,13 @@ PARAM_FILES = [
     REPO_ROOT / "infra" / "main.staging.bicepparam",
     REPO_ROOT / "infra" / "main.prod.bicepparam",
 ]
-APIM_POLICY = REPO_ROOT / "infra" / "policies" / "scholar-search-policy.xml"
+APIM_POLICY = REPO_ROOT / "infra" / "policies" / "paper-chaser-policy.xml"
 SERVER_METADATA = REPO_ROOT / "server.json"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=("Validate deployment assets for the Azure-hosted Scholar Search MCP service.")
+        description=("Validate deployment assets for the Azure-hosted Paper Chaser MCP service.")
     )
     parser.add_argument(
         "--skip-az",
@@ -51,7 +52,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--image-tag",
-        default="scholar-search-mcp:validation",
+        default="paper-chaser-mcp:validation",
         help="Local Docker image tag used for build and smoke tests.",
     )
     return parser.parse_args()
@@ -123,17 +124,15 @@ def _extract_oci_packages(payload: dict) -> list[dict]:
     return oci_packages
 
 
-def _expected_ghcr_identifier(repository_url: str, version: str) -> str:
-    parsed = urllib.parse.urlparse(repository_url)
-    path_parts = [part for part in parsed.path.split("/") if part]
-    if parsed.scheme != "https" or parsed.netloc != "github.com" or len(path_parts) != 2:
+def _expected_ghcr_identifier(server_name: str, version: str) -> str:
+    parsed_name = urllib.parse.unquote(server_name).strip()
+    name_match = re.match(r"^io\.github\.([^/]+)/([^/]+)$", parsed_name)
+    if name_match is None:
         raise SystemExit(
-            "server.json repository.url must point to an "
-            "https://github.com/<owner>/<repo> path for public OCI packaging."
+            "server.json name must follow io.github.<owner>/<server> so the public OCI package path can be derived."
         )
-    owner = path_parts[0].lower()
-    repo = path_parts[1].lower()
-    return f"ghcr.io/{owner}/{repo}:{version}"
+    owner, server = name_match.groups()
+    return f"ghcr.io/{owner.lower()}/{server.lower()}:{version}"
 
 
 def validate_server_metadata() -> dict[str, str]:
@@ -169,10 +168,10 @@ def validate_server_metadata() -> dict[str, str]:
     if not isinstance(package_identifier, str) or not package_identifier.strip():
         raise SystemExit("server.json OCI packages must define a non-empty string 'identifier'.")
 
-    expected_identifier = _expected_ghcr_identifier(repository_url, version)
+    expected_identifier = _expected_ghcr_identifier(name, version)
     if package_identifier != expected_identifier:
         raise SystemExit(
-            "server.json OCI package identifier must match the repository-backed "
+            "server.json OCI package identifier must match the public server-name-backed "
             f"GHCR package path. Expected {expected_identifier!r}, got "
             f"{package_identifier!r}."
         )
@@ -328,9 +327,9 @@ def validate_image_config(
         raise SystemExit("Docker image must define a non-empty ENTRYPOINT.")
 
     env = _parse_image_env(config)
-    configured_transport = env.get("SCHOLAR_SEARCH_TRANSPORT")
+    configured_transport = env.get("PAPER_CHASER_TRANSPORT")
     if configured_transport and configured_transport.lower() != "stdio":
-        raise SystemExit("Docker image default transport must be stdio when SCHOLAR_SEARCH_TRANSPORT is set.")
+        raise SystemExit("Docker image default transport must be stdio when PAPER_CHASER_TRANSPORT is set.")
 
     user = str(config.get("User") or "").strip().lower()
     if user in {"", "0", "root"}:
@@ -371,7 +370,7 @@ def validate_docker(
     )
 
     port = free_port()
-    container_name = f"scholar-search-validation-{port}"
+    container_name = f"paper-chaser-validation-{port}"
     allowed_origin = "https://apim.validation.local"
     # Keep HTTP smoke tests explicit so the image can remain stdio-first by default.
     run(
@@ -385,11 +384,11 @@ def validate_docker(
             "-p",
             f"{port}:8080",
             "-e",
-            f"SCHOLAR_SEARCH_ALLOWED_ORIGINS={allowed_origin}",
+            f"PAPER_CHASER_ALLOWED_ORIGINS={allowed_origin}",
             "-e",
-            "SCHOLAR_SEARCH_HTTP_AUTH_HEADER=x-backend-auth",
+            "PAPER_CHASER_HTTP_AUTH_HEADER=x-backend-auth",
             "-e",
-            "SCHOLAR_SEARCH_HTTP_AUTH_TOKEN=local-test-token",
+            "PAPER_CHASER_HTTP_AUTH_TOKEN=local-test-token",
             image_tag,
             "deployment-http",
         ],

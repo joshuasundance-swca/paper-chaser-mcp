@@ -1,7 +1,7 @@
 import pytest
 
-from scholar_search_mcp import server
-from scholar_search_mcp.models.common import BulkSearchResponse, dump_jsonable
+from paper_chaser_mcp import server
+from paper_chaser_mcp.models.common import BulkSearchResponse, dump_jsonable
 from tests.helpers import RecordingSemanticClient
 
 
@@ -42,7 +42,7 @@ async def test_search_papers_bulk_returns_structured_next_cursor(
     assert cursor is not None
     assert cursor != "tok-next"
 
-    from scholar_search_mcp.utils.cursor import decode_bulk_cursor
+    from paper_chaser_mcp.utils.cursor import decode_bulk_cursor
 
     decoded = decode_bulk_cursor(cursor)
     assert decoded.tool == "search_papers_bulk"
@@ -102,7 +102,7 @@ async def test_search_papers_bulk_retrieval_note_default_ordering(
 
 def test_tool_descriptions_document_cursor_pagination_uniformly() -> None:
     """All paginated tool descriptions must explain the cursor / pagination pattern."""
-    from scholar_search_mcp.tools import TOOL_DESCRIPTIONS
+    from paper_chaser_mcp.tools import TOOL_DESCRIPTIONS
 
     paginated_tools = [
         "search_papers_bulk",
@@ -135,7 +135,7 @@ def test_tool_descriptions_document_cursor_pagination_uniformly() -> None:
 
 def test_cursor_to_offset_decoding() -> None:
     """_cursor_to_offset must decode integer strings and reject invalid cursors."""
-    from scholar_search_mcp.dispatch import _cursor_to_offset
+    from paper_chaser_mcp.dispatch import _cursor_to_offset
 
     assert _cursor_to_offset("42") == 42
     assert _cursor_to_offset("0") == 0
@@ -287,7 +287,7 @@ def test_search_papers_rejects_cursor_argument() -> None:
     """search_papers input model must reject cursor as an unknown field."""
     from pydantic import ValidationError
 
-    from scholar_search_mcp.models.tools import SearchPapersArgs
+    from paper_chaser_mcp.models.tools import SearchPapersArgs
 
     with pytest.raises(ValidationError):
         SearchPapersArgs.model_validate({"query": "ml", "cursor": "10"})
@@ -295,7 +295,7 @@ def test_search_papers_rejects_cursor_argument() -> None:
 
 def test_encode_cursor_produces_decodable_base64() -> None:
     """encode_cursor must produce a URL-safe base64 string that decodes back."""
-    from scholar_search_mcp.utils.cursor import encode_cursor
+    from paper_chaser_mcp.utils.cursor import encode_cursor
 
     payload = {
         "tool": "get_paper_citations",
@@ -318,7 +318,7 @@ def test_encode_cursor_produces_decodable_base64() -> None:
 
 def test_decode_cursor_returns_cursor_state() -> None:
     """decode_cursor must return a CursorState with all fields populated."""
-    from scholar_search_mcp.utils.cursor import (
+    from paper_chaser_mcp.utils.cursor import (
         CursorState,
         decode_cursor,
         encode_cursor,
@@ -344,7 +344,7 @@ def test_decode_cursor_returns_cursor_state() -> None:
 
 def test_is_legacy_offset_detects_integer_strings() -> None:
     """is_legacy_offset must return True for integer strings only."""
-    from scholar_search_mcp.utils.cursor import is_legacy_offset
+    from paper_chaser_mcp.utils.cursor import is_legacy_offset
 
     assert is_legacy_offset("0") is True
     assert is_legacy_offset("100") is True
@@ -356,7 +356,7 @@ def test_is_legacy_offset_detects_integer_strings() -> None:
 
 def test_is_legacy_offset_false_for_structured_cursor() -> None:
     """Structured cursors must NOT be identified as legacy offsets."""
-    from scholar_search_mcp.utils.cursor import encode_cursor, is_legacy_offset
+    from paper_chaser_mcp.utils.cursor import encode_cursor, is_legacy_offset
 
     encoded = encode_cursor(
         {
@@ -371,7 +371,7 @@ def test_is_legacy_offset_false_for_structured_cursor() -> None:
 
 def test_cursor_to_offset_accepts_legacy_integer() -> None:
     """_cursor_to_offset must accept legacy plain integer string cursors."""
-    from scholar_search_mcp.dispatch import _cursor_to_offset
+    from paper_chaser_mcp.dispatch import _cursor_to_offset
 
     assert _cursor_to_offset("0", "get_paper_citations") == 0
     assert _cursor_to_offset("100", "get_paper_citations") == 100
@@ -379,8 +379,8 @@ def test_cursor_to_offset_accepts_legacy_integer() -> None:
 
 def test_cursor_to_offset_accepts_structured_cursor() -> None:
     """_cursor_to_offset must decode structured cursors and return their offset."""
-    from scholar_search_mcp.dispatch import _cursor_to_offset
-    from scholar_search_mcp.utils.cursor import cursor_from_offset
+    from paper_chaser_mcp.dispatch import _cursor_to_offset
+    from paper_chaser_mcp.utils.cursor import cursor_from_offset
 
     encoded = cursor_from_offset("get_paper_citations", 150)
     result = _cursor_to_offset(encoded, "get_paper_citations")
@@ -389,8 +389,8 @@ def test_cursor_to_offset_accepts_structured_cursor() -> None:
 
 def test_cursor_to_offset_rejects_cross_tool_cursor() -> None:
     """_cursor_to_offset must reject a cursor issued by a different tool."""
-    from scholar_search_mcp.dispatch import _cursor_to_offset
-    from scholar_search_mcp.utils.cursor import cursor_from_offset
+    from paper_chaser_mcp.dispatch import _cursor_to_offset
+    from paper_chaser_mcp.utils.cursor import cursor_from_offset
 
     # Cursor was issued by get_paper_citations but used with get_paper_references
     encoded = cursor_from_offset("get_paper_citations", 100)
@@ -400,7 +400,7 @@ def test_cursor_to_offset_rejects_cross_tool_cursor() -> None:
 
 def test_cursor_to_offset_rejects_corrupted_cursor() -> None:
     """_cursor_to_offset must reject a corrupted base64 cursor."""
-    from scholar_search_mcp.dispatch import _cursor_to_offset
+    from paper_chaser_mcp.dispatch import _cursor_to_offset
 
     corrupted = "not-valid-base64!!!"
     with pytest.raises(ValueError, match="INVALID_CURSOR"):
@@ -409,7 +409,7 @@ def test_cursor_to_offset_rejects_corrupted_cursor() -> None:
 
 def test_cursor_to_offset_returns_none_for_none() -> None:
     """_cursor_to_offset must return None when no cursor is given."""
-    from scholar_search_mcp.dispatch import _cursor_to_offset
+    from paper_chaser_mcp.dispatch import _cursor_to_offset
 
     assert _cursor_to_offset(None, "get_paper_citations") is None
     # cursor=None returns None immediately regardless of tool; safe to omit tool
@@ -418,7 +418,7 @@ def test_cursor_to_offset_returns_none_for_none() -> None:
 
 def test_cursor_to_offset_rejects_negative_integer() -> None:
     """_cursor_to_offset must reject negative integer strings as invalid offsets."""
-    from scholar_search_mcp.dispatch import _cursor_to_offset
+    from paper_chaser_mcp.dispatch import _cursor_to_offset
 
     with pytest.raises(ValueError, match="INVALID_CURSOR"):
         _cursor_to_offset("-1", "get_paper_citations")
@@ -440,7 +440,7 @@ async def test_offset_tool_response_has_structured_cursor(
             self.calls.append(("get_paper_citations", kwargs))
             # Return the same format the real SS client produces (already serialized
             # PaperListResponse with pagination key)
-            from scholar_search_mcp.models.common import (
+            from paper_chaser_mcp.models.common import (
                 PaperListResponse,
                 dump_jsonable,
             )
@@ -484,7 +484,7 @@ async def test_structured_cursor_round_trip_on_offset_tool(
             nonlocal call_count
             call_count += 1
             self.calls.append(("get_paper_citations", kwargs))
-            from scholar_search_mcp.models.common import (
+            from paper_chaser_mcp.models.common import (
                 PaperListResponse,
                 dump_jsonable,
             )
@@ -529,7 +529,7 @@ async def test_cross_tool_cursor_reuse_raises_error(
     class PaginatedSemanticClient(RecordingSemanticClient):
         async def get_paper_citations(self, **kwargs):
             self.calls.append(("get_paper_citations", kwargs))
-            from scholar_search_mcp.models.common import (
+            from paper_chaser_mcp.models.common import (
                 PaperListResponse,
                 dump_jsonable,
             )
@@ -579,7 +579,7 @@ async def test_legacy_integer_cursor_still_accepted(
 
 def test_bulk_search_cursor_not_structured() -> None:
     """Bulk search tokens must NOT be treated as offset cursors."""
-    from scholar_search_mcp.utils.cursor import is_legacy_offset
+    from paper_chaser_mcp.utils.cursor import is_legacy_offset
 
     # A bulk search token (provider-issued) is not a legacy offset
     assert is_legacy_offset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh") is False
@@ -590,7 +590,7 @@ def test_decode_cursor_rejects_missing_required_fields() -> None:
     import base64
     import json
 
-    from scholar_search_mcp.utils.cursor import decode_cursor
+    from paper_chaser_mcp.utils.cursor import decode_cursor
 
     # Missing 'tool' key
     payload = {"provider": "semantic_scholar", "offset": 50, "version": 1}
@@ -602,7 +602,7 @@ def test_decode_cursor_rejects_missing_required_fields() -> None:
 
 def test_encode_then_decode_roundtrip() -> None:
     """encode_cursor followed by decode_cursor must reproduce the original state."""
-    from scholar_search_mcp.utils.cursor import (
+    from paper_chaser_mcp.utils.cursor import (
         CursorState,
         decode_cursor,
         encode_cursor,
@@ -631,7 +631,7 @@ def test_cursor_to_offset_rejects_wrong_provider() -> None:
     import base64
     import json
 
-    from scholar_search_mcp.dispatch import _cursor_to_offset
+    from paper_chaser_mcp.dispatch import _cursor_to_offset
 
     payload = {
         "tool": "get_paper_citations",
@@ -650,7 +650,7 @@ def test_cursor_to_offset_rejects_unsupported_version() -> None:
     import base64
     import json
 
-    from scholar_search_mcp.dispatch import _cursor_to_offset
+    from paper_chaser_mcp.dispatch import _cursor_to_offset
 
     payload = {
         "tool": "get_paper_citations",
@@ -666,8 +666,8 @@ def test_cursor_to_offset_rejects_unsupported_version() -> None:
 
 def test_cursor_to_offset_rejects_context_hash_mismatch() -> None:
     """_cursor_to_offset must reject a cursor whose context_hash doesn't match."""
-    from scholar_search_mcp.dispatch import _cursor_to_offset
-    from scholar_search_mcp.utils.cursor import cursor_from_offset
+    from paper_chaser_mcp.dispatch import _cursor_to_offset
+    from paper_chaser_mcp.utils.cursor import cursor_from_offset
 
     # Cursor was issued for paper-1
     encoded = cursor_from_offset(
@@ -686,8 +686,8 @@ def test_cursor_to_offset_rejects_context_hash_mismatch() -> None:
 
 def test_cursor_to_offset_accepts_matching_context_hash() -> None:
     """_cursor_to_offset must accept a cursor with a matching context_hash."""
-    from scholar_search_mcp.dispatch import _cursor_to_offset
-    from scholar_search_mcp.utils.cursor import cursor_from_offset
+    from paper_chaser_mcp.dispatch import _cursor_to_offset
+    from paper_chaser_mcp.utils.cursor import cursor_from_offset
 
     ctx = "aabbccdd11223344"
     encoded = cursor_from_offset("search_authors", 50, context_hash=ctx)
@@ -700,8 +700,8 @@ def test_cursor_to_offset_accepts_cursor_without_context_hash() -> None:
 
     This covers structured cursors that predate context-hash binding (forward-compat).
     """
-    from scholar_search_mcp.dispatch import _cursor_to_offset
-    from scholar_search_mcp.utils.cursor import cursor_from_offset
+    from paper_chaser_mcp.dispatch import _cursor_to_offset
+    from paper_chaser_mcp.utils.cursor import cursor_from_offset
 
     # Cursor with no context_hash (context_hash=None)
     encoded = cursor_from_offset("get_author_papers", 200, context_hash=None)
@@ -715,7 +715,7 @@ def test_cursor_to_offset_accepts_cursor_without_context_hash() -> None:
 
 def test_compute_context_hash_is_deterministic() -> None:
     """compute_context_hash must return the same value for the same arguments."""
-    from scholar_search_mcp.utils.cursor import compute_context_hash
+    from paper_chaser_mcp.utils.cursor import compute_context_hash
 
     h1 = compute_context_hash("get_paper_citations", {"paper_id": "abc123"})
     h2 = compute_context_hash("get_paper_citations", {"paper_id": "abc123"})
@@ -726,7 +726,7 @@ def test_compute_context_hash_is_deterministic() -> None:
 
 def test_compute_context_hash_differs_for_different_args() -> None:
     """compute_context_hash must differ when the stream-defining argument changes."""
-    from scholar_search_mcp.utils.cursor import compute_context_hash
+    from paper_chaser_mcp.utils.cursor import compute_context_hash
 
     h1 = compute_context_hash("get_paper_citations", {"paper_id": "paper-1"})
     h2 = compute_context_hash("get_paper_citations", {"paper_id": "paper-2"})
@@ -735,7 +735,7 @@ def test_compute_context_hash_differs_for_different_args() -> None:
 
 def test_compute_context_hash_ignores_cursor_and_limit() -> None:
     """compute_context_hash must produce the same hash regardless of cursor/limit."""
-    from scholar_search_mcp.utils.cursor import compute_context_hash
+    from paper_chaser_mcp.utils.cursor import compute_context_hash
 
     base = {"paper_id": "p1"}
     with_cursor = {"paper_id": "p1", "cursor": "100", "limit": 50}
@@ -747,7 +747,7 @@ def test_cursor_from_offset_embeds_context_hash() -> None:
     import base64
     import json
 
-    from scholar_search_mcp.utils.cursor import cursor_from_offset
+    from paper_chaser_mcp.utils.cursor import cursor_from_offset
 
     ctx = "deadbeeffeedface"
     encoded = cursor_from_offset("search_authors", 30, context_hash=ctx)
@@ -760,7 +760,7 @@ def test_cursor_from_offset_omits_context_hash_when_none() -> None:
     import base64
     import json
 
-    from scholar_search_mcp.utils.cursor import cursor_from_offset
+    from paper_chaser_mcp.utils.cursor import cursor_from_offset
 
     encoded = cursor_from_offset("search_authors", 30)
     payload = json.loads(base64.urlsafe_b64decode(encoded))
@@ -777,7 +777,7 @@ async def test_context_hash_mismatch_rejects_cursor_on_different_paper(
     class PaginatedSemanticClient(RecordingSemanticClient):
         async def get_paper_citations(self, **kwargs):
             self.calls.append(("get_paper_citations", kwargs))
-            from scholar_search_mcp.models.common import (
+            from paper_chaser_mcp.models.common import (
                 PaperListResponse,
                 dump_jsonable,
             )
@@ -827,7 +827,7 @@ async def test_context_hash_same_paper_accepts_cursor(
             nonlocal call_count
             call_count += 1
             self.calls.append(("get_paper_citations", kwargs))
-            from scholar_search_mcp.models.common import (
+            from paper_chaser_mcp.models.common import (
                 PaperListResponse,
                 dump_jsonable,
             )

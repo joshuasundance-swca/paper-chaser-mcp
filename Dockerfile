@@ -15,7 +15,7 @@ WORKDIR /build
 RUN python -m venv /opt/venv
 
 COPY pyproject.toml README.md LICENSE ./
-COPY scholar_search_mcp ./scholar_search_mcp
+COPY paper_chaser_mcp ./paper_chaser_mcp
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip \
@@ -35,19 +35,19 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PATH="/opt/venv/bin:$PATH" \
     PORT=8080 \
-    SCHOLAR_SEARCH_HTTP_HOST=0.0.0.0 \
-    SCHOLAR_SEARCH_HTTP_PORT=8080 \
-    SCHOLAR_SEARCH_HTTP_PATH=/mcp
+    PAPER_CHASER_HTTP_HOST=0.0.0.0 \
+    PAPER_CHASER_HTTP_PORT=8080 \
+    PAPER_CHASER_HTTP_PATH=/mcp
 
-LABEL org.opencontainers.image.title="Scholar Search MCP" \
+LABEL org.opencontainers.image.title="Paper Chaser MCP" \
       org.opencontainers.image.description="Academic paper discovery MCP server with stdio-first local packaging and optional HTTP deployment wrapper." \
-      org.opencontainers.image.documentation="https://github.com/joshuasundance-swca/scholar-search-mcp#readme" \
+    org.opencontainers.image.documentation="https://github.com/joshuasundance-swca/scholar-search-mcp#readme" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.created="${BUILD_DATE}" \
-      org.opencontainers.image.source="https://github.com/joshuasundance-swca/scholar-search-mcp" \
+    org.opencontainers.image.source="https://github.com/joshuasundance-swca/scholar-search-mcp" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.version="${VERSION}" \
-      io.modelcontextprotocol.server.name="io.github.joshuasundance-swca/scholar-search-mcp"
+      io.modelcontextprotocol.server.name="io.github.joshuasundance-swca/paper-chaser-mcp"
 
 RUN groupadd --gid "${GID}" app \
     && useradd --uid "${UID}" --gid app --create-home --home-dir /home/app --shell /usr/sbin/nologin app \
@@ -62,6 +62,6 @@ USER app
 
 EXPOSE 8080
 
-ENTRYPOINT ["scholar-search-mcp"]
+ENTRYPOINT ["paper-chaser-mcp"]
 
 CMD []

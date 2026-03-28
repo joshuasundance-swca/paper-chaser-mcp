@@ -1,6 +1,6 @@
 import xml.etree.ElementTree as ET
 
-from scholar_search_mcp import server
+from paper_chaser_mcp import server
 
 
 def test_arxiv_id_from_url_strips_version_suffix() -> None:

@@ -1,13 +1,13 @@
 import pytest
 
-import scholar_search_mcp
-import scholar_search_mcp.__main__ as server_main
-import scholar_search_mcp.cli as cli
-import scholar_search_mcp.clients.serpapi.client as serpapi_client_module
-from scholar_search_mcp import server
-from scholar_search_mcp.clients.serpapi import SerpApiScholarClient
-from scholar_search_mcp.enrichment import PaperEnrichmentService
-from scholar_search_mcp.utils.cursor import decode_bulk_cursor, decode_cursor
+import paper_chaser_mcp
+import paper_chaser_mcp.__main__ as server_main
+import paper_chaser_mcp.cli as cli
+import paper_chaser_mcp.clients.serpapi.client as serpapi_client_module
+from paper_chaser_mcp import server
+from paper_chaser_mcp.clients.serpapi import SerpApiScholarClient
+from paper_chaser_mcp.enrichment import PaperEnrichmentService
+from paper_chaser_mcp.utils.cursor import decode_bulk_cursor, decode_cursor
 from tests.helpers import (
     DummyResponse,
     DummySerpApiAsyncClient,
@@ -1131,7 +1131,7 @@ async def test_provider_diagnostics_surface_crossref_and_unpaywall(
 
 def test_package_import_and_module_entrypoints_keep_expected_targets() -> None:
     """Package import exposes server.main while python -m routes through cli.main."""
-    assert scholar_search_mcp.main is server.main
+    assert paper_chaser_mcp.main is server.main
     assert server_main.main is cli.main
 
 
