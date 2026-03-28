@@ -7,6 +7,7 @@ GITIGNORE = REPO_ROOT / ".gitignore"
 DOCKERIGNORE = REPO_ROOT / ".dockerignore"
 DEPLOY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy-azure.yml"
 PUBLIC_MCP_PUBLISH_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "publish-public-mcp-package.yml"
+PYPI_PUBLISH_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "publish-pypi.yml"
 
 REQUIRED_GITIGNORE_PATTERNS = {
     ".env",
@@ -89,3 +90,29 @@ def test_public_mcp_publish_workflow_pins_mcp_publisher_install() -> None:
     assert "releases/latest/download" not in text
     assert "MCP_PUBLISHER_VERSION:" in text
     assert "sha256sum -c -" in text
+
+
+def test_pypi_publish_workflow_uses_oidc_environments_and_not_api_tokens() -> None:
+    text = PYPI_PUBLISH_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "id-token: write" in text
+    assert "name: testpypi" in text
+    assert "name: pypi" in text
+    assert "repository-url: https://test.pypi.org/legacy/" in text
+    assert "secrets.PYPI_API_TOKEN" not in text
+    assert "secrets.TEST_PYPI_API_TOKEN" not in text
+    assert "pypa/gh-action-pypi-publish@" in text
+
+
+def test_pypi_publish_workflow_pins_github_actions_to_commit_shas() -> None:
+    text = PYPI_PUBLISH_WORKFLOW.read_text(encoding="utf-8")
+
+    for action in (
+        "actions/checkout",
+        "actions/setup-python",
+        "actions/upload-artifact",
+        "actions/download-artifact",
+        "pypa/gh-action-pypi-publish",
+    ):
+        assert f"{action}@v" not in text
+        assert action in text

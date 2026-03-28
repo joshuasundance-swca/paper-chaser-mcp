@@ -25,6 +25,11 @@ This document is the current working handoff for the fork. It is intended to giv
   keeps checked-in package versions in PEP 440 form while preserving `v*` git
   tags for the publish workflow, and the default bumpver config keeps commit,
   tag, and push disabled so PR branches can stage release-prep diffs safely.
+- A dedicated `.github/workflows/publish-pypi.yml` workflow now covers the
+  Python package path separately from GHCR/MCP Registry publication: PRs build
+  and validate distributions, manual dispatch targets TestPyPI, and `v*` tags
+  are reserved for PyPI Trusted Publishing after the external publisher
+  registration is in place.
 - Deployment asset validation is now a first-class workflow: pre-commit and the
   main CI workflow run `scripts/validate_deployment.py`, and the validator can
   lint/build the Bicep, validate the APIM policy XML, build the Docker image,
