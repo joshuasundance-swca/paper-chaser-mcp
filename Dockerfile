@@ -41,10 +41,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 LABEL org.opencontainers.image.title="Paper Chaser MCP" \
       org.opencontainers.image.description="Academic paper discovery MCP server with stdio-first local packaging and optional HTTP deployment wrapper." \
-    org.opencontainers.image.documentation="https://github.com/joshuasundance-swca/scholar-search-mcp#readme" \
+    org.opencontainers.image.documentation="https://github.com/joshuasundance-swca/paper-chaser-mcp#readme" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.created="${BUILD_DATE}" \
-    org.opencontainers.image.source="https://github.com/joshuasundance-swca/scholar-search-mcp" \
+    org.opencontainers.image.source="https://github.com/joshuasundance-swca/paper-chaser-mcp" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.version="${VERSION}" \
       io.modelcontextprotocol.server.name="io.github.joshuasundance-swca/paper-chaser-mcp"

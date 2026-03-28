@@ -4,7 +4,7 @@
   "title": "Paper Chaser MCP",
   "description": "Model Context Protocol server for academic paper search across Semantic Scholar, CORE, arXiv, OpenAlex, SerpApi Google Scholar, Crossref, Unpaywall, ECOS species dossiers, and Federal Register / CFR regulatory text.",
   "repository": {
-    "url": "https://github.com/joshuasundance-swca/scholar-search-mcp",
+    "url": "https://github.com/joshuasundance-swca/paper-chaser-mcp",
     "source": "github"
   },
   "version": "0.1.2",
