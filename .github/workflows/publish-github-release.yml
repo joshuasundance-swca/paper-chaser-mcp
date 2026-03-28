@@ -52,7 +52,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          project_version="$(python -c \"import pathlib, tomllib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])\")"
+          project_version="$(python -c 'import pathlib, tomllib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"])')"
           server_version="$(jq -re '.version' server.json)"
 
           if [ "$project_version" != "$server_version" ]; then
