@@ -35,14 +35,14 @@ jobs:
             verify-lockfile: false
             docker-candidate: false
           - python-version: "3.13"
-            coverage-gate: true
-            heavy-checks: true
-            verify-lockfile: true
+            coverage-gate: false
+            heavy-checks: false
+            verify-lockfile: false
             docker-candidate: false
           - python-version: "3.14"
             coverage-gate: true
             heavy-checks: true
-            verify-lockfile: false
+            verify-lockfile: true
             docker-candidate: true
 
     steps:
@@ -102,14 +102,13 @@ jobs:
         if: matrix.heavy-checks
         run: python scripts/validate_deployment.py --skip-docker
 
-      - name: Validate Python 3.14 Docker candidate
+      - name: Validate default Docker runtime
         if: matrix.docker-candidate
         run: |
           python scripts/validate_deployment.py \
             --skip-az \
             --require-docker \
-            --python-version 3.14 \
-            --image-tag paper-chaser-mcp:validation-314
+            --image-tag paper-chaser-mcp:validation-314-default
 
       - name: Build package
         if: matrix.heavy-checks
