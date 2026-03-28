@@ -13,11 +13,10 @@ This document is the current working handoff for the fork. It is intended to giv
 - XML parsing uses `defusedxml`.
 - README configuration examples are valid JSON.
 - GitHub Actions now validates pushes and pull requests.
-- The main validation workflow now treats Python 3.14 as a promotion-candidate
-  lane rather than a light compatibility-only lane: it runs coverage-gated
-  tests, build, dependency audit, deployment validation, and an explicit
-  Docker smoke test with `PYTHON_VERSION=3.14` while 3.13 remains the shipped
-  default runtime.
+- The main validation workflow now treats Python 3.14 as the shipped default
+  runtime lane: it runs the lockfile freshness check, coverage-gated tests,
+  build, dependency audit, deployment validation, and the default Docker smoke
+  path. Python 3.13 remains in the matrix as a compatibility lane.
 - The repo now includes a private-network Azure deployment scaffold: Docker
   packaging, a deployment wrapper ASGI app, Bicep infrastructure under
   `infra/`, a manual OIDC deployment workflow with `bootstrap` and `full`
@@ -46,9 +45,9 @@ This document is the current working handoff for the fork. It is intended to giv
   that wheel/sdist builds still work, while `v*` tags and manual dispatch build
   the Python artifacts, generate `SHA256SUMS`, and attach them to a draft
   GitHub Release for review.
-- The release-asset and PyPI workflows now also run PR-only Python 3.14
-  distribution builds with `twine check` so release-style packaging is proven
-  on the candidate runtime before any default-runtime promotion.
+- The release-asset and PyPI workflows now build and validate distributions on
+  Python 3.14 by default, while still keeping PR-only 3.14 proof jobs in place
+  as an explicit packaging cross-check.
 - Deployment asset validation is now a first-class workflow: pre-commit and the
   main CI workflow run `scripts/validate_deployment.py`, and the validator can
   lint/build the Bicep, validate the APIM policy XML, build the Docker image,
@@ -435,7 +434,7 @@ gh aw compile test-paper-chaser --dir .github/workflows
   through `search_papers`, because the OpenAlex guide's citation, author, and
   cursor semantics differ enough from Semantic Scholar to warrant a separate
   provider-specific surface.
-- The agentic workflow now runs `paper-chaser` through a `python:3.13`
+- The agentic workflow now runs `paper-chaser` through a `python:3.14`
   container mounted to `${GITHUB_WORKSPACE}` so the generated MCP Gateway
   config matches the current schema.
 - `search_papers_bulk` now truncates returned data to the requested `limit`
