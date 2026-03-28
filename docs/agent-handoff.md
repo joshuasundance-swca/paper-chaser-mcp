@@ -34,6 +34,11 @@ This document is the current working handoff for the fork. It is intended to giv
   before PyPI/TestPyPI account recovery; once access is restored and the
   trusted publishers are registered, manual dispatch can target TestPyPI and
   `v*` tags can publish to PyPI.
+- A dedicated `.github/workflows/publish-github-release.yml` workflow now covers
+  GitHub Release page artifacts independently of GHCR and PyPI: PRs validate
+  that wheel/sdist builds still work, while `v*` tags and manual dispatch build
+  the Python artifacts, generate `SHA256SUMS`, and attach them to a draft
+  GitHub Release for review.
 - Deployment asset validation is now a first-class workflow: pre-commit and the
   main CI workflow run `scripts/validate_deployment.py`, and the validator can
   lint/build the Bicep, validate the APIM policy XML, build the Docker image,

@@ -296,6 +296,12 @@ variable `ENABLE_PYPI_PUBLISHING` is set to `true`. After PyPI/TestPyPI access
 is restored and the trusted publishers are registered, manual dispatch can
 publish to TestPyPI and a `v*` tag can publish to PyPI.
 
+GitHub Release assets are handled separately in
+`.github/workflows/publish-github-release.yml`: a `v*` tag or manual dispatch
+builds wheel and sdist artifacts, verifies them with `twine check`, generates
+`SHA256SUMS`, and uploads them to a draft GitHub Release page so Python
+artifacts can be reviewed before broader public promotion.
+
 ### Docker Compose (HTTP wrapper mode)
 
 For local HTTP testing, MCP Inspector, or bridge-style integrations, this repo
