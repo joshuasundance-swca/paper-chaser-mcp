@@ -45,6 +45,9 @@ This document is the current working handoff for the fork. It is intended to giv
   that wheel/sdist builds still work, while `v*` tags and manual dispatch build
   the Python artifacts, generate `SHA256SUMS`, and attach them to a draft
   GitHub Release for review.
+- `docs/release-publishing-plan.md` is now the durable playbook for release
+  prep, tagging, GHCR publication, GitHub Release asset review, manual MCP
+  Registry publication, and the no-tag-overwrite policy.
 - The release-asset and PyPI workflows now build and validate distributions on
   Python 3.14 by default, while still keeping PR-only 3.14 proof jobs in place
   as an explicit packaging cross-check.
@@ -546,30 +549,31 @@ gh aw compile test-paper-chaser --dir .github/workflows
 
 ## Suggested Next Steps
 
-1. Consider whether budget-aware provider preferences should become a more explicit first-class planning concept in the docs and prompt surfaces.
-2. Decide whether retry-recovered provider behavior should remain invisible or become broker metadata.
-3. Add more negative tests for CORE schema drift, especially malformed author shapes, journal fields, and URL containers.
-4. Consider moving from per-request `httpx.AsyncClient` creation to shared clients if connection reuse becomes important.
-5. Decide whether the compatibility facade in `paper_chaser_mcp/server.py` should remain broad or be narrowed with an explicit supported surface.
-6. Revisit `.github/copilot-instructions.md` and `docs/golden-paths.md` whenever future agent-facing search behavior materially changes.
-7. ~~OpenAlex institution/source pivots~~ — **completed**: `search_entities_openalex`
+1. Merge the `0.2.0` release-prep branch described in `docs/release-publishing-plan.md`, then tag `v0.2.0` from updated `master` after the normal validation pass.
+2. Consider whether budget-aware provider preferences should become a more explicit first-class planning concept in the docs and prompt surfaces.
+3. Decide whether retry-recovered provider behavior should remain invisible or become broker metadata.
+4. Add more negative tests for CORE schema drift, especially malformed author shapes, journal fields, and URL containers.
+5. Consider moving from per-request `httpx.AsyncClient` creation to shared clients if connection reuse becomes important.
+6. Decide whether the compatibility facade in `paper_chaser_mcp/server.py` should remain broad or be narrowed with an explicit supported surface.
+7. Revisit `.github/copilot-instructions.md` and `docs/golden-paths.md` whenever future agent-facing search behavior materially changes.
+8. ~~OpenAlex institution/source pivots~~ — **completed**: `search_entities_openalex`
    and `search_papers_openalex_by_entity` are now first-class tools.
-8. Tune the smart discovery thresholds and trace logs once real-world
+9. Tune the smart discovery thresholds and trace logs once real-world
    `search_papers_smart` runs accumulate enough UX feedback.
-9. Expand the agentic workflow once stable secrets are available for deeper provider-specific assertions, for example optional SerpApi or OpenAI-backed smart-tool coverage.
-10. Act on the first UX friction report produced by the
+10. Expand the agentic workflow once stable secrets are available for deeper provider-specific assertions, for example optional SerpApi or OpenAI-backed smart-tool coverage.
+11. Act on the first UX friction report produced by the
     `GH_AW_MODEL_AGENT_COPILOT`-configured verifier. Focus on the
     highest-impact item from the structured "UX friction summary": likely a
     round-trip reduction or a clearly missing feature rather than cosmetic work.
-11. Consider adding a dedicated ECOS-to-regulatory golden path in
+12. Consider adding a dedicated ECOS-to-regulatory golden path in
     `docs/golden-paths.md` covering the full chain from species dossier through
     `frCitation` to GovInfo/FR retrieval, now that all three regulatory tools
     are stable and documented.
-12. Evaluate whether a Federal Register walkthrough (analogous to the ECOS
+13. Evaluate whether a Federal Register walkthrough (analogous to the ECOS
     California-least-tern walkthrough in the README) should be added to help
     agents discover the discovery→direct-retrieval→CFR-text chain without
     reading the full tool descriptions.
-13. Keep the repo metadata sweep complete whenever GitHub-side settings change,
+14. Keep the repo metadata sweep complete whenever GitHub-side settings change,
   especially if MCP Registry listing metadata, GHCR package descriptions, or
   external docs drift from the renamed Paper Chaser identity.
 

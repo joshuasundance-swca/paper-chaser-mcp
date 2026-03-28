@@ -605,8 +605,8 @@ instead of assuming inline workflow bash is being linted locally.
 ### Version bumps
 
 Version metadata is managed with `bumpver` from `pyproject.toml`. The checked-in
-package version stays in plain PEP 440 form such as `0.1.2`, while the release
-tag shape remains `v0.1.2` to match the existing publish workflow trigger.
+package version stays in plain PEP 440 form such as `0.2.0`, while the release
+tag shape remains `v0.2.0` to match the existing publish workflow trigger.
 
 For PR-branch-safe review, dry-run a patch bump without touching git state:
 
@@ -701,6 +701,7 @@ For maintainer orientation after the module split, start with `docs/agent-handof
 
 - [GitHub Copilot Instructions](.github/copilot-instructions.md) - repo-specific guidance for GitHub Copilot and the GitHub cloud coding agent, including workflow defaults and durable planning expectations.
 - [Agent Handoff](docs/agent-handoff.md) - current repo status, validation commands, and next recommended work for follow-on agents.
+- [Release And Publishing Plan](docs/release-publishing-plan.md) - the current release playbook for GHCR, GitHub Release assets, manual MCP Registry publication, and dormant PyPI.
 - [Paper Chaser Golden Paths](docs/golden-paths.md) - primary personas, workflow defaults, success signals, and future workflow-oriented follow-up work.
 - [Azure Deployment](docs/azure-deployment.md) - deployment modes, required secrets and variables, and validation paths for the private Azure rollout.
 - [Azure Architecture](docs/azure-architecture.md) - trust boundaries, runtime topology, and credential separation for the Azure scaffold.

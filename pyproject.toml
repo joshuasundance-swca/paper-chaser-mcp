@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "paper-chaser-mcp"
-version = "0.1.2"
+version = "0.2.0"
 description = "Model Context Protocol server for academic paper search across Semantic Scholar, CORE, arXiv, OpenAlex, SerpApi Google Scholar, Crossref, Unpaywall, ECOS species dossiers, and Federal Register / CFR regulatory text"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -77,7 +77,7 @@ where = ["."]
 include = ["paper_chaser_mcp*"]
 
 [tool.bumpver]
-current_version = "v0.1.2"
+current_version = "v0.2.0"
 version_pattern = "vMAJOR.MINOR.PATCH"
 commit_message = "bump version {old_version} -> {new_version}"
 tag_message = "{new_version}"
