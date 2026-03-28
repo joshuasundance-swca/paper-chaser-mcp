@@ -55,6 +55,10 @@ def parse_args() -> argparse.Namespace:
         default="paper-chaser-mcp:validation",
         help="Local Docker image tag used for build and smoke tests.",
     )
+    parser.add_argument(
+        "--python-version",
+        help="Optional Dockerfile PYTHON_VERSION build arg override for candidate runtime validation.",
+    )
     return parser.parse_args()
 
 
@@ -343,22 +347,26 @@ def validate_docker(
     expected_server_name: str,
     expected_server_version: str,
     expected_source_url: str,
+    python_version: str | None = None,
 ) -> None:
     build_date = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    build_command = [
+        docker_command,
+        "build",
+        "-t",
+        image_tag,
+        "--build-arg",
+        f"VERSION={expected_server_version}",
+        "--build-arg",
+        "VCS_REF=local-validate",
+        "--build-arg",
+        f"BUILD_DATE={build_date}",
+    ]
+    if python_version:
+        build_command.extend(["--build-arg", f"PYTHON_VERSION={python_version}"])
+    build_command.append(".")
     run(
-        [
-            docker_command,
-            "build",
-            "-t",
-            image_tag,
-            "--build-arg",
-            f"VERSION={expected_server_version}",
-            "--build-arg",
-            "VCS_REF=local-validate",
-            "--build-arg",
-            f"BUILD_DATE={build_date}",
-            ".",
-        ],
+        build_command,
         description=f"Build Docker image {image_tag}",
     )
     validate_image_config(
@@ -468,6 +476,7 @@ def main() -> None:
             expected_server_name=server_metadata["name"],
             expected_server_version=server_metadata["version"],
             expected_source_url=server_metadata["source_url"],
+            python_version=args.python_version,
         )
 
     print("[validate-deployment] Deployment asset validation completed successfully")

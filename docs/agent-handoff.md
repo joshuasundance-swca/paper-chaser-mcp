@@ -13,6 +13,11 @@ This document is the current working handoff for the fork. It is intended to giv
 - XML parsing uses `defusedxml`.
 - README configuration examples are valid JSON.
 - GitHub Actions now validates pushes and pull requests.
+- The main validation workflow now treats Python 3.14 as a promotion-candidate
+  lane rather than a light compatibility-only lane: it runs coverage-gated
+  tests, build, dependency audit, deployment validation, and an explicit
+  Docker smoke test with `PYTHON_VERSION=3.14` while 3.13 remains the shipped
+  default runtime.
 - The repo now includes a private-network Azure deployment scaffold: Docker
   packaging, a deployment wrapper ASGI app, Bicep infrastructure under
   `infra/`, a manual OIDC deployment workflow with `bootstrap` and `full`
@@ -41,6 +46,9 @@ This document is the current working handoff for the fork. It is intended to giv
   that wheel/sdist builds still work, while `v*` tags and manual dispatch build
   the Python artifacts, generate `SHA256SUMS`, and attach them to a draft
   GitHub Release for review.
+- The release-asset and PyPI workflows now also run PR-only Python 3.14
+  distribution builds with `twine check` so release-style packaging is proven
+  on the candidate runtime before any default-runtime promotion.
 - Deployment asset validation is now a first-class workflow: pre-commit and the
   main CI workflow run `scripts/validate_deployment.py`, and the validator can
   lint/build the Bicep, validate the APIM policy XML, build the Docker image,
