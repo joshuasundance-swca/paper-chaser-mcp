@@ -8,6 +8,7 @@ DOCKERIGNORE = REPO_ROOT / ".dockerignore"
 DEPLOY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy-azure.yml"
 PUBLIC_MCP_PUBLISH_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "publish-public-mcp-package.yml"
 MCP_REGISTRY_PUBLISH_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "publish-mcp-registry.yml"
+GITHUB_RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "publish-github-release.yml"
 PYPI_PUBLISH_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "publish-pypi.yml"
 
 REQUIRED_GITIGNORE_PATTERNS = {
@@ -115,6 +116,37 @@ def test_mcp_registry_publish_workflow_pins_actions_to_commit_shas() -> None:
         "actions/checkout",
         "docker/setup-buildx-action",
         "docker/login-action",
+    ):
+        assert f"{action}@v" not in text
+        assert action in text
+
+
+def test_github_release_workflow_validates_prs_and_publishes_on_tags_or_manual() -> None:
+    text = GITHUB_RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "pull_request:" in text
+    assert "workflow_dispatch:" in text
+    assert "tags:" in text
+    assert "- v*" in text
+    assert "python -m build" in text
+    assert "python -m twine check --strict dist/*" in text
+    assert "sha256sum * > SHA256SUMS" in text
+    assert "gh release create" in text
+    assert "gh release upload" in text
+    assert "--draft" in text
+    assert "contents: write" in text
+    assert "packages: write" not in text
+    assert "id-token: write" not in text
+
+
+def test_github_release_workflow_pins_actions_to_commit_shas() -> None:
+    text = GITHUB_RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+    for action in (
+        "actions/checkout",
+        "actions/setup-python",
+        "actions/upload-artifact",
+        "actions/download-artifact",
     ):
         assert f"{action}@v" not in text
         assert action in text
