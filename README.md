@@ -288,6 +288,13 @@ workflow is tag-driven: a `v*` tag publishes the GHCR image first, then
 publishes the same committed `server.json` metadata to the MCP Registry via
 GitHub OIDC.
 
+Python package publishing is prepared separately in
+`.github/workflows/publish-pypi.yml`: pull requests build and `twine check` the
+distribution, and the actual publish jobs stay dormant until the repository
+variable `ENABLE_PYPI_PUBLISHING` is set to `true`. After PyPI/TestPyPI access
+is restored and the trusted publishers are registered, manual dispatch can
+publish to TestPyPI and a `v*` tag can publish to PyPI.
+
 ### Docker Compose (HTTP wrapper mode)
 
 For local HTTP testing, MCP Inspector, or bridge-style integrations, this repo
