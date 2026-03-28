@@ -27,9 +27,11 @@ This document is the current working handoff for the fork. It is intended to giv
   tag, and push disabled so PR branches can stage release-prep diffs safely.
 - A dedicated `.github/workflows/publish-pypi.yml` workflow now covers the
   Python package path separately from GHCR/MCP Registry publication: PRs build
-  and validate distributions, manual dispatch targets TestPyPI, and `v*` tags
-  are reserved for PyPI Trusted Publishing after the external publisher
-  registration is in place.
+  and validate distributions, while the actual publish jobs are gated behind
+  `vars.ENABLE_PYPI_PUBLISHING == 'true'`. That keeps the workflow safe to merge
+  before PyPI/TestPyPI account recovery; once access is restored and the
+  trusted publishers are registered, manual dispatch can target TestPyPI and
+  `v*` tags can publish to PyPI.
 - Deployment asset validation is now a first-class workflow: pre-commit and the
   main CI workflow run `scripts/validate_deployment.py`, and the validator can
   lint/build the Bicep, validate the APIM policy XML, build the Docker image,

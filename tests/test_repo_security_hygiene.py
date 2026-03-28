@@ -98,6 +98,7 @@ def test_pypi_publish_workflow_uses_oidc_environments_and_not_api_tokens() -> No
     assert "id-token: write" in text
     assert "name: testpypi" in text
     assert "name: pypi" in text
+    assert "vars.ENABLE_PYPI_PUBLISHING == 'true'" in text
     assert "repository-url: https://test.pypi.org/legacy/" in text
     assert "secrets.PYPI_API_TOKEN" not in text
     assert "secrets.TEST_PYPI_API_TOKEN" not in text

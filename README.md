@@ -290,9 +290,10 @@ GitHub OIDC.
 
 Python package publishing is prepared separately in
 `.github/workflows/publish-pypi.yml`: pull requests build and `twine check` the
-distribution, manual dispatch publishes to TestPyPI, and a `v*` tag can publish
-to PyPI through Trusted Publishing once the PyPI-side publisher registration is
-configured.
+distribution, and the actual publish jobs stay dormant until the repository
+variable `ENABLE_PYPI_PUBLISHING` is set to `true`. After PyPI/TestPyPI access
+is restored and the trusted publishers are registered, manual dispatch can
+publish to TestPyPI and a `v*` tag can publish to PyPI.
 
 ### Docker Compose (HTTP wrapper mode)
 

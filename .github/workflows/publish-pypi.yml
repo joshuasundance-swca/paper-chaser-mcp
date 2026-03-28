@@ -52,7 +52,7 @@ jobs:
           if-no-files-found: error
 
   publish-testpypi:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && vars.ENABLE_PYPI_PUBLISHING == 'true'
     needs:
       - build-distributions
     runs-on: ubuntu-latest
@@ -76,7 +76,7 @@ jobs:
           repository-url: https://test.pypi.org/legacy/
 
   publish-pypi:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && vars.ENABLE_PYPI_PUBLISHING == 'true'
     needs:
       - build-distributions
     runs-on: ubuntu-latest
