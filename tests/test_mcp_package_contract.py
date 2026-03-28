@@ -62,6 +62,10 @@ def test_server_json_declares_public_name_and_semver_version() -> None:
     assert name.startswith("io.github.")
     assert "/" in name
 
+    description = payload.get("description")
+    assert isinstance(description, str) and description
+    assert len(description) <= 100, "server.json description must stay within MCP Registry length limits."
+
     version = payload.get("version")
     assert isinstance(version, str) and version
     assert SEMVER_PATTERN.match(version), f"server.json version should use semantic versioning (got {version!r})."
