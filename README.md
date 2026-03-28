@@ -557,10 +557,29 @@ hooks are not invoked automatically; run `pre-commit run --hook-stage manual
 --all-files` (or the direct commands above) when you want the full local gate.
 
 The development extras include `pytest`, `pytest-asyncio`, `pytest-cov`,
-`ruff`, `mypy`, `bandit`, `build`, `pip-audit`, `types-defusedxml`, and
-`pre-commit`. GitHub dependency automation is configured for both Python
+`ruff`, `mypy`, `bandit`, `build`, `bumpver`, `pip-audit`,
+`types-defusedxml`, and `pre-commit`. GitHub dependency automation is configured for both Python
 packages and GitHub Actions via Dependabot, with pull requests checked by the
 dependency review workflow.
+
+### Version bumps
+
+Version metadata is managed with `bumpver` from `pyproject.toml`. The checked-in
+package version stays in plain PEP 440 form such as `0.1.2`, while the release
+tag shape remains `v0.1.2` to match the existing publish workflow trigger.
+
+For PR-branch-safe review, dry-run a patch bump without touching git state:
+
+```bash
+bumpver update --patch --dry --no-fetch --no-commit --no-tag-commit --no-push
+```
+
+For an actual release-prep branch, update the checked-in version contract but
+still leave commit, tag, and push under explicit maintainer control:
+
+```bash
+bumpver update --patch --no-commit --no-tag-commit --no-push
+```
 
 ### Full local validation
 
