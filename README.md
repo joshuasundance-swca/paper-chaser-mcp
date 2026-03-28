@@ -2,10 +2,11 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> **Fork status:** This repository is a divergent fork mid-rename. The code,
-> package, CLI, public MCP branding, and package/image identifiers now use
-> `paper-chaser-mcp`, and the GitHub repository slug now matches the renamed
-> package and public MCP identity.
+> **Release status:** The repository, CLI, Docker image metadata, and public
+> MCP identity are now aligned on `paper-chaser-mcp`. GHCR images and GitHub
+> Release assets are the primary public distribution channels; PyPI remains
+> intentionally gated until account recovery and trusted-publisher setup are
+> complete.
 
 An MCP server for academic research — search papers, chase citations, look up authors, repair broken references, explore species dossiers, and retrieve regulatory text, all from one FastMCP server that AI assistants can call directly.
 
@@ -29,6 +30,7 @@ An MCP server for academic research — search papers, chase citations, look up 
 - [Development](#development)
 - [Guides](#guides)
 - [License](#license)
+- [Links](#links)
 
 ---
 
@@ -172,8 +174,14 @@ These fields are the high-value response contracts to pay attention to:
 
 ## Installation
 
-Because this fork has diverged from the upstream PyPI package, install from
-source until the rename and republish are complete:
+Current distribution options:
+
+- Source checkout: the most direct local path today, especially for development and MCP desktop clients.
+- GHCR image: the primary container distribution channel for Docker-backed MCP clients.
+- GitHub Release assets: `v*` tags build wheel and sdist artifacts and attach them to a draft GitHub Release for review.
+- PyPI: intentionally gated for now; use source installs or GitHub Release artifacts until that path is re-enabled.
+
+For local source installs:
 
 ```bash
 pip install -e .
@@ -547,7 +555,19 @@ mcp-inspector python -m paper_chaser_mcp
 Install the package with development extras:
 
 ```bash
+pip install -e ".[dev]"
+```
+
+If you also want the additive AI layer in the same environment:
+
+```bash
 pip install -e ".[all]"
+```
+
+If you need the optional FAISS backend locally as well:
+
+```bash
+pip install -e ".[ai,ai-faiss,dev]"
 ```
 
 Project dependencies are declared in `pyproject.toml`; there is no separate runtime `requirements.txt` to keep in sync.
@@ -572,9 +592,14 @@ hooks are not invoked automatically; run `pre-commit run --hook-stage manual
 
 The development extras include `pytest`, `pytest-asyncio`, `pytest-cov`,
 `ruff`, `mypy`, `bandit`, `build`, `bumpver`, `pip-audit`,
-`types-defusedxml`, and `pre-commit`. GitHub dependency automation is configured for both Python
+`shellcheck-py`, `types-defusedxml`, and `pre-commit`. GitHub dependency automation is configured for both Python
 packages and GitHub Actions via Dependabot, with pull requests checked by the
 dependency review workflow.
+
+For local parity with CI on GitHub workflow files, keep `shellcheck` available
+on `PATH` before running `pre-commit`. Installing `shellcheck-py` in the active
+repo venv satisfies this for many setups; verify with `shellcheck --version`
+instead of assuming inline workflow bash is being linted locally.
 
 ### Version bumps
 

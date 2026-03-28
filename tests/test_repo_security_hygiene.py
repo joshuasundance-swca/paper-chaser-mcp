@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GITIGNORE = REPO_ROOT / ".gitignore"
 DOCKERIGNORE = REPO_ROOT / ".dockerignore"
+README = REPO_ROOT / "README.md"
+PYPROJECT = REPO_ROOT / "pyproject.toml"
 DEPLOY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy-azure.yml"
 PUBLIC_MCP_PUBLISH_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "publish-public-mcp-package.yml"
 MCP_REGISTRY_PUBLISH_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "publish-mcp-registry.yml"
@@ -46,6 +49,41 @@ def _read_lines(path: Path) -> set[str]:
     }
 
 
+def _extract_readme_contents_entries(text: str) -> list[str]:
+    entries: list[str] = []
+    in_contents = False
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped == "## Contents":
+            in_contents = True
+            continue
+        if not in_contents:
+            continue
+        if stripped.startswith("## "):
+            break
+
+        match = re.match(r"- \[(.+?)\]\(#.+\)$", stripped)
+        if match is not None:
+            entries.append(match.group(1))
+
+    return entries
+
+
+def _extract_readme_top_level_sections(text: str) -> list[str]:
+    sections: list[str] = []
+
+    for line in text.splitlines():
+        if not line.startswith("## "):
+            continue
+
+        heading = line[3:].strip()
+        if heading != "Contents":
+            sections.append(heading)
+
+    return sections
+
+
 def test_gitignore_covers_local_env_and_planning_files() -> None:
     lines = _read_lines(GITIGNORE)
 
@@ -56,6 +94,18 @@ def test_dockerignore_covers_local_env_and_planning_files() -> None:
     lines = _read_lines(DOCKERIGNORE)
 
     assert REQUIRED_DOCKERIGNORE_PATTERNS <= lines
+
+
+def test_readme_contents_matches_top_level_sections() -> None:
+    text = README.read_text(encoding="utf-8")
+
+    assert _extract_readme_contents_entries(text) == _extract_readme_top_level_sections(text)
+
+
+def test_dev_extras_include_shellcheck_for_local_workflow_lint_parity() -> None:
+    text = PYPROJECT.read_text(encoding="utf-8")
+
+    assert '"shellcheck-py>=' in text
 
 
 def test_deploy_workflow_uses_secrets_for_deployment_identifiers() -> None:
