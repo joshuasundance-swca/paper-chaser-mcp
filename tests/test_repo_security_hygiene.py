@@ -7,6 +7,7 @@ GITIGNORE = REPO_ROOT / ".gitignore"
 DOCKERIGNORE = REPO_ROOT / ".dockerignore"
 DEPLOY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy-azure.yml"
 PUBLIC_MCP_PUBLISH_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "publish-public-mcp-package.yml"
+MCP_REGISTRY_PUBLISH_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "publish-mcp-registry.yml"
 PYPI_PUBLISH_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "publish-pypi.yml"
 
 REQUIRED_GITIGNORE_PATTERNS = {
@@ -84,12 +85,39 @@ def test_public_mcp_publish_workflow_pins_docker_actions_to_commit_shas() -> Non
         assert action in text
 
 
-def test_public_mcp_publish_workflow_pins_mcp_publisher_install() -> None:
+def test_public_mcp_publish_workflow_stays_ghcr_only() -> None:
     text = PUBLIC_MCP_PUBLISH_WORKFLOW.read_text(encoding="utf-8")
 
+    assert "mcp-publisher" not in text
+    assert "Publish server to MCP Registry" not in text
+
+
+def test_mcp_registry_publish_workflow_is_manual_only_and_pins_installer() -> None:
+    text = MCP_REGISTRY_PUBLISH_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "workflow_dispatch:" in text
+    assert "\n  push:\n" not in text
+    assert "\n  pull_request:\n" not in text
+    assert "packages: read" in text
+    assert "id-token: write" in text
+    assert "docker buildx imagetools inspect" in text
     assert "releases/latest/download" not in text
     assert "MCP_PUBLISHER_VERSION:" in text
     assert "sha256sum -c -" in text
+    assert "./mcp-publisher login github-oidc" in text
+    assert "./mcp-publisher publish" in text
+
+
+def test_mcp_registry_publish_workflow_pins_actions_to_commit_shas() -> None:
+    text = MCP_REGISTRY_PUBLISH_WORKFLOW.read_text(encoding="utf-8")
+
+    for action in (
+        "actions/checkout",
+        "docker/setup-buildx-action",
+        "docker/login-action",
+    ):
+        assert f"{action}@v" not in text
+        assert action in text
 
 
 def test_pypi_publish_workflow_uses_oidc_environments_and_not_api_tokens() -> None:

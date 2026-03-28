@@ -1,4 +1,4 @@
-name: Publish Public MCP Package
+name: Publish GHCR Image
 
 on:
   pull_request:
@@ -23,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: Optional semver tag to publish (for example v0.2.0).
+        description: Optional semver tag to publish to GHCR (for example v0.2.0).
         required: false
         type: string
 
@@ -33,11 +33,6 @@ permissions:
 concurrency:
   group: public-mcp-package-${{ github.ref_name || github.run_id }}
   cancel-in-progress: false
-
-env:
-  MCP_PUBLISHER_VERSION: v1.5.0
-  MCP_PUBLISHER_LINUX_AMD64_SHA256: 79bbb73ba048c5906034f73ef6286d7763bd53cf368ea0b358fc593ed360cbd5
-  MCP_PUBLISHER_LINUX_ARM64_SHA256: ba33c656a3fe79e9e01395cc367641cb3847dc9990d299bde3fbcc13c0f830d0
 
 jobs:
   package-check:
@@ -71,7 +66,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ ! -f server.json ]; then
-            echo "server.json is required for public MCP package publishing."
+            echo "server.json is required for GHCR image publishing."
             exit 1
           fi
 
@@ -81,10 +76,6 @@ jobs:
           transport_type="$(jq -re '.packages[0].transport.type' server.json)"
           if [ -z "$server_name" ] || [ -z "$server_version" ]; then
             echo "server.json must define non-empty name and version."
-            exit 1
-          fi
-          if [[ ! "$server_name" =~ ^io\.github\.[^/]+/.+ ]]; then
-            echo "MCP server name must follow io.github.<owner>/<server> for registry publication."
             exit 1
           fi
           if [ "$package_identifier" != "${{ steps.image.outputs.name }}:${server_version}" ]; then
@@ -196,7 +187,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ ! -f server.json ]; then
-            echo "server.json is required for public MCP package publishing."
+            echo "server.json is required for GHCR image publishing."
             exit 1
           fi
           server_name="$(jq -re '.name' server.json)"
@@ -333,69 +324,3 @@ jobs:
             BUILD_DATE=${{ steps.buildinfo.outputs.date }}
           provenance: mode=max
           sbom: true
-
-  publish-mcp-registry:
-    if: needs.publish-image.result == 'success'
-    needs:
-      - publish-image
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      - name: Verify MCP metadata matches published image contract
-        shell: bash
-        run: |
-          set -euo pipefail
-          server_version="$(jq -re '.version' server.json)"
-          package_identifier="$(jq -re '.packages[0].identifier' server.json)"
-          expected_identifier="${{ needs.publish-image.outputs.image-name }}:${{ needs.publish-image.outputs.version }}"
-
-          if [ "$server_version" != "${{ needs.publish-image.outputs.version }}" ]; then
-            echo "server.json version must match the published image version."
-            exit 1
-          fi
-
-          if [ "$package_identifier" != "$expected_identifier" ]; then
-            echo "server.json package identifier must match the published GHCR image."
-            exit 1
-          fi
-
-      - name: Install mcp-publisher
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "$(uname -m)" in
-            x86_64)
-              asset_name="mcp-publisher_linux_amd64.tar.gz"
-              asset_sha="${MCP_PUBLISHER_LINUX_AMD64_SHA256}"
-              ;;
-            aarch64|arm64)
-              asset_name="mcp-publisher_linux_arm64.tar.gz"
-              asset_sha="${MCP_PUBLISHER_LINUX_ARM64_SHA256}"
-              ;;
-            *)
-              echo "Unsupported runner architecture: $(uname -m)"
-              exit 1
-              ;;
-          esac
-
-          asset_url="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/${asset_name}"
-          curl -fsSLo mcp-publisher.tar.gz "${asset_url}"
-          echo "${asset_sha}  mcp-publisher.tar.gz" | sha256sum -c -
-          tar -xzf mcp-publisher.tar.gz mcp-publisher
-          rm -f mcp-publisher.tar.gz
-
-      - name: Authenticate to MCP Registry
-        shell: bash
-        run: ./mcp-publisher login github-oidc
-
-      - name: Publish server to MCP Registry
-        shell: bash
-        run: ./mcp-publisher publish

@@ -18,9 +18,11 @@ This document is the current working handoff for the fork. It is intended to giv
 - The Docker image is now a reusable public MCP package surface as well: the
   default image contract is stdio-first with a stable `paper-chaser-mcp`
   entrypoint, `server.json` tracks the public MCP/OCI metadata, and
-  `.github/workflows/publish-public-mcp-package.yml` handles tag-driven GHCR
-  publishing plus MCP Registry publication, with semver checks, OIDC auth, and
-  SBOM/provenance output.
+  `.github/workflows/publish-public-mcp-package.yml` now handles tag-driven
+  GHCR publication only, while `.github/workflows/publish-mcp-registry.yml`
+  separately handles manual MCP Registry publication after the GHCR image
+  exists. The GHCR workflow keeps the semver checks plus SBOM/provenance
+  output, and the registry workflow keeps the OIDC publish step independent.
 - Version bumps are now managed through `bumpver` in `pyproject.toml`. The repo
   keeps checked-in package versions in PEP 440 form while preserving `v*` git
   tags for the publish workflow, and the default bumpver config keeps commit,

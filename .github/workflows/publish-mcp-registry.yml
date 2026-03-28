@@ -1,0 +1,139 @@
+name: Publish MCP Registry Listing
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Optional semver tag expected to already exist in GHCR (for example v0.2.0).
+        required: false
+        type: string
+
+permissions: {}
+
+env:
+  MCP_PUBLISHER_VERSION: v1.5.0
+  MCP_PUBLISHER_LINUX_AMD64_SHA256: 79bbb73ba048c5906034f73ef6286d7763bd53cf368ea0b358fc593ed360cbd5
+  MCP_PUBLISHER_LINUX_ARM64_SHA256: ba33c656a3fe79e9e01395cc367641cb3847dc9990d299bde3fbcc13c0f830d0
+
+jobs:
+  publish-mcp-registry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+
+      - name: Read MCP server metadata
+        id: server
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f server.json ]; then
+            echo "server.json is required for MCP Registry publication."
+            exit 1
+          fi
+
+          server_name="$(jq -re '.name' server.json)"
+          server_version="$(jq -re '.version' server.json)"
+          package_identifier="$(jq -re '.packages[0].identifier' server.json)"
+          transport_type="$(jq -re '.packages[0].transport.type' server.json)"
+
+          if [ -z "$server_name" ] || [ -z "$server_version" ]; then
+            echo "server.json must define non-empty name and version."
+            exit 1
+          fi
+
+          if [[ ! "$server_name" =~ ^io\.github\.[^/]+/.+ ]]; then
+            echo "MCP server name must follow io.github.<owner>/<server> for registry publication."
+            exit 1
+          fi
+
+          if [ "$transport_type" != "stdio" ]; then
+            echo "Public OCI MCP package transport must be stdio."
+            exit 1
+          fi
+
+          {
+            echo "name=${server_name}"
+            echo "version=${server_version}"
+            echo "identifier=${package_identifier}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Resolve expected tag
+        id: publish_tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.image_tag }}" ]; then
+            raw_tag="${{ inputs.image_tag }}"
+          else
+            raw_tag="v${{ steps.server.outputs.version }}"
+          fi
+
+          if [[ ! "$raw_tag" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?(\+[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "Publish tag must be semver-compatible (for example v1.2.3, v1.2.3-rc.1, or v1.2.3+build.1)."
+            exit 1
+          fi
+
+          normalized="${raw_tag#v}"
+          if [ "$normalized" != "${{ steps.server.outputs.version }}" ]; then
+            echo "server.json version (${{ steps.server.outputs.version }}) must match publish tag ($normalized)."
+            exit 1
+          fi
+
+          echo "raw=${raw_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Log into GHCR
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify published GHCR image exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect "${{ steps.server.outputs.identifier }}" > /dev/null
+
+      - name: Install mcp-publisher
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64)
+              asset_name="mcp-publisher_linux_amd64.tar.gz"
+              asset_sha="${MCP_PUBLISHER_LINUX_AMD64_SHA256}"
+              ;;
+            aarch64|arm64)
+              asset_name="mcp-publisher_linux_arm64.tar.gz"
+              asset_sha="${MCP_PUBLISHER_LINUX_ARM64_SHA256}"
+              ;;
+            *)
+              echo "Unsupported runner architecture: $(uname -m)"
+              exit 1
+              ;;
+          esac
+
+          asset_url="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/${asset_name}"
+          curl -fsSLo mcp-publisher.tar.gz "${asset_url}"
+          echo "${asset_sha}  mcp-publisher.tar.gz" | sha256sum -c -
+          tar -xzf mcp-publisher.tar.gz mcp-publisher
+          rm -f mcp-publisher.tar.gz
+
+      - name: Authenticate to MCP Registry
+        shell: bash
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish server to MCP Registry
+        shell: bash
+        run: ./mcp-publisher publish

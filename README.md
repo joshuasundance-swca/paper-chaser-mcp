@@ -284,9 +284,10 @@ owns the server process lifecycle.
 
 The repo also ships `server.json` so the public OCI image and MCP package
 metadata stay aligned for registry/discovery tooling. The public-package
-workflow is tag-driven: a `v*` tag publishes the GHCR image first, then
-publishes the same committed `server.json` metadata to the MCP Registry via
-GitHub OIDC.
+workflow is tag-driven for GHCR: a `v*` tag publishes the reusable container
+image to `ghcr.io/joshuasundance-swca/paper-chaser-mcp`. MCP Registry
+publication is intentionally decoupled into a separate manual workflow so GHCR
+shipping does not depend on registry availability.
 
 Python package publishing is prepared separately in
 `.github/workflows/publish-pypi.yml`: pull requests build and `twine check` the
