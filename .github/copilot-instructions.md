@@ -14,6 +14,10 @@ Before changing code, read these files in order:
 3. `docs/agent-handoff.md` for current repo status, progress snapshots, known
    hotspots, and suggested next steps.
 
+For release, publishing, or version-prep work, also read
+`docs/release-publishing-plan.md` before changing workflows, tags, or package
+metadata.
+
 ## Development Priorities
 
 - Keep the **default tool surface small and obvious** for low-context agents.
