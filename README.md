@@ -1,6 +1,7 @@
 # Paper Chaser MCP
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/joshuasundance-swca/paper-chaser-mcp)
 
 > **Release status:** The repository, CLI, Docker image metadata, and public
 > MCP identity are now aligned on `paper-chaser-mcp`. GHCR images and GitHub
