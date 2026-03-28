@@ -174,32 +174,22 @@ This document is the current working handoff for the fork. It is intended to giv
   full current provider surface (Semantic Scholar, CORE, arXiv, OpenAlex,
   SerpApi, Crossref, Unpaywall, ECOS, Federal Register, GovInfo).
 
-## Required Future Changes After Repo Rename
+## Recent Repo Rename Follow-up
 
-The in-repo Paper Chaser rebrand is complete except for references that must
-remain aligned with the current live GitHub repository slug until the repo is
-actually renamed. Public package and GHCR identity are already decoupled from
-the repo slug and derive from `server.json` server metadata instead.
+The GitHub repository slug now matches the Paper Chaser package and public MCP
+identity. The remaining rebrand-sensitive guardrails are:
 
-Once the repository slug changes from `scholar-search-mcp` to
-`paper-chaser-mcp`, make this follow-up pass in one PR:
-
-1. Update repo URL metadata and links that must match the live GitHub slug:
-  `README.md`, `pyproject.toml`, `server.json`, and Docker OCI labels in
-  `Dockerfile`.
-2. Update local operator docs that still intentionally reference the current
-  GitHub repo path or repo name variables, especially the `.local-azure-*`
-  runbooks and PowerShell snippets using `$Repo`, `$RepoName`, or explicit
-  `https://github.com/joshuasundance-swca/scholar-search-mcp` URLs.
-3. Re-scan for exact old-slug references with a search like
-  `scholar-search-mcp|scholar_search_mcp|SCHOLAR_SEARCH_` and confirm that no
-  non-provider old-brand identifiers remain.
-4. Re-run the rebrand-sensitive validation subset:
+1. Keep repo URL metadata and links aligned across `README.md`,
+  `pyproject.toml`, `server.json`, and Docker OCI labels in `Dockerfile`.
+2. Re-scan for exact old-slug references with a search like
+  `scholar-search-mcp|scholar_search_mcp|SCHOLAR_SEARCH_` and confirm that only
+  intentionally historical or provider-specific references remain.
+3. Re-run the rebrand-sensitive validation subset when touching repo metadata:
   `python -m pytest tests/test_mcp_package_contract.py tests/test_local_config_contract.py tests/test_microsoft_assets.py`
   and `python scripts/validate_deployment.py --skip-az --skip-docker`.
-5. Review any external integrations or marketplace settings that are not stored
-  in this repo, such as the actual GitHub repository rename, MCP Registry
-  listing metadata, and any future GHCR package description settings.
+4. Review external integrations that are not stored in this repo, such as MCP
+  Registry listing metadata, GHCR package description settings, and any
+  third-party docs that pinned the old repo slug.
 
 ## Module Map
 
@@ -552,9 +542,9 @@ gh aw compile test-paper-chaser --dir .github/workflows
     California-least-tern walkthrough in the README) should be added to help
     agents discover the discovery→direct-retrieval→CFR-text chain without
     reading the full tool descriptions.
-13. After the GitHub repo slug is actually renamed, execute the
-  `Required Future Changes After Repo Rename` checklist above and then remove
-  the README fork-status note that still acknowledges the old repo slug.
+13. Keep the repo metadata sweep complete whenever GitHub-side settings change,
+  especially if MCP Registry listing metadata, GHCR package descriptions, or
+  external docs drift from the renamed Paper Chaser identity.
 
 ## Ready Handoff Prompt
 

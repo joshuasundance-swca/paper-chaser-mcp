@@ -65,9 +65,9 @@ all = [
 paper-chaser-mcp = "paper_chaser_mcp.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/joshuasundance-swca/scholar-search-mcp"
-Repository = "https://github.com/joshuasundance-swca/scholar-search-mcp"
-Issues = "https://github.com/joshuasundance-swca/scholar-search-mcp/issues"
+Homepage = "https://github.com/joshuasundance-swca/paper-chaser-mcp"
+Repository = "https://github.com/joshuasundance-swca/paper-chaser-mcp"
+Issues = "https://github.com/joshuasundance-swca/paper-chaser-mcp/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -4,9 +4,8 @@
 
 > **Fork status:** This repository is a divergent fork mid-rename. The code,
 > package, CLI, public MCP branding, and package/image identifiers now use
-> `paper-chaser-mcp`. The only remaining old-project reference is the current
-> GitHub repository slug, which still uses `scholar-search-mcp` until the repo
-> itself is renamed.
+> `paper-chaser-mcp`, and the GitHub repository slug now matches the renamed
+> package and public MCP identity.
 
 An MCP server for academic research — search papers, chase citations, look up authors, repair broken references, explore species dossiers, and retrieve regulatory text, all from one FastMCP server that AI assistants can call directly.
 
