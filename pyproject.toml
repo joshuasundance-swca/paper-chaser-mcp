@@ -48,6 +48,7 @@ ai-faiss = [
 dev = [
     "bandit>=1.8.0",
     "build>=1.4.0",
+    "bumpver>=2025.1131",
     "mypy>=1.17.0",
     "pip-audit>=2.10.0",
     "pre-commit>=4.2.0",
@@ -72,6 +73,26 @@ Issues = "https://github.com/joshuasundance-swca/paper-chaser-mcp/issues"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["paper_chaser_mcp*"]
+
+[tool.bumpver]
+current_version = "v0.1.2"
+version_pattern = "vMAJOR.MINOR.PATCH"
+commit_message = "bump version {old_version} -> {new_version}"
+tag_message = "{new_version}"
+tag_scope = "default"
+commit = false
+tag = false
+push = false
+
+[tool.bumpver.file_patterns]
+"pyproject.toml" = [
+    'current_version = "{version}"',
+    'version = "{pep440_version}"',
+]
+"server.json" = [
+    '"version": "{pep440_version}",',
+    '"identifier": "ghcr.io/joshuasundance-swca/paper-chaser-mcp:{pep440_version}",',
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

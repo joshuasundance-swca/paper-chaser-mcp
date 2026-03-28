@@ -21,6 +21,10 @@ This document is the current working handoff for the fork. It is intended to giv
   `.github/workflows/publish-public-mcp-package.yml` handles tag-driven GHCR
   publishing plus MCP Registry publication, with semver checks, OIDC auth, and
   SBOM/provenance output.
+- Version bumps are now managed through `bumpver` in `pyproject.toml`. The repo
+  keeps checked-in package versions in PEP 440 form while preserving `v*` git
+  tags for the publish workflow, and the default bumpver config keeps commit,
+  tag, and push disabled so PR branches can stage release-prep diffs safely.
 - Deployment asset validation is now a first-class workflow: pre-commit and the
   main CI workflow run `scripts/validate_deployment.py`, and the validator can
   lint/build the Bicep, validate the APIM policy XML, build the Docker image,
