@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import pytest
@@ -40,6 +41,51 @@ def test_expected_ghcr_identifier_rejects_invalid_server_names(
         match=("server.json name must follow io.github.<owner>/<server>"),
     ):
         validate_deployment._expected_ghcr_identifier(server_name, "1.2.3")
+
+
+def test_parse_args_accepts_python_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        ["validate_deployment.py", "--python-version", "3.14"],
+    )
+
+    args = validate_deployment.parse_args()
+
+    assert isinstance(args, argparse.Namespace)
+    assert args.python_version == "3.14"
+
+
+def test_validate_docker_passes_python_build_arg(monkeypatch: pytest.MonkeyPatch) -> None:
+    commands: list[list[str]] = []
+    responses = iter([(403, ""), (401, ""), (200, "")])
+
+    def fake_run(command: list[str], *, description: str):
+        commands.append(command)
+
+        class Result:
+            stdout = "[]"
+
+        return Result()
+
+    monkeypatch.setattr(validate_deployment, "run", fake_run)
+    monkeypatch.setattr(validate_deployment, "validate_image_config", lambda *args, **kwargs: None)
+    monkeypatch.setattr(validate_deployment, "free_port", lambda: 18080)
+    monkeypatch.setattr(validate_deployment, "wait_for_health", lambda url: None)
+    monkeypatch.setattr(validate_deployment, "request_json", lambda *args, **kwargs: next(responses))
+    monkeypatch.setattr(validate_deployment.subprocess, "run", lambda *args, **kwargs: None)
+
+    validate_deployment.validate_docker(
+        "docker",
+        "paper-chaser-mcp:test",
+        expected_server_name="io.github.owner/repo",
+        expected_server_version="1.2.3",
+        expected_source_url="https://github.com/owner/repo",
+        python_version="3.14",
+    )
+
+    build_command = commands[0]
+    assert "--build-arg" in build_command
+    assert "PYTHON_VERSION=3.14" in build_command
 
 
 def test_azure_container_app_bicep_wires_agentic_env_contract() -> None:
