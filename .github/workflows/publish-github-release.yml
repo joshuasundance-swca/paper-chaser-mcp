@@ -163,20 +163,22 @@ jobs:
       - name: Create or update draft release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.build-distributions.outputs.release-tag }}
           RELEASE_VERSION: ${{ needs.build-distributions.outputs.normalized-version }}
         shell: bash
         run: |
           set -euo pipefail
 
-          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+          if gh release view "$RELEASE_TAG" --repo "$GH_REPO" > /dev/null 2>&1; then
             echo "Release $RELEASE_TAG already exists; uploading refreshed assets."
           else
             gh release create "$RELEASE_TAG" \
+              --repo "$GH_REPO" \
               --draft \
               --verify-tag \
               --title "Paper Chaser MCP v${RELEASE_VERSION}" \
               --generate-notes
           fi
 
-          gh release upload "$RELEASE_TAG" dist/* --clobber
+          gh release upload "$RELEASE_TAG" dist/* --repo "$GH_REPO" --clobber
