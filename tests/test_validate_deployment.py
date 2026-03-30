@@ -11,6 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 MAIN_BICEP = REPO_ROOT / "infra" / "main.bicep"
 CONTAINER_APP_BICEP = REPO_ROOT / "infra" / "modules" / "containerApp.bicep"
 AZURE_DEPLOYMENT_DOC = REPO_ROOT / "docs" / "azure-deployment.md"
+AZURE_ARCHITECTURE_DOC = REPO_ROOT / "docs" / "azure-architecture.md"
 
 
 def test_expected_ghcr_identifier_accepts_canonical_server_name() -> None:
@@ -92,9 +93,18 @@ def test_azure_container_app_bicep_wires_agentic_env_contract() -> None:
     main_text = MAIN_BICEP.read_text(encoding="utf-8")
     container_text = CONTAINER_APP_BICEP.read_text(encoding="utf-8")
 
+    assert "param azureOpenAiEndpoint string = ''" in main_text
+    assert "param azureOpenAiApiVersion string = ''" in main_text
+    assert "azureOpenAiEndpoint: azureOpenAiEndpoint" in main_text
+    assert "azureOpenAiApiVersion: azureOpenAiApiVersion" in main_text
+    assert "azureOpenAiEndpoint: ''" not in main_text
+    assert "azureOpenAiApiVersion: ''" not in main_text
+
     for expected in (
         "enableAgentic",
         "agenticProvider",
+        "azureOpenAiEndpoint",
+        "azureOpenAiApiVersion",
         "plannerModel",
         "synthesisModel",
         "embeddingModel",
@@ -103,11 +113,21 @@ def test_azure_container_app_bicep_wires_agentic_env_contract() -> None:
         "sessionTtlSeconds",
         "enableAgenticTraceLog",
         "keyVaultOpenAiApiKeySecretUri",
+        "keyVaultAzureOpenAiApiKeySecretUri",
+        "keyVaultAnthropicApiKeySecretUri",
+        "keyVaultGoogleApiKeySecretUri",
+        "enableScholarApi",
+        "keyVaultScholarApiKeySecretUri",
     ):
         assert expected in main_text
 
     for expected in (
         "OPENAI_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_OPENAI_API_VERSION",
+        "ANTHROPIC_API_KEY",
+        "GOOGLE_API_KEY",
         "PAPER_CHASER_ENABLE_AGENTIC",
         "PAPER_CHASER_AGENTIC_PROVIDER",
         "PAPER_CHASER_PLANNER_MODEL",
@@ -118,13 +138,34 @@ def test_azure_container_app_bicep_wires_agentic_env_contract() -> None:
         "PAPER_CHASER_AGENTIC_INDEX_BACKEND",
         "PAPER_CHASER_SESSION_TTL_SECONDS",
         "PAPER_CHASER_ENABLE_AGENTIC_TRACE_LOG",
+        "PAPER_CHASER_ENABLE_SCHOLARAPI",
+        "SCHOLARAPI_API_KEY",
     ):
         assert expected in container_text
+
+    assert "!empty(azureOpenAiEndpoint)" in container_text
+    assert "!empty(azureOpenAiApiVersion)" in container_text
 
 
 def test_azure_deployment_doc_mentions_openai_secret_and_agentic_flags() -> None:
     text = AZURE_DEPLOYMENT_DOC.read_text(encoding="utf-8")
 
     assert "openai-api-key" in text
+    assert "azure-openai-api-key" in text
+    assert "anthropic-api-key" in text
+    assert "google-api-key" in text
     assert "enableAgentic" in text
     assert "agenticProvider" in text
+    assert "azureOpenAiEndpoint" in text
+    assert "azureOpenAiApiVersion" in text
+    assert "enableScholarApi" in text
+    assert "scholarapi-api-key" in text
+
+
+def test_azure_architecture_doc_mentions_provider_specific_smart_layer_inputs() -> None:
+    text = AZURE_ARCHITECTURE_DOC.read_text(encoding="utf-8")
+
+    assert "Azure OpenAI" in text
+    assert "Anthropic" in text
+    assert "Google" in text
+    assert "AZURE_OPENAI_ENDPOINT" in text

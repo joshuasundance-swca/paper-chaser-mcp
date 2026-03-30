@@ -256,6 +256,8 @@ class WorkspaceRegistry:
         search_session_id: str,
         query: str,
         top_k: int = 8,
+        *,
+        allow_model_similarity: bool = True,
     ) -> list[dict[str, Any]]:
         """Retrieve the most relevant papers within a saved result set."""
         record = self.get(search_session_id)
@@ -263,7 +265,7 @@ class WorkspaceRegistry:
             papers = self._search_vector_store(record, query=query, top_k=top_k)
             if papers:
                 return papers
-        if self._similarity_fn is not None:
+        if allow_model_similarity and self._similarity_fn is not None:
             ranked = sorted(
                 ((self._similarity_fn(query, item.text), item.paper) for item in record.indexed_papers),
                 key=lambda item: item[0],
@@ -283,6 +285,8 @@ class WorkspaceRegistry:
         search_session_id: str,
         query: str,
         top_k: int = 8,
+        *,
+        allow_model_similarity: bool = True,
     ) -> list[dict[str, Any]]:
         """Async retrieval optimized for batched semantic ranking."""
         record = self.get(search_session_id)
@@ -290,7 +294,7 @@ class WorkspaceRegistry:
             papers = await self._asearch_vector_store(record, query=query, top_k=top_k)
             if papers:
                 return papers
-        if self._async_batched_similarity_fn is not None:
+        if allow_model_similarity and self._async_batched_similarity_fn is not None:
             texts = [item.text for item in record.indexed_papers]
             scores = await self._async_batched_similarity_fn(query, texts)
             ranked = sorted(
@@ -299,7 +303,12 @@ class WorkspaceRegistry:
                 reverse=True,
             )
             return [paper for score, paper in ranked[:top_k] if score > 0]
-        return self.search_papers(search_session_id, query, top_k=top_k)
+        return self.search_papers(
+            search_session_id,
+            query,
+            top_k=top_k,
+            allow_model_similarity=allow_model_similarity,
+        )
 
     async def aclose(self) -> None:
         """Cancel any in-flight async index builds owned by the registry."""

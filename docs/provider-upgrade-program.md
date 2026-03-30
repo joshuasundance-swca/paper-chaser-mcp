@@ -10,6 +10,7 @@ Use this together with:
 - `docs/semantic-scholar-api-guide.md`
 - `docs/openalex-api-guide.md`
 - `docs/serpapi-google-scholar-api-guide.md`
+- `docs/scholarapi-api-guide.md`
 
 ## What Shipped
 

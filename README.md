@@ -190,15 +190,11 @@ pip install -e .
 
 Optional extras for the additive AI layer:
 
-```bash
-pip install -e .[ai]
-```
-
-Optional FAISS backend extras:
-
-```bash
-pip install -e .[ai,ai-faiss]
-```
+- Shared smart-layer runtime only, including deterministic mode: `pip install -e ".[ai]"`
+- OpenAI or Azure OpenAI provider support: `pip install -e ".[ai,openai]"`
+- Anthropic provider support: `pip install -e ".[ai,anthropic]"`
+- Google provider support: `pip install -e ".[ai,google]"`
+- Add `,ai-faiss` to any of the commands above if you want the optional FAISS backend.
 
 ## Configuration
 
@@ -222,15 +218,16 @@ See the [Quick start](#quick-start) JSON example above for the server definition
 | --- | --- | --- | --- |
 | Search broker | `semantic_scholar,arxiv,core,serpapi_google_scholar` | `PAPER_CHASER_ENABLE_SEMANTIC_SCHOLAR`, `PAPER_CHASER_ENABLE_ARXIV`, `PAPER_CHASER_ENABLE_CORE`, `PAPER_CHASER_ENABLE_SERPAPI`, `PAPER_CHASER_PROVIDER_ORDER` | SerpApi is opt-in and paid; CORE is off by default |
 | OpenAlex tool family | enabled | `PAPER_CHASER_ENABLE_OPENALEX`, `OPENALEX_API_KEY`, `OPENALEX_MAILTO` | Explicit tool family, not a default broker hop |
+| ScholarAPI tool family | disabled | `PAPER_CHASER_ENABLE_SCHOLARAPI`, `SCHOLARAPI_API_KEY` | Explicit discovery, monitoring, full-text, and PDF family; also available as an opt-in broker target via `preferredProvider` or `providerOrder` |
 | Enrichment | enabled | `PAPER_CHASER_ENABLE_CROSSREF`, `CROSSREF_MAILTO`, `CROSSREF_TIMEOUT_SECONDS`, `PAPER_CHASER_ENABLE_UNPAYWALL`, `UNPAYWALL_EMAIL`, `UNPAYWALL_TIMEOUT_SECONDS` | Used after you already have a paper or DOI |
 | ECOS | enabled | `PAPER_CHASER_ENABLE_ECOS`, `ECOS_BASE_URL`, `ECOS_TIMEOUT_SECONDS`, document timeout and size vars, TLS vars | Species and document workflows |
 | Federal Register / GovInfo | enabled | `PAPER_CHASER_ENABLE_FEDERAL_REGISTER`, `PAPER_CHASER_ENABLE_GOVINFO_CFR`, `GOVINFO_API_KEY`, GovInfo timeout and size vars | Federal Register search is keyless; authoritative CFR retrieval uses GovInfo |
-| Smart layer | disabled | `OPENAI_API_KEY`, `PAPER_CHASER_ENABLE_AGENTIC`, model and index vars | Additive only; raw tools remain the stable contract |
+| Smart layer | disabled | `OPENAI_API_KEY`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `PAPER_CHASER_ENABLE_AGENTIC`, model and index vars | Additive only; supports `openai`, `azure-openai`, `anthropic`, `google`, and `deterministic`; embeddings remain disabled by default. When ScholarAPI is enabled, smart discovery can also route through it and cap it via `providerBudget.maxScholarApiCalls`. |
 
 Broker rules that matter most:
 
 - Default search fallback order is Semantic Scholar, then arXiv, then CORE, then SerpApi when enabled.
-- `preferredProvider`, `providerOrder`, and `PAPER_CHASER_PROVIDER_ORDER` accept `core`, `semantic_scholar`, `arxiv`, and `serpapi` or `serpapi_google_scholar`.
+- `preferredProvider`, `providerOrder`, and `PAPER_CHASER_PROVIDER_ORDER` accept `core`, `semantic_scholar`, `arxiv`, `scholarapi`, and `serpapi` or `serpapi_google_scholar`.
 - Semantic Scholar-only filters such as `publicationDateOrYear`, `fieldsOfStudy`, `publicationTypes`, `openAccessPdf`, and `minCitationCount` can force the broker to skip incompatible providers.
 - Broker responses surface `brokerMetadata.providerUsed`, `brokerMetadata.attemptedProviders`, and `brokerMetadata.recommendedPaginationTool` so agents can follow the right next step.
 
@@ -400,14 +397,16 @@ Full tool reference. See the [Quick tool decision guide](#quick-tool-decision-gu
 
 | Tool | Description |
 | --- | --- |
-| `search_papers` | Brokered single-page search (Semantic Scholar → arXiv → CORE → SerpApi). Read `brokerMetadata.nextStepHint`. |
+| `search_papers` | Brokered single-page search (default: Semantic Scholar → arXiv → CORE → SerpApi). Read `brokerMetadata.nextStepHint`; ScholarAPI is also available as an explicit opt-in broker target. |
 | `search_papers_bulk` | Paginated bulk search (Semantic Scholar) up to 1,000 papers/call with boolean query syntax. |
 | `search_papers_semantic_scholar` | Single-page Semantic Scholar-only search with full filter support. |
 | `search_papers_arxiv` | Single-page arXiv-only search. |
 | `search_papers_core` | Single-page CORE-only search. |
 | `search_papers_serpapi` | Single-page SerpApi Google Scholar search. **Requires SerpApi.** |
+| `search_papers_scholarapi` | Single-page ScholarAPI relevance-ranked search. **Requires ScholarAPI.** |
 | `search_papers_openalex` | Single-page OpenAlex-only search. |
 | `search_papers_openalex_bulk` | Cursor-paginated OpenAlex search. |
+| `list_papers_scholarapi` | Cursor-paginated ScholarAPI monitoring/list flow sorted by `indexed_at`. |
 | `search_papers_openalex_by_entity` | OpenAlex works constrained to one source, institution, or topic entity ID. |
 
 ### Known-item lookup and citation repair
@@ -448,6 +447,14 @@ Full tool reference. See the [Quick tool decision guide](#quick-tool-decision-gu
 | `enrich_paper` | Combined Crossref + Unpaywall enrichment for one paper or DOI. |
 | `get_paper_metadata_crossref` | Explicit Crossref enrichment for a known paper or DOI. |
 | `get_paper_open_access_unpaywall` | Unpaywall OA status, PDF URL, and license lookup by DOI. Requires `UNPAYWALL_EMAIL`. |
+
+### ScholarAPI text and PDF retrieval
+
+| Tool | Description |
+| --- | --- |
+| `get_paper_text_scholarapi` | Fetch one ScholarAPI plain-text full document by ScholarAPI paper id. |
+| `get_paper_texts_scholarapi` | Batch full-text retrieval for up to 100 ScholarAPI paper ids. Preserves order and null placeholders. |
+| `get_paper_pdf_scholarapi` | Fetch one ScholarAPI PDF as structured metadata plus base64-encoded content. |
 
 ### OpenAlex entities
 
@@ -559,16 +566,18 @@ Install the package with development extras:
 pip install -e ".[dev]"
 ```
 
-If you also want the additive AI layer in the same environment:
+If you also want the additive AI layer plus every hosted-provider integration in the same environment:
 
 ```bash
 pip install -e ".[all]"
 ```
 
+`all` expands to `ai,openai,anthropic,google,dev`, so Azure OpenAI uses the same `openai` extra as the standard OpenAI path.
+
 If you need the optional FAISS backend locally as well:
 
 ```bash
-pip install -e ".[ai,ai-faiss,dev]"
+pip install -e ".[all,ai-faiss]"
 ```
 
 Project dependencies are declared in `pyproject.toml`; there is no separate runtime `requirements.txt` to keep in sync.
@@ -707,6 +716,7 @@ For maintainer orientation after the module split, start with `docs/agent-handof
 - [Azure Architecture](docs/azure-architecture.md) - trust boundaries, runtime topology, and credential separation for the Azure scaffold.
 - [Azure Security Model](docs/azure-security-model.md) - credential classes, Key Vault usage, and backend-auth separation in the Azure rollout.
 - [Provider Upgrade Program](docs/provider-upgrade-program.md) - provider roles, latency profiles, diagnostics, benchmark corpus, and acceptance gates for the reliability-first provider upgrade.
+- [ScholarAPI Integration Guide](docs/scholarapi-api-guide.md) - planning guide for adding ScholarAPI as an explicit discovery, monitoring, full-text, and PDF provider without weakening the current graph-oriented provider contracts.
 - [OpenAlex API Guide](docs/openalex-api-guide.md) - implementation-focused guidance for the repo's explicit OpenAlex MCP surface, including authentication, credit-based limits, paging, `/works` semantics, and normalization caveats.
 - [Semantic Scholar API Guide](docs/semantic-scholar-api-guide.md) - practical guidance for respectful and effective Semantic Scholar API usage with async rate limiting, retries, and `.env`-based local development.
 - [SerpApi Google Scholar Guide](docs/serpapi-google-scholar-api-guide.md) - deep research notes on SerpApi capabilities, tradeoffs, and cost/compliance considerations; the repo ships the explicit cited-by, versions, author, account, and citation-format flows documented there.
@@ -730,6 +740,7 @@ MIT
 - [arXiv API User's Manual](https://info.arxiv.org/help/api/user-manual.html)
 - [CORE API v3 Documentation](https://api.core.ac.uk/docs/v3)
 - [OpenAlex API docs](https://docs.openalex.org/)
+- [ScholarAPI docs](https://scholarapi.net/docs/api)
 - [SerpApi Google Scholar API](https://serpapi.com/google-scholar-api)
 - [Crossref REST API](https://www.crossref.org/documentation/retrieve-metadata/rest-api/)
 - [Unpaywall API](https://unpaywall.org/products/api)

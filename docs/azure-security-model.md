@@ -40,13 +40,17 @@ These are the credentials the MCP server uses to talk to scholarly providers.
 
 - `CORE_API_KEY`
 - `GOVINFO_API_KEY` when GovInfo CFR authoritative XML access is needed
-- `OPENAI_API_KEY` when the smart layer uses the OpenAI provider bundle
+- `OPENAI_API_KEY` when the smart layer uses the `openai` provider bundle
+- `AZURE_OPENAI_API_KEY` when the smart layer uses the `azure-openai` provider bundle
+- `ANTHROPIC_API_KEY` when the smart layer uses the `anthropic` provider bundle
+- `GOOGLE_API_KEY` when the smart layer uses the `google` provider bundle
 - `SEMANTIC_SCHOLAR_API_KEY`
 - `OPENALEX_API_KEY`
 - `SERPAPI_API_KEY`
 - optional `OPENALEX_MAILTO` contact value
 
-These are server-side secrets only.
+These are server-side secrets only. Embeddings remain disabled by default, so no
+additional embedding-specific secrets are required for the new providers.
 
 ## Storage and access rules
 

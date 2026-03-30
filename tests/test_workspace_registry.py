@@ -114,6 +114,55 @@ async def test_workspace_registry_async_search_uses_batched_similarity() -> None
 
 
 @pytest.mark.asyncio
+async def test_workspace_registry_async_search_can_skip_model_similarity_hooks() -> None:
+    async def _unexpected_async_similarity(query: str, texts: list[str]) -> list[float]:
+        raise AssertionError(f"async similarity hook should be bypassed: {query!r}, {texts!r}")
+
+    def _unexpected_similarity(query: str, text: str) -> float:
+        raise AssertionError(f"sync similarity hook should be bypassed: {query!r}, {text!r}")
+
+    registry = WorkspaceRegistry(
+        ttl_seconds=1800,
+        enable_trace_log=False,
+        similarity_fn=_unexpected_similarity,
+        async_batched_similarity_fn=_unexpected_async_similarity,
+    )
+
+    record = registry.save_result_set(
+        source_tool="search_papers_smart",
+        query="retrieval agents",
+        payload={
+            "results": [
+                {
+                    "paper": {
+                        "paperId": "paper-1",
+                        "title": "Retrieval-Augmented Agents for Scientific Search",
+                        "abstract": "Vector retrieval improves agent workflows.",
+                    }
+                },
+                {
+                    "paper": {
+                        "paperId": "paper-2",
+                        "title": "Citation Graph Analysis for Literature Review",
+                        "abstract": "Graph traversal supports citation chasing.",
+                    }
+                },
+            ]
+        },
+    )
+
+    papers = await registry.asearch_papers(
+        record.search_session_id,
+        "vector retrieval",
+        top_k=1,
+        allow_model_similarity=False,
+    )
+
+    assert papers
+    assert papers[0]["paperId"] == "paper-1"
+
+
+@pytest.mark.asyncio
 async def test_workspace_registry_async_save_builds_vector_store() -> None:
     fallback_calls: list[tuple[str, list[str]]] = []
     vector_calls: list[tuple[str, int]] = []

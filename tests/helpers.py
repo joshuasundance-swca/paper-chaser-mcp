@@ -215,6 +215,61 @@ class RecordingOpenAlexClient:
         }
 
 
+class RecordingScholarApiClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    async def search(self, **kwargs) -> dict:
+        self.calls.append(("search", kwargs))
+        return {
+            "provider": "scholarapi",
+            "total": 1,
+            "offset": 0,
+            "data": [{"paperId": "ScholarAPI:sa-1", "source": "scholarapi"}],
+            "pagination": {"hasMore": True, "nextCursor": "sch-search-next"},
+        }
+
+    async def list_papers(self, **kwargs) -> dict:
+        self.calls.append(("list_papers", kwargs))
+        return {
+            "provider": "scholarapi",
+            "total": 1,
+            "offset": 0,
+            "data": [{"paperId": "ScholarAPI:sa-list-1", "source": "scholarapi"}],
+            "pagination": {"hasMore": True, "nextCursor": "2024-03-01T12:30:45.123Z"},
+        }
+
+    async def get_text(self, **kwargs) -> dict:
+        self.calls.append(("get_text", kwargs))
+        return {
+            "provider": "scholarapi",
+            "paperId": f"ScholarAPI:{kwargs['paper_id']}",
+            "source": "scholarapi",
+            "text": "full text",
+        }
+
+    async def get_texts(self, **kwargs) -> dict:
+        self.calls.append(("get_texts", kwargs))
+        return {
+            "provider": "scholarapi",
+            "results": [
+                {"paperId": "ScholarAPI:sa-1", "source": "scholarapi", "text": "text 1"},
+                {"paperId": "ScholarAPI:sa-2", "source": "scholarapi", "text": None},
+            ],
+        }
+
+    async def get_pdf(self, **kwargs) -> dict:
+        self.calls.append(("get_pdf", kwargs))
+        return {
+            "provider": "scholarapi",
+            "paperId": f"ScholarAPI:{kwargs['paper_id']}",
+            "source": "scholarapi",
+            "mimeType": "application/pdf",
+            "contentBase64": "JVBERi0xLjQ=",
+            "byteLength": 8,
+        }
+
+
 class RecordingCrossrefClient:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []

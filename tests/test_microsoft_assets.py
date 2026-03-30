@@ -53,6 +53,11 @@ def test_core_and_full_tool_assets_exist_and_use_streamable_http() -> None:
     assert "expand_research_graph" in full["tools"]
     assert "search_entities_openalex" in full["tools"]
     assert "search_papers_openalex_by_entity" in full["tools"]
+    assert "search_papers_scholarapi" in full["tools"]
+    assert "list_papers_scholarapi" in full["tools"]
+    assert "get_paper_text_scholarapi" in full["tools"]
+    assert "get_paper_texts_scholarapi" in full["tools"]
+    assert "get_paper_pdf_scholarapi" in full["tools"]
     assert "search_species_ecos" in full["tools"]
     assert "get_species_profile_ecos" in full["tools"]
     assert "list_species_documents_ecos" in full["tools"]
@@ -66,4 +71,7 @@ def test_microsoft_plugin_sample_points_at_full_tool_asset() -> None:
     assert len(sample["conversation_starters"]) >= 5
     assert any("citation" in starter.lower() for starter in sample["conversation_starters"])
     assert any("Federal Register" in starter for starter in sample["conversation_starters"])
+    assert any(
+        "full text" in starter.lower() or "pdf" in starter.lower() for starter in sample["conversation_starters"]
+    )
     assert any("searchSessionId" in note for note in sample["notes"])

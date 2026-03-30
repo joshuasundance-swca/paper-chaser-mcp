@@ -452,6 +452,43 @@ class ModelProviderBundle:
     synthesis_model_name: str
     embedding_model_name: str
 
+    def configured_provider_name(self) -> str:
+        return str(getattr(self, "_configured_provider", getattr(self, "_provider_name", "deterministic")))
+
+    def active_provider_name(self) -> str:
+        return str(getattr(self, "_last_effective_provider_name", getattr(self, "_provider_name", "deterministic")))
+
+    def _mark_provider_used(self, provider_name: str | None = None) -> None:
+        self._last_effective_provider_name = provider_name or getattr(self, "_provider_name", "deterministic")
+
+    def _mark_deterministic_fallback(self) -> None:
+        self._last_effective_provider_name = "deterministic"
+
+    def supports_embeddings(self) -> bool:
+        return False
+
+    def selection_metadata(self) -> dict[str, Any]:
+        configured_provider = self.configured_provider_name()
+        active_provider = self.active_provider_name()
+        config = getattr(self, "_config", None)
+        planner_source = getattr(config, "planner_model_source", "configured")
+        synthesis_source = getattr(config, "synthesis_model_source", "configured")
+        planner_model = self.planner_model_name
+        synthesis_model = self.synthesis_model_name
+        if active_provider == "deterministic":
+            planner_source = "deterministic"
+            synthesis_source = "deterministic"
+            planner_model = f"{configured_provider}:deterministic-planner"
+            synthesis_model = f"{configured_provider}:deterministic-synthesizer"
+        return {
+            "configuredSmartProvider": str(configured_provider),
+            "activeSmartProvider": str(active_provider),
+            "plannerModel": planner_model,
+            "plannerModelSource": planner_source,
+            "synthesisModel": synthesis_model,
+            "synthesisModelSource": synthesis_source,
+        }
+
     def plan_search(
         self,
         *,
@@ -625,6 +662,10 @@ class DeterministicProviderBundle(ModelProviderBundle):
     """Pure-Python fallback planner/synthesizer for tests and offline use."""
 
     def __init__(self, config: AgenticConfig) -> None:
+        self._config = config
+        self._configured_provider = config.provider
+        self._provider_name = "deterministic"
+        self._last_effective_provider_name = "deterministic"
         self.planner_model_name = f"{config.provider}:deterministic-planner"
         self.synthesis_model_name = f"{config.provider}:deterministic-synthesizer"
         self.embedding_model_name = f"{config.provider}:deterministic-lexical"
@@ -658,7 +699,7 @@ class DeterministicProviderBundle(ModelProviderBundle):
             constraints=constraints,
             seedIdentifiers=_extract_seed_identifiers(normalized),
             candidateConcepts=candidate_concepts,
-            providerPlan=["semantic_scholar", "openalex", "core", "arxiv"],
+            providerPlan=["semantic_scholar", "openalex", "scholarapi", "core", "arxiv"],
             followUpMode="claim_check" if inferred_intent == "review" else "qa",
         )
 
@@ -789,6 +830,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         provider_registry: ProviderDiagnosticsRegistry | None = None,
     ) -> None:
         super().__init__(config)
+        self._provider_name = "openai"
         self.planner_model_name = config.planner_model
         self.synthesis_model_name = config.synthesis_model
         self.embedding_model_name = config.embedding_model
@@ -802,6 +844,13 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         self._synthesizer: Any | None = None
         self._embeddings: Any | None = None
         self._embedding_cache: dict[str, tuple[float, ...]] = {}
+
+    def supports_embeddings(self) -> bool:
+        return (not self._disable_embeddings) and bool(self._api_key)
+
+    def _allow_langchain_chat_fallback(self) -> bool:
+        """Whether sync methods may fall back to LangChain chat/completions calls."""
+        return True
 
     def _load_openai_client(self) -> Any | None:
         if self._openai_client is not None:
@@ -838,7 +887,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         return self._async_openai_client
 
     def _load_models(self) -> tuple[Any | None, Any | None]:
-        if self._planner is not None or self._synthesizer is not None:
+        if self._planner is not None and self._synthesizer is not None:
             return self._planner, self._synthesizer
         if not self._api_key:
             return None, None
@@ -849,7 +898,6 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 "LangChain v1 chat model helpers are not installed; falling back to deterministic smart planning."
             )
             return None, None
-
         self._planner = init_chat_model(
             model=self.planner_model_name,
             model_provider="openai",
@@ -984,7 +1032,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             return client.responses.parse(**kwargs)
 
         response = execute_provider_call_sync(
-            provider="openai",
+            provider=self._provider_name,
             endpoint=endpoint,
             operation=_call,
             registry=self._provider_registry,
@@ -1028,7 +1076,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             return client.responses.create(**kwargs)
 
         response = execute_provider_call_sync(
-            provider="openai",
+            provider=self._provider_name,
             endpoint=endpoint,
             operation=_call,
             registry=self._provider_registry,
@@ -1070,7 +1118,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             )
 
         response = await execute_provider_call(
-            provider="openai",
+            provider=self._provider_name,
             endpoint=endpoint,
             operation=_call,
             registry=self._provider_registry,
@@ -1121,7 +1169,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             )
 
         response = await execute_provider_call(
-            provider="openai",
+            provider=self._provider_name,
             endpoint=endpoint,
             operation=_call,
             registry=self._provider_registry,
@@ -1200,7 +1248,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         if client is not None and hasattr(client, "embeddings"):
             try:
                 response = execute_provider_call_sync(
-                    provider="openai",
+                    provider=self._provider_name,
                     endpoint="embeddings.create",
                     operation=lambda: client.embeddings.create(
                         model=self.embedding_model_name,
@@ -1232,7 +1280,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         if client is not None and hasattr(client, "embeddings") and pending:
             try:
                 response = execute_provider_call_sync(
-                    provider="openai",
+                    provider=self._provider_name,
                     endpoint="embeddings.create",
                     operation=lambda: client.embeddings.create(
                         model=self.embedding_model_name,
@@ -1319,7 +1367,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 uncached_texts=len(pending),
             )
             response = await execute_provider_call(
-                provider="openai",
+                provider=self._provider_name,
                 endpoint="embeddings.create",
                 operation=lambda: self._await_with_total_timeout(
                     client.embeddings.create(
@@ -1401,7 +1449,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 response_model=_PlannerResponseSchema,
                 system_prompt=(
                     "Plan a grounded literature-search workflow. Keep providerPlan "
-                    "limited to semantic_scholar, openalex, core, and arxiv. "
+                    "limited to semantic_scholar, openalex, scholarapi, core, and arxiv. "
                     "Return compact structured output only."
                 ),
                 payload={
@@ -1415,9 +1463,11 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 request_id=request_id,
             )
             if direct is not None:
+                self._mark_provider_used()
                 return direct.to_planner_decision()
         except Exception:
             logger.exception("Async OpenAI planner failed; falling back to deterministic planning.")
+        self._mark_deterministic_fallback()
         return super().plan_search(
             query=query,
             mode=mode,
@@ -1466,11 +1516,13 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 request_id=request_id,
             )
             if response is None:
+                self._mark_deterministic_fallback()
                 return super().suggest_speculative_expansions(
                     query=query,
                     evidence_texts=evidence_texts,
                     max_variants=max_variants,
                 )
+            self._mark_provider_used()
             variants: list[ExpansionCandidate] = []
             query_tokens = set(_tokenize(query))
             for item in response.expansions[:max_variants]:
@@ -1484,6 +1536,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             return variants
         except Exception:
             logger.exception("Async OpenAI variant generation failed; falling back to deterministic expansions.")
+            self._mark_deterministic_fallback()
             return super().suggest_speculative_expansions(
                 query=query,
                 evidence_texts=evidence_texts,
@@ -1512,9 +1565,11 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 max_output_tokens=40,
             )
             if direct:
+                self._mark_provider_used()
                 return direct.strip().strip('"')
         except Exception:
             logger.exception("Async OpenAI theme labeling failed; falling back to deterministic theme labels.")
+        self._mark_deterministic_fallback()
         return super().label_theme(seed_terms=seed_terms, papers=papers)
 
     async def asummarize_theme(
@@ -1547,9 +1602,11 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 max_output_tokens=180,
             )
             if direct:
+                self._mark_provider_used()
                 return direct
         except Exception:
             logger.exception("Async OpenAI theme summarization failed; falling back to deterministic summaries.")
+        self._mark_deterministic_fallback()
         return super().summarize_theme(title=title, papers=papers)
 
     async def aanswer_question(
@@ -1597,9 +1654,42 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             if direct is not None:
                 parsed = direct.model_dump()
                 parsed["confidence"] = self.normalize_confidence(parsed.get("confidence"))
+                self._mark_provider_used()
+                return parsed
+            text_fallback = await self._aresponses_text(
+                endpoint="responses.create:answer",
+                model_name=self.synthesis_model_name,
+                system_prompt=(
+                    "Answer only from the supplied papers. If evidence is weak, say so. "
+                    "Return only JSON with keys answer, unsupportedAsks, followUpQuestions, confidence. "
+                    "Confidence must be exactly one of: high, medium, low."
+                ),
+                payload={
+                    "question": question,
+                    "answer_mode": answer_mode,
+                    "evidence": [
+                        {
+                            "title": paper.get("title"),
+                            "abstract": paper.get("abstract"),
+                            "venue": paper.get("venue"),
+                            "year": paper.get("year"),
+                        }
+                        for paper in evidence_papers[:6]
+                    ],
+                },
+                request_outcomes=request_outcomes,
+                request_id=request_id,
+                max_output_tokens=240,
+            )
+            if text_fallback:
+                json_payload = _extract_json_object(text_fallback) or text_fallback
+                parsed = AnswerSchema.model_validate_json(json_payload).model_dump()
+                parsed["confidence"] = self.normalize_confidence(parsed.get("confidence"))
+                self._mark_provider_used()
                 return parsed
         except Exception:
             logger.exception("Async OpenAI synthesis failed; falling back to deterministic answer generation.")
+        self._mark_deterministic_fallback()
         return super().answer_question(
             question=question,
             evidence_papers=evidence_papers,
@@ -1623,7 +1713,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 response_model=_PlannerResponseSchema,
                 system_prompt=(
                     "Plan a grounded literature-search workflow. Keep providerPlan "
-                    "limited to semantic_scholar, openalex, core, and arxiv. "
+                    "limited to semantic_scholar, openalex, scholarapi, core, and arxiv. "
                     "Return compact structured output only."
                 ),
                 payload={
@@ -1635,8 +1725,19 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 },
             )
             if direct is not None:
+                self._mark_provider_used()
                 return direct.to_planner_decision()
+            if not self._allow_langchain_chat_fallback():
+                self._mark_deterministic_fallback()
+                return super().plan_search(
+                    query=query,
+                    mode=mode,
+                    year=year,
+                    venue=venue,
+                    focus=focus,
+                )
             if planner is None:
+                self._mark_deterministic_fallback()
                 return super().plan_search(
                     query=query,
                     mode=mode,
@@ -1655,7 +1756,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                         "system",
                         "Plan a grounded literature-search workflow. Keep "
                         "providerPlan limited to semantic_scholar, openalex, "
-                        "core, and arxiv. Return compact structured output only.",
+                        "scholarapi, core, and arxiv. Return compact structured output only.",
                     ),
                     (
                         "human",
@@ -1671,9 +1772,11 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                     ),
                 ]
             )
+            self._mark_provider_used()
             return response.to_planner_decision()
         except Exception:
             logger.exception("OpenAI planner failed; falling back to deterministic planning.")
+            self._mark_deterministic_fallback()
             return super().plan_search(
                 query=query,
                 mode=mode,
@@ -1721,7 +1824,15 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             if direct is not None:
                 response = direct
             else:
+                if not self._allow_langchain_chat_fallback():
+                    self._mark_deterministic_fallback()
+                    return super().suggest_speculative_expansions(
+                        query=query,
+                        evidence_texts=evidence_texts,
+                        max_variants=max_variants,
+                    )
                 if planner is None:
+                    self._mark_deterministic_fallback()
                     return super().suggest_speculative_expansions(
                         query=query,
                         evidence_texts=evidence_texts,
@@ -1753,6 +1864,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                         ),
                     ]
                 )
+            self._mark_provider_used()
             variants: list[ExpansionCandidate] = []
             for item in response.expansions[:max_variants]:
                 variant = item.variant.strip()
@@ -1765,6 +1877,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             return variants
         except Exception:
             logger.exception("OpenAI variant generation failed; falling back to deterministic expansions.")
+            self._mark_deterministic_fallback()
             return super().suggest_speculative_expansions(
                 query=query,
                 evidence_texts=evidence_texts,
@@ -1788,9 +1901,14 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             max_output_tokens=40,
         )
         if direct:
+            self._mark_provider_used()
             return direct.strip().strip('"')
+        if not self._allow_langchain_chat_fallback():
+            self._mark_deterministic_fallback()
+            return super().label_theme(seed_terms=seed_terms, papers=papers)
         _, synthesizer = self._load_models()
         if synthesizer is None:
+            self._mark_deterministic_fallback()
             return super().label_theme(seed_terms=seed_terms, papers=papers)
         try:
             response = synthesizer.invoke(
@@ -1808,8 +1926,13 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 ]
             )
             label = str(response.content).strip().strip('"')
-            return label or super().label_theme(seed_terms=seed_terms, papers=papers)
+            if label:
+                self._mark_provider_used()
+                return label
+            self._mark_deterministic_fallback()
+            return super().label_theme(seed_terms=seed_terms, papers=papers)
         except Exception:
+            self._mark_deterministic_fallback()
             return super().label_theme(seed_terms=seed_terms, papers=papers)
 
     def summarize_theme(
@@ -1837,9 +1960,14 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             max_output_tokens=180,
         )
         if direct:
+            self._mark_provider_used()
             return direct
+        if not self._allow_langchain_chat_fallback():
+            self._mark_deterministic_fallback()
+            return super().summarize_theme(title=title, papers=papers)
         _, synthesizer = self._load_models()
         if synthesizer is None:
+            self._mark_deterministic_fallback()
             return super().summarize_theme(title=title, papers=papers)
         try:
             response = synthesizer.invoke(
@@ -1865,8 +1993,13 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 ]
             )
             content = str(response.content).strip()
-            return content or super().summarize_theme(title=title, papers=papers)
+            if content:
+                self._mark_provider_used()
+                return content
+            self._mark_deterministic_fallback()
+            return super().summarize_theme(title=title, papers=papers)
         except Exception:
+            self._mark_deterministic_fallback()
             return super().summarize_theme(title=title, papers=papers)
 
     def answer_question(
@@ -1910,8 +2043,46 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             )
             if direct is not None:
                 parsed = direct.model_dump()
+                self._mark_provider_used()
             else:
+                text_fallback = self._responses_text(
+                    endpoint="responses.create:answer",
+                    model_name=self.synthesis_model_name,
+                    system_prompt=(
+                        "Answer only from the supplied papers. If evidence is weak, say so. "
+                        "Return only JSON with keys answer, unsupportedAsks, followUpQuestions, confidence. "
+                        "Confidence must be exactly one of: high, medium, low."
+                    ),
+                    payload={
+                        "question": question,
+                        "answer_mode": answer_mode,
+                        "evidence": [
+                            {
+                                "title": paper.get("title"),
+                                "abstract": paper.get("abstract"),
+                                "venue": paper.get("venue"),
+                                "year": paper.get("year"),
+                            }
+                            for paper in evidence_papers[:6]
+                        ],
+                    },
+                    max_output_tokens=240,
+                )
+                if text_fallback:
+                    json_payload = _extract_json_object(text_fallback) or text_fallback
+                    parsed = AnswerSchema.model_validate_json(json_payload).model_dump()
+                    parsed["confidence"] = self.normalize_confidence(parsed.get("confidence"))
+                    self._mark_provider_used()
+                    return parsed
+                if not self._allow_langchain_chat_fallback():
+                    self._mark_deterministic_fallback()
+                    return super().answer_question(
+                        question=question,
+                        evidence_papers=evidence_papers,
+                        answer_mode=answer_mode,
+                    )
                 if synthesizer is None:
+                    self._mark_deterministic_fallback()
                     return super().answer_question(
                         question=question,
                         evidence_papers=evidence_papers,
@@ -1950,11 +2121,13 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                     ]
                 )
                 parsed = response.model_dump()
+                self._mark_provider_used()
             parsed["confidence"] = self.normalize_confidence(parsed.get("confidence"))
             if isinstance(parsed, dict):
                 return parsed
         except Exception:
             logger.exception("OpenAI synthesis failed; falling back to deterministic answer generation.")
+        self._mark_deterministic_fallback()
         return super().answer_question(
             question=question,
             evidence_papers=evidence_papers,
@@ -1962,15 +2135,1085 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         )
 
 
+def _langchain_message_text(response: Any) -> str:
+    if response is None:
+        return ""
+    if isinstance(response, str):
+        return response.strip()
+    content = getattr(response, "content", None)
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                if item.strip():
+                    parts.append(item.strip())
+                continue
+            if isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+                continue
+            text = getattr(item, "text", None)
+            if isinstance(text, str) and text.strip():
+                parts.append(text.strip())
+        return "\n".join(parts).strip()
+    if isinstance(response, BaseModel):
+        return response.model_dump_json()
+    return str(response).strip()
+
+
+def _extract_json_object(text: str) -> str | None:
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+    if fenced:
+        return fenced.group(1).strip()
+
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    for index, char in enumerate(text[start:], start=start):
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1].strip()
+    return None
+
+
+def _normalize_label_text(text: str) -> str:
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        line = re.sub(r"^#+\s*", "", line)
+        line = re.sub(r"^(theme|label)\s*:\s*", "", line, flags=re.IGNORECASE)
+        line = line.strip().strip('"').strip("'")
+        if line:
+            return line
+    return ""
+
+
+def _coerce_langchain_structured_response(
+    response: Any,
+    response_model: type[_ResponseModelT],
+) -> _ResponseModelT:
+    if isinstance(response, response_model):
+        return response
+    if isinstance(response, BaseModel):
+        return response_model.model_validate(response.model_dump())
+    if isinstance(response, dict):
+        return response_model.model_validate(response)
+    text = _langchain_message_text(response)
+    if text:
+        try:
+            return response_model.model_validate_json(text)
+        except Exception:
+            json_payload = _extract_json_object(text)
+            if json_payload:
+                return response_model.model_validate_json(json_payload)
+    raise ValueError("LangChain provider did not return structured output.")
+
+
+class AzureOpenAIProviderBundle(OpenAIProviderBundle):
+    """Azure OpenAI adapter that reuses the OpenAI-compatible response path."""
+
+    def __init__(
+        self,
+        config: AgenticConfig,
+        api_key: str | None,
+        azure_endpoint: str | None,
+        api_version: str | None,
+        *,
+        azure_planner_deployment: str | None = None,
+        azure_synthesis_deployment: str | None = None,
+        provider_registry: ProviderDiagnosticsRegistry | None = None,
+    ) -> None:
+        super().__init__(config, api_key, provider_registry=provider_registry)
+        self._provider_name = "azure-openai"
+        self._azure_endpoint = azure_endpoint
+        self._api_version = api_version
+        self._azure_planner_deployment = azure_planner_deployment
+        self._azure_synthesis_deployment = azure_synthesis_deployment
+        if azure_planner_deployment:
+            self.planner_model_name = azure_planner_deployment
+        if azure_synthesis_deployment:
+            self.synthesis_model_name = azure_synthesis_deployment
+
+    def supports_embeddings(self) -> bool:
+        return (not self._disable_embeddings) and bool(self._api_key and self._azure_endpoint)
+
+    def _allow_langchain_chat_fallback(self) -> bool:
+        """Azure sync parity should prefer responses and then deterministic fallback."""
+        return False
+
+    def _load_openai_client(self) -> Any | None:
+        if self._openai_client is not None:
+            return self._openai_client
+        if not self._api_key or not self._azure_endpoint:
+            return None
+        try:
+            from openai import AzureOpenAI
+        except ImportError:
+            logger.info("openai is not installed; falling back to LangChain and deterministic smart-provider adapters.")
+            return None
+        self._openai_client = AzureOpenAI(
+            api_key=self._api_key,
+            azure_endpoint=self._azure_endpoint,
+            api_version=self._api_version,
+            timeout=self._timeout_seconds,
+            max_retries=0,
+        )
+        return self._openai_client
+
+    def _load_async_openai_client(self) -> Any | None:
+        if self._async_openai_client is not None:
+            return self._async_openai_client
+        if not self._api_key or not self._azure_endpoint:
+            return None
+        try:
+            from openai import AsyncAzureOpenAI
+        except ImportError:
+            logger.info("openai is not installed; falling back to deterministic smart-provider adapters.")
+            return None
+        self._async_openai_client = AsyncAzureOpenAI(
+            api_key=self._api_key,
+            azure_endpoint=self._azure_endpoint,
+            api_version=self._api_version,
+            timeout=self._timeout_seconds,
+            max_retries=0,
+        )
+        return self._async_openai_client
+
+    def _load_models(self) -> tuple[Any | None, Any | None]:
+        if self._planner is not None and self._synthesizer is not None:
+            return self._planner, self._synthesizer
+        if not self._api_key or not self._azure_endpoint:
+            return None, None
+        try:
+            from langchain_openai import AzureChatOpenAI
+        except ImportError:
+            logger.info("langchain-openai is not installed; falling back to deterministic smart planning.")
+            return None, None
+
+        azure_chat_model: Any = AzureChatOpenAI
+        planner_kwargs = {
+            "azure_endpoint": self._azure_endpoint,
+            "api_key": SecretStr(self._api_key),
+            "api_version": self._api_version,
+            "azure_deployment": self.planner_model_name,
+            "temperature": 0,
+            "timeout": self._timeout_seconds,
+            "max_retries": 0,
+        }
+        synthesis_kwargs = {
+            "azure_endpoint": self._azure_endpoint,
+            "api_key": SecretStr(self._api_key),
+            "api_version": self._api_version,
+            "azure_deployment": self.synthesis_model_name,
+            "temperature": 0,
+            "timeout": self._timeout_seconds,
+            "max_retries": 0,
+        }
+        self._planner = azure_chat_model(**planner_kwargs)
+        self._synthesizer = azure_chat_model(**synthesis_kwargs)
+        return self._planner, self._synthesizer
+
+    def _load_embeddings(self) -> Any | None:
+        if self._embeddings is not None:
+            return self._embeddings
+        if self._disable_embeddings:
+            return None
+        if not self._api_key or not self._azure_endpoint:
+            return None
+        try:
+            from langchain_openai import AzureOpenAIEmbeddings
+        except ImportError:
+            logger.info(
+                "langchain-openai is not installed; falling back to lexical similarity for Azure OpenAI smart ranking."
+            )
+            return None
+
+        self._embeddings = AzureOpenAIEmbeddings(
+            model=self.embedding_model_name,
+            azure_deployment=self.embedding_model_name,
+            api_key=SecretStr(self._api_key),
+            azure_endpoint=self._azure_endpoint,
+            api_version=self._api_version,
+            max_retries=0,
+            timeout=self._timeout_seconds,
+        )
+        return self._embeddings
+
+
+class LangChainChatProviderBundle(DeterministicProviderBundle):
+    """Chat-only provider bundle built on LangChain structured outputs."""
+
+    def __init__(
+        self,
+        config: AgenticConfig,
+        *,
+        provider_name: str,
+        api_key: str | None,
+        provider_registry: ProviderDiagnosticsRegistry | None = None,
+        structured_output_method: str | None = None,
+    ) -> None:
+        super().__init__(config)
+        self._provider_name = provider_name
+        self._api_key = api_key
+        self._provider_registry = provider_registry
+        self._structured_output_method = structured_output_method
+        self._timeout_seconds = config.openai_timeout_seconds
+        self.planner_model_name = config.planner_model
+        self.synthesis_model_name = config.synthesis_model
+        self.embedding_model_name = config.embedding_model
+        self._planner: Any | None = None
+        self._synthesizer: Any | None = None
+
+    def supports_embeddings(self) -> bool:
+        return False
+
+    def _create_chat_model(self, model_name: str) -> Any:
+        raise NotImplementedError
+
+    def _load_models(self) -> tuple[Any | None, Any | None]:
+        if self._planner is not None and self._synthesizer is not None:
+            return self._planner, self._synthesizer
+        if not self._api_key:
+            return None, None
+        try:
+            self._planner = self._create_chat_model(self.planner_model_name)
+            self._synthesizer = self._create_chat_model(self.synthesis_model_name)
+        except ImportError:
+            logger.info(
+                "%s dependencies are not installed; falling back to deterministic smart planning.",
+                self._provider_name,
+            )
+            return None, None
+        except Exception:
+            logger.exception("%s model initialization failed.", self._provider_name)
+            return None, None
+        return self._planner, self._synthesizer
+
+    def _wrap_structured_model(self, model: Any, response_model: type[_ResponseModelT]) -> Any:
+        if self._structured_output_method is None:
+            return model.with_structured_output(response_model)
+        return model.with_structured_output(response_model, method=self._structured_output_method)
+
+    @staticmethod
+    def _messages(system_prompt: str, payload: dict[str, Any]) -> list[tuple[str, str]]:
+        return [
+            ("system", system_prompt),
+            ("human", json.dumps(payload)),
+        ]
+
+    async def _ainvoke(self, model: Any, messages: list[tuple[str, str]]) -> Any:
+        if hasattr(model, "ainvoke"):
+            return await model.ainvoke(messages)
+        return await asyncio.to_thread(model.invoke, messages)
+
+    async def _ainvoke_structured(self, structured: Any, messages: list[tuple[str, str]]) -> Any:
+        if hasattr(structured, "ainvoke"):
+            return await structured.ainvoke(messages)
+        return await asyncio.to_thread(structured.invoke, messages)
+
+    def _structured_sync(
+        self,
+        *,
+        endpoint: str,
+        model: Any,
+        response_model: type[_ResponseModelT],
+        system_prompt: str,
+        payload: dict[str, Any],
+    ) -> _ResponseModelT | None:
+        if model is None:
+            return None
+
+        response = execute_provider_call_sync(
+            provider=self._provider_name,
+            endpoint=endpoint,
+            operation=lambda: self._wrap_structured_model(model, response_model).invoke(
+                self._messages(system_prompt, payload)
+            ),
+            registry=self._provider_registry,
+        )
+        if response.payload is None:
+            return None
+        try:
+            return _coerce_langchain_structured_response(response.payload, response_model)
+        except Exception:
+            logger.exception("%s structured parse failed for %s.", self._provider_name, endpoint)
+            return None
+
+    async def _structured_async(
+        self,
+        *,
+        endpoint: str,
+        model: Any,
+        response_model: type[_ResponseModelT],
+        system_prompt: str,
+        payload: dict[str, Any],
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+    ) -> _ResponseModelT | None:
+        if model is None:
+            return None
+
+        async def _call() -> Any:
+            structured = self._wrap_structured_model(model, response_model)
+            return await self._ainvoke_structured(structured, self._messages(system_prompt, payload))
+
+        response = await execute_provider_call(
+            provider=self._provider_name,
+            endpoint=endpoint,
+            operation=_call,
+            registry=self._provider_registry,
+            request_outcomes=request_outcomes,
+            request_id=request_id,
+        )
+        if response.payload is None:
+            return None
+        try:
+            return _coerce_langchain_structured_response(response.payload, response_model)
+        except Exception:
+            logger.exception("%s structured parse failed for %s.", self._provider_name, endpoint)
+            return None
+
+    def _text_sync(
+        self,
+        *,
+        endpoint: str,
+        model: Any,
+        system_prompt: str,
+        payload: dict[str, Any],
+    ) -> str | None:
+        if model is None:
+            return None
+
+        response = execute_provider_call_sync(
+            provider=self._provider_name,
+            endpoint=endpoint,
+            operation=lambda: model.invoke(self._messages(system_prompt, payload)),
+            registry=self._provider_registry,
+        )
+        if response.payload is None:
+            return None
+        text = _langchain_message_text(response.payload)
+        return text or None
+
+    async def _text_async(
+        self,
+        *,
+        endpoint: str,
+        model: Any,
+        system_prompt: str,
+        payload: dict[str, Any],
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+    ) -> str | None:
+        if model is None:
+            return None
+
+        response = await execute_provider_call(
+            provider=self._provider_name,
+            endpoint=endpoint,
+            operation=lambda: self._ainvoke(model, self._messages(system_prompt, payload)),
+            registry=self._provider_registry,
+            request_outcomes=request_outcomes,
+            request_id=request_id,
+        )
+        if response.payload is None:
+            return None
+        text = _langchain_message_text(response.payload)
+        return text or None
+
+    def _structured_from_text_sync(
+        self,
+        *,
+        endpoint: str,
+        model: Any,
+        response_model: type[_ResponseModelT],
+        system_prompt: str,
+        payload: dict[str, Any],
+    ) -> _ResponseModelT | None:
+        if model is None:
+            return None
+
+        response = execute_provider_call_sync(
+            provider=self._provider_name,
+            endpoint=endpoint,
+            operation=lambda: model.invoke(self._messages(system_prompt, payload)),
+            registry=self._provider_registry,
+        )
+        if response.payload is None:
+            return None
+        try:
+            return _coerce_langchain_structured_response(response.payload, response_model)
+        except Exception:
+            logger.exception("%s text-to-structured parse failed for %s.", self._provider_name, endpoint)
+            return None
+
+    async def _structured_from_text_async(
+        self,
+        *,
+        endpoint: str,
+        model: Any,
+        response_model: type[_ResponseModelT],
+        system_prompt: str,
+        payload: dict[str, Any],
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+    ) -> _ResponseModelT | None:
+        if model is None:
+            return None
+
+        response = await execute_provider_call(
+            provider=self._provider_name,
+            endpoint=endpoint,
+            operation=lambda: self._ainvoke(model, self._messages(system_prompt, payload)),
+            registry=self._provider_registry,
+            request_outcomes=request_outcomes,
+            request_id=request_id,
+        )
+        if response.payload is None:
+            return None
+        try:
+            return _coerce_langchain_structured_response(response.payload, response_model)
+        except Exception:
+            logger.exception("%s text-to-structured parse failed for %s.", self._provider_name, endpoint)
+            return None
+
+    def plan_search(
+        self,
+        *,
+        query: str,
+        mode: str,
+        year: str | None = None,
+        venue: str | None = None,
+        focus: str | None = None,
+    ) -> PlannerDecision:
+        planner, _ = self._load_models()
+        try:
+            direct = self._structured_sync(
+                endpoint="structured:planner",
+                model=planner,
+                response_model=_PlannerResponseSchema,
+                system_prompt=(
+                    "Plan a grounded literature-search workflow. Keep providerPlan "
+                    "limited to semantic_scholar, openalex, scholarapi, core, and arxiv. "
+                    "Return compact structured output only."
+                ),
+                payload={
+                    "query": query,
+                    "mode": mode,
+                    "year": year,
+                    "venue": venue,
+                    "focus": focus,
+                },
+            )
+            if direct is not None:
+                self._mark_provider_used()
+                return direct.to_planner_decision()
+        except Exception:
+            logger.exception("%s planner failed; falling back to deterministic planning.", self._provider_name)
+        self._mark_deterministic_fallback()
+        return super().plan_search(query=query, mode=mode, year=year, venue=venue, focus=focus)
+
+    async def aplan_search(
+        self,
+        *,
+        query: str,
+        mode: str,
+        year: str | None = None,
+        venue: str | None = None,
+        focus: str | None = None,
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+    ) -> PlannerDecision:
+        planner, _ = self._load_models()
+        try:
+            direct = await self._structured_async(
+                endpoint="structured:planner",
+                model=planner,
+                response_model=_PlannerResponseSchema,
+                system_prompt=(
+                    "Plan a grounded literature-search workflow. Keep providerPlan "
+                    "limited to semantic_scholar, openalex, scholarapi, core, and arxiv. "
+                    "Return compact structured output only."
+                ),
+                payload={
+                    "query": query,
+                    "mode": mode,
+                    "year": year,
+                    "venue": venue,
+                    "focus": focus,
+                },
+                request_outcomes=request_outcomes,
+                request_id=request_id,
+            )
+            if direct is not None:
+                self._mark_provider_used()
+                return direct.to_planner_decision()
+        except Exception:
+            logger.exception("%s planner failed; falling back to deterministic planning.", self._provider_name)
+        self._mark_deterministic_fallback()
+        return super().plan_search(query=query, mode=mode, year=year, venue=venue, focus=focus)
+
+    def suggest_speculative_expansions(
+        self,
+        *,
+        query: str,
+        evidence_texts: list[str],
+        max_variants: int,
+    ) -> list[ExpansionCandidate]:
+        planner, _ = self._load_models()
+        try:
+
+            class ExpansionSchema(BaseModel):
+                variant: str
+                source: str = Field(default="speculative")
+                rationale: str = Field(default="")
+
+            class ExpansionListSchema(BaseModel):
+                expansions: list[ExpansionSchema] = Field(default_factory=list)
+
+            direct = self._structured_sync(
+                endpoint="structured:expansions",
+                model=planner,
+                response_model=ExpansionListSchema,
+                system_prompt=(
+                    "Suggest at most three short literature-search expansions. "
+                    "Each expansion must preserve the user's research intent, "
+                    "must not add unrelated domains, and must avoid stopwords, "
+                    "generic verbs, or filler terms. Label each expansion as "
+                    "from_input, from_retrieved_evidence, or speculative."
+                ),
+                payload={
+                    "query": query,
+                    "evidence": evidence_texts[:5],
+                    "max_variants": max_variants,
+                },
+            )
+            if direct is None:
+                self._mark_deterministic_fallback()
+                return super().suggest_speculative_expansions(
+                    query=query,
+                    evidence_texts=evidence_texts,
+                    max_variants=max_variants,
+                )
+            self._mark_provider_used()
+            variants: list[ExpansionCandidate] = []
+            query_tokens = set(_tokenize(query))
+            for item in direct.expansions[:max_variants]:
+                variant = item.variant.strip()
+                if not variant:
+                    continue
+                new_tokens = [token for token in _tokenize(variant) if token not in query_tokens]
+                if not new_tokens or all(token in COMMON_QUERY_WORDS for token in new_tokens):
+                    continue
+                variants.append(ExpansionCandidate.model_validate(item.model_dump()))
+            return variants
+        except Exception:
+            logger.exception(
+                "%s expansion generation failed; falling back to deterministic expansions.",
+                self._provider_name,
+            )
+            self._mark_deterministic_fallback()
+            return super().suggest_speculative_expansions(
+                query=query,
+                evidence_texts=evidence_texts,
+                max_variants=max_variants,
+            )
+
+    async def asuggest_speculative_expansions(
+        self,
+        *,
+        query: str,
+        evidence_texts: list[str],
+        max_variants: int,
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+    ) -> list[ExpansionCandidate]:
+        planner, _ = self._load_models()
+        try:
+
+            class ExpansionSchema(BaseModel):
+                variant: str
+                source: str = Field(default="speculative")
+                rationale: str = Field(default="")
+
+            class ExpansionListSchema(BaseModel):
+                expansions: list[ExpansionSchema] = Field(default_factory=list)
+
+            direct = await self._structured_async(
+                endpoint="structured:expansions",
+                model=planner,
+                response_model=ExpansionListSchema,
+                system_prompt=(
+                    "Suggest at most three short literature-search expansions. "
+                    "Each expansion must preserve the user's research intent, "
+                    "must not add unrelated domains, and must avoid stopwords, "
+                    "generic verbs, or filler terms. Label each expansion as "
+                    "from_input, from_retrieved_evidence, or speculative."
+                ),
+                payload={
+                    "query": query,
+                    "evidence": evidence_texts[:5],
+                    "max_variants": max_variants,
+                },
+                request_outcomes=request_outcomes,
+                request_id=request_id,
+            )
+            if direct is None:
+                self._mark_deterministic_fallback()
+                return super().suggest_speculative_expansions(
+                    query=query,
+                    evidence_texts=evidence_texts,
+                    max_variants=max_variants,
+                )
+            self._mark_provider_used()
+            variants: list[ExpansionCandidate] = []
+            query_tokens = set(_tokenize(query))
+            for item in direct.expansions[:max_variants]:
+                variant = item.variant.strip()
+                if not variant:
+                    continue
+                new_tokens = [token for token in _tokenize(variant) if token not in query_tokens]
+                if not new_tokens or all(token in COMMON_QUERY_WORDS for token in new_tokens):
+                    continue
+                variants.append(ExpansionCandidate.model_validate(item.model_dump()))
+            return variants
+        except Exception:
+            logger.exception(
+                "%s expansion generation failed; falling back to deterministic expansions.",
+                self._provider_name,
+            )
+            self._mark_deterministic_fallback()
+            return super().suggest_speculative_expansions(
+                query=query,
+                evidence_texts=evidence_texts,
+                max_variants=max_variants,
+            )
+
+    def label_theme(
+        self,
+        *,
+        seed_terms: list[str],
+        papers: list[dict[str, Any]],
+    ) -> str:
+        _, synthesizer = self._load_models()
+        try:
+            direct = self._text_sync(
+                endpoint="text:label_theme",
+                model=synthesizer,
+                system_prompt=(
+                    "Write a very short literature theme label. Return plain text only, "
+                    "no markdown, no bullets, no explanation."
+                ),
+                payload={
+                    "seed_terms": seed_terms,
+                    "titles": [paper.get("title") for paper in papers[:6]],
+                },
+            )
+            if direct:
+                label = _normalize_label_text(direct)
+                if label:
+                    self._mark_provider_used()
+                    return label
+        except Exception:
+            logger.exception(
+                "%s theme labeling failed; falling back to deterministic theme labels.",
+                self._provider_name,
+            )
+        self._mark_deterministic_fallback()
+        return super().label_theme(seed_terms=seed_terms, papers=papers)
+
+    async def alabel_theme(
+        self,
+        *,
+        seed_terms: list[str],
+        papers: list[dict[str, Any]],
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+    ) -> str:
+        _, synthesizer = self._load_models()
+        try:
+            direct = await self._text_async(
+                endpoint="text:label_theme",
+                model=synthesizer,
+                system_prompt=(
+                    "Write a very short literature theme label. Return plain text only, "
+                    "no markdown, no bullets, no explanation."
+                ),
+                payload={
+                    "seed_terms": seed_terms,
+                    "titles": [paper.get("title") for paper in papers[:6]],
+                },
+                request_outcomes=request_outcomes,
+                request_id=request_id,
+            )
+            if direct:
+                label = _normalize_label_text(direct)
+                if label:
+                    self._mark_provider_used()
+                    return label
+        except Exception:
+            logger.exception(
+                "%s theme labeling failed; falling back to deterministic theme labels.",
+                self._provider_name,
+            )
+        self._mark_deterministic_fallback()
+        return super().label_theme(seed_terms=seed_terms, papers=papers)
+
+    def summarize_theme(
+        self,
+        *,
+        title: str,
+        papers: list[dict[str, Any]],
+    ) -> str:
+        _, synthesizer = self._load_models()
+        try:
+            direct = self._text_sync(
+                endpoint="text:summarize_theme",
+                model=synthesizer,
+                system_prompt="Summarize one literature cluster in two sentences. Return plain text only.",
+                payload={
+                    "title": title,
+                    "papers": [
+                        {
+                            "title": paper.get("title"),
+                            "abstract": paper.get("abstract"),
+                            "venue": paper.get("venue"),
+                            "year": paper.get("year"),
+                        }
+                        for paper in papers[:5]
+                    ],
+                },
+            )
+            if direct:
+                self._mark_provider_used()
+                return direct
+        except Exception:
+            logger.exception(
+                "%s theme summarization failed; falling back to deterministic summaries.",
+                self._provider_name,
+            )
+        self._mark_deterministic_fallback()
+        return super().summarize_theme(title=title, papers=papers)
+
+    async def asummarize_theme(
+        self,
+        *,
+        title: str,
+        papers: list[dict[str, Any]],
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+    ) -> str:
+        _, synthesizer = self._load_models()
+        try:
+            direct = await self._text_async(
+                endpoint="text:summarize_theme",
+                model=synthesizer,
+                system_prompt="Summarize one literature cluster in two sentences. Return plain text only.",
+                payload={
+                    "title": title,
+                    "papers": [
+                        {
+                            "title": paper.get("title"),
+                            "abstract": paper.get("abstract"),
+                            "venue": paper.get("venue"),
+                            "year": paper.get("year"),
+                        }
+                        for paper in papers[:5]
+                    ],
+                },
+                request_outcomes=request_outcomes,
+                request_id=request_id,
+            )
+            if direct:
+                self._mark_provider_used()
+                return direct
+        except Exception:
+            logger.exception(
+                "%s theme summarization failed; falling back to deterministic summaries.",
+                self._provider_name,
+            )
+        self._mark_deterministic_fallback()
+        return super().summarize_theme(title=title, papers=papers)
+
+    def answer_question(
+        self,
+        *,
+        question: str,
+        evidence_papers: list[dict[str, Any]],
+        answer_mode: str,
+    ) -> dict[str, Any]:
+        _, synthesizer = self._load_models()
+        try:
+
+            class AnswerSchema(BaseModel):
+                answer: str = Field(default="")
+                unsupportedAsks: list[str] = Field(default_factory=list)
+                followUpQuestions: list[str] = Field(default_factory=list)
+                confidence: Literal["high", "medium", "low"] = "medium"
+
+            direct = self._structured_sync(
+                endpoint="structured:answer",
+                model=synthesizer,
+                response_model=AnswerSchema,
+                system_prompt=(
+                    "Answer only from the supplied papers. If evidence is weak, "
+                    "say so. Confidence must be exactly one of: high, medium, low."
+                ),
+                payload={
+                    "question": question,
+                    "answer_mode": answer_mode,
+                    "evidence": [
+                        {
+                            "title": paper.get("title"),
+                            "abstract": paper.get("abstract"),
+                            "venue": paper.get("venue"),
+                            "year": paper.get("year"),
+                        }
+                        for paper in evidence_papers[:6]
+                    ],
+                },
+            )
+            if direct is not None:
+                parsed = direct.model_dump()
+                parsed["confidence"] = self.normalize_confidence(parsed.get("confidence"))
+                self._mark_provider_used()
+                return parsed
+            text_fallback = self._structured_from_text_sync(
+                endpoint="text:answer",
+                model=synthesizer,
+                response_model=AnswerSchema,
+                system_prompt=(
+                    "Answer only from the supplied papers. If evidence is weak, say so. "
+                    "Return only JSON with keys answer, unsupportedAsks, followUpQuestions, confidence. "
+                    "Confidence must be exactly one of: high, medium, low."
+                ),
+                payload={
+                    "question": question,
+                    "answer_mode": answer_mode,
+                    "evidence": [
+                        {
+                            "title": paper.get("title"),
+                            "abstract": paper.get("abstract"),
+                            "venue": paper.get("venue"),
+                            "year": paper.get("year"),
+                        }
+                        for paper in evidence_papers[:6]
+                    ],
+                },
+            )
+            if text_fallback is not None:
+                parsed = text_fallback.model_dump()
+                parsed["confidence"] = self.normalize_confidence(parsed.get("confidence"))
+                self._mark_provider_used()
+                return parsed
+        except Exception:
+            logger.exception(
+                "%s synthesis failed; falling back to deterministic answer generation.",
+                self._provider_name,
+            )
+        self._mark_deterministic_fallback()
+        return super().answer_question(
+            question=question,
+            evidence_papers=evidence_papers,
+            answer_mode=answer_mode,
+        )
+
+    async def aanswer_question(
+        self,
+        *,
+        question: str,
+        evidence_papers: list[dict[str, Any]],
+        answer_mode: str,
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        _, synthesizer = self._load_models()
+        try:
+
+            class AnswerSchema(BaseModel):
+                answer: str = Field(default="")
+                unsupportedAsks: list[str] = Field(default_factory=list)
+                followUpQuestions: list[str] = Field(default_factory=list)
+                confidence: Literal["high", "medium", "low"] = "medium"
+
+            direct = await self._structured_async(
+                endpoint="structured:answer",
+                model=synthesizer,
+                response_model=AnswerSchema,
+                system_prompt=(
+                    "Answer only from the supplied papers. If evidence is weak, "
+                    "say so. Confidence must be exactly one of: high, medium, low."
+                ),
+                payload={
+                    "question": question,
+                    "answer_mode": answer_mode,
+                    "evidence": [
+                        {
+                            "title": paper.get("title"),
+                            "abstract": paper.get("abstract"),
+                            "venue": paper.get("venue"),
+                            "year": paper.get("year"),
+                        }
+                        for paper in evidence_papers[:6]
+                    ],
+                },
+                request_outcomes=request_outcomes,
+                request_id=request_id,
+            )
+            if direct is not None:
+                parsed = direct.model_dump()
+                parsed["confidence"] = self.normalize_confidence(parsed.get("confidence"))
+                self._mark_provider_used()
+                return parsed
+            text_fallback = await self._structured_from_text_async(
+                endpoint="text:answer",
+                model=synthesizer,
+                response_model=AnswerSchema,
+                system_prompt=(
+                    "Answer only from the supplied papers. If evidence is weak, say so. "
+                    "Return only JSON with keys answer, unsupportedAsks, followUpQuestions, confidence. "
+                    "Confidence must be exactly one of: high, medium, low."
+                ),
+                payload={
+                    "question": question,
+                    "answer_mode": answer_mode,
+                    "evidence": [
+                        {
+                            "title": paper.get("title"),
+                            "abstract": paper.get("abstract"),
+                            "venue": paper.get("venue"),
+                            "year": paper.get("year"),
+                        }
+                        for paper in evidence_papers[:6]
+                    ],
+                },
+                request_outcomes=request_outcomes,
+                request_id=request_id,
+            )
+            if text_fallback is not None:
+                parsed = text_fallback.model_dump()
+                parsed["confidence"] = self.normalize_confidence(parsed.get("confidence"))
+                self._mark_provider_used()
+                return parsed
+        except Exception:
+            logger.exception(
+                "%s synthesis failed; falling back to deterministic answer generation.",
+                self._provider_name,
+            )
+        self._mark_deterministic_fallback()
+        return super().answer_question(
+            question=question,
+            evidence_papers=evidence_papers,
+            answer_mode=answer_mode,
+        )
+
+
+class AnthropicProviderBundle(LangChainChatProviderBundle):
+    """Anthropic smart-layer adapter via LangChain."""
+
+    def __init__(
+        self,
+        config: AgenticConfig,
+        api_key: str | None,
+        *,
+        provider_registry: ProviderDiagnosticsRegistry | None = None,
+    ) -> None:
+        super().__init__(
+            config,
+            provider_name="anthropic",
+            api_key=api_key,
+            provider_registry=provider_registry,
+        )
+
+    def _create_chat_model(self, model_name: str) -> Any:
+        from langchain_anthropic import ChatAnthropic
+
+        chat_anthropic: Any = ChatAnthropic
+        kwargs = {
+            "model_name": model_name,
+            "api_key": SecretStr(self._api_key or ""),
+            "stop": None,
+            "temperature": 0,
+            "timeout": self._timeout_seconds,
+            "max_retries": 0,
+        }
+        return chat_anthropic(**kwargs)
+
+
+class GoogleProviderBundle(LangChainChatProviderBundle):
+    """Google Gemini smart-layer adapter via LangChain."""
+
+    def __init__(
+        self,
+        config: AgenticConfig,
+        api_key: str | None,
+        *,
+        provider_registry: ProviderDiagnosticsRegistry | None = None,
+    ) -> None:
+        super().__init__(
+            config,
+            provider_name="google",
+            api_key=api_key,
+            provider_registry=provider_registry,
+            structured_output_method="json_schema",
+        )
+
+    def _create_chat_model(self, model_name: str) -> Any:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        return ChatGoogleGenerativeAI(
+            model=model_name,
+            google_api_key=self._api_key,
+            temperature=0,
+        )
+
+
 def resolve_provider_bundle(
     config: AgenticConfig,
     *,
     openai_api_key: str | None,
+    azure_openai_api_key: str | None = None,
+    azure_openai_endpoint: str | None = None,
+    azure_openai_api_version: str | None = None,
+    azure_openai_planner_deployment: str | None = None,
+    azure_openai_synthesis_deployment: str | None = None,
+    anthropic_api_key: str | None = None,
+    google_api_key: str | None = None,
     provider_registry: ProviderDiagnosticsRegistry | None = None,
 ) -> ModelProviderBundle:
     """Resolve the configured provider bundle with deterministic fallback."""
     if config.provider == "deterministic":
         return DeterministicProviderBundle(config)
+    if config.provider == "azure-openai":
+        return AzureOpenAIProviderBundle(
+            config,
+            azure_openai_api_key,
+            azure_openai_endpoint,
+            azure_openai_api_version,
+            azure_planner_deployment=azure_openai_planner_deployment,
+            azure_synthesis_deployment=azure_openai_synthesis_deployment,
+            provider_registry=provider_registry,
+        )
+    if config.provider == "anthropic":
+        return AnthropicProviderBundle(
+            config,
+            anthropic_api_key,
+            provider_registry=provider_registry,
+        )
+    if config.provider == "google":
+        return GoogleProviderBundle(
+            config,
+            google_api_key,
+            provider_registry=provider_registry,
+        )
     return OpenAIProviderBundle(
         config,
         openai_api_key,

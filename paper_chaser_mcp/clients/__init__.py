@@ -7,6 +7,7 @@ from .ecos import EcosClient
 from .federal_register import FederalRegisterClient
 from .govinfo import GovInfoClient
 from .openalex import OpenAlexClient
+from .scholarapi import ScholarApiClient
 from .semantic_scholar import SemanticScholarClient
 from .serpapi import SerpApiScholarClient
 from .unpaywall import UnpaywallClient
@@ -19,6 +20,7 @@ __all__ = [
     "FederalRegisterClient",
     "GovInfoClient",
     "OpenAlexClient",
+    "ScholarApiClient",
     "SemanticScholarClient",
     "SerpApiScholarClient",
     "UnpaywallClient",

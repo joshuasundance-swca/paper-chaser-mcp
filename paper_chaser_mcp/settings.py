@@ -12,7 +12,7 @@ from .models.tools import (
     _normalize_provider_name,
 )
 
-AgenticProvider = Literal["openai", "deterministic"]
+AgenticProvider = Literal["openai", "azure-openai", "anthropic", "google", "deterministic"]
 AgenticIndexBackend = Literal["memory", "faiss"]
 
 
@@ -104,11 +104,19 @@ class AppSettings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     openai_api_key: str | None = None
+    azure_openai_api_key: str | None = None
+    azure_openai_endpoint: str | None = None
+    azure_openai_api_version: str | None = None
+    azure_openai_planner_deployment: str | None = None
+    azure_openai_synthesis_deployment: str | None = None
+    anthropic_api_key: str | None = None
+    google_api_key: str | None = None
     semantic_scholar_api_key: str | None = None
     core_api_key: str | None = None
     openalex_api_key: str | None = None
     openalex_mailto: str | None = None
     serpapi_api_key: str | None = None
+    scholarapi_api_key: str | None = None
     govinfo_api_key: str | None = None
     crossref_mailto: str | None = None
     unpaywall_email: str | None = None
@@ -118,6 +126,7 @@ class AppSettings(BaseModel):
     enable_openalex: bool = True
     enable_arxiv: bool = True
     enable_serpapi: bool = False
+    enable_scholarapi: bool = False
     enable_crossref: bool = True
     enable_unpaywall: bool = True
     enable_ecos: bool = True
@@ -159,6 +168,13 @@ class AppSettings(BaseModel):
         env = environ if environ is not None else os.environ
         return cls(
             openai_api_key=_parse_optional_string(env, "OPENAI_API_KEY"),
+            azure_openai_api_key=_parse_optional_string(env, "AZURE_OPENAI_API_KEY"),
+            azure_openai_endpoint=_parse_optional_string(env, "AZURE_OPENAI_ENDPOINT"),
+            azure_openai_api_version=_parse_optional_string(env, "AZURE_OPENAI_API_VERSION"),
+            azure_openai_planner_deployment=_parse_optional_string(env, "AZURE_OPENAI_PLANNER_DEPLOYMENT"),
+            azure_openai_synthesis_deployment=_parse_optional_string(env, "AZURE_OPENAI_SYNTHESIS_DEPLOYMENT"),
+            anthropic_api_key=_parse_optional_string(env, "ANTHROPIC_API_KEY"),
+            google_api_key=_parse_optional_string(env, "GOOGLE_API_KEY"),
             semantic_scholar_api_key=_parse_optional_string(
                 env,
                 "SEMANTIC_SCHOLAR_API_KEY",
@@ -167,6 +183,7 @@ class AppSettings(BaseModel):
             openalex_api_key=_parse_optional_string(env, "OPENALEX_API_KEY"),
             openalex_mailto=_parse_optional_string(env, "OPENALEX_MAILTO"),
             serpapi_api_key=_parse_optional_string(env, "SERPAPI_API_KEY"),
+            scholarapi_api_key=_parse_optional_string(env, "SCHOLARAPI_API_KEY"),
             govinfo_api_key=_parse_optional_string(env, "GOVINFO_API_KEY"),
             crossref_mailto=_parse_optional_string(env, "CROSSREF_MAILTO"),
             unpaywall_email=_parse_optional_string(env, "UNPAYWALL_EMAIL"),
@@ -186,6 +203,11 @@ class AppSettings(BaseModel):
             enable_serpapi=_parse_env_bool(
                 env,
                 "PAPER_CHASER_ENABLE_SERPAPI",
+                False,
+            ),
+            enable_scholarapi=_parse_env_bool(
+                env,
+                "PAPER_CHASER_ENABLE_SCHOLARAPI",
                 False,
             ),
             enable_crossref=_parse_env_bool(
@@ -335,9 +357,11 @@ def cast_agentic_provider(value: str | None) -> AgenticProvider:
     if value is None or value == "":
         return "openai"
     normalized = value.strip().lower()
-    if normalized in {"openai", "deterministic"}:
+    if normalized in {"openai", "azure-openai", "anthropic", "google", "deterministic"}:
         return cast(AgenticProvider, normalized)
-    raise ValueError("PAPER_CHASER_AGENTIC_PROVIDER must be one of: openai, deterministic")
+    raise ValueError(
+        "PAPER_CHASER_AGENTIC_PROVIDER must be one of: openai, azure-openai, anthropic, google, deterministic"
+    )
 
 
 def cast_agentic_index_backend(value: str | None) -> AgenticIndexBackend:

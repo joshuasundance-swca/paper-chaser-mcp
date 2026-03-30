@@ -163,8 +163,9 @@ class BrokerMetadata(BaseModel):
     provider-native continuation stream.
 
     ``provider_used`` identifies which provider supplied the returned results.
-    Possible values are ``"core"``, ``"semantic_scholar"``, ``"arxiv"``, or
-    ``"none"`` when no provider returned results.
+    Possible values are ``"core"``, ``"semantic_scholar"``, ``"arxiv"``,
+    ``"serpapi_google_scholar"``, ``"scholarapi"``, or ``"none"`` when no
+    provider returned results.
 
     ``result_status`` gives a first-class signal about the outcome of the search:
     - ``"returned_results"``: at least one provider returned results.
@@ -190,7 +191,12 @@ class BrokerMetadata(BaseModel):
     - ``"lexical"``: CORE or arXiv used keyword/lexical matching only; results
       contain the query terms but may not be topically relevant, especially for
       unusual or nonsense queries.
-    - ``"unknown"``: SerpApi or no-result path; match quality is not determined.
+        - ``"unknown"``: SerpApi, ScholarAPI, or no-result path; match quality is
+            not determined.
+
+        ``paid_provider_used`` is ``True`` when the winning provider path is
+        paywalled, so callers can distinguish free broker results from explicit paid
+        paths without inferring that from provider names.
 
     ``bulk_search_is_provider_pivot`` is ``True`` when ``provider_used`` is not
     ``"semantic_scholar"``, meaning that calling ``search_papers_bulk`` next
@@ -214,6 +220,14 @@ class BrokerMetadata(BaseModel):
         ),
     )
     provider_used: str = Field(serialization_alias="providerUsed")
+    paid_provider_used: bool = Field(
+        default=False,
+        serialization_alias="paidProviderUsed",
+        description=(
+            "True when the provider that produced these brokered results is a paid "
+            "provider path such as SerpApi or ScholarAPI."
+        ),
+    )
     continuation_supported: bool = Field(
         default=False,
         serialization_alias="continuationSupported",

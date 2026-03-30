@@ -29,6 +29,14 @@ SMART_RETRIEVAL_FIELDS = [
 ]
 
 _SEARCH_EXECUTOR = SearchExecutor()
+_SMART_PROVIDER_ORDER: tuple[ProviderExecutorName, ...] = (
+    "semantic_scholar",
+    "openalex",
+    "scholarapi",
+    "core",
+    "arxiv",
+    "serpapi_google_scholar",
+)
 
 
 @dataclass
@@ -67,6 +75,7 @@ def provider_limits(
     base_limits = {
         "semantic_scholar": 10,
         "openalex": 10,
+        "scholarapi": 6,
         "core": 6,
         "arxiv": 6,
         "serpapi_google_scholar": 4,
@@ -75,6 +84,7 @@ def provider_limits(
         base_limits = {
             "semantic_scholar": 6,
             "openalex": 6,
+            "scholarapi": 4,
             "core": 4,
             "arxiv": 4,
             "serpapi_google_scholar": 0,
@@ -83,6 +93,7 @@ def provider_limits(
         base_limits = {
             "semantic_scholar": 12,
             "openalex": 12,
+            "scholarapi": 8,
             "core": 8,
             "arxiv": 8,
             "serpapi_google_scholar": 6,
@@ -100,6 +111,7 @@ def provider_limits(
             "fast": {
                 "semantic_scholar": 4,
                 "openalex": 4,
+                "scholarapi": 3,
                 "core": 3,
                 "arxiv": 3,
                 "serpapi_google_scholar": 0,
@@ -107,6 +119,7 @@ def provider_limits(
             "balanced": {
                 "semantic_scholar": 6,
                 "openalex": 6,
+                "scholarapi": 4,
                 "core": 4,
                 "arxiv": 4,
                 "serpapi_google_scholar": 2,
@@ -114,6 +127,7 @@ def provider_limits(
             "deep": {
                 "semantic_scholar": 8,
                 "openalex": 8,
+                "scholarapi": 6,
                 "core": 6,
                 "arxiv": 6,
                 "serpapi_google_scholar": 4,
@@ -121,6 +135,13 @@ def provider_limits(
         }[latency_profile]
         return {provider: min(limit, expansion_caps[provider]) for provider, limit in base_limits.items()}
     return base_limits
+
+
+def _planned_provider_order(provider_plan: list[str] | None) -> list[ProviderExecutorName]:
+    if not provider_plan:
+        return list(_SMART_PROVIDER_ORDER)
+    allowed: list[ProviderExecutorName] = [provider for provider in _SMART_PROVIDER_ORDER if provider in provider_plan]
+    return allowed or list(_SMART_PROVIDER_ORDER)
 
 
 async def retrieve_variant(
@@ -135,11 +156,14 @@ async def retrieve_variant(
     enable_openalex: bool,
     enable_arxiv: bool,
     enable_serpapi: bool,
+    enable_scholarapi: bool = False,
     core_client: Any,
     semantic_client: Any,
     openalex_client: Any,
     arxiv_client: Any,
     serpapi_client: Any,
+    scholarapi_client: Any = None,
+    provider_plan: list[str] | None = None,
     widened: bool = False,
     is_expansion: bool = False,
     allow_serpapi: bool = True,
@@ -158,63 +182,81 @@ async def retrieve_variant(
         latency_profile=latency_profile,
     )
     provider_calls: list[tuple[ProviderExecutorName, ProviderSearchRequest]] = []
-    if enable_semantic_scholar:
-        provider_calls.append(
-            (
-                "semantic_scholar",
-                ProviderSearchRequest(
-                    query=variant,
-                    limit=limits["semantic_scholar"],
-                    fields=SMART_RETRIEVAL_FIELDS,
-                    year=year,
-                    venue=[venue] if venue else None,
-                ),
+    for provider in _planned_provider_order(provider_plan):
+        if provider == "semantic_scholar" and enable_semantic_scholar:
+            provider_calls.append(
+                (
+                    "semantic_scholar",
+                    ProviderSearchRequest(
+                        query=variant,
+                        limit=limits["semantic_scholar"],
+                        fields=SMART_RETRIEVAL_FIELDS,
+                        year=year,
+                        venue=[venue] if venue else None,
+                    ),
+                )
             )
-        )
-    if enable_openalex:
-        provider_calls.append(
-            (
-                "openalex",
-                ProviderSearchRequest(
-                    query=variant,
-                    limit=limits["openalex"],
-                    year=year,
-                ),
+        elif provider == "openalex" and enable_openalex:
+            provider_calls.append(
+                (
+                    "openalex",
+                    ProviderSearchRequest(
+                        query=variant,
+                        limit=limits["openalex"],
+                        year=year,
+                    ),
+                )
             )
-        )
-    if enable_core:
-        provider_calls.append(
-            (
-                "core",
-                ProviderSearchRequest(
-                    query=variant,
-                    limit=limits["core"],
-                    year=year,
-                ),
+        elif provider == "scholarapi" and enable_scholarapi and scholarapi_client is not None:
+            provider_calls.append(
+                (
+                    "scholarapi",
+                    ProviderSearchRequest(
+                        query=variant,
+                        limit=limits["scholarapi"],
+                        year=year,
+                    ),
+                )
             )
-        )
-    if enable_arxiv:
-        provider_calls.append(
-            (
-                "arxiv",
-                ProviderSearchRequest(
-                    query=variant,
-                    limit=limits["arxiv"],
-                    year=year,
-                ),
+        elif provider == "core" and enable_core:
+            provider_calls.append(
+                (
+                    "core",
+                    ProviderSearchRequest(
+                        query=variant,
+                        limit=limits["core"],
+                        year=year,
+                    ),
+                )
             )
-        )
-    if enable_serpapi and serpapi_client is not None and allow_serpapi and limits["serpapi_google_scholar"] > 0:
-        provider_calls.append(
-            (
-                "serpapi_google_scholar",
-                ProviderSearchRequest(
-                    query=variant,
-                    limit=limits["serpapi_google_scholar"],
-                    year=year,
-                ),
+        elif provider == "arxiv" and enable_arxiv:
+            provider_calls.append(
+                (
+                    "arxiv",
+                    ProviderSearchRequest(
+                        query=variant,
+                        limit=limits["arxiv"],
+                        year=year,
+                    ),
+                )
             )
-        )
+        elif (
+            provider == "serpapi_google_scholar"
+            and enable_serpapi
+            and serpapi_client is not None
+            and allow_serpapi
+            and limits["serpapi_google_scholar"] > 0
+        ):
+            provider_calls.append(
+                (
+                    "serpapi_google_scholar",
+                    ProviderSearchRequest(
+                        query=variant,
+                        limit=limits["serpapi_google_scholar"],
+                        year=year,
+                    ),
+                )
+            )
 
     raw_results = await _SEARCH_EXECUTOR.execute_parallel_requests(
         provider_requests=provider_calls,
@@ -224,6 +266,7 @@ async def retrieve_variant(
             openalex_client=openalex_client,
             arxiv_client=arxiv_client,
             serpapi_client=serpapi_client,
+            scholarapi_client=scholarapi_client,
         ),
         provider_registry=provider_registry,
         budget=provider_budget,

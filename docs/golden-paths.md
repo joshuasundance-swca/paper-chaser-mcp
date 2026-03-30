@@ -29,7 +29,8 @@ result-set paths are exercised by the agentic smoke test in
 1. Start with `search_papers_smart` when the task is concept-level discovery,
    literature review, or a grounded follow-up workflow.
 2. Inspect `strategyMetadata`, especially `acceptedExpansions`,
-   `rejectedExpansions`, `speculativeExpansions`, and `providersUsed`.
+  `rejectedExpansions`, `speculativeExpansions`, `providersUsed`, and
+  `providerOutcomes`.
 3. Save the returned `searchSessionId`.
 4. Use `ask_result_set` for grounded QA, `map_research_landscape` for themes,
    and `expand_research_graph` for compact citation/reference/author expansion.
@@ -53,6 +54,8 @@ search_papers_smart(query="retrieval-augmented generation for coding agents", li
 
 - The first smart result set is useful even when the starting query is concept-level.
 - `strategyMetadata` explains what the server tried instead of acting like a black box.
+- When ScholarAPI is enabled, smart retrieval can explicitly include it in the
+  provider fanout instead of treating it as a raw-tool-only surface.
 - `searchSessionId` is enough to continue without rerunning the whole discovery step.
 - Grounded follow-up answers cite papers from the saved result set instead of guessing.
 - Known-item smart search degrades into a reviewable candidate set rather than a hard dead end when exact recovery is weak.
@@ -232,6 +235,13 @@ search_authors(query="Yoshua Bengio", limit=5)
   agency/date/type narrowing before retrieval. Direct document numbers remain
   the strongest anchor, but FR citation strings now retry broader Federal
   Register discovery before giving up.
+- **Explicit ScholarAPI full-text workflows**: use `search_papers_scholarapi`
+  when the task explicitly needs ScholarAPI-ranked discovery, then pivot to
+  `get_paper_text_scholarapi`, `get_paper_texts_scholarapi`, or
+  `get_paper_pdf_scholarapi` when the next step requires accessible full text
+  or a PDF payload. Use `list_papers_scholarapi` instead of `search_papers_bulk`
+  when the goal is indexed-at monitoring or exhaustive date-window traversal on
+  the ScholarAPI surface.
 - **Quote or snippet validation**: use `search_snippets` only when title or
   keyword search is weak, or when `resolve_citation` suggests a quote fragment
   is the strongest remaining clue.

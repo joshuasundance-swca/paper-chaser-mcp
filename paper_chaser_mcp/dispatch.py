@@ -452,6 +452,7 @@ PROVIDER_SEARCH_TOOLS: dict[str, SearchProvider] = {
     "search_papers_core": "core",
     "search_papers_semantic_scholar": "semantic_scholar",
     "search_papers_serpapi": "serpapi_google_scholar",
+    "search_papers_scholarapi": "scholarapi",
     "search_papers_arxiv": "arxiv",
 }
 
@@ -470,10 +471,12 @@ async def dispatch_tool(
     client: Any,
     core_client: Any,
     openalex_client: Any,
+    scholarapi_client: Any,
     arxiv_client: Any,
     enable_core: bool,
     enable_semantic_scholar: bool,
     enable_openalex: bool,
+    enable_scholarapi: bool,
     enable_arxiv: bool,
     serpapi_client: Any = None,
     enable_serpapi: bool = False,
@@ -616,6 +619,16 @@ async def dispatch_tool(
                 "providerOrder": list(provider_order or []),
                 "providers": [],
             }
+        smart_provider_enabled = {
+            "openai": False,
+            "azure-openai": False,
+            "anthropic": False,
+            "google": False,
+        }
+        smart_provider_order = ["openai", "azure-openai", "anthropic", "google"]
+        if agentic_runtime is not None and hasattr(agentic_runtime, "smart_provider_diagnostics"):
+            smart_provider_enabled, smart_provider_order = agentic_runtime.smart_provider_diagnostics()
+
         snapshot = provider_registry.snapshot(
             enabled={
                 "semantic_scholar": enable_semantic_scholar,
@@ -623,9 +636,10 @@ async def dispatch_tool(
                 "core": enable_core,
                 "arxiv": enable_arxiv,
                 "serpapi_google_scholar": enable_serpapi,
+                "scholarapi": enable_scholarapi,
                 "crossref": enable_crossref,
                 "unpaywall": enable_unpaywall,
-                "openai": agentic_runtime is not None,
+                **smart_provider_enabled,
                 "ecos": enable_ecos,
                 "federal_register": enable_federal_register,
                 "govinfo": enable_govinfo_cfr,
@@ -633,9 +647,10 @@ async def dispatch_tool(
             provider_order=[
                 *(provider_order or []),
                 "openalex",
+                "scholarapi",
                 "crossref",
                 "unpaywall",
-                "openai",
+                *smart_provider_order,
                 "ecos",
                 "federal_register",
                 "govinfo",
@@ -852,12 +867,14 @@ async def dispatch_tool(
             enable_semantic_scholar=enable_semantic_scholar,
             enable_arxiv=enable_arxiv,
             enable_serpapi=enable_serpapi,
+            enable_scholarapi=enable_scholarapi,
             preferred_provider=search_args.preferred_provider,
             provider_order=search_args.provider_order or provider_order,
             core_client=core_client,
             semantic_client=client,
             arxiv_client=arxiv_client,
             serpapi_client=serpapi_client,
+            scholarapi_client=scholarapi_client,
             provider_registry=provider_registry,
             allow_default_hedging=(search_args.preferred_provider is None and search_args.provider_order is None),
         )
@@ -870,6 +887,7 @@ async def dispatch_tool(
             openalex_client=openalex_client,
             arxiv_client=arxiv_client,
             serpapi_client=serpapi_client,
+            scholarapi_client=scholarapi_client,
             crossref_client=crossref_client,
             unpaywall_client=unpaywall_client,
             ecos_client=ecos_client,
@@ -880,6 +898,7 @@ async def dispatch_tool(
             enable_openalex=enable_openalex,
             enable_arxiv=enable_arxiv,
             enable_serpapi=enable_serpapi,
+            enable_scholarapi=enable_scholarapi,
             enable_crossref=enable_crossref,
             enable_unpaywall=enable_unpaywall,
             enable_ecos=enable_ecos,
@@ -943,6 +962,7 @@ async def dispatch_tool(
             openalex_client=openalex_client,
             arxiv_client=arxiv_client,
             serpapi_client=serpapi_client,
+            scholarapi_client=scholarapi_client,
             crossref_client=crossref_client,
             unpaywall_client=unpaywall_client,
             ecos_client=ecos_client,
@@ -953,6 +973,7 @@ async def dispatch_tool(
             enable_openalex=enable_openalex,
             enable_arxiv=enable_arxiv,
             enable_serpapi=enable_serpapi,
+            enable_scholarapi=enable_scholarapi,
             enable_crossref=enable_crossref,
             enable_unpaywall=enable_unpaywall,
             enable_ecos=enable_ecos,
@@ -1071,6 +1092,132 @@ async def dispatch_tool(
             limit=args_dict.get("limit", 10),
             year=args_dict.get("year"),
         )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            result,
+            workspace_registry=workspace_registry,
+        )
+
+    if name == "search_papers_scholarapi":
+        if not enable_scholarapi:
+            raise ValueError(
+                "search_papers_scholarapi requires ScholarAPI, which is not enabled. "
+                "Set PAPER_CHASER_ENABLE_SCHOLARAPI=true and provide SCHOLARAPI_API_KEY."
+            )
+        validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
+        args_dict = validated_payload.model_dump(by_alias=False)
+        ctx_hash = compute_context_hash(name, args_dict)
+        result = await scholarapi_client.search(
+            query=args_dict["query"],
+            limit=args_dict.get("limit", 10),
+            cursor=_cursor_to_bulk_token(
+                args_dict.get("cursor"),
+                tool=name,
+                context_hash=ctx_hash,
+                expected_provider="scholarapi",
+            ),
+            indexed_after=args_dict.get("indexed_after"),
+            indexed_before=args_dict.get("indexed_before"),
+            published_after=args_dict.get("published_after"),
+            published_before=args_dict.get("published_before"),
+            has_text=args_dict.get("has_text"),
+            has_pdf=args_dict.get("has_pdf"),
+        )
+        serialized = dump_jsonable(result)
+        serialized = _encode_next_bulk_cursor(
+            serialized,
+            name,
+            context_hash=ctx_hash,
+            provider="scholarapi",
+        )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            serialized,
+            workspace_registry=workspace_registry,
+        )
+
+    if name == "list_papers_scholarapi":
+        if not enable_scholarapi:
+            raise ValueError(
+                "list_papers_scholarapi requires ScholarAPI, which is not enabled. "
+                "Set PAPER_CHASER_ENABLE_SCHOLARAPI=true and provide SCHOLARAPI_API_KEY."
+            )
+        validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
+        args_dict = validated_payload.model_dump(by_alias=False)
+        ctx_hash = compute_context_hash(name, args_dict)
+        result = await scholarapi_client.list_papers(
+            query=args_dict.get("query"),
+            limit=args_dict.get("limit", 100),
+            cursor=_cursor_to_bulk_token(
+                args_dict.get("cursor"),
+                tool=name,
+                context_hash=ctx_hash,
+                expected_provider="scholarapi",
+            ),
+            indexed_after=args_dict.get("indexed_after"),
+            indexed_before=args_dict.get("indexed_before"),
+            published_after=args_dict.get("published_after"),
+            published_before=args_dict.get("published_before"),
+            has_text=args_dict.get("has_text"),
+            has_pdf=args_dict.get("has_pdf"),
+        )
+        serialized = dump_jsonable(result)
+        serialized = _encode_next_bulk_cursor(
+            serialized,
+            name,
+            context_hash=ctx_hash,
+            provider="scholarapi",
+        )
+        return _finalize_tool_result(
+            name,
+            arguments,
+            serialized,
+            workspace_registry=workspace_registry,
+        )
+
+    if name == "get_paper_text_scholarapi":
+        if not enable_scholarapi:
+            raise ValueError(
+                "get_paper_text_scholarapi requires ScholarAPI, which is not enabled. "
+                "Set PAPER_CHASER_ENABLE_SCHOLARAPI=true and provide SCHOLARAPI_API_KEY."
+            )
+        validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
+        args_dict = validated_payload.model_dump(by_alias=False)
+        result = await scholarapi_client.get_text(paper_id=args_dict["paper_id"])
+        return _finalize_tool_result(
+            name,
+            arguments,
+            result,
+            workspace_registry=workspace_registry,
+        )
+
+    if name == "get_paper_texts_scholarapi":
+        if not enable_scholarapi:
+            raise ValueError(
+                "get_paper_texts_scholarapi requires ScholarAPI, which is not enabled. "
+                "Set PAPER_CHASER_ENABLE_SCHOLARAPI=true and provide SCHOLARAPI_API_KEY."
+            )
+        validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
+        args_dict = validated_payload.model_dump(by_alias=False)
+        result = await scholarapi_client.get_texts(paper_ids=args_dict["paper_ids"])
+        return _finalize_tool_result(
+            name,
+            arguments,
+            result,
+            workspace_registry=workspace_registry,
+        )
+
+    if name == "get_paper_pdf_scholarapi":
+        if not enable_scholarapi:
+            raise ValueError(
+                "get_paper_pdf_scholarapi requires ScholarAPI, which is not enabled. "
+                "Set PAPER_CHASER_ENABLE_SCHOLARAPI=true and provide SCHOLARAPI_API_KEY."
+            )
+        validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
+        args_dict = validated_payload.model_dump(by_alias=False)
+        result = await scholarapi_client.get_pdf(paper_id=args_dict["paper_id"])
         return _finalize_tool_result(
             name,
             arguments,
@@ -1341,11 +1488,13 @@ async def dispatch_tool(
             enable_semantic_scholar=enable_semantic_scholar,
             enable_arxiv=enable_arxiv,
             enable_serpapi=enable_serpapi,
+            enable_scholarapi=enable_scholarapi,
             provider_order=[PROVIDER_SEARCH_TOOLS[name]],
             core_client=core_client,
             semantic_client=client,
             arxiv_client=arxiv_client,
             serpapi_client=serpapi_client,
+            scholarapi_client=scholarapi_client,
             provider_registry=provider_registry,
             allow_default_hedging=False,
         )
@@ -1627,6 +1776,7 @@ async def dispatch_tool(
         openalex_client=openalex_client,
         arxiv_client=arxiv_client,
         serpapi_client=serpapi_client,
+        scholarapi_client=scholarapi_client,
         crossref_client=crossref_client,
         unpaywall_client=unpaywall_client,
         ecos_client=ecos_client,
@@ -1637,6 +1787,7 @@ async def dispatch_tool(
         enable_openalex=enable_openalex,
         enable_arxiv=enable_arxiv,
         enable_serpapi=enable_serpapi,
+        enable_scholarapi=enable_scholarapi,
         enable_crossref=enable_crossref,
         enable_unpaywall=enable_unpaywall,
         enable_ecos=enable_ecos,
@@ -1698,6 +1849,7 @@ async def _maybe_elicit_and_retry(
     openalex_client: Any,
     arxiv_client: Any,
     serpapi_client: Any,
+    scholarapi_client: Any,
     crossref_client: Any,
     unpaywall_client: Any,
     ecos_client: Any,
@@ -1708,6 +1860,7 @@ async def _maybe_elicit_and_retry(
     enable_openalex: bool,
     enable_arxiv: bool,
     enable_serpapi: bool,
+    enable_scholarapi: bool,
     enable_crossref: bool,
     enable_unpaywall: bool,
     enable_ecos: bool,
@@ -1793,12 +1946,14 @@ async def _maybe_elicit_and_retry(
         core_client=core_client,
         openalex_client=openalex_client,
         arxiv_client=arxiv_client,
+        scholarapi_client=scholarapi_client,
         enable_core=enable_core,
         enable_semantic_scholar=enable_semantic_scholar,
         enable_openalex=enable_openalex,
         enable_arxiv=enable_arxiv,
         serpapi_client=serpapi_client,
         enable_serpapi=enable_serpapi,
+        enable_scholarapi=enable_scholarapi,
         crossref_client=crossref_client,
         unpaywall_client=unpaywall_client,
         ecos_client=ecos_client,

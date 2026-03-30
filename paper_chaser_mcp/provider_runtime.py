@@ -8,10 +8,15 @@ import random
 import re
 import time
 from collections import Counter, deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Literal
 
+from .clients.scholarapi import (
+    ScholarApiKeyMissingError,
+    ScholarApiQuotaError,
+    ScholarApiUpstreamError,
+)
 from .clients.serpapi import (
     SerpApiKeyMissingError,
     SerpApiQuotaError,
@@ -26,9 +31,13 @@ ProviderName = Literal[
     "core",
     "arxiv",
     "serpapi_google_scholar",
+    "scholarapi",
     "crossref",
     "unpaywall",
     "openai",
+    "azure-openai",
+    "anthropic",
+    "google",
     "ecos",
     "federal_register",
     "govinfo",
@@ -96,6 +105,13 @@ DEFAULT_PROVIDER_POLICIES: dict[str, ProviderPolicy] = {
         suppression_seconds=300.0,
         paywalled=True,
     ),
+    "scholarapi": ProviderPolicy(
+        concurrency_limit=1,
+        max_attempts=1,
+        failure_threshold=1,
+        suppression_seconds=300.0,
+        paywalled=True,
+    ),
     "crossref": ProviderPolicy(
         concurrency_limit=2,
         max_attempts=2,
@@ -112,6 +128,30 @@ DEFAULT_PROVIDER_POLICIES: dict[str, ProviderPolicy] = {
     ),
     "openai": ProviderPolicy(
         concurrency_limit=8,
+        max_attempts=1,
+        base_delay_seconds=0.5,
+        failure_threshold=2,
+        suppression_seconds=60.0,
+        paywalled=True,
+    ),
+    "azure-openai": ProviderPolicy(
+        concurrency_limit=8,
+        max_attempts=1,
+        base_delay_seconds=0.5,
+        failure_threshold=2,
+        suppression_seconds=60.0,
+        paywalled=True,
+    ),
+    "anthropic": ProviderPolicy(
+        concurrency_limit=4,
+        max_attempts=1,
+        base_delay_seconds=0.5,
+        failure_threshold=2,
+        suppression_seconds=60.0,
+        paywalled=True,
+    ),
+    "google": ProviderPolicy(
+        concurrency_limit=4,
         max_attempts=1,
         base_delay_seconds=0.5,
         failure_threshold=2,
@@ -153,8 +193,10 @@ class ProviderOutcomeEnvelope:
     retries: int = 0
     fallback_reason: str | None = None
     error: str | None = None
+    paywalled: bool = False
     cache_info: dict[str, Any] = field(default_factory=dict)
     quota_metadata: dict[str, Any] = field(default_factory=dict)
+    provider_request_id: str | None = None
     request_id: str | None = None
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -167,8 +209,10 @@ class ProviderOutcomeEnvelope:
             "retries": self.retries,
             "fallbackReason": self.fallback_reason,
             "error": self.error,
+            "paywalled": self.paywalled,
             "cacheInfo": self.cache_info,
             "quotaMetadata": self.quota_metadata,
+            "providerRequestId": self.provider_request_id,
             "requestId": self.request_id,
             "createdAt": self.created_at,
         }
@@ -192,6 +236,7 @@ class ProviderBudgetState:
     max_core_calls: int | None = None
     max_arxiv_calls: int | None = None
     max_serpapi_calls: int | None = None
+    max_scholarapi_calls: int | None = None
     allow_paid_providers: bool = True
     _counts: Counter[str] = field(default_factory=Counter, init=False, repr=False)
     _total_calls: int = field(default=0, init=False, repr=False)
@@ -212,6 +257,7 @@ class ProviderBudgetState:
                     "max_core_calls",
                     "max_arxiv_calls",
                     "max_serpapi_calls",
+                    "max_scholarapi_calls",
                 )
             )
             and values.get("allow_paid_providers", True) is True
@@ -224,6 +270,7 @@ class ProviderBudgetState:
             max_core_calls=values.get("max_core_calls"),
             max_arxiv_calls=values.get("max_arxiv_calls"),
             max_serpapi_calls=values.get("max_serpapi_calls"),
+            max_scholarapi_calls=values.get("max_scholarapi_calls"),
             allow_paid_providers=bool(values.get("allow_paid_providers", True)),
         )
 
@@ -235,6 +282,7 @@ class ProviderBudgetState:
             "maxCoreCalls": self.max_core_calls,
             "maxArxivCalls": self.max_arxiv_calls,
             "maxSerpApiCalls": self.max_serpapi_calls,
+            "maxScholarApiCalls": self.max_scholarapi_calls,
             "allowPaidProviders": self.allow_paid_providers,
             "appliedCounts": {
                 "totalCalls": self._total_calls,
@@ -260,6 +308,7 @@ class ProviderBudgetState:
                 "core": self.max_core_calls,
                 "arxiv": self.max_arxiv_calls,
                 "serpapi_google_scholar": self.max_serpapi_calls,
+                "scholarapi": self.max_scholarapi_calls,
             }.get(provider)
             if per_provider_limit is not None and self._counts[provider] >= per_provider_limit:
                 return f"Skipped because providerBudget exhausted the per-provider limit for {provider}."
@@ -281,6 +330,8 @@ class ProviderDiagnosticsRegistry:
         self._last_latency_ms: dict[str, int] = {}
         self._last_endpoint: dict[str, str | None] = {}
         self._last_outcome: dict[str, str | None] = {}
+        self._last_quota_metadata: dict[str, dict[str, Any]] = {}
+        self._last_provider_request_id: dict[str, str | None] = {}
         self._semaphores: dict[str, asyncio.Semaphore] = {}
         self._started_at = datetime.now(timezone.utc).isoformat()
 
@@ -318,6 +369,10 @@ class ProviderDiagnosticsRegistry:
         self._last_latency_ms[outcome.provider] = outcome.latency_ms
         self._last_endpoint[outcome.provider] = outcome.endpoint
         self._last_outcome[outcome.provider] = outcome.status_bucket
+        if outcome.quota_metadata:
+            self._last_quota_metadata[outcome.provider] = dict(outcome.quota_metadata)
+        if outcome.provider_request_id is not None:
+            self._last_provider_request_id[outcome.provider] = outcome.provider_request_id
         if outcome.status_bucket in _SUCCESSISH_STATUSES:
             self._consecutive_failures[outcome.provider] = 0
             if outcome.status_bucket == "success":
@@ -353,6 +408,7 @@ class ProviderDiagnosticsRegistry:
                 {
                     "provider": provider,
                     "enabled": enabled.get(provider) if enabled else None,
+                    "paywalled": policy_for_provider(provider).paywalled,
                     "suppressed": self.is_suppressed(provider),
                     "suppressedUntil": self.suppressed_until(provider),
                     "consecutiveFailures": self._consecutive_failures.get(provider, 0),
@@ -361,6 +417,8 @@ class ProviderDiagnosticsRegistry:
                     "lastEndpoint": self._last_endpoint.get(provider),
                     "lastLatencyMs": self._last_latency_ms.get(provider),
                     "lastError": self._last_error.get(provider),
+                    "lastQuotaMetadata": dict(self._last_quota_metadata.get(provider, {})),
+                    "lastProviderRequestId": self._last_provider_request_id.get(provider),
                     "recentOutcomes": [envelope.to_dict() for envelope in self._recent.get(provider, deque())],
                 }
                 for provider in ordered_providers
@@ -370,6 +428,26 @@ class ProviderDiagnosticsRegistry:
 
 def policy_for_provider(provider: str) -> ProviderPolicy:
     return DEFAULT_PROVIDER_POLICIES.get(provider, ProviderPolicy())
+
+
+def provider_is_paywalled(provider: str) -> bool:
+    return policy_for_provider(provider).paywalled
+
+
+def _resolved_policy(provider: str, override: ProviderPolicy | None) -> ProviderPolicy:
+    if override is None:
+        return policy_for_provider(provider)
+    base = policy_for_provider(provider)
+    return replace(
+        base,
+        concurrency_limit=override.concurrency_limit,
+        max_attempts=override.max_attempts,
+        base_delay_seconds=override.base_delay_seconds,
+        max_delay_seconds=override.max_delay_seconds,
+        failure_threshold=override.failure_threshold,
+        suppression_seconds=override.suppression_seconds,
+        paywalled=(override.paywalled or base.paywalled),
+    )
 
 
 def _default_fallback_reason(status_bucket: ProviderStatusBucket) -> str | None:
@@ -396,6 +474,12 @@ def _classify_exception(exc: Exception) -> ProviderStatusBucket:
     if isinstance(exc, SerpApiQuotaError):
         return "quota_exhausted"
     if isinstance(exc, SerpApiUpstreamError):
+        return "provider_error"
+    if isinstance(exc, ScholarApiKeyMissingError):
+        return "auth_error"
+    if isinstance(exc, ScholarApiQuotaError):
+        return "quota_exhausted"
+    if isinstance(exc, ScholarApiUpstreamError):
         return "provider_error"
 
     text = str(exc).lower()
@@ -444,12 +528,25 @@ def _quota_metadata_from_payload(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return {}
     metadata: dict[str, Any] = {}
+    request_id = payload.get("requestId")
+    if isinstance(request_id, str) and request_id.strip():
+        metadata["requestId"] = request_id.strip()
+    request_cost = payload.get("requestCost")
+    if request_cost is not None:
+        metadata["requestCost"] = request_cost
     search_metadata = payload.get("search_metadata")
     if isinstance(search_metadata, dict):
         if "id" in search_metadata:
             metadata["searchId"] = search_metadata.get("id")
         if "status" in search_metadata:
             metadata["searchStatus"] = search_metadata.get("status")
+    pagination = payload.get("pagination")
+    if isinstance(pagination, dict):
+        if "hasMore" in pagination:
+            metadata["hasMore"] = bool(pagination.get("hasMore"))
+        next_cursor = pagination.get("nextCursor")
+        if next_cursor is not None:
+            metadata["nextCursor"] = next_cursor
     account = payload.get("account")
     if isinstance(account, dict):
         for key in (
@@ -461,6 +558,14 @@ def _quota_metadata_from_payload(payload: Any) -> dict[str, Any]:
             if key in account:
                 metadata[key] = account.get(key)
     return metadata
+
+
+def _provider_request_id_from_metadata(metadata: dict[str, Any]) -> str | None:
+    value = metadata.get("requestId")
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized or None
+    return None
 
 
 def _shorten_runtime_log_text(text: str | None, *, limit: int = 120) -> str | None:
@@ -524,7 +629,7 @@ async def execute_provider_call(
 ) -> ProviderCallResult:
     """Run one async provider call through the shared policy wrapper."""
 
-    resolved_policy = policy or policy_for_provider(provider)
+    resolved_policy = _resolved_policy(provider, policy)
     empty_checker = is_empty or _empty_payload
     metadata_reader = metadata_extractor or _quota_metadata_from_payload
 
@@ -534,6 +639,7 @@ async def execute_provider_call(
             endpoint=endpoint,
             status_bucket="suppressed",
             fallback_reason=_default_fallback_reason("suppressed"),
+            paywalled=resolved_policy.paywalled,
             request_id=request_id,
         )
         registry.record(outcome, policy=resolved_policy)
@@ -559,6 +665,7 @@ async def execute_provider_call(
                 endpoint=endpoint,
                 status_bucket="skipped",
                 fallback_reason=budget_reason,
+                paywalled=resolved_policy.paywalled,
                 request_id=request_id,
             )
             if registry is not None:
@@ -622,6 +729,7 @@ async def execute_provider_call(
                     retries=retries,
                     fallback_reason=_default_fallback_reason(status_bucket),
                     error=_format_exception(exc),
+                    paywalled=resolved_policy.paywalled,
                     request_id=request_id,
                 )
                 if registry is not None:
@@ -642,14 +750,17 @@ async def execute_provider_call(
                 return ProviderCallResult(payload=None, outcome=outcome)
 
             status_bucket = "empty" if empty_checker(payload) else "success"
+            quota_metadata = metadata_reader(payload)
             outcome = ProviderOutcomeEnvelope(
                 provider=provider,
                 endpoint=endpoint,
                 status_bucket=status_bucket,
                 latency_ms=int((time.perf_counter() - started) * 1000),
                 retries=attempt,
+                paywalled=resolved_policy.paywalled,
                 cache_info={},
-                quota_metadata=metadata_reader(payload),
+                quota_metadata=quota_metadata,
+                provider_request_id=_provider_request_id_from_metadata(quota_metadata),
                 request_id=request_id,
             )
             if registry is not None:
@@ -684,7 +795,7 @@ def execute_provider_call_sync(
 ) -> ProviderCallResult:
     """Sync variant used by model-provider adapters that run inline."""
 
-    resolved_policy = policy or policy_for_provider(provider)
+    resolved_policy = _resolved_policy(provider, policy)
     empty_checker = is_empty or _empty_payload
     metadata_reader = metadata_extractor or _quota_metadata_from_payload
 
@@ -694,6 +805,7 @@ def execute_provider_call_sync(
             endpoint=endpoint,
             status_bucket="suppressed",
             fallback_reason=_default_fallback_reason("suppressed"),
+            paywalled=resolved_policy.paywalled,
             request_id=request_id,
         )
         registry.record(outcome, policy=resolved_policy)
@@ -717,6 +829,7 @@ def execute_provider_call_sync(
                 retries=attempt,
                 fallback_reason=_default_fallback_reason(status_bucket),
                 error=_format_exception(exc),
+                paywalled=resolved_policy.paywalled,
                 request_id=request_id,
             )
             if registry is not None:
@@ -724,13 +837,16 @@ def execute_provider_call_sync(
             return ProviderCallResult(payload=None, outcome=outcome)
 
         status_bucket = "empty" if empty_checker(payload) else "success"
+        quota_metadata = metadata_reader(payload)
         outcome = ProviderOutcomeEnvelope(
             provider=provider,
             endpoint=endpoint,
             status_bucket=status_bucket,
             latency_ms=int((time.perf_counter() - started) * 1000),
             retries=attempt,
-            quota_metadata=metadata_reader(payload),
+            paywalled=resolved_policy.paywalled,
+            quota_metadata=quota_metadata,
+            provider_request_id=_provider_request_id_from_metadata(quota_metadata),
             request_id=request_id,
         )
         if registry is not None:

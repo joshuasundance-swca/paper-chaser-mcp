@@ -25,6 +25,7 @@ from ..provider_runtime import (
     ProviderBudgetState,
     ProviderDiagnosticsRegistry,
     execute_provider_call,
+    provider_is_paywalled,
 )
 from ..search import _enrich_ss_paper
 from .config import AgenticConfig, LatencyProfile
@@ -125,6 +126,12 @@ _THEME_LABEL_STOPWORDS = _GRAPH_GENERIC_TERMS | {
     "using",
     "with",
 }
+
+
+def _paid_providers_used(providers: list[str]) -> list[str]:
+    return sorted({provider for provider in providers if provider_is_paywalled(provider)})
+
+
 _COMPARISON_FOCUS_STOPWORDS = _THEME_LABEL_STOPWORDS | {
     "noise",
     "paper",
@@ -165,11 +172,13 @@ class AgenticRuntime:
         client: Any,
         core_client: Any,
         openalex_client: Any,
+        scholarapi_client: Any = None,
         arxiv_client: Any,
         serpapi_client: Any,
         enable_core: bool,
         enable_semantic_scholar: bool,
         enable_openalex: bool,
+        enable_scholarapi: bool = False,
         enable_arxiv: bool,
         enable_serpapi: bool,
         provider_registry: ProviderDiagnosticsRegistry | None = None,
@@ -182,17 +191,30 @@ class AgenticRuntime:
         self._client = client
         self._core_client = core_client
         self._openalex_client = openalex_client
+        self._scholarapi_client = scholarapi_client
         self._arxiv_client = arxiv_client
         self._serpapi_client = serpapi_client
         self._enable_core = enable_core
         self._enable_semantic_scholar = enable_semantic_scholar
         self._enable_openalex = enable_openalex
+        self._enable_scholarapi = enable_scholarapi
         self._enable_arxiv = enable_arxiv
         self._enable_serpapi = enable_serpapi
         self._provider_registry = provider_registry
         self._enrichment_service = enrichment_service
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._compiled_graphs = self._maybe_compile_graphs()
+
+    def smart_provider_diagnostics(self) -> tuple[dict[str, bool], list[str]]:
+        smart_providers = ["openai", "azure-openai", "anthropic", "google"]
+        configured_provider = self._provider_bundle.configured_provider_name()
+        enabled = {provider: False for provider in smart_providers}
+        if self._config.enabled and configured_provider in enabled:
+            enabled[configured_provider] = True
+        order = ([configured_provider] if configured_provider in enabled else []) + [
+            provider for provider in smart_providers if provider != configured_provider
+        ]
+        return enabled, order
 
     def _provider_bundle_for_profile(
         self,
@@ -365,6 +387,8 @@ class AgenticRuntime:
                 query=normalized_query,
                 limit=limit,
                 planner_intent=planner.intent,
+                provider_plan=planner.provider_plan or None,
+                provider_budget=budget_state,
                 search_session_id=search_session_id,
                 latency_profile=latency_profile,
                 request_id=request_id,
@@ -394,13 +418,16 @@ class AgenticRuntime:
             enable_core=self._enable_core,
             enable_semantic_scholar=self._enable_semantic_scholar,
             enable_openalex=self._enable_openalex,
+            enable_scholarapi=self._enable_scholarapi,
             enable_arxiv=self._enable_arxiv,
             enable_serpapi=self._enable_serpapi,
             core_client=self._core_client,
             semantic_client=self._client,
             openalex_client=self._openalex_client,
+            scholarapi_client=self._scholarapi_client,
             arxiv_client=self._arxiv_client,
             serpapi_client=self._serpapi_client,
+            provider_plan=planner.provider_plan or None,
             widened=planner.intent == "review",
             is_expansion=False,
             allow_serpapi=(self._enable_serpapi and profile_settings.allow_serpapi_on_input),
@@ -526,13 +553,16 @@ class AgenticRuntime:
                             enable_core=self._enable_core,
                             enable_semantic_scholar=self._enable_semantic_scholar,
                             enable_openalex=self._enable_openalex,
+                            enable_scholarapi=self._enable_scholarapi,
                             enable_arxiv=self._enable_arxiv,
                             enable_serpapi=self._enable_serpapi,
                             core_client=self._core_client,
                             semantic_client=self._client,
                             openalex_client=self._openalex_client,
+                            scholarapi_client=self._scholarapi_client,
                             arxiv_client=self._arxiv_client,
                             serpapi_client=self._serpapi_client,
+                            provider_plan=planner.provider_plan or None,
                             widened=planner.intent == "review",
                             is_expansion=True,
                             allow_serpapi=(self._enable_serpapi and profile_settings.allow_serpapi_on_expansions),
@@ -583,13 +613,16 @@ class AgenticRuntime:
                         enable_core=self._enable_core,
                         enable_semantic_scholar=self._enable_semantic_scholar,
                         enable_openalex=self._enable_openalex,
+                        enable_scholarapi=self._enable_scholarapi,
                         enable_arxiv=self._enable_arxiv,
                         enable_serpapi=self._enable_serpapi,
                         core_client=self._core_client,
                         semantic_client=self._client,
                         openalex_client=self._openalex_client,
+                        scholarapi_client=self._scholarapi_client,
                         arxiv_client=self._arxiv_client,
                         serpapi_client=self._serpapi_client,
+                        provider_plan=planner.provider_plan or None,
                         widened=planner.intent == "review",
                         is_expansion=True,
                         allow_serpapi=(self._enable_serpapi and profile_settings.allow_serpapi_on_expansions),
@@ -659,7 +692,11 @@ class AgenticRuntime:
 
         merged = merge_candidates(all_candidates)
         rerank_started = time.perf_counter()
-        rerank_bundle = provider_bundle if profile_settings.use_embedding_rerank else self._deterministic_bundle
+        rerank_bundle = (
+            provider_bundle
+            if profile_settings.use_embedding_rerank and provider_bundle.supports_embeddings()
+            else self._deterministic_bundle
+        )
         reranked = await rerank_candidates(
             query=normalized_query,
             merged_candidates=merged,
@@ -695,6 +732,11 @@ class AgenticRuntime:
             detail=(f"Fusing {len(all_candidates)} candidate(s) into {len(filtered_ranked)} unique ranked paper(s)."),
         )
 
+        providers_used = sorted(
+            {provider for batch in [first_batch, *remaining_batches] for provider in batch.providers_used}
+            | {candidate.provider for candidate in recommendation_candidates}
+        )
+        provider_selection = provider_bundle.selection_metadata()
         strategy_metadata = SearchStrategyMetadata(
             intent=planner.intent,
             latencyProfile=latency_profile,
@@ -706,15 +748,14 @@ class AgenticRuntime:
             ),
             rejectedExpansions=rejected_speculative,
             speculativeExpansions=[candidate.variant for candidate in variants if candidate.source == "speculative"],
-            providersUsed=sorted(
-                {provider for batch in [first_batch, *remaining_batches] for provider in batch.providers_used}
-                | {candidate.provider for candidate in recommendation_candidates}
-            ),
+            providersUsed=providers_used,
+            paidProvidersUsed=_paid_providers_used(providers_used),
             resultCoverage=_result_coverage_label(filtered_ranked),
             driftWarnings=drift_warnings,
             providerBudgetApplied=budget_state.to_dict() if budget_state else {},
             providerOutcomes=provider_outcomes,
             stageTimingsMs=stage_timings_ms,
+            **provider_selection,
         )
 
         top_candidates = filtered_ranked[:limit]
@@ -849,7 +890,11 @@ class AgenticRuntime:
 
         profile_settings = self._config.latency_profile_settings(latency_profile)
         provider_bundle = self._provider_bundle_for_profile(latency_profile)
-        similarity_bundle = provider_bundle if profile_settings.use_embedding_rerank else self._deterministic_bundle
+        similarity_bundle = (
+            provider_bundle
+            if profile_settings.use_embedding_rerank and provider_bundle.supports_embeddings()
+            else self._deterministic_bundle
+        )
 
         await self._emit_tool_progress(
             ctx=ctx,
@@ -862,6 +907,9 @@ class AgenticRuntime:
                 search_session_id,
                 question,
                 top_k=top_k,
+                # Keep evidence selection cheap and deterministic; the explicit
+                # relevance scoring phase below is where model-backed similarity belongs.
+                allow_model_similarity=False,
             )
             or record.papers[:top_k]
         )
@@ -966,7 +1014,11 @@ class AgenticRuntime:
 
         profile_settings = self._config.latency_profile_settings(latency_profile)
         provider_bundle = self._provider_bundle_for_profile(latency_profile)
-        clustering_bundle = provider_bundle if profile_settings.use_embedding_rerank else self._deterministic_bundle
+        clustering_bundle = (
+            provider_bundle
+            if profile_settings.use_embedding_rerank and provider_bundle.supports_embeddings()
+            else self._deterministic_bundle
+        )
 
         await self._emit_tool_progress(
             ctx=ctx,
@@ -1106,9 +1158,10 @@ class AgenticRuntime:
             message="Expanding research graph",
         )
         profile_settings = self._config.latency_profile_settings(latency_profile)
+        scoring_provider_bundle = self._provider_bundle_for_profile(latency_profile)
         frontier_scoring_bundle = (
-            self._provider_bundle_for_profile(latency_profile)
-            if profile_settings.use_embedding_rerank
+            scoring_provider_bundle
+            if profile_settings.use_embedding_rerank and scoring_provider_bundle.supports_embeddings()
             else self._deterministic_bundle
         )
 
@@ -1453,6 +1506,8 @@ class AgenticRuntime:
         query: str,
         limit: int,
         planner_intent: str,
+        provider_plan: list[str] | None,
+        provider_budget: ProviderBudgetState | None,
         search_session_id: str | None,
         latency_profile: LatencyProfile,
         request_id: str,
@@ -1486,6 +1541,8 @@ class AgenticRuntime:
                 query=query,
                 limit=limit,
                 planner_intent=planner_intent,
+                provider_plan=provider_plan,
+                provider_budget=provider_budget,
                 search_session_id=search_session_id,
                 latency_profile=latency_profile,
                 request_id=request_id,
@@ -1533,6 +1590,8 @@ class AgenticRuntime:
             retrievedBy=[resolution_strategy],
             scoreBreakdown=ScoreBreakdown(finalScore=1.0),
         )
+        provider_selection = self._provider_bundle_for_profile(latency_profile).selection_metadata()
+        providers_used = [str(known_item.get("source") or "semantic_scholar")]
         strategy_metadata = SearchStrategyMetadata(
             intent=planner_intent,
             latencyProfile=latency_profile,
@@ -1541,7 +1600,8 @@ class AgenticRuntime:
             acceptedExpansions=[],
             rejectedExpansions=[],
             speculativeExpansions=[],
-            providersUsed=[str(known_item.get("source") or "semantic_scholar")],
+            providersUsed=providers_used,
+            paidProvidersUsed=_paid_providers_used(providers_used),
             resultCoverage="known_item",
             driftWarnings=(
                 []
@@ -1550,8 +1610,10 @@ class AgenticRuntime:
                     "Known-item fallback used title-style recovery; verify the anchor before treating it as canonical."
                 ]
             ),
+            providerBudgetApplied=(provider_budget.to_dict() if provider_budget else {}),
             providerOutcomes=provider_outcomes,
             stageTimingsMs=stage_timings_ms,
+            **provider_selection,
         )
         response = SmartSearchResponse(
             results=[hit][:limit],
@@ -1668,6 +1730,8 @@ class AgenticRuntime:
         query: str,
         limit: int,
         planner_intent: str,
+        provider_plan: list[str] | None,
+        provider_budget: ProviderBudgetState | None,
         search_session_id: str | None,
         latency_profile: LatencyProfile,
         request_id: str,
@@ -1688,29 +1752,37 @@ class AgenticRuntime:
             enable_core=self._enable_core,
             enable_semantic_scholar=self._enable_semantic_scholar,
             enable_openalex=self._enable_openalex,
+            enable_scholarapi=self._enable_scholarapi,
             enable_arxiv=self._enable_arxiv,
             enable_serpapi=self._enable_serpapi,
             core_client=self._core_client,
             semantic_client=self._client,
             openalex_client=self._openalex_client,
+            scholarapi_client=self._scholarapi_client,
             arxiv_client=self._arxiv_client,
             serpapi_client=self._serpapi_client,
+            provider_plan=provider_plan,
             widened=True,
             is_expansion=False,
             allow_serpapi=(self._enable_serpapi and profile_settings.allow_serpapi_on_input),
             latency_profile=latency_profile,
             provider_registry=self._provider_registry,
-            provider_budget=None,
+            provider_budget=provider_budget,
             request_outcomes=provider_outcomes,
             request_id=request_id,
         )
         stage_timings_ms["knownItemFallbackRetrieval"] = int((time.perf_counter() - retrieval_started) * 1000)
 
         merged_candidates = merge_candidates(batch.candidates)
+        rerank_bundle = (
+            provider_bundle
+            if profile_settings.use_embedding_rerank and provider_bundle.supports_embeddings()
+            else self._deterministic_bundle
+        )
         ranked_candidates = await rerank_candidates(
             query=query,
             merged_candidates=merged_candidates,
-            provider_bundle=provider_bundle,
+            provider_bundle=rerank_bundle,
             candidate_concepts=[],
             candidate_pool_size=max(limit * 4, 8),
             request_outcomes=provider_outcomes,
@@ -1739,6 +1811,8 @@ class AgenticRuntime:
                 provider_outcomes=provider_outcomes,
             )
 
+        provider_selection = self._provider_bundle_for_profile(latency_profile).selection_metadata()
+        providers_used = sorted(batch.providers_used)
         strategy_metadata = SearchStrategyMetadata(
             intent=planner_intent,
             latencyProfile=latency_profile,
@@ -1747,14 +1821,17 @@ class AgenticRuntime:
             acceptedExpansions=[],
             rejectedExpansions=[],
             speculativeExpansions=[],
-            providersUsed=sorted(batch.providers_used),
+            providersUsed=providers_used,
+            paidProvidersUsed=_paid_providers_used(providers_used),
             resultCoverage=("narrow" if smart_hits else "none"),
             driftWarnings=[
                 "Exact known-item resolution was not confident, so the smart workflow fell back to a broader candidate "
                 "set. Verify title, year, and venue before treating a result as canonical."
             ],
+            providerBudgetApplied=(provider_budget.to_dict() if provider_budget else {}),
             providerOutcomes=provider_outcomes,
             stageTimingsMs=stage_timings_ms,
+            **provider_selection,
         )
         response = SmartSearchResponse(
             results=smart_hits,

@@ -12,10 +12,11 @@ def run_server(*, app: Any, logger: Any, settings: AppSettings) -> None:
     logger.info("Starting Paper Chaser MCP server...")
     logger.info("FastMCP transport: %s", settings.transport)
     logger.info(
-        "Search channels: CORE=%s, Semantic Scholar=%s, SerpApi=%s, arXiv=%s",
+        "Search channels: CORE=%s, Semantic Scholar=%s, SerpApi=%s, ScholarAPI=%s, arXiv=%s",
         settings.enable_core,
         settings.enable_semantic_scholar,
         settings.enable_serpapi,
+        settings.enable_scholarapi,
         settings.enable_arxiv,
     )
     logger.info(
@@ -47,6 +48,16 @@ def run_server(*, app: Any, logger: Any, settings: AppSettings) -> None:
         logger.info(
             "SerpApi Google Scholar is disabled (set PAPER_CHASER_ENABLE_SERPAPI=true and SERPAPI_API_KEY to enable)"
         )
+    if settings.enable_scholarapi:
+        if settings.scholarapi_api_key:
+            logger.info("ScholarAPI enabled with API key")
+        else:
+            logger.warning(
+                "ScholarAPI is enabled but SCHOLARAPI_API_KEY is not set; "
+                "calls to ScholarAPI-backed tools will fail with a helpful error"
+            )
+    else:
+        logger.info("ScholarAPI is disabled (set PAPER_CHASER_ENABLE_SCHOLARAPI=true and SCHOLARAPI_API_KEY to enable)")
 
     if settings.transport == "stdio":
         app.run(transport="stdio")

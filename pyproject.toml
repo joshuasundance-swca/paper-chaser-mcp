@@ -35,12 +35,22 @@ dependencies = [
 [project.optional-dependencies]
 ai = [
     "langchain>=1.2.13",
-    "langchain-openai>=1.1.11",
     "langgraph>=1.1.3",
     "langgraph-checkpoint>=4.0.1",
-    "openai>=1.109.0",
     "numpy>=2.2.6,<2.4.0; python_version < '3.11'",
     "numpy>=2.4.3; python_version >= '3.11'",
+]
+openai = [
+    "langchain-openai>=1.1.11",
+    "openai>=1.109.0",
+]
+anthropic = [
+    "anthropic>=0.86.0",
+    "langchain-anthropic>=1.4.0",
+]
+google = [
+    "google-genai>=1.69.0",
+    "langchain-google-genai>=4.2.1",
 ]
 ai-faiss = [
     "faiss-cpu>=1.13.2",
@@ -61,7 +71,7 @@ dev = [
     "types-defusedxml>=0.7.0",
 ]
 all = [
-    "paper-chaser-mcp[ai,dev]",
+    "paper-chaser-mcp[ai,openai,anthropic,google,dev]",
 ]
 
 [project.scripts]
@@ -123,8 +133,12 @@ check_untyped_defs = true
 # These imports are guarded at runtime, so silence mypy when stubs are absent.
 [[tool.mypy.overrides]]
 module = [
+    "anthropic.*",
+    "google.*",
     "openai.*",
     "langchain.*",
+    "langchain_anthropic.*",
+    "langchain_google_genai.*",
     "langchain_openai.*",
     "langchain_community.*",
     "langchain_core.*",
