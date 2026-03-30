@@ -631,6 +631,18 @@ def test_openai_provider_sync_high_level_methods_cover_direct_and_model_fallback
     assert fallback_answer["confidence"] == "medium"
 
 
+def test_openai_provider_sync_label_normalizes_prefixed_markdown_text() -> None:
+    bundle = OpenAIProviderBundle(_config(), api_key="sk-test")
+
+    bundle._responses_text = (  # type: ignore[method-assign]
+        lambda **kwargs: '## Theme: "Graph Retrieval"'
+    )
+
+    label = bundle.label_theme(seed_terms=["graph retrieval"], papers=[])
+
+    assert label == "Graph Retrieval"
+
+
 def test_deterministic_provider_gap_answers_and_theme_labels_are_more_specific() -> None:
     bundle = DeterministicProviderBundle(_config(provider="deterministic"))
 
@@ -800,6 +812,21 @@ async def test_openai_provider_async_high_level_methods_and_close(
     bundle._openai_client = _SyncClosable()
     await bundle.aclose()
     assert closed == ["async", "sync"]
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_async_label_normalizes_prefixed_markdown_text() -> None:
+    bundle = OpenAIProviderBundle(_config(), api_key="sk-test")
+
+    async def _text_json(**kwargs: Any) -> str:
+        del kwargs
+        return '## Theme: "Async Graph Retrieval"'
+
+    bundle._aresponses_text = _text_json  # type: ignore[method-assign]
+
+    label = await bundle.alabel_theme(seed_terms=["graph retrieval"], papers=[])
+
+    assert label == "Async Graph Retrieval"
 
 
 def test_openai_provider_loader_failures_and_sync_wrapper_none_paths(
