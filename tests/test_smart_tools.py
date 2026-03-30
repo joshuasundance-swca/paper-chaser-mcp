@@ -620,9 +620,7 @@ async def test_ask_result_set_balanced_mode_skips_embedding_scoring() -> None:
         raise AssertionError(f"balanced ask_result_set should not use workspace model similarity: {query!r}, {text!r}")
 
     async def _unexpected_async_similarity(query: str, texts: list[str]) -> list[float]:
-        raise AssertionError(
-            f"balanced ask_result_set should not use workspace async similarity: {query!r}, {texts!r}"
-        )
+        raise AssertionError(f"balanced ask_result_set should not use workspace async similarity: {query!r}, {texts!r}")
 
     bundle.aembed_texts = _unexpected_aembed_texts  # type: ignore[method-assign]
 
@@ -694,10 +692,10 @@ async def test_search_papers_smart_known_item_fallback_honors_provider_plan(
             PlannerDecision(
                 intent="known_item",
                 constraints={},
-                seed_identifiers=[],
-                candidate_concepts=[],
-                provider_plan=["scholarapi"],
-                follow_up_mode="qa",
+                seedIdentifiers=[],
+                candidateConcepts=[],
+                providerPlan=["scholarapi"],
+                followUpMode="qa",
             ),
         )
 
