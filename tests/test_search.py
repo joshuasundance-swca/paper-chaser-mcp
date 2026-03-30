@@ -6,7 +6,7 @@ import pytest
 
 from paper_chaser_mcp import server
 from paper_chaser_mcp.provider_runtime import ProviderDiagnosticsRegistry
-from tests.helpers import RecordingSemanticClient, _payload
+from tests.helpers import RecordingScholarApiClient, RecordingSemanticClient, _payload
 
 
 @pytest.fixture(autouse=True)
@@ -293,6 +293,124 @@ async def test_search_papers_provider_order_can_override_chain(
         {"provider": "arxiv", "status": "returned_results", "reason": None}
     ]
     assert spy_core.called is False
+
+
+@pytest.mark.asyncio
+async def test_search_papers_provider_order_can_route_to_scholarapi(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scholarapi = RecordingScholarApiClient()
+
+    monkeypatch.setattr(server, "enable_core", False)
+    monkeypatch.setattr(server, "enable_semantic_scholar", False)
+    monkeypatch.setattr(server, "enable_arxiv", False)
+    monkeypatch.setattr(server, "enable_serpapi", False)
+    monkeypatch.setattr(server, "enable_scholarapi", True)
+    monkeypatch.setattr(server, "scholarapi_client", scholarapi)
+
+    payload = _payload(
+        await server.call_tool(
+            "search_papers",
+            {"query": "graphene", "providerOrder": ["scholarapi"]},
+        )
+    )
+
+    assert payload["data"][0]["paperId"] == "ScholarAPI:sa-1"
+    assert payload["brokerMetadata"]["providerUsed"] == "scholarapi"
+    assert payload["brokerMetadata"]["paidProviderUsed"] is True
+    assert payload["brokerMetadata"]["attemptedProviders"] == [
+        {"provider": "scholarapi", "status": "returned_results", "reason": None}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_search_papers_explicit_scholarapi_route_honors_year_and_open_access_pdf(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scholarapi = RecordingScholarApiClient()
+
+    monkeypatch.setattr(server, "enable_core", False)
+    monkeypatch.setattr(server, "enable_semantic_scholar", False)
+    monkeypatch.setattr(server, "enable_arxiv", False)
+    monkeypatch.setattr(server, "enable_serpapi", False)
+    monkeypatch.setattr(server, "enable_scholarapi", True)
+    monkeypatch.setattr(server, "scholarapi_client", scholarapi)
+
+    payload = _payload(
+        await server.call_tool(
+            "search_papers",
+            {
+                "query": "graphene",
+                "providerOrder": ["scholarapi"],
+                "year": "2024",
+                "openAccessPdf": True,
+            },
+        )
+    )
+
+    assert scholarapi.calls == [
+        (
+            "search",
+            {
+                "query": "graphene",
+                "limit": 10,
+                "published_after": "2024-01-01",
+                "published_before": "2024-12-31",
+                "has_pdf": True,
+            },
+        )
+    ]
+    assert payload["brokerMetadata"]["providerUsed"] == "scholarapi"
+
+
+@pytest.mark.asyncio
+async def test_search_papers_explicit_scholarapi_route_skips_unsupported_publication_date_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scholarapi = RecordingScholarApiClient()
+
+    monkeypatch.setattr(server, "enable_core", False)
+    monkeypatch.setattr(server, "enable_semantic_scholar", False)
+    monkeypatch.setattr(server, "enable_arxiv", False)
+    monkeypatch.setattr(server, "enable_serpapi", False)
+    monkeypatch.setattr(server, "enable_scholarapi", True)
+    monkeypatch.setattr(server, "scholarapi_client", scholarapi)
+
+    payload = _payload(
+        await server.call_tool(
+            "search_papers",
+            {
+                "query": "graphene",
+                "providerOrder": ["scholarapi"],
+                "publicationDateOrYear": "2024:2025",
+            },
+        )
+    )
+
+    assert scholarapi.calls == []
+    assert payload["data"] == []
+    assert payload["brokerMetadata"]["providerUsed"] == "none"
+    assert payload["brokerMetadata"]["attemptedProviders"] == [
+        {
+            "provider": "scholarapi",
+            "status": "skipped",
+            "reason": "Skipped because this provider cannot honor requested advanced filters: publicationDateOrYear",
+        }
+    ]
+    assert "could not be honored" in payload["brokerMetadata"]["nextStepHint"]
+
+
+@pytest.mark.asyncio
+async def test_provider_diagnostics_include_scholarapi_enablement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(server, "enable_scholarapi", True)
+
+    diagnostics = _payload(await server.call_tool("get_provider_diagnostics", {}))
+
+    scholarapi = next(item for item in diagnostics["providers"] if item["provider"] == "scholarapi")
+    assert scholarapi["enabled"] is True
+    assert scholarapi["paywalled"] is True
 
 
 @pytest.mark.asyncio

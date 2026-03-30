@@ -9,14 +9,24 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 ENV_EXAMPLE = REPO_ROOT / ".env.example"
 DOCKER_COMPOSE = REPO_ROOT / "docker-compose.yaml"
 INSPECTOR_COMPOSE = REPO_ROOT / "compose.inspector.yaml"
+README = REPO_ROOT / "README.md"
+PYPROJECT = REPO_ROOT / "pyproject.toml"
 
 EXPECTED_LOCAL_CONFIG_KEYS = {
     "OPENAI_API_KEY",
+    "AZURE_OPENAI_API_KEY",
+    "AZURE_OPENAI_ENDPOINT",
+    "AZURE_OPENAI_API_VERSION",
+    "AZURE_OPENAI_PLANNER_DEPLOYMENT",
+    "AZURE_OPENAI_SYNTHESIS_DEPLOYMENT",
+    "ANTHROPIC_API_KEY",
+    "GOOGLE_API_KEY",
     "CORE_API_KEY",
     "SEMANTIC_SCHOLAR_API_KEY",
     "OPENALEX_API_KEY",
     "OPENALEX_MAILTO",
     "SERPAPI_API_KEY",
+    "SCHOLARAPI_API_KEY",
     "GOVINFO_API_KEY",
     "CROSSREF_MAILTO",
     "UNPAYWALL_EMAIL",
@@ -26,6 +36,7 @@ EXPECTED_LOCAL_CONFIG_KEYS = {
     "PAPER_CHASER_ENABLE_OPENALEX",
     "PAPER_CHASER_ENABLE_ARXIV",
     "PAPER_CHASER_ENABLE_SERPAPI",
+    "PAPER_CHASER_ENABLE_SCHOLARAPI",
     "PAPER_CHASER_ENABLE_CROSSREF",
     "PAPER_CHASER_ENABLE_UNPAYWALL",
     "PAPER_CHASER_ENABLE_ECOS",
@@ -159,3 +170,30 @@ def test_inspector_compose_keeps_ports_localhost_bound_when_present() -> None:
     text = INSPECTOR_COMPOSE.read_text(encoding="utf-8")
     for mapping in _iter_compose_short_syntax_port_mappings(text):
         assert mapping.startswith("127.0.0.1:")
+
+
+def test_readme_agentic_install_guidance_matches_declared_optional_extras() -> None:
+    readme = README.read_text(encoding="utf-8")
+    pyproject = PYPROJECT.read_text(encoding="utf-8")
+
+    for expected in (
+        "ai = [",
+        "openai = [",
+        "anthropic = [",
+        "google = [",
+        "ai-faiss = [",
+        "all = [",
+    ):
+        assert expected in pyproject
+
+    for expected in (
+        'pip install -e ".[ai]"',
+        'pip install -e ".[ai,openai]"',
+        'pip install -e ".[ai,anthropic]"',
+        'pip install -e ".[ai,google]"',
+        'pip install -e ".[all]"',
+        'pip install -e ".[all,ai-faiss]"',
+    ):
+        assert expected in readme
+
+    assert "Azure OpenAI uses the same `openai` extra" in readme

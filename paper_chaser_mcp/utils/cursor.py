@@ -41,6 +41,24 @@ OFFSET_TOOLS: frozenset[str] = frozenset(
 # because they do not change which underlying dataset is being paged through.
 STREAM_CONTEXT_KEYS: dict[str, tuple[str, ...]] = {
     "search_papers_bulk": ("query",),
+    "search_papers_scholarapi": (
+        "query",
+        "indexed_after",
+        "indexed_before",
+        "published_after",
+        "published_before",
+        "has_text",
+        "has_pdf",
+    ),
+    "list_papers_scholarapi": (
+        "query",
+        "indexed_after",
+        "indexed_before",
+        "published_after",
+        "published_before",
+        "has_text",
+        "has_pdf",
+    ),
     "search_papers_openalex_bulk": ("query", "year"),
     "search_entities_openalex": ("entity_type", "query"),
     "search_papers_openalex_by_entity": ("entity_type", "entity_id", "year"),

@@ -200,6 +200,15 @@ This document is the current working handoff for the fork. It is intended to giv
 - OpenAlex institution/source/topic pivots are now first-class tools:
   `search_entities_openalex` and `search_papers_openalex_by_entity` expose
   explicit entity-scoped work retrieval with OpenAlex cursor pagination.
+- ScholarAPI is now integrated as an explicit provider family for ranked
+  discovery, indexed-at listing, full-text retrieval, and PDF retrieval, and it
+  can also be steered into the raw `search_papers` broker through
+  `preferredProvider` or `providerOrder` without changing the default free
+  broker order.
+- The smart/agentic retrieval layer can now also include ScholarAPI when it is
+  enabled: planner `providerPlan` guidance now admits ScholarAPI, smart
+  retrieval respects that plan, and smart-provider budgets can cap it through
+  `maxScholarApiCalls` without changing the default raw broker order.
 - `pyproject.toml` project description and keywords are updated to reflect the
   full current provider surface (Semantic Scholar, CORE, arXiv, OpenAlex,
   SerpApi, Crossref, Unpaywall, ECOS, Federal Register, GovInfo).

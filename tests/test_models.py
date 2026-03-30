@@ -360,16 +360,28 @@ def test_broker_metadata_next_step_hint_is_provider_specific() -> None:
         attempts=[],
         ss_only_filters=[],
     )
+    assert serpapi_meta.paid_provider_used is True
     assert "scholarResultId" in serpapi_meta.next_step_hint
     assert "get_paper_citation_formats" in serpapi_meta.next_step_hint
+    assert "paid provider path" in serpapi_meta.next_step_hint
     assert "provider pivot" in serpapi_meta.next_step_hint
     assert "SerpApi Google Scholar" in serpapi_meta.next_step_hint
+
+    scholarapi_meta = _metadata(
+        provider_used="scholarapi",
+        attempts=[],
+        ss_only_filters=[],
+    )
+    assert scholarapi_meta.paid_provider_used is True
+    assert "paid provider path" in scholarapi_meta.next_step_hint
+    assert "list_papers_scholarapi" in scholarapi_meta.next_step_hint
 
     none_meta = _metadata(
         provider_used="none",
         attempts=[],
         ss_only_filters=[],
     )
+    assert none_meta.paid_provider_used is False
     assert "broaden" in none_meta.next_step_hint.lower()
 
     ss_meta = _metadata(
@@ -419,5 +431,6 @@ def test_broker_metadata_next_step_hint_in_serialized_response() -> None:
     serialized = _dump_search_response(response)
 
     assert "brokerMetadata" in serialized
+    assert serialized["brokerMetadata"]["paidProviderUsed"] is False
     assert "nextStepHint" in serialized["brokerMetadata"]
     assert serialized["brokerMetadata"]["nextStepHint"]

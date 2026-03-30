@@ -14,6 +14,7 @@ from tests.helpers import (
     RecordingCrossrefClient,
     RecordingEcosClient,
     RecordingOpenAlexClient,
+    RecordingScholarApiClient,
     RecordingSemanticClient,
     RecordingUnpaywallClient,
     _payload,
@@ -55,22 +56,27 @@ def _install_recording_enrichment(
 async def test_list_tools_returns_expected_public_contract() -> None:
     tools = await server.list_tools()
 
-    assert len(tools) == 53
+    assert len(tools) == 58
     tool_map = {tool.name: tool for tool in tools}
     assert set(tool_map) == {
         "search_papers",
         "search_papers_core",
         "search_papers_semantic_scholar",
         "search_papers_serpapi",
+        "search_papers_scholarapi",
         "search_papers_arxiv",
         "search_papers_openalex",
         "search_papers_openalex_bulk",
+        "list_papers_scholarapi",
         "search_papers_bulk",
         "search_papers_match",
         "resolve_citation",
         "paper_autocomplete",
         "paper_autocomplete_openalex",
         "get_paper_details",
+        "get_paper_text_scholarapi",
+        "get_paper_texts_scholarapi",
+        "get_paper_pdf_scholarapi",
         "get_paper_metadata_crossref",
         "get_paper_open_access_unpaywall",
         "enrich_paper",
@@ -149,6 +155,28 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "limit",
         "year",
     }
+    assert set(tool_map["search_papers_scholarapi"].inputSchema["properties"]) == {
+        "query",
+        "limit",
+        "cursor",
+        "indexed_after",
+        "indexed_before",
+        "published_after",
+        "published_before",
+        "has_text",
+        "has_pdf",
+    }
+    assert set(tool_map["list_papers_scholarapi"].inputSchema["properties"]) == {
+        "query",
+        "limit",
+        "cursor",
+        "indexed_after",
+        "indexed_before",
+        "published_after",
+        "published_before",
+        "has_text",
+        "has_pdf",
+    }
     assert set(tool_map["search_papers_arxiv"].inputSchema["properties"]) == {
         "query",
         "limit",
@@ -197,6 +225,9 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "fields",
         "includeEnrichment",
     }
+    assert set(tool_map["get_paper_text_scholarapi"].inputSchema["properties"]) == {"paper_id"}
+    assert set(tool_map["get_paper_texts_scholarapi"].inputSchema["properties"]) == {"paper_ids"}
+    assert set(tool_map["get_paper_pdf_scholarapi"].inputSchema["properties"]) == {"paper_id"}
     assert set(tool_map["get_paper_metadata_crossref"].inputSchema["properties"]) == {
         "paper_id",
         "doi",
@@ -229,6 +260,7 @@ async def test_list_tools_returns_expected_public_contract() -> None:
     search_tags = tool_map["search_papers"].meta or {}
     semantic_tags = tool_map["search_papers_semantic_scholar"].meta or {}
     openalex_tags = tool_map["search_papers_openalex"].meta or {}
+    scholarapi_tags = tool_map["search_papers_scholarapi"].meta or {}
     citation_tags = tool_map["resolve_citation"].meta or {}
     ecos_tags = tool_map["search_species_ecos"].meta or {}
     assert set(search_tags["fastmcp"]["tags"]) == {
@@ -244,6 +276,11 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "search",
         "provider-specific",
         "provider:openalex",
+    }
+    assert set(scholarapi_tags["fastmcp"]["tags"]) == {
+        "search",
+        "provider-specific",
+        "provider:scholarapi",
     }
     assert set(citation_tags["fastmcp"]["tags"]) == {
         "citation-repair",
@@ -960,6 +997,187 @@ async def test_new_openalex_tools_route_and_wrap_bulk_cursors(
 
 
 @pytest.mark.asyncio
+async def test_scholarapi_tools_route_and_wrap_bulk_cursors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scholarapi = RecordingScholarApiClient()
+    monkeypatch.setattr(server, "scholarapi_client", scholarapi)
+    monkeypatch.setattr(server, "enable_scholarapi", True)
+
+    search_payload = _payload(
+        await server.call_tool(
+            "search_papers_scholarapi",
+            {"query": "graphene", "has_text": True},
+        )
+    )
+    list_payload = _payload(
+        await server.call_tool(
+            "list_papers_scholarapi",
+            {"query": "graphene", "has_pdf": True},
+        )
+    )
+    text_payload = _payload(await server.call_tool("get_paper_text_scholarapi", {"paper_id": "sa-1"}))
+    texts_payload = _payload(await server.call_tool("get_paper_texts_scholarapi", {"paper_ids": ["sa-1", "sa-2"]}))
+    pdf_payload = _payload(await server.call_tool("get_paper_pdf_scholarapi", {"paper_id": "sa-1"}))
+
+    search_cursor = decode_bulk_cursor(search_payload["pagination"]["nextCursor"])
+    list_cursor = decode_bulk_cursor(list_payload["pagination"]["nextCursor"])
+
+    assert scholarapi.calls == [
+        (
+            "search",
+            {
+                "query": "graphene",
+                "limit": 10,
+                "cursor": None,
+                "indexed_after": None,
+                "indexed_before": None,
+                "published_after": None,
+                "published_before": None,
+                "has_text": True,
+                "has_pdf": None,
+            },
+        ),
+        (
+            "list_papers",
+            {
+                "query": "graphene",
+                "limit": 100,
+                "cursor": None,
+                "indexed_after": None,
+                "indexed_before": None,
+                "published_after": None,
+                "published_before": None,
+                "has_text": None,
+                "has_pdf": True,
+            },
+        ),
+        ("get_text", {"paper_id": "sa-1"}),
+        ("get_texts", {"paper_ids": ["sa-1", "sa-2"]}),
+        ("get_pdf", {"paper_id": "sa-1"}),
+    ]
+    assert search_cursor.provider == "scholarapi"
+    assert search_cursor.tool == "search_papers_scholarapi"
+    assert search_cursor.token == "sch-search-next"
+    assert search_cursor.context_hash is not None
+    assert list_cursor.provider == "scholarapi"
+    assert list_cursor.tool == "list_papers_scholarapi"
+    assert list_cursor.token == "2024-03-01T12:30:45.123Z"
+    assert list_cursor.context_hash is not None
+    assert text_payload["paperId"] == "ScholarAPI:sa-1"
+    assert texts_payload["results"][1]["text"] is None
+    assert pdf_payload["mimeType"] == "application/pdf"
+
+
+@pytest.mark.asyncio
+async def test_scholarapi_search_cursor_round_trips_and_rejects_cross_query_reuse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scholarapi = RecordingScholarApiClient()
+    monkeypatch.setattr(server, "scholarapi_client", scholarapi)
+    monkeypatch.setattr(server, "enable_scholarapi", True)
+
+    first_page = _payload(
+        await server.call_tool(
+            "search_papers_scholarapi",
+            {"query": "graphene", "has_text": True},
+        )
+    )
+    cursor = first_page["pagination"]["nextCursor"]
+
+    await server.call_tool(
+        "search_papers_scholarapi",
+        {"query": "graphene", "has_text": True, "cursor": cursor},
+    )
+
+    assert scholarapi.calls[1] == (
+        "search",
+        {
+            "query": "graphene",
+            "limit": 10,
+            "cursor": "sch-search-next",
+            "indexed_after": None,
+            "indexed_before": None,
+            "published_after": None,
+            "published_before": None,
+            "has_text": True,
+            "has_pdf": None,
+        },
+    )
+
+    with pytest.raises(ValueError, match="INVALID_CURSOR") as exc_info:
+        await server.call_tool(
+            "search_papers_scholarapi",
+            {"query": "boron nitride", "has_text": True, "cursor": cursor},
+        )
+
+    assert "different query context" in str(exc_info.value)
+    assert len(scholarapi.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_scholarapi_list_cursor_round_trips_and_rejects_cross_filter_reuse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scholarapi = RecordingScholarApiClient()
+    monkeypatch.setattr(server, "scholarapi_client", scholarapi)
+    monkeypatch.setattr(server, "enable_scholarapi", True)
+
+    first_page = _payload(
+        await server.call_tool(
+            "list_papers_scholarapi",
+            {"query": "graphene", "has_pdf": True},
+        )
+    )
+    cursor = first_page["pagination"]["nextCursor"]
+
+    await server.call_tool(
+        "list_papers_scholarapi",
+        {"query": "graphene", "has_pdf": True, "cursor": cursor},
+    )
+
+    assert scholarapi.calls[1] == (
+        "list_papers",
+        {
+            "query": "graphene",
+            "limit": 100,
+            "cursor": "2024-03-01T12:30:45.123Z",
+            "indexed_after": None,
+            "indexed_before": None,
+            "published_after": None,
+            "published_before": None,
+            "has_text": None,
+            "has_pdf": True,
+        },
+    )
+
+    with pytest.raises(ValueError, match="INVALID_CURSOR") as exc_info:
+        await server.call_tool(
+            "list_papers_scholarapi",
+            {"query": "graphene", "has_pdf": False, "cursor": cursor},
+        )
+
+    assert "different query context" in str(exc_info.value)
+    assert len(scholarapi.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_scholarapi_tools_require_explicit_enablement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(server, "enable_scholarapi", False)
+
+    with pytest.raises(ValueError, match="PAPER_CHASER_ENABLE_SCHOLARAPI"):
+        await server.call_tool("search_papers_scholarapi", {"query": "graphene"})
+
+    with pytest.raises(ValueError, match="PAPER_CHASER_ENABLE_SCHOLARAPI"):
+        await server.call_tool("list_papers_scholarapi", {})
+
+    with pytest.raises(ValueError, match="PAPER_CHASER_ENABLE_SCHOLARAPI"):
+        await server.call_tool("get_paper_text_scholarapi", {"paper_id": "sa-1"})
+
+
+@pytest.mark.asyncio
 async def test_new_serpapi_tools_and_provider_diagnostics_route(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1066,7 +1284,35 @@ async def test_new_serpapi_tools_and_provider_diagnostics_route(
     assert articles["authorId"] == "author-1"
     assert decode_cursor(articles["pagination"]["nextCursor"]).provider == ("serpapi_google_scholar")
     assert account["provider"] == "serpapi_google_scholar"
-    assert any(item["provider"] == "openai" for item in diagnostics["providers"])
+    provider_map = {item["provider"]: item for item in diagnostics["providers"] if isinstance(item, dict)}
+    assert provider_map["openai"]["enabled"] is False
+    assert provider_map["azure-openai"]["enabled"] is False
+    assert provider_map["anthropic"]["enabled"] is False
+    assert provider_map["google"]["enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_provider_diagnostics_can_surface_non_openai_smart_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeRuntime:
+        def smart_provider_diagnostics(self) -> tuple[dict[str, bool], list[str]]:
+            return (
+                {
+                    "openai": False,
+                    "azure-openai": False,
+                    "anthropic": True,
+                    "google": False,
+                },
+                ["anthropic", "openai", "azure-openai", "google"],
+            )
+
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    diagnostics = _payload(await server.call_tool("get_provider_diagnostics", {}))
+    provider_map = {item["provider"]: item for item in diagnostics["providers"] if isinstance(item, dict)}
+
+    assert provider_map["anthropic"]["enabled"] is True
+    assert provider_map["openai"]["enabled"] is False
+    assert diagnostics["providerOrder"].index("anthropic") < diagnostics["providerOrder"].index("openai")
 
 
 @pytest.mark.asyncio

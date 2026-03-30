@@ -13,7 +13,8 @@
     "Map recent work on biomedical literature-review agents and highlight gaps.",
     "Show me recent papers by this author and the best follow-up graph expansion.",
     "Answer a grounded question using only the saved result set from my last search.",
-    "Find the Federal Register notice behind this ECOS species review and then show me the affected CFR text."
+    "Find the Federal Register notice behind this ECOS species review and then show me the affected CFR text.",
+    "Find papers on graphene with accessible full text, then fetch the best ScholarAPI text or PDF."
   ],
   "notes": [
     "Use mcp-tools.core.json instead when a smaller raw-tool subset is preferable or when smart synthesis is unnecessary.",

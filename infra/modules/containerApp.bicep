@@ -3,6 +3,8 @@ param agenticIndexBackend string
 param agenticOpenAiTimeoutSeconds int
 param agenticProvider string
 param allowedOrigins string
+param azureOpenAiApiVersion string = ''
+param azureOpenAiEndpoint string = ''
 param backendAuthSecretName string
 param backendAuthSecretUri string
 param containerAppName string
@@ -13,13 +15,18 @@ param embeddingModel string
 param enableAgentic bool
 param enableAgenticTraceLog bool
 param enableSerpApi bool
+param enableScholarApi bool = false
 param environmentName string
 param environmentResourceId string
 param image string
+param keyVaultAnthropicApiKeySecretUri string
+param keyVaultAzureOpenAiApiKeySecretUri string
 param keyVaultCoreApiKeySecretUri string
+param keyVaultGoogleApiKeySecretUri string
 param keyVaultOpenAiApiKeySecretUri string
 param keyVaultOpenAlexApiKeySecretUri string
 param keyVaultOpenAlexMailtoSecretUri string
+param keyVaultScholarApiKeySecretUri string
 param keyVaultSemanticScholarApiKeySecretUri string
 param keyVaultSerpApiKeySecretUri string
 param keyVaultGovInfoApiKeySecretUri string
@@ -81,11 +88,35 @@ var secretDefinitions = concat([
     keyVaultUrl: keyVaultSerpApiKeySecretUri
     name: 'serpapi-api-key'
   }
+] : [], enableScholarApi ? [
+  {
+    identity: managedIdentityResourceId
+    keyVaultUrl: keyVaultScholarApiKeySecretUri
+    name: 'scholarapi-api-key'
+  }
 ] : [], enableAgentic && agenticProvider == 'openai' ? [
   {
     identity: managedIdentityResourceId
     keyVaultUrl: keyVaultOpenAiApiKeySecretUri
     name: 'openai-api-key'
+  }
+] : [], enableAgentic && agenticProvider == 'azure-openai' ? [
+  {
+    identity: managedIdentityResourceId
+    keyVaultUrl: keyVaultAzureOpenAiApiKeySecretUri
+    name: 'azure-openai-api-key'
+  }
+] : [], enableAgentic && agenticProvider == 'anthropic' ? [
+  {
+    identity: managedIdentityResourceId
+    keyVaultUrl: keyVaultAnthropicApiKeySecretUri
+    name: 'anthropic-api-key'
+  }
+] : [], enableAgentic && agenticProvider == 'google' ? [
+  {
+    identity: managedIdentityResourceId
+    keyVaultUrl: keyVaultGoogleApiKeySecretUri
+    name: 'google-api-key'
   }
 ] : [], enableGovinfoCfr ? [
   {
@@ -161,6 +192,10 @@ var containerEnv = concat([
     value: string(enableSerpApi)
   }
   {
+    name: 'PAPER_CHASER_ENABLE_SCHOLARAPI'
+    value: string(enableScholarApi)
+  }
+  {
     name: 'PAPER_CHASER_ENABLE_AGENTIC'
     value: string(enableAgentic)
   }
@@ -188,6 +223,17 @@ var containerEnv = concat([
     name: 'PAPER_CHASER_AGENTIC_OPENAI_TIMEOUT_SECONDS'
     value: string(agenticOpenAiTimeoutSeconds)
   }
+], !empty(azureOpenAiEndpoint) ? [
+  {
+    name: 'AZURE_OPENAI_ENDPOINT'
+    value: azureOpenAiEndpoint
+  }
+] : [], !empty(azureOpenAiApiVersion) ? [
+  {
+    name: 'AZURE_OPENAI_API_VERSION'
+    value: azureOpenAiApiVersion
+  }
+] : [], [
   {
     name: 'PAPER_CHASER_AGENTIC_INDEX_BACKEND'
     value: agenticIndexBackend
@@ -238,10 +284,30 @@ var containerEnv = concat([
     name: 'SERPAPI_API_KEY'
     secretRef: 'serpapi-api-key'
   }
+] : [], enableScholarApi ? [
+  {
+    name: 'SCHOLARAPI_API_KEY'
+    secretRef: 'scholarapi-api-key'
+  }
 ] : [], enableAgentic && agenticProvider == 'openai' ? [
   {
     name: 'OPENAI_API_KEY'
     secretRef: 'openai-api-key'
+  }
+] : [], enableAgentic && agenticProvider == 'azure-openai' ? [
+  {
+    name: 'AZURE_OPENAI_API_KEY'
+    secretRef: 'azure-openai-api-key'
+  }
+] : [], enableAgentic && agenticProvider == 'anthropic' ? [
+  {
+    name: 'ANTHROPIC_API_KEY'
+    secretRef: 'anthropic-api-key'
+  }
+] : [], enableAgentic && agenticProvider == 'google' ? [
+  {
+    name: 'GOOGLE_API_KEY'
+    secretRef: 'google-api-key'
   }
 ] : [], enableGovinfoCfr ? [
   {

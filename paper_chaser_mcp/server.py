@@ -10,7 +10,7 @@ from fastmcp import Context, FastMCP
 from fastmcp.server.middleware.timing import TimingMiddleware
 from mcp.types import TextContent, Tool, ToolAnnotations
 from pydantic import Field
-from pydantic.fields import PydanticUndefined
+from pydantic_core import PydanticUndefined
 
 from .agentic import (
     AgenticConfig,
@@ -26,6 +26,7 @@ from .clients import (
     FederalRegisterClient,
     GovInfoClient,
     OpenAlexClient,
+    ScholarApiClient,
     SemanticScholarClient,
     UnpaywallClient,
 )
@@ -90,20 +91,25 @@ Decision tree for tool selection:
    OpenAlex-native DOI/ID lookup, OpenAlex cursor paging, author pivots, or
    source/institution/topic pivots via search_entities_openalex and
    search_papers_openalex_by_entity
-13. SERPAPI RECOVERY PATHS → use search_papers_serpapi_cited_by,
+13. SCHOLARAPI FULL-TEXT PATHS → use search_papers_scholarapi,
+    list_papers_scholarapi, get_paper_text_scholarapi,
+    get_paper_texts_scholarapi, or get_paper_pdf_scholarapi when the workflow
+    explicitly needs ScholarAPI-ranked discovery, indexed-at monitoring,
+    accessible full text, or binary PDF retrieval
+14. SERPAPI RECOVERY PATHS → use search_papers_serpapi_cited_by,
    search_papers_serpapi_versions, get_author_profile_serpapi,
    get_author_articles_serpapi, or get_serpapi_account_status only when
    PAPER_CHASER_ENABLE_SERPAPI=true and the workflow justifies paid recall recovery
-14. ECOS SPECIES DOSSIERS → search_species_ecos → get_species_profile_ecos →
+15. ECOS SPECIES DOSSIERS → search_species_ecos → get_species_profile_ecos →
    list_species_documents_ecos → get_document_text_ecos for species pages,
    regulatory documents, and recovery PDFs from the U.S. Fish and Wildlife
    Service ECOS system
-15. REGULATORY PRIMARY SOURCES → search_federal_register for discovery,
+16. REGULATORY PRIMARY SOURCES → search_federal_register for discovery,
     get_federal_register_document for one notice or rule, and get_cfr_text for
     authoritative CFR part/section text. NOTE: Biological opinions, Section 7
     consultation records, and incidental take permits live in ECOS, not the
     Federal Register — use the ECOS species dossier chain for those.
-16. PROVIDER HEALTH / DEBUGGING → get_provider_diagnostics
+17. PROVIDER HEALTH / DEBUGGING → get_provider_diagnostics
 
 After search_papers: read brokerMetadata.nextStepHint for the recommended next move.
 After search_papers_smart: reuse searchSessionId for ask_result_set,
@@ -112,7 +118,9 @@ rejectedExpansions, speculativeExpansions, providersUsed, driftWarnings,
 latencyProfile, providerBudgetApplied, and providerOutcomes. Set
 includeEnrichment=true only when you want Crossref and Unpaywall metadata on the
 final smart-ranked hits; enrichment is post-ranking only and never changes
-retrieval or provider ordering.
+retrieval or provider ordering. When ScholarAPI is enabled, smart retrieval may
+also include it explicitly, and providerBudget.maxScholarApiCalls can cap that
+paid path.
 Primary read tools now also return agentHints, clarification, resourceUris, and,
 when they produce reusable result sets, searchSessionId.
 For known-item flows, includeEnrichment=true on search_papers_match,
@@ -133,14 +141,15 @@ lookup.
 For common-name author lookup, add affiliation, coauthor, venue, or topic clues
 before expanding into get_author_info/get_author_papers.
 To steer the broker: use preferredProvider (try-first) or providerOrder (full override).
-Provider names: semantic_scholar, arxiv, core, serpapi / serpapi_google_scholar.
+Provider names: semantic_scholar, arxiv, core, scholarapi, serpapi / serpapi_google_scholar.
 Provider-specific search inputs: search_papers_core, search_papers_serpapi, and
 search_papers_arxiv only accept query/limit/year; search_papers_semantic_scholar
-supports the wider Semantic Scholar filter set. OpenAlex is available through
-explicit *_openalex tools instead of the broker because its citation, author,
-and pagination semantics differ from Semantic Scholar.
+supports the wider Semantic Scholar filter set; search_papers_scholarapi and
+list_papers_scholarapi expose ScholarAPI-specific cursor/date/full-text filters.
+OpenAlex is available through explicit *_openalex tools instead of the broker because
+its citation, author, and pagination semantics differ from Semantic Scholar.
 Continuation rule: search_papers_bulk is the closest continuation path only for
-Semantic Scholar-style retrieval; from CORE, arXiv, or SerpApi results it is a
+Semantic Scholar-style retrieval; from CORE, arXiv, ScholarAPI, or SerpApi results it is a
 Semantic Scholar pivot rather than another page from the same provider.
 Even on Semantic Scholar paths, default bulk ordering is NOT relevance-ranked;
 it is not 'page 2' of search_papers. Read retrievalNote in each bulk response,
@@ -168,7 +177,9 @@ AGENT_WORKFLOW_GUIDE = """
   `balanced` for the default path, and `deep` when controlled multi-provider
     expansion is worth the extra latency. In `known_item` mode, if one exact
     anchor is not confidently resolved, the smart workflow now falls back to a
-    broader candidate set with warnings instead of stopping on a dead-end error.
+        broader candidate set with warnings instead of stopping on a dead-end error.
+        When ScholarAPI is enabled, smart retrieval can include it explicitly and
+        cap it with `providerBudget.maxScholarApiCalls`.
 - **Quick literature discovery**: `search_papers` → inspect
   `brokerMetadata.nextStepHint`, `agentHints`, and `resourceUris` to decide
   whether to broaden, narrow, paginate, or pivot.
@@ -230,6 +241,12 @@ AGENT_WORKFLOW_GUIDE = """
   `get_author_profile_serpapi`, `get_author_articles_serpapi`, and
   `get_serpapi_account_status` only when Google Scholar recall recovery or quota
   inspection is explicitly needed.
+- **ScholarAPI full-text workflows**: use `search_papers_scholarapi` for
+    explicit ScholarAPI-ranked discovery, `list_papers_scholarapi` for
+    indexed-at monitoring or exhaustive date-window scans, and
+    `get_paper_text_scholarapi`, `get_paper_texts_scholarapi`, or
+    `get_paper_pdf_scholarapi` when the next step requires accessible full text
+    or a PDF payload.
 - **Provider/runtime debugging**: `get_provider_diagnostics`
 - **ECOS species dossiers**: `search_species_ecos` -> `get_species_profile_ecos`
   -> `list_species_documents_ecos` -> `get_document_text_ecos`
@@ -249,7 +266,8 @@ AGENT_WORKFLOW_GUIDE = """
 Set `preferredProvider` on `search_papers` to try one provider first while keeping
 the fallback chain. Set `providerOrder` to override the full broker chain for one
 call. Use `search_papers_core`, `search_papers_semantic_scholar`,
-`search_papers_serpapi`, or `search_papers_arxiv` for single-source searches.
+`search_papers_serpapi`, `search_papers_scholarapi`, or `search_papers_arxiv`
+for single-source searches.
 
 ## Provider-specific tool contracts
 
@@ -259,6 +277,8 @@ call. Use `search_papers_core`, `search_papers_semantic_scholar`,
     `search_papers_openalex_bulk` exposes OpenAlex cursor pagination.
 - `search_papers_semantic_scholar` exposes the wider Semantic Scholar-compatible
     filter set.
+- `search_papers_scholarapi` and `list_papers_scholarapi` expose ScholarAPI
+    cursor, date-range, and full-text/PDF availability filters.
 
 ## Continuation vs pivot
 
@@ -267,7 +287,7 @@ call. Use `search_papers_core`, `search_papers_semantic_scholar`,
 - Even on Semantic Scholar paths, default bulk ordering is NOT relevance-ranked;
     it is not "page 2" of `search_papers`. Read `retrievalNote` and use
     `sort='citationCount:desc'` for citation-ranked bulk traversal.
-- If `search_papers` returned CORE, arXiv, or SerpApi results, `search_papers_bulk`
+- If `search_papers` returned CORE, arXiv, ScholarAPI, or SerpApi results, `search_papers_bulk`
     is a Semantic Scholar pivot, not another page from the same provider.
 - Venue-filtered Semantic Scholar searches can also broaden when moved to bulk
     retrieval.
@@ -319,6 +339,7 @@ __all__ = [
     "CoreApiClient",
     "CrossrefClient",
     "OpenAlexClient",
+    "ScholarApiClient",
     "ArxivClient",
     "SerpApiScholarClient",
     "UnpaywallClient",
@@ -338,6 +359,7 @@ __all__ = [
     "openai_api_key",
     "core_api_key",
     "serpapi_api_key",
+    "scholarapi_api_key",
     "openalex_api_key",
     "openalex_mailto",
     "crossref_mailto",
@@ -347,6 +369,7 @@ __all__ = [
     "enable_openalex",
     "enable_arxiv",
     "enable_serpapi",
+    "enable_scholarapi",
     "enable_crossref",
     "enable_unpaywall",
     "enable_ecos",
@@ -357,6 +380,7 @@ __all__ = [
     "openalex_client",
     "arxiv_client",
     "serpapi_client",
+    "scholarapi_client",
     "unpaywall_client",
     "provider_registry",
     "enrichment_service",
@@ -461,10 +485,12 @@ async def _execute_tool(
         client=client,
         core_client=core_client,
         openalex_client=openalex_client,
+        scholarapi_client=scholarapi_client,
         arxiv_client=arxiv_client,
         enable_core=enable_core,
         enable_semantic_scholar=enable_semantic_scholar,
         enable_openalex=enable_openalex,
+        enable_scholarapi=enable_scholarapi,
         enable_arxiv=enable_arxiv,
         serpapi_client=serpapi_client,
         enable_serpapi=enable_serpapi,
@@ -491,10 +517,18 @@ settings = AppSettings.from_env()
 agentic_config = AgenticConfig.from_settings(settings)
 api_key = settings.semantic_scholar_api_key
 openai_api_key = settings.openai_api_key
+azure_openai_api_key = settings.azure_openai_api_key
+azure_openai_endpoint = settings.azure_openai_endpoint
+azure_openai_api_version = settings.azure_openai_api_version
+azure_openai_planner_deployment = settings.azure_openai_planner_deployment
+azure_openai_synthesis_deployment = settings.azure_openai_synthesis_deployment
+anthropic_api_key = settings.anthropic_api_key
+google_api_key = settings.google_api_key
 core_api_key = settings.core_api_key
 openalex_api_key = settings.openalex_api_key
 openalex_mailto = settings.openalex_mailto
 serpapi_api_key = settings.serpapi_api_key
+scholarapi_api_key = settings.scholarapi_api_key
 govinfo_api_key = settings.govinfo_api_key
 crossref_mailto = settings.crossref_mailto
 unpaywall_email = settings.unpaywall_email
@@ -504,6 +538,7 @@ enable_semantic_scholar = settings.enable_semantic_scholar
 enable_openalex = settings.enable_openalex
 enable_arxiv = settings.enable_arxiv
 enable_serpapi = settings.enable_serpapi
+enable_scholarapi = settings.enable_scholarapi
 enable_crossref = settings.enable_crossref
 enable_unpaywall = settings.enable_unpaywall
 enable_ecos = settings.enable_ecos
@@ -535,6 +570,7 @@ ecos_client = EcosClient(
     provider_registry=provider_registry,
 )
 openalex_client = OpenAlexClient(api_key=openalex_api_key, mailto=openalex_mailto)
+scholarapi_client = ScholarApiClient(api_key=scholarapi_api_key)
 arxiv_client = ArxivClient()
 serpapi_client = SerpApiScholarClient(api_key=serpapi_api_key)
 unpaywall_client = UnpaywallClient(
@@ -551,6 +587,13 @@ enrichment_service = PaperEnrichmentService(
 provider_bundle = resolve_provider_bundle(
     agentic_config,
     openai_api_key=openai_api_key,
+    azure_openai_api_key=azure_openai_api_key,
+    azure_openai_endpoint=azure_openai_endpoint,
+    azure_openai_api_version=azure_openai_api_version,
+    azure_openai_planner_deployment=azure_openai_planner_deployment,
+    azure_openai_synthesis_deployment=azure_openai_synthesis_deployment,
+    anthropic_api_key=anthropic_api_key,
+    google_api_key=google_api_key,
     provider_registry=provider_registry,
 )
 workspace_registry = WorkspaceRegistry(
@@ -559,10 +602,10 @@ workspace_registry = WorkspaceRegistry(
     index_backend=settings.agentic_index_backend,
     similarity_fn=provider_bundle.similarity,
     async_batched_similarity_fn=provider_bundle.abatched_similarity,
-    async_embed_query_fn=(None if settings.disable_embeddings else provider_bundle.aembed_query),
-    async_embed_texts_fn=(None if settings.disable_embeddings else provider_bundle.aembed_texts),
-    embed_query_fn=(None if settings.disable_embeddings else provider_bundle.embed_query),
-    embed_texts_fn=(None if settings.disable_embeddings else provider_bundle.embed_texts),
+    async_embed_query_fn=(None if not provider_bundle.supports_embeddings() else provider_bundle.aembed_query),
+    async_embed_texts_fn=(None if not provider_bundle.supports_embeddings() else provider_bundle.aembed_texts),
+    embed_query_fn=(None if not provider_bundle.supports_embeddings() else provider_bundle.embed_query),
+    embed_texts_fn=(None if not provider_bundle.supports_embeddings() else provider_bundle.embed_texts),
 )
 agentic_runtime = AgenticRuntime(
     config=agentic_config,
@@ -571,11 +614,13 @@ agentic_runtime = AgenticRuntime(
     client=client,
     core_client=core_client,
     openalex_client=openalex_client,
+    scholarapi_client=scholarapi_client,
     arxiv_client=arxiv_client,
     serpapi_client=serpapi_client,
     enable_core=enable_core,
     enable_semantic_scholar=enable_semantic_scholar,
     enable_openalex=enable_openalex,
+    enable_scholarapi=enable_scholarapi,
     enable_arxiv=enable_arxiv,
     enable_serpapi=enable_serpapi,
     provider_registry=provider_registry,
@@ -592,6 +637,7 @@ async def _server_lifespan(_: FastMCP):
         await maybe_close_async_resource(client)
         await maybe_close_async_resource(core_client)
         await maybe_close_async_resource(openalex_client)
+        await maybe_close_async_resource(scholarapi_client)
         await maybe_close_async_resource(arxiv_client)
         await maybe_close_async_resource(serpapi_client)
         await maybe_close_async_resource(crossref_client)
@@ -811,7 +857,9 @@ def plan_paper_chaser_search(
         "Use preferredProvider/providerOrder or provider-specific search_papers_* "
         "tools only when source choice matters. Remember that search_papers_core, "
         "search_papers_serpapi, and search_papers_arxiv only support query, limit, "
-        "and year, while search_papers_semantic_scholar supports the wider filter set. "
+        "and year, while search_papers_semantic_scholar supports the wider filter set "
+        "and search_papers_scholarapi/list_papers_scholarapi support ScholarAPI-specific "
+        "cursor, date, and full-text filters. "
         "If you uncover a defect or confusing UX, summarize the exact tool calls, "
         "expected vs actual behavior, and whether the best follow-up is a code "
         "change, a documentation update, or both so the result can turn into an "
@@ -921,7 +969,7 @@ def build_http_app(
     """Build an ASGI app for local/dev HTTP use or custom deployment hardening."""
     return app.http_app(
         path=path or settings.http_path,
-        transport=transport or http_app_transport,
+        transport=cast(Literal["http", "streamable-http", "sse"], transport or http_app_transport),
         middleware=middleware,
     )
 

@@ -1,6 +1,7 @@
 import pytest
 
 from paper_chaser_mcp import server
+from paper_chaser_mcp.agentic.config import AgenticConfig
 from paper_chaser_mcp.runtime import run_server
 from paper_chaser_mcp.settings import AppSettings
 
@@ -41,14 +42,31 @@ def test_search_papers_args_accept_serpapi_alias() -> None:
     assert args.provider_order == ["core", "serpapi_google_scholar"]
 
 
+def test_search_papers_args_accept_scholarapi_alias() -> None:
+    from paper_chaser_mcp.models.tools import SearchPapersArgs
+
+    args = SearchPapersArgs.model_validate(
+        {
+            "query": "fallback",
+            "preferredProvider": "scholarapi",
+            "providerOrder": ["semantic_scholar", "scholarapi"],
+        }
+    )
+
+    assert args.preferred_provider == "scholarapi"
+    assert args.provider_order == ["semantic_scholar", "scholarapi"]
+
+
 def test_app_settings_serpapi_disabled_by_default() -> None:
     """SerpApi must be disabled by default to protect users from surprise costs."""
 
     settings = AppSettings.from_env({})  # empty env
     assert settings.enable_serpapi is False
+    assert settings.enable_scholarapi is False
     assert settings.enable_agentic is False
     assert settings.openai_api_key is None
     assert settings.serpapi_api_key is None
+    assert settings.scholarapi_api_key is None
     assert settings.enable_openalex is True
     assert settings.openalex_api_key is None
     assert settings.openalex_mailto is None
@@ -88,6 +106,18 @@ def test_app_settings_serpapi_enabled_via_env() -> None:
     )
     assert settings.enable_serpapi is True
     assert settings.serpapi_api_key == "my-api-key"
+
+
+def test_app_settings_scholarapi_enabled_via_env() -> None:
+    settings = AppSettings.from_env(
+        {
+            "PAPER_CHASER_ENABLE_SCHOLARAPI": "true",
+            "SCHOLARAPI_API_KEY": "sch-test-key",
+        }
+    )
+
+    assert settings.enable_scholarapi is True
+    assert settings.scholarapi_api_key == "sch-test-key"
 
 
 def test_app_settings_openalex_enabled_with_optional_mailto_and_key() -> None:
@@ -175,9 +205,17 @@ def test_app_settings_normalizes_blank_optional_values_to_none() -> None:
         {
             "CORE_API_KEY": "   ",
             "SEMANTIC_SCHOLAR_API_KEY": "",
+            "AZURE_OPENAI_API_KEY": " ",
+            "AZURE_OPENAI_ENDPOINT": " ",
+            "AZURE_OPENAI_API_VERSION": " ",
+            "AZURE_OPENAI_PLANNER_DEPLOYMENT": " ",
+            "AZURE_OPENAI_SYNTHESIS_DEPLOYMENT": " ",
+            "ANTHROPIC_API_KEY": " ",
+            "GOOGLE_API_KEY": " ",
             "OPENALEX_API_KEY": "   ",
             "OPENALEX_MAILTO": "",
             "SERPAPI_API_KEY": "   ",
+            "SCHOLARAPI_API_KEY": "   ",
             "GOVINFO_API_KEY": " ",
             "CROSSREF_MAILTO": " ",
             "UNPAYWALL_EMAIL": " ",
@@ -188,10 +226,18 @@ def test_app_settings_normalizes_blank_optional_values_to_none() -> None:
 
     assert settings.core_api_key is None
     assert settings.openai_api_key is None
+    assert settings.azure_openai_api_key is None
+    assert settings.azure_openai_endpoint is None
+    assert settings.azure_openai_api_version is None
+    assert settings.azure_openai_planner_deployment is None
+    assert settings.azure_openai_synthesis_deployment is None
+    assert settings.anthropic_api_key is None
+    assert settings.google_api_key is None
     assert settings.semantic_scholar_api_key is None
     assert settings.openalex_api_key is None
     assert settings.openalex_mailto is None
     assert settings.serpapi_api_key is None
+    assert settings.scholarapi_api_key is None
     assert settings.govinfo_api_key is None
     assert settings.crossref_mailto is None
     assert settings.unpaywall_email is None
@@ -251,6 +297,110 @@ def test_app_settings_parses_agentic_configuration() -> None:
     assert settings.agentic_index_backend == "memory"
     assert settings.session_ttl_seconds == 900
     assert settings.enable_agentic_trace_log is True
+
+
+@pytest.mark.parametrize(
+    ("provider", "env", "field_name", "field_value"),
+    [
+        (
+            "azure-openai",
+            {
+                "AZURE_OPENAI_API_KEY": "azure-key",
+                "AZURE_OPENAI_ENDPOINT": "https://example.openai.azure.com/",
+                "AZURE_OPENAI_API_VERSION": "2024-10-21",
+                "AZURE_OPENAI_PLANNER_DEPLOYMENT": "azure-planner",
+                "AZURE_OPENAI_SYNTHESIS_DEPLOYMENT": "azure-synthesis",
+            },
+            "azure_openai_api_key",
+            "azure-key",
+        ),
+        (
+            "anthropic",
+            {"ANTHROPIC_API_KEY": "sk-ant-test"},
+            "anthropic_api_key",
+            "sk-ant-test",
+        ),
+        (
+            "google",
+            {"GOOGLE_API_KEY": "google-key"},
+            "google_api_key",
+            "google-key",
+        ),
+    ],
+)
+def test_app_settings_parses_additional_agentic_providers(
+    provider: str,
+    env: dict[str, str],
+    field_name: str,
+    field_value: str,
+) -> None:
+    settings = AppSettings.from_env(
+        {
+            "PAPER_CHASER_ENABLE_AGENTIC": "true",
+            "PAPER_CHASER_AGENTIC_PROVIDER": provider,
+            **env,
+        }
+    )
+
+    assert settings.agentic_provider == provider
+    assert getattr(settings, field_name) == field_value
+    if provider == "azure-openai":
+        assert settings.azure_openai_planner_deployment == "azure-planner"
+        assert settings.azure_openai_synthesis_deployment == "azure-synthesis"
+    assert settings.disable_embeddings is True
+
+
+def test_app_settings_rejects_invalid_agentic_provider() -> None:
+    with pytest.raises(ValueError, match="PAPER_CHASER_AGENTIC_PROVIDER"):
+        AppSettings.from_env({"PAPER_CHASER_AGENTIC_PROVIDER": "unsupported"})
+
+
+def test_agentic_config_tracks_azure_openai_model_sources() -> None:
+    settings = AppSettings.from_env(
+        {
+            "PAPER_CHASER_ENABLE_AGENTIC": "true",
+            "PAPER_CHASER_AGENTIC_PROVIDER": "azure-openai",
+            "AZURE_OPENAI_API_KEY": "azure-key",
+            "AZURE_OPENAI_ENDPOINT": "https://example.openai.azure.com/",
+            "AZURE_OPENAI_PLANNER_DEPLOYMENT": "planner-deployment",
+            "AZURE_OPENAI_SYNTHESIS_DEPLOYMENT": "synthesis-deployment",
+        }
+    )
+
+    config = AgenticConfig.from_settings(settings)
+
+    assert config.planner_model == "planner-deployment"
+    assert config.synthesis_model == "synthesis-deployment"
+    assert config.planner_model_source == "azure_deployment"
+    assert config.synthesis_model_source == "azure_deployment"
+
+
+@pytest.mark.parametrize(
+    ("provider", "api_key_env", "expected_model"),
+    [
+        ("anthropic", {"ANTHROPIC_API_KEY": "sk-ant-test"}, "claude-sonnet-4-5"),
+        ("google", {"GOOGLE_API_KEY": "google-key"}, "gemini-2.5-flash"),
+    ],
+)
+def test_agentic_config_tracks_provider_default_model_sources(
+    provider: str,
+    api_key_env: dict[str, str],
+    expected_model: str,
+) -> None:
+    settings = AppSettings.from_env(
+        {
+            "PAPER_CHASER_ENABLE_AGENTIC": "true",
+            "PAPER_CHASER_AGENTIC_PROVIDER": provider,
+            **api_key_env,
+        }
+    )
+
+    config = AgenticConfig.from_settings(settings)
+
+    assert config.planner_model == expected_model
+    assert config.synthesis_model == expected_model
+    assert config.planner_model_source == "provider_default"
+    assert config.synthesis_model_source == "provider_default"
 
 
 def test_run_server_logs_embedding_flag(caplog: pytest.LogCaptureFixture) -> None:

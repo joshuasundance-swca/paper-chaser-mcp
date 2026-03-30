@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+from paper_chaser_mcp.clients.scholarapi import ScholarApiQuotaError
 from paper_chaser_mcp.clients.serpapi import (
     SerpApiKeyMissingError,
     SerpApiQuotaError,
@@ -29,6 +30,7 @@ from paper_chaser_mcp.provider_runtime import (
     parse_retry_after_seconds,
     policy_for_provider,
     provider_attempt_reason,
+    provider_is_paywalled,
     provider_status_to_attempt_status,
 )
 
@@ -88,6 +90,8 @@ async def test_provider_budget_state_and_registry_snapshot() -> None:
             endpoint="works.search",
             status_bucket="success",
             latency_ms=12,
+            quota_metadata={"requestId": "oa-req-1"},
+            provider_request_id="oa-req-1",
         ),
         policy=ProviderPolicy(),
     )
@@ -120,9 +124,13 @@ async def test_provider_budget_state_and_registry_snapshot() -> None:
 
     assert snapshot["providerOrder"][0] == "openalex"
     assert openalex_snapshot["enabled"] is True
+    assert openalex_snapshot["paywalled"] is False
     assert openalex_snapshot["consecutiveFailures"] == 1
+    assert openalex_snapshot["lastQuotaMetadata"] == {"requestId": "oa-req-1"}
+    assert openalex_snapshot["lastProviderRequestId"] == "oa-req-1"
     assert openalex_snapshot["statusCounts"] == {"success": 1, "provider_error": 1}
     assert openalex_snapshot["suppressed"] is True
+    assert serpapi_snapshot["paywalled"] is True
     assert serpapi_snapshot["suppressed"] is True
     assert serpapi_snapshot["suppressedUntil"] is not None
 
@@ -132,7 +140,15 @@ def test_provider_runtime_helper_functions(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     assert policy_for_provider("openalex").concurrency_limit == 2
+    assert policy_for_provider("azure-openai").paywalled is True
+    assert policy_for_provider("anthropic").paywalled is True
+    assert policy_for_provider("google").paywalled is True
     assert policy_for_provider("unknown").concurrency_limit == 2
+    assert provider_is_paywalled("scholarapi") is True
+    assert provider_is_paywalled("azure-openai") is True
+    assert provider_is_paywalled("anthropic") is True
+    assert provider_is_paywalled("google") is True
+    assert provider_is_paywalled("openalex") is False
     assert _default_fallback_reason("auth_error") == "Provider authentication failed."
     assert _default_fallback_reason("success") is None
     assert _provider_semaphore_key("openai", "responses.parse:planner") == ("openai:responses.parse:planner")
@@ -140,6 +156,7 @@ def test_provider_runtime_helper_functions(
     assert _classify_exception(SerpApiKeyMissingError("missing")) == "auth_error"
     assert _classify_exception(SerpApiQuotaError("quota")) == "quota_exhausted"
     assert _classify_exception(SerpApiUpstreamError("upstream")) == "provider_error"
+    assert _classify_exception(ScholarApiQuotaError("quota")) == "quota_exhausted"
     assert _classify_exception(RuntimeError("429 too many requests")) == "rate_limited"
     assert _classify_exception(RuntimeError("quota exceeded")) == "quota_exhausted"
     assert _classify_exception(RuntimeError("forbidden")) == "auth_error"
@@ -160,6 +177,9 @@ def test_provider_runtime_helper_functions(
 
     metadata = _quota_metadata_from_payload(
         {
+            "requestId": "sch-req-1",
+            "requestCost": "3",
+            "pagination": {"hasMore": True, "nextCursor": "next-sch"},
             "search_metadata": {"id": "search-1", "status": "Success"},
             "account": {
                 "plan": "paid",
@@ -170,6 +190,10 @@ def test_provider_runtime_helper_functions(
         }
     )
     assert metadata == {
+        "requestId": "sch-req-1",
+        "requestCost": "3",
+        "hasMore": True,
+        "nextCursor": "next-sch",
         "searchId": "search-1",
         "searchStatus": "Success",
         "plan": "paid",
@@ -334,6 +358,7 @@ async def test_execute_provider_call_records_budget_skips_and_waits_for_slots(
     )
 
     assert skipped.outcome.status_bucket == "skipped"
+    assert skipped.outcome.paywalled is True
     assert outcomes[-1]["statusBucket"] == "skipped"
     assert any(
         item["lastOutcome"] == "skipped" for item in registry.snapshot()["providers"] if item["provider"] == "openai"
@@ -360,6 +385,7 @@ async def test_execute_provider_call_records_budget_skips_and_waits_for_slots(
     waited = await task
 
     assert waited.outcome.status_bucket == "success"
+    assert waited.outcome.paywalled is True
     assert any("waiting_for_slot" in record.getMessage() for record in caplog.records)
 
 

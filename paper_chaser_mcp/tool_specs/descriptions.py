@@ -18,11 +18,12 @@ TOOL_DESCRIPTIONS = {
         "Use preferredProvider to try one provider first, or providerOrder to "
         "override the broker chain for this call when source constraints matter. "
         "Provider names accepted by those arguments are core, semantic_scholar, "
-        "arxiv, and either serpapi or serpapi_google_scholar. "
+        "arxiv, scholarapi, and either serpapi or serpapi_google_scholar. "
         "Optional filters: year, venue, publicationDateOrYear, "
         "fieldsOfStudy, publicationTypes, openAccessPdf, minCitationCount. "
-        "Semantic Scholar-only filters still cause CORE and SerpApi to be "
-        "skipped even if they appear in providerOrder. "
+        "Providers that cannot honor a requested advanced filter are skipped "
+        "instead of silently widening the query; explicit ScholarAPI routing can "
+        "also honor openAccessPdf through its PDF-availability filter. "
         "Returns a single page of results (no pagination). For large paginated "
         "retrieval use search_papers_bulk. "
         "brokerMetadata.providerUsed identifies which provider supplied the results, "
@@ -47,6 +48,15 @@ TOOL_DESCRIPTIONS = {
         "search_papers, but does not fall back to other providers. Supported "
         "inputs are query, limit, and year."
     ),
+    "search_papers_scholarapi": (
+        "Search papers using ScholarAPI only. Requires "
+        "PAPER_CHASER_ENABLE_SCHOLARAPI=true and SCHOLARAPI_API_KEY. Returns a "
+        "single explicit ScholarAPI relevance-ranked page with normalized paper "
+        "results, full-text/PDF availability flags, and an opaque cursor for "
+        "continuing the same ScholarAPI query. Supported inputs are query, "
+        "limit, cursor, indexed/published date bounds, has_text, and has_pdf. "
+        f"{OPAQUE_CURSOR_CONTRACT}"
+    ),
     "search_papers_arxiv": (
         "Search papers using arXiv only. Returns a single page of results with "
         "the same normalized response shape as search_papers, but does not fall "
@@ -67,6 +77,15 @@ TOOL_DESCRIPTIONS = {
         "treats pagination.nextCursor as an opaque server-issued token. Supported "
         "inputs are query, limit, year, and cursor. Use this when you explicitly "
         "want OpenAlex-native paging rather than Semantic Scholar bulk search. "
+        f"{OPAQUE_CURSOR_CONTRACT}"
+    ),
+    "list_papers_scholarapi": (
+        "Ingestion-oriented ScholarAPI listing for monitoring or exhaustive date-window scans. "
+        "Requires PAPER_CHASER_ENABLE_SCHOLARAPI=true and SCHOLARAPI_API_KEY. "
+        "This uses ScholarAPI /list semantics, sorted by indexed_at rather than relevance, "
+        "and is the right continuation path for ScholarAPI monitoring workflows rather than "
+        "search_papers_bulk. Supported inputs are optional query, limit, cursor, indexed/published "
+        "date bounds, has_text, and has_pdf. "
         f"{OPAQUE_CURSOR_CONTRACT}"
     ),
     "search_papers_bulk": (
@@ -136,6 +155,24 @@ TOOL_DESCRIPTIONS = {
         "details from a DOI, ArXiv ID, Semantic Scholar ID, or URL. "
         "Optional includeEnrichment=true adds post-resolution Crossref and "
         "Unpaywall metadata to the final paper without changing the lookup path."
+    ),
+    "get_paper_text_scholarapi": (
+        "Fetch one full plain-text document from ScholarAPI by ScholarAPI paper id. "
+        "Requires PAPER_CHASER_ENABLE_SCHOLARAPI=true and SCHOLARAPI_API_KEY. "
+        "Accepts either a raw ScholarAPI id or a ScholarAPI:<id> value returned by search. "
+        "Use this when the workflow explicitly needs accessible full text rather than only metadata."
+    ),
+    "get_paper_texts_scholarapi": (
+        "Fetch full plain-text content for up to 100 ScholarAPI paper ids in one call. "
+        "Requires PAPER_CHASER_ENABLE_SCHOLARAPI=true and SCHOLARAPI_API_KEY. "
+        "Each paper id may be raw or namespaced as ScholarAPI:<id>. "
+        "Preserves request order and keeps null placeholders for items whose text is unavailable."
+    ),
+    "get_paper_pdf_scholarapi": (
+        "Fetch one PDF from ScholarAPI by ScholarAPI paper id. Requires "
+        "PAPER_CHASER_ENABLE_SCHOLARAPI=true and SCHOLARAPI_API_KEY. Returns "
+        "structured PDF metadata plus base64-encoded binary content. Accepts either "
+        "a raw ScholarAPI id or a ScholarAPI:<id> value returned by search."
     ),
     "get_paper_metadata_crossref": (
         "Explicit Crossref paper enrichment. Use this after you already have a "

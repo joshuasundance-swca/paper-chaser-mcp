@@ -23,6 +23,7 @@ from .models.tools import (
 from .provider_runtime import (
     ProviderDiagnosticsRegistry,
     ProviderStatusBucket,
+    provider_is_paywalled,
 )
 from .search_executor import (
     ProviderSearchRequest,
@@ -214,7 +215,7 @@ def _result_quality(
       should apply the low-relevance override separately via ``_metadata``.
     - ``"lexical"``: CORE or arXiv used keyword-only matching; results may be
       false positives for unusual or nonsense queries.
-    - ``"unknown"``: SerpApi path or no results — match quality is undetermined.
+        - ``"unknown"``: SerpApi, ScholarAPI, or no results — match quality is undetermined.
     """
     if provider_used == "semantic_scholar":
         return "strong"
@@ -272,6 +273,7 @@ def _metadata(
         "core": "CORE",
         "semantic_scholar": "Semantic Scholar",
         "serpapi_google_scholar": "SerpApi Google Scholar",
+        "scholarapi": "ScholarAPI",
         "arxiv": "arXiv",
     }
     portability_guidance = (
@@ -348,16 +350,41 @@ def _metadata(
         quality_guidance = ""
 
     result_status = _compute_result_status(provider_used, attempts)
+    incompatible_filter_skips = [
+        attempt
+        for attempt in attempts
+        if attempt.status == "skipped"
+        and attempt.reason
+        and (
+            "Semantic Scholar-only filters were requested" in attempt.reason
+            or "cannot honor requested advanced filters" in attempt.reason
+        )
+    ]
 
     if provider_used == "serpapi_google_scholar":
         next_step_hint = (
-            "Results are from SerpApi Google Scholar. Papers that include "
+            "Results are from SerpApi Google Scholar, a paid provider path. Papers that include "
             "scholarResultId can be passed to get_paper_citation_formats for "
             "MLA, APA, BibTeX, and other export formats. "
             + portability_guidance
             + quality_guidance
             + bulk_guidance
             + "To expand from a paper use get_paper_citations or get_paper_references."
+        )
+    elif provider_used == "scholarapi":
+        next_step_hint = (
+            "Results are from ScholarAPI, a paid provider path. "
+            "If the task needs more results ordered by indexed_at rather than relevance, "
+            "continue with list_papers_scholarapi. "
+            "If the task needs accessible full text or binary PDFs, use "
+            "get_paper_text_scholarapi, get_paper_texts_scholarapi, or "
+            "get_paper_pdf_scholarapi with the ScholarAPI paper id. "
+            + quality_guidance
+            + bulk_guidance
+            + (
+                "Use get_paper_citations or get_paper_references only after "
+                "you re-anchor the paper into a Semantic Scholar-compatible id."
+            )
         )
     elif provider_used == "none":
         if suppressed_low_relevance_title:
@@ -366,6 +393,13 @@ def _metadata(
                 "so the broker suppressed them instead of surfacing likely false positives. "
                 "Try search_papers_match for exact-title recovery, refine the title, or "
                 "change providerOrder."
+            )
+        elif incompatible_filter_skips and all(attempt.status == "skipped" for attempt in attempts):
+            next_step_hint = (
+                "No routed provider was allowed to run because one or more requested advanced filters "
+                "could not be honored by that provider chain. Inspect brokerMetadata.attemptedProviders, "
+                "remove the incompatible filters, route to a provider that supports them, or use "
+                "search_papers_semantic_scholar for the widest advanced-filter support."
             )
         elif result_status == "provider_failed":
             failed_labels = [provider_labels.get(a.provider, a.provider) for a in attempts if a.status == "failed"]
@@ -403,6 +437,7 @@ def _metadata(
         )
     return BrokerMetadata(
         provider_used=provider_used,
+        paid_provider_used=(provider_is_paywalled(provider_used) if provider_used != "none" else False),
         result_status=result_status,
         attempted_providers=attempts,
         semantic_scholar_only_filters=ss_only_filters,
@@ -431,7 +466,9 @@ def _provider_enabled(
     enable_semantic_scholar: bool,
     enable_arxiv: bool,
     enable_serpapi: bool,
+    enable_scholarapi: bool,
     serpapi_client: Any,
+    scholarapi_client: Any,
 ) -> bool:
     return _SEARCH_EXECUTOR.provider_enabled(
         provider,
@@ -440,6 +477,7 @@ def _provider_enabled(
             "semantic_scholar": enable_semantic_scholar,
             "arxiv": enable_arxiv,
             "serpapi_google_scholar": enable_serpapi,
+            "scholarapi": enable_scholarapi,
             "openalex": False,
         },
         clients=SearchClientBundle(
@@ -447,6 +485,7 @@ def _provider_enabled(
             semantic_client=True,
             arxiv_client=True,
             serpapi_client=serpapi_client,
+            scholarapi_client=scholarapi_client,
         ),
     )
 
@@ -460,7 +499,9 @@ def _hedge_target_index(
     enable_semantic_scholar: bool,
     enable_arxiv: bool,
     enable_serpapi: bool,
+    enable_scholarapi: bool,
     serpapi_client: Any,
+    scholarapi_client: Any,
 ) -> int | None:
     return _SEARCH_EXECUTOR.hedge_target_index(
         effective_order=effective_order,
@@ -471,6 +512,7 @@ def _hedge_target_index(
             "semantic_scholar": enable_semantic_scholar,
             "arxiv": enable_arxiv,
             "serpapi_google_scholar": enable_serpapi,
+            "scholarapi": enable_scholarapi,
             "openalex": False,
         },
         clients=SearchClientBundle(
@@ -478,6 +520,7 @@ def _hedge_target_index(
             semantic_client=True,
             arxiv_client=True,
             serpapi_client=serpapi_client,
+            scholarapi_client=scholarapi_client,
         ),
     )
 
@@ -491,6 +534,7 @@ def _disabled_provider_attempt(provider: SearchProvider) -> BrokerAttempt:
         "core": "Disabled by PAPER_CHASER_ENABLE_CORE=false.",
         "semantic_scholar": "Disabled by PAPER_CHASER_ENABLE_SEMANTIC_SCHOLAR=false.",
         "serpapi_google_scholar": "Disabled by PAPER_CHASER_ENABLE_SERPAPI=false.",
+        "scholarapi": "Disabled by PAPER_CHASER_ENABLE_SCHOLARAPI=false.",
         "arxiv": "Disabled by PAPER_CHASER_ENABLE_ARXIV=false.",
     }
     return BrokerAttempt(
@@ -619,6 +663,7 @@ async def _run_provider_search(
     semantic_client: Any,
     arxiv_client: Any,
     serpapi_client: Any = None,
+    scholarapi_client: Any = None,
     publication_date_or_year: Optional[str] = None,
     fields_of_study: Optional[str] = None,
     publication_types: Optional[str] = None,
@@ -666,10 +711,12 @@ async def search_papers_with_fallback(
     enable_semantic_scholar: bool,
     enable_arxiv: bool,
     enable_serpapi: bool = False,
+    enable_scholarapi: bool = False,
     core_client: Any,
     semantic_client: Any,
     arxiv_client: Any,
     serpapi_client: Any = None,
+    scholarapi_client: Any = None,
     publication_date_or_year: Optional[str] = None,
     fields_of_study: Optional[str] = None,
     publication_types: Optional[str] = None,
@@ -693,6 +740,14 @@ async def search_papers_with_fallback(
     Semantic Scholar-only filter is requested, because those filters have no
     equivalent in Google Scholar.
 
+    ScholarAPI is also available as an explicit opt-in broker target when
+    ``enable_scholarapi=True`` and ``providerOrder`` or ``preferredProvider``
+    routes to it. It is intentionally kept out of the default broker order so
+    the free default path remains stable. When explicitly routed, ScholarAPI
+    can honor the simple ``year`` filter plus ``openAccessPdf`` via its own
+    PDF-availability filter, while unsupported advanced filters still cause the
+    broker to skip ScholarAPI rather than silently widening the query.
+
     Pagination is intentionally not supported here: each provider uses a different
     continuation mechanism and mixing pages from different backends would produce
     incorrect results.  For paginated retrieval use ``search_papers_bulk``
@@ -707,7 +762,7 @@ async def search_papers_with_fallback(
             ("open_access_pdf", open_access_pdf),
             ("min_citation_count", min_citation_count),
         )
-        if value is not None
+        if value is not None and (field_name != "open_access_pdf" or value is True)
     ]
     trace = await _SEARCH_EXECUTOR.search_with_fallback(
         query=query,
@@ -724,6 +779,7 @@ async def search_papers_with_fallback(
             "semantic_scholar": enable_semantic_scholar,
             "arxiv": enable_arxiv,
             "serpapi_google_scholar": enable_serpapi,
+            "scholarapi": enable_scholarapi,
             "openalex": False,
         },
         clients=SearchClientBundle(
@@ -731,6 +787,7 @@ async def search_papers_with_fallback(
             semantic_client=semantic_client,
             arxiv_client=arxiv_client,
             serpapi_client=serpapi_client,
+            scholarapi_client=scholarapi_client,
         ),
         provider_registry=provider_registry,
         allow_default_hedging=allow_default_hedging,
@@ -746,6 +803,7 @@ async def search_papers_with_fallback(
     attempts = list(trace.attempts)
     effective_order = trace.effective_order
     processed_providers = trace.processed_providers
+    low_relevance = False
 
     if provider_used != "none":
         if result is not None:

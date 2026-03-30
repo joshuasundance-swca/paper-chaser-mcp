@@ -11,8 +11,12 @@ from paper_chaser_mcp.agentic.config import AgenticConfig
 from paper_chaser_mcp.agentic.models import ExpansionCandidate, PlannerDecision
 from paper_chaser_mcp.agentic.providers import (
     COMMON_QUERY_WORDS,
+    AnthropicProviderBundle,
+    AzureOpenAIProviderBundle,
     DeterministicProviderBundle,
+    GoogleProviderBundle,
     OpenAIProviderBundle,
+    _coerce_langchain_structured_response,
     _cosine_similarity,
     _extract_seed_identifiers,
     _lexical_similarity,
@@ -128,6 +132,7 @@ def test_provider_helpers_and_deterministic_bundle_paths() -> None:
         "focus": "benchmarks",
     }
     assert known_item.seed_identifiers == ["10.1234/example"]
+    assert "scholarapi" in known_item.provider_plan
     assert author.intent == "author"
     assert citation.intent == "citation"
     assert review.intent == "review"
@@ -1144,3 +1149,585 @@ async def test_openai_provider_async_wrapper_and_embedding_success_paths(
     assert text_embeddings == [(1.0, 0.0), (0.0, 1.0)]
     assert scores[0] > scores[1]
     assert await disabled_bundle.aembed_texts(["alpha"]) == [None]
+
+
+def test_resolve_provider_bundle_routes_additional_provider_types() -> None:
+    azure_bundle = resolve_provider_bundle(
+        _config(provider="azure-openai"),
+        openai_api_key=None,
+        azure_openai_api_key="azure-key",
+        azure_openai_endpoint="https://example.openai.azure.com/",
+        azure_openai_api_version="2024-10-21",
+    )
+    anthropic_bundle = resolve_provider_bundle(
+        _config(provider="anthropic"),
+        openai_api_key=None,
+        anthropic_api_key="sk-ant-test",
+    )
+    google_bundle = resolve_provider_bundle(
+        _config(provider="google"),
+        openai_api_key=None,
+        google_api_key="google-key",
+    )
+
+    assert isinstance(azure_bundle, AzureOpenAIProviderBundle)
+    assert isinstance(anthropic_bundle, AnthropicProviderBundle)
+    assert isinstance(google_bundle, GoogleProviderBundle)
+
+
+def test_azure_openai_provider_loaders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: dict[str, Any] = {}
+
+    class _FakeAzureOpenAI:
+        def __init__(self, **kwargs: Any) -> None:
+            created["sync"] = kwargs
+
+    class _FakeAsyncAzureOpenAI:
+        def __init__(self, **kwargs: Any) -> None:
+            created["async"] = kwargs
+
+    class _FakeAzureChatOpenAI:
+        def __init__(self, **kwargs: Any) -> None:
+            created.setdefault("chat", []).append(kwargs)
+
+    openai_module = types.ModuleType("openai")
+    openai_module.AzureOpenAI = _FakeAzureOpenAI  # type: ignore[attr-defined]
+    openai_module.AsyncAzureOpenAI = _FakeAsyncAzureOpenAI  # type: ignore[attr-defined]
+    langchain_openai_module = types.ModuleType("langchain_openai")
+    langchain_openai_module.AzureChatOpenAI = _FakeAzureChatOpenAI  # type: ignore[attr-defined]
+
+    monkeypatch.setitem(sys.modules, "openai", openai_module)
+    monkeypatch.setitem(sys.modules, "langchain_openai", langchain_openai_module)
+
+    bundle = AzureOpenAIProviderBundle(
+        _config(provider="azure-openai"),
+        api_key="azure-key",
+        azure_endpoint="https://example.openai.azure.com/",
+        api_version="2024-10-21",
+    )
+
+    assert bundle._load_openai_client() is not None
+    assert bundle._load_async_openai_client() is not None
+    planner, synthesizer = bundle._load_models()
+
+    assert planner is not None
+    assert synthesizer is not None
+    assert created["sync"]["api_key"] == "azure-key"
+    assert created["sync"]["azure_endpoint"] == "https://example.openai.azure.com/"
+    assert created["sync"]["api_version"] == "2024-10-21"
+    assert created["chat"][0]["azure_deployment"] == bundle.planner_model_name
+    assert created["chat"][1]["azure_deployment"] == bundle.synthesis_model_name
+
+
+def test_azure_openai_provider_uses_deployment_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: dict[str, Any] = {}
+
+    class _FakeAzureChatOpenAI:
+        def __init__(self, **kwargs: Any) -> None:
+            created.setdefault("chat", []).append(kwargs)
+
+    langchain_openai_module = types.ModuleType("langchain_openai")
+    langchain_openai_module.AzureChatOpenAI = _FakeAzureChatOpenAI  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "langchain_openai", langchain_openai_module)
+
+    bundle = AzureOpenAIProviderBundle(
+        _config(provider="azure-openai"),
+        api_key="azure-key",
+        azure_endpoint="https://example.openai.azure.com/",
+        api_version="2024-10-21",
+        azure_planner_deployment="planner-deployment",
+        azure_synthesis_deployment="synthesis-deployment",
+    )
+
+    bundle._load_models()
+
+    assert bundle.planner_model_name == "planner-deployment"
+    assert bundle.synthesis_model_name == "synthesis-deployment"
+    assert created["chat"][0]["azure_deployment"] == "planner-deployment"
+    assert created["chat"][1]["azure_deployment"] == "synthesis-deployment"
+
+
+def test_azure_openai_provider_loads_azure_embeddings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: dict[str, Any] = {}
+
+    class _FakeAzureOpenAIEmbeddings:
+        def __init__(self, **kwargs: Any) -> None:
+            created.update(kwargs)
+
+    langchain_openai_module = types.ModuleType("langchain_openai")
+    langchain_openai_module.AzureOpenAIEmbeddings = _FakeAzureOpenAIEmbeddings  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "langchain_openai", langchain_openai_module)
+
+    bundle = AzureOpenAIProviderBundle(
+        _config(provider="azure-openai", disable_embeddings=False),
+        api_key="azure-key",
+        azure_endpoint="https://example.openai.azure.com/",
+        api_version="2024-10-21",
+    )
+
+    embeddings = bundle._load_embeddings()
+
+    assert embeddings is not None
+    assert created["azure_endpoint"] == "https://example.openai.azure.com/"
+    assert created["api_version"] == "2024-10-21"
+    assert created["azure_deployment"] == bundle.embedding_model_name
+    assert created["model"] == bundle.embedding_model_name
+
+
+@pytest.mark.parametrize(
+    ("bundle", "expected"),
+    [
+        (OpenAIProviderBundle(_config(disable_embeddings=False), api_key="sk-test"), True),
+        (
+            AzureOpenAIProviderBundle(
+                _config(provider="azure-openai", disable_embeddings=False),
+                api_key="azure-key",
+                azure_endpoint="https://example.openai.azure.com/",
+                api_version="2024-10-21",
+            ),
+            True,
+        ),
+        (
+            AnthropicProviderBundle(
+                _config(provider="anthropic", disable_embeddings=False),
+                api_key="sk-ant-test",
+            ),
+            False,
+        ),
+        (
+            GoogleProviderBundle(
+                _config(provider="google", disable_embeddings=False),
+                api_key="google-key",
+            ),
+            False,
+        ),
+    ],
+)
+def test_provider_embedding_support_flags(bundle: Any, expected: bool) -> None:
+    assert bundle.supports_embeddings() is expected
+
+
+@pytest.mark.parametrize(
+    "bundle",
+    [
+        AzureOpenAIProviderBundle(
+            _config(provider="azure-openai"),
+            api_key=None,
+            azure_endpoint=None,
+            api_version=None,
+        ),
+        AnthropicProviderBundle(_config(provider="anthropic"), api_key=None),
+        GoogleProviderBundle(_config(provider="google"), api_key=None),
+    ],
+)
+def test_additional_provider_selection_metadata_reports_deterministic_fallback(bundle: Any) -> None:
+    plan = bundle.plan_search(query="author Ada Lovelace", mode="auto")
+    metadata = bundle.selection_metadata()
+
+    assert isinstance(plan, PlannerDecision)
+    assert metadata["configuredSmartProvider"] in {"azure-openai", "anthropic", "google"}
+    assert metadata["activeSmartProvider"] == "deterministic"
+    assert metadata["plannerModelSource"] == "deterministic"
+    assert metadata["synthesisModelSource"] == "deterministic"
+    assert metadata["plannerModel"].endswith(":deterministic-planner")
+    assert metadata["synthesisModel"].endswith(":deterministic-synthesizer")
+
+
+def test_openai_provider_reloads_models_when_cache_is_partial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[str] = []
+
+    def _fake_init_chat_model(**kwargs: Any) -> dict[str, str]:
+        created.append(kwargs["model"])
+        return {"model": kwargs["model"]}
+
+    langchain_module = types.ModuleType("langchain")
+    chat_models_module = types.ModuleType("langchain.chat_models")
+    chat_models_module.init_chat_model = _fake_init_chat_model  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "langchain", langchain_module)
+    monkeypatch.setitem(sys.modules, "langchain.chat_models", chat_models_module)
+
+    bundle = OpenAIProviderBundle(_config(), api_key="sk-test")
+    bundle._planner = object()
+    bundle._synthesizer = None
+
+    planner, synthesizer = bundle._load_models()
+
+    assert created == [bundle.planner_model_name, bundle.synthesis_model_name]
+    assert planner == {"model": bundle.planner_model_name}
+    assert synthesizer == {"model": bundle.synthesis_model_name}
+
+
+def test_azure_openai_provider_reloads_models_when_cache_is_partial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: dict[str, Any] = {}
+
+    class _FakeAzureChatOpenAI:
+        def __init__(self, **kwargs: Any) -> None:
+            created.setdefault("chat", []).append(kwargs)
+
+    langchain_openai_module = types.ModuleType("langchain_openai")
+    langchain_openai_module.AzureChatOpenAI = _FakeAzureChatOpenAI  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "langchain_openai", langchain_openai_module)
+
+    bundle = AzureOpenAIProviderBundle(
+        _config(provider="azure-openai"),
+        api_key="azure-key",
+        azure_endpoint="https://example.openai.azure.com/",
+        api_version="2024-10-21",
+    )
+    bundle._planner = object()
+    bundle._synthesizer = None
+
+    planner, synthesizer = bundle._load_models()
+
+    assert planner is not None
+    assert synthesizer is not None
+    assert len(created["chat"]) == 2
+
+
+def test_langchain_provider_reloads_models_when_cache_is_partial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[str] = []
+    bundle = AnthropicProviderBundle(_config(provider="anthropic"), api_key="sk-ant-test")
+
+    def _fake_create_chat_model(model_name: str) -> dict[str, str]:
+        created.append(model_name)
+        return {"model": model_name}
+
+    monkeypatch.setattr(bundle, "_create_chat_model", _fake_create_chat_model)
+    bundle._planner = object()
+    bundle._synthesizer = None
+
+    planner, synthesizer = bundle._load_models()
+
+    assert created == [bundle.planner_model_name, bundle.synthesis_model_name]
+    assert planner == {"model": bundle.planner_model_name}
+    assert synthesizer == {"model": bundle.synthesis_model_name}
+
+
+def test_azure_openai_sync_methods_skip_langchain_chat_fallback_when_responses_are_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = AzureOpenAIProviderBundle(
+        _config(provider="azure-openai"),
+        api_key="azure-key",
+        azure_endpoint="https://example.openai.azure.com/",
+        api_version="2024-10-21",
+        azure_planner_deployment="planner-deployment",
+        azure_synthesis_deployment="synthesis-deployment",
+    )
+
+    class _ExplodingModel:
+        def invoke(self, messages: list[tuple[str, str]]) -> Any:
+            raise AssertionError("LangChain chat fallback should not be invoked for Azure")
+
+        def with_structured_output(self, schema: Any, method: str | None = None) -> Any:
+            del schema, method
+            raise AssertionError("Structured fallback should not be invoked for Azure")
+
+    monkeypatch.setattr(bundle, "_responses_parse", lambda **kwargs: None)
+    monkeypatch.setattr(bundle, "_responses_text", lambda **kwargs: None)
+    monkeypatch.setattr(bundle, "_load_models", lambda: (_ExplodingModel(), _ExplodingModel()))
+
+    plan = bundle.plan_search(query="author Ada Lovelace", mode="auto")
+    expansions = bundle.suggest_speculative_expansions(
+        query="retrieval agents",
+        evidence_texts=["citation graphs for retrieval agents"],
+        max_variants=2,
+    )
+    label = bundle.label_theme(seed_terms=["graph retrieval"], papers=[])
+    summary = bundle.summarize_theme(title="Graph Retrieval", papers=[])
+    answer = bundle.answer_question(
+        question="What matters?",
+        evidence_papers=[{"title": "Paper A"}],
+        answer_mode="qa",
+    )
+
+    assert isinstance(plan, PlannerDecision)
+    assert isinstance(expansions, list)
+    assert label == "Graph Retrieval"
+    assert summary
+    assert isinstance(answer, dict)
+
+
+def test_azure_openai_answer_uses_native_text_fallback_before_deterministic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = AzureOpenAIProviderBundle(
+        _config(provider="azure-openai"),
+        api_key="azure-key",
+        azure_endpoint="https://example.openai.azure.com/",
+        api_version="2024-10-21",
+        azure_planner_deployment="planner-deployment",
+        azure_synthesis_deployment="synthesis-deployment",
+    )
+
+    class _ExplodingModel:
+        def invoke(self, messages: list[tuple[str, str]]) -> Any:
+            raise AssertionError("LangChain chat fallback should not be invoked for Azure")
+
+        def with_structured_output(self, schema: Any, method: str | None = None) -> Any:
+            del schema, method
+            raise AssertionError("Structured fallback should not be invoked for Azure")
+
+    monkeypatch.setattr(bundle, "_responses_parse", lambda **kwargs: None)
+    recovered_answer = (
+        '{"answer":"Recovered Azure answer","unsupportedAsks":[],"followUpQuestions":[],"confidence":"high"}'
+    )
+    monkeypatch.setattr(
+        bundle,
+        "_responses_text",
+        lambda **kwargs: recovered_answer,
+    )
+    monkeypatch.setattr(bundle, "_load_models", lambda: (_ExplodingModel(), _ExplodingModel()))
+
+    answer = bundle.answer_question(
+        question="What matters?",
+        evidence_papers=[{"title": "Paper A"}],
+        answer_mode="qa",
+    )
+
+    assert answer["answer"] == "Recovered Azure answer"
+    assert answer["confidence"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_openai_async_answer_uses_native_text_fallback_before_deterministic() -> None:
+    bundle = OpenAIProviderBundle(_config(), api_key="sk-test")
+
+    async def _parse_none(**kwargs: Any) -> None:
+        del kwargs
+        return None
+
+    async def _text_json(**kwargs: Any) -> str:
+        del kwargs
+        return '{"answer":"Recovered async answer","unsupportedAsks":[],"followUpQuestions":[],"confidence":"medium"}'
+
+    bundle._aresponses_parse = _parse_none  # type: ignore[method-assign]
+    bundle._aresponses_text = _text_json  # type: ignore[method-assign]
+
+    answer = await bundle.aanswer_question(
+        question="What matters?",
+        evidence_papers=[{"title": "Paper A"}],
+        answer_mode="qa",
+    )
+
+    assert answer["answer"] == "Recovered async answer"
+    assert answer["confidence"] == "medium"
+
+
+class _StructuredInvoker:
+    def __init__(self, model: "_SequenceModel") -> None:
+        self._model = model
+
+    def invoke(self, messages: list[tuple[str, str]]) -> Any:
+        assert messages
+        return self._model.structured_responses.pop(0)
+
+    async def ainvoke(self, messages: list[tuple[str, str]]) -> Any:
+        assert messages
+        return self._model.structured_responses.pop(0)
+
+
+class _SequenceModel:
+    def __init__(self, *, structured_responses: list[Any], text_responses: list[str]) -> None:
+        self.structured_responses = list(structured_responses)
+        self.text_responses = list(text_responses)
+        self.methods: list[str | None] = []
+
+    def with_structured_output(self, schema: Any, method: str | None = None) -> _StructuredInvoker:
+        assert schema is not None
+        self.methods.append(method)
+        return _StructuredInvoker(self)
+
+    def invoke(self, messages: list[tuple[str, str]]) -> Any:
+        assert messages
+        return types.SimpleNamespace(content=self.text_responses.pop(0))
+
+    async def ainvoke(self, messages: list[tuple[str, str]]) -> Any:
+        assert messages
+        return types.SimpleNamespace(content=self.text_responses.pop(0))
+
+
+def test_coerce_langchain_structured_response_extracts_json_from_markdown() -> None:
+    response = types.SimpleNamespace(
+        content='```json\n{"answer":"Grounded","unsupportedAsks":[],"followUpQuestions":[],"confidence":"high"}\n```'
+    )
+
+    parsed = _coerce_langchain_structured_response(response, _AnswerPayload)
+
+    assert parsed.answer == "Grounded"
+    assert parsed.confidence == "high"
+
+
+@pytest.mark.parametrize(
+    ("bundle", "expected_method"),
+    [
+        (AnthropicProviderBundle(_config(provider="anthropic"), api_key="sk-ant-test"), None),
+        (GoogleProviderBundle(_config(provider="google"), api_key="google-key"), "json_schema"),
+    ],
+)
+def test_langchain_provider_bundles_sync_high_level_methods(
+    monkeypatch: pytest.MonkeyPatch,
+    bundle: Any,
+    expected_method: str | None,
+) -> None:
+    planner = _SequenceModel(
+        structured_responses=[
+            _PlannerResponseSchema(
+                intent="review",
+                constraints=providers_module._PlannerConstraintsSchema(),
+                seedIdentifiers=[],
+                candidateConcepts=["agents"],
+                providerPlan=["semantic_scholar"],
+                followUpMode="qa",
+            ),
+            _ExpansionPayload(expansions=[_ExpansionItem(variant="retrieval agents citation")]),
+        ],
+        text_responses=[],
+    )
+    synthesizer = _SequenceModel(
+        structured_responses=[_AnswerPayload(answer="Grounded answer.", confidence="medium")],
+        text_responses=['"Theme"', "Summary text."],
+    )
+    monkeypatch.setattr(bundle, "_load_models", lambda: (planner, synthesizer))
+
+    plan = bundle.plan_search(query="agents", mode="auto")
+    expansions = bundle.suggest_speculative_expansions(
+        query="retrieval agents",
+        evidence_texts=["citation graphs for retrieval agents"],
+        max_variants=2,
+    )
+    label = bundle.label_theme(seed_terms=["agents"], papers=[])
+    summary = bundle.summarize_theme(title="Agents", papers=[])
+    answer = bundle.answer_question(
+        question="What matters?",
+        evidence_papers=[{"title": "Paper A"}],
+        answer_mode="qa",
+    )
+
+    assert plan.intent == "review"
+    assert [item.variant for item in expansions] == ["retrieval agents citation"]
+    assert label == "Theme"
+    assert summary == "Summary text."
+    assert answer["answer"] == "Grounded answer."
+    assert planner.methods == [expected_method, expected_method]
+    assert synthesizer.methods == [expected_method]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("bundle", "expected_method"),
+    [
+        (AnthropicProviderBundle(_config(provider="anthropic"), api_key="sk-ant-test"), None),
+        (GoogleProviderBundle(_config(provider="google"), api_key="google-key"), "json_schema"),
+    ],
+)
+async def test_langchain_provider_bundles_async_high_level_methods(
+    monkeypatch: pytest.MonkeyPatch,
+    bundle: Any,
+    expected_method: str | None,
+) -> None:
+    planner = _SequenceModel(
+        structured_responses=[
+            _PlannerResponseSchema(
+                intent="citation",
+                constraints=providers_module._PlannerConstraintsSchema(),
+                seedIdentifiers=["seed-1"],
+                candidateConcepts=["graphs"],
+                providerPlan=["semantic_scholar"],
+                followUpMode="qa",
+            ),
+            _ExpansionPayload(expansions=[_ExpansionItem(variant="retrieval agents graphs")]),
+        ],
+        text_responses=[],
+    )
+    synthesizer = _SequenceModel(
+        structured_responses=[_AnswerPayload(answer="Async answer.", confidence="medium")],
+        text_responses=['"Async label"', "Async summary."],
+    )
+    monkeypatch.setattr(bundle, "_load_models", lambda: (planner, synthesizer))
+
+    plan = await bundle.aplan_search(query="cited by agents", mode="auto")
+    expansions = await bundle.asuggest_speculative_expansions(
+        query="retrieval agents",
+        evidence_texts=["graphs for retrieval agents"],
+        max_variants=2,
+    )
+    label = await bundle.alabel_theme(seed_terms=["graphs"], papers=[])
+    summary = await bundle.asummarize_theme(title="Agents", papers=[])
+    answer = await bundle.aanswer_question(
+        question="Answer",
+        evidence_papers=[{"title": "Paper A"}],
+        answer_mode="qa",
+    )
+
+    assert plan.intent == "citation"
+    assert [item.variant for item in expansions] == ["retrieval agents graphs"]
+    assert label == "Async label"
+    assert summary == "Async summary."
+    assert answer["answer"] == "Async answer."
+    assert planner.methods == [expected_method, expected_method]
+    assert synthesizer.methods == [expected_method]
+
+
+@pytest.mark.parametrize(
+    "bundle",
+    [
+        AnthropicProviderBundle(_config(provider="anthropic"), api_key=None),
+        GoogleProviderBundle(_config(provider="google"), api_key=None),
+    ],
+)
+def test_langchain_provider_bundles_fallback_without_credentials(bundle: Any) -> None:
+    plan = bundle.plan_search(query="author Ada Lovelace", mode="auto")
+    label = bundle.label_theme(seed_terms=["graph retrieval"], papers=[])
+
+    assert isinstance(plan, PlannerDecision)
+    assert label == "Graph Retrieval"
+
+
+@pytest.mark.parametrize(
+    "bundle",
+    [
+        AnthropicProviderBundle(_config(provider="anthropic"), api_key="sk-ant-test"),
+        GoogleProviderBundle(_config(provider="google"), api_key="google-key"),
+    ],
+)
+def test_langchain_provider_label_normalization_and_text_json_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    bundle: Any,
+) -> None:
+    planner = _SequenceModel(
+        structured_responses=[],
+        text_responses=[],
+    )
+    synthesizer = _SequenceModel(
+        structured_responses=[],
+        text_responses=[
+            "# Retrieval-Augmented AI Systems\n\nThis theme covers retrieval-backed agents.",
+            '{"answer":"Recovered answer","unsupportedAsks":[],"followUpQuestions":[],"confidence":"high"}',
+        ],
+    )
+    monkeypatch.setattr(bundle, "_load_models", lambda: (planner, synthesizer))
+    monkeypatch.setattr(bundle, "_structured_sync", lambda **kwargs: None)
+
+    label = bundle.label_theme(seed_terms=["retrieval"], papers=[])
+    answer = bundle.answer_question(
+        question="What matters?",
+        evidence_papers=[{"title": "Paper A"}],
+        answer_mode="qa",
+    )
+
+    assert label == "Retrieval-Augmented AI Systems"
+    assert answer["answer"] == "Recovered answer"
+    assert answer["confidence"] == "high"

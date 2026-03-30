@@ -83,6 +83,34 @@ class SearchStrategyMetadata(ApiModel):
         default_factory=list,
         alias="providersUsed",
     )
+    paid_providers_used: list[str] = Field(
+        default_factory=list,
+        alias="paidProvidersUsed",
+    )
+    configured_smart_provider: str = Field(
+        default="deterministic",
+        alias="configuredSmartProvider",
+    )
+    active_smart_provider: str = Field(
+        default="deterministic",
+        alias="activeSmartProvider",
+    )
+    planner_model: str = Field(
+        default="",
+        alias="plannerModel",
+    )
+    planner_model_source: str = Field(
+        default="configured",
+        alias="plannerModelSource",
+    )
+    synthesis_model: str = Field(
+        default="",
+        alias="synthesisModel",
+    )
+    synthesis_model_source: str = Field(
+        default="configured",
+        alias="synthesisModelSource",
+    )
     result_coverage: str = Field(
         default="narrow",
         alias="resultCoverage",

@@ -94,6 +94,7 @@ SearchProvider = Literal[
     "core",
     "semantic_scholar",
     "serpapi_google_scholar",
+    "scholarapi",
     "arxiv",
 ]
 OpenAlexEntityType = Literal["source", "institution", "topic"]
@@ -104,6 +105,7 @@ SEARCH_PROVIDER_ALIASES: dict[str, SearchProvider] = {
     "semantic_scholar": "semantic_scholar",
     "serpapi": "serpapi_google_scholar",
     "serpapi_google_scholar": "serpapi_google_scholar",
+    "scholarapi": "scholarapi",
     "arxiv": "arxiv",
 }
 
@@ -203,7 +205,7 @@ class SearchPapersArgs(SearchPapersBaseArgs):
         description=(
             "Optional provider to try first before continuing the broker fallback "
             "chain. One of: core, semantic_scholar, serpapi, "
-            "serpapi_google_scholar, arxiv."
+            "serpapi_google_scholar, scholarapi, arxiv."
         ),
     )
     provider_order: list[SearchProvider] | None = Field(
@@ -211,9 +213,10 @@ class SearchPapersArgs(SearchPapersBaseArgs):
         alias="providerOrder",
         description=(
             "Optional ordered provider chain override for this call. Defaults to "
-            "core, semantic_scholar, serpapi_google_scholar, arxiv. Omit providers "
+            "semantic_scholar, arxiv, core, serpapi_google_scholar. Omit providers "
             "to skip them for this request. `serpapi` is accepted as a shorthand "
-            "for `serpapi_google_scholar`."
+            "for `serpapi_google_scholar`. ScholarAPI is supported as an explicit "
+            "opt-in broker target via `scholarapi`, but it is not part of the default order."
         ),
     )
 
@@ -240,6 +243,76 @@ class MinimalProviderSearchPapersArgs(BasicSearchPapersArgs):
 
 class SemanticProviderSearchPapersArgs(SearchPapersBaseArgs):
     """Semantic Scholar single-source search arguments."""
+
+
+class ScholarApiSearchArgs(ToolArgsModel):
+    query: str = Field(description="ScholarAPI search query")
+    limit: int = Field(default=10, description="Max results (default 10, max 1000)")
+    cursor: str | None = Field(default=None, description=OPAQUE_CURSOR_FIELD_DESCRIPTION)
+    indexed_after: str | None = Field(
+        default=None,
+        description="Optional RFC3339 UTC lower bound for indexed_at.",
+    )
+    indexed_before: str | None = Field(
+        default=None,
+        description="Optional RFC3339 UTC upper bound for indexed_at.",
+    )
+    published_after: str | None = Field(
+        default=None,
+        description="Optional ISO date lower bound for published_date.",
+    )
+    published_before: str | None = Field(
+        default=None,
+        description="Optional ISO date upper bound for published_date.",
+    )
+    has_text: bool | None = Field(
+        default=None,
+        description="When true, only return records with full text available.",
+    )
+    has_pdf: bool | None = Field(
+        default=None,
+        description="When true, only return records with PDF available.",
+    )
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def clamp_limit(cls, value: int | None) -> int:
+        return _clamp_limit(value, 10, 1000)
+
+
+class ScholarApiListArgs(ToolArgsModel):
+    query: str | None = Field(default=None, description="Optional ScholarAPI keyword or phrase filter.")
+    limit: int = Field(default=100, description="Max results (default 100, max 1000)")
+    cursor: str | None = Field(default=None, description=OPAQUE_CURSOR_FIELD_DESCRIPTION)
+    indexed_after: str | None = Field(
+        default=None,
+        description="Optional RFC3339 UTC lower bound for indexed_at.",
+    )
+    indexed_before: str | None = Field(
+        default=None,
+        description="Optional RFC3339 UTC upper bound for indexed_at.",
+    )
+    published_after: str | None = Field(
+        default=None,
+        description="Optional ISO date lower bound for published_date.",
+    )
+    published_before: str | None = Field(
+        default=None,
+        description="Optional ISO date upper bound for published_date.",
+    )
+    has_text: bool | None = Field(
+        default=None,
+        description="When true, only return records with full text available.",
+    )
+    has_pdf: bool | None = Field(
+        default=None,
+        description="When true, only return records with PDF available.",
+    )
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def clamp_limit(cls, value: int | None) -> int:
+        return _clamp_limit(value, 100, 1000)
 
 
 class OpenAlexBulkSearchPapersArgs(BasicSearchPapersArgs):
@@ -417,6 +490,40 @@ class PaperEnrichmentLookupArgs(ToolArgsModel):
     doi: str | None = Field(
         default=None,
         description=DOI_INPUT_DESCRIPTION,
+    )
+
+
+class ScholarApiPaperTextArgs(ToolArgsModel):
+    paper_id: str = Field(
+        description=(
+            "ScholarAPI paper id for full-text retrieval. Accepts either a raw id "
+            "or a ScholarAPI:<id> value returned by search."
+        )
+    )
+
+
+class ScholarApiPaperTextsArgs(ToolArgsModel):
+    paper_ids: list[str] = Field(
+        description=(
+            "ScholarAPI paper ids to retrieve as full text (max 100). Each item may be "
+            "a raw id or a ScholarAPI:<id> value returned by search."
+        )
+    )
+
+    @field_validator("paper_ids")
+    @classmethod
+    def validate_paper_ids(cls, value: list[str]) -> list[str]:
+        if len(value) > 100:
+            raise ValueError(f"Maximum 100 ScholarAPI paper IDs per batch request, got {len(value)}")
+        return value
+
+
+class ScholarApiPaperPdfArgs(ToolArgsModel):
+    paper_id: str = Field(
+        description=(
+            "ScholarAPI paper id for PDF retrieval. Accepts either a raw id or a "
+            "ScholarAPI:<id> value returned by search."
+        )
     )
 
 
@@ -916,10 +1023,15 @@ class ProviderBudgetArgs(ToolArgsModel):
         alias="maxSerpApiCalls",
         description="Optional SerpApi call cap for one smart search.",
     )
+    max_scholarapi_calls: int | None = Field(
+        default=None,
+        alias="maxScholarApiCalls",
+        description="Optional ScholarAPI call cap for one smart search.",
+    )
     allow_paid_providers: bool = Field(
         default=True,
         alias="allowPaidProviders",
-        description="Set false to disallow paid providers such as SerpApi.",
+        description="Set false to disallow paid providers such as SerpApi or ScholarAPI.",
     )
 
 
@@ -1208,15 +1320,20 @@ TOOL_INPUT_MODELS: dict[str, type[ToolArgsModel]] = {
     "search_papers_core": MinimalProviderSearchPapersArgs,
     "search_papers_semantic_scholar": SemanticProviderSearchPapersArgs,
     "search_papers_serpapi": MinimalProviderSearchPapersArgs,
+    "search_papers_scholarapi": ScholarApiSearchArgs,
     "search_papers_arxiv": MinimalProviderSearchPapersArgs,
     "search_papers_openalex": MinimalProviderSearchPapersArgs,
     "search_papers_openalex_bulk": OpenAlexBulkSearchPapersArgs,
+    "list_papers_scholarapi": ScholarApiListArgs,
     "search_papers_bulk": BulkSearchPapersArgs,
     "search_papers_match": PaperMatchArgs,
     "resolve_citation": ResolveCitationArgs,
     "paper_autocomplete": PaperAutocompleteArgs,
     "paper_autocomplete_openalex": OpenAlexPaperAutocompleteArgs,
     "get_paper_details": PaperLookupArgs,
+    "get_paper_text_scholarapi": ScholarApiPaperTextArgs,
+    "get_paper_texts_scholarapi": ScholarApiPaperTextsArgs,
+    "get_paper_pdf_scholarapi": ScholarApiPaperPdfArgs,
     "get_paper_metadata_crossref": CrossrefEnrichmentArgs,
     "get_paper_open_access_unpaywall": UnpaywallEnrichmentArgs,
     "enrich_paper": EnrichPaperArgs,

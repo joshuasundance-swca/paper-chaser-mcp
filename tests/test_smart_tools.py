@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import types
 from typing import Any, cast
 
 import pytest
@@ -22,7 +23,12 @@ from paper_chaser_mcp.agentic.planner import (
     grounded_expansion_candidates,
     looks_like_exact_title,
 )
-from paper_chaser_mcp.agentic.providers import OpenAIProviderBundle
+from paper_chaser_mcp.agentic.providers import (
+    AnthropicProviderBundle,
+    AzureOpenAIProviderBundle,
+    GoogleProviderBundle,
+    OpenAIProviderBundle,
+)
 from paper_chaser_mcp.agentic.ranking import merge_candidates, rerank_candidates
 from paper_chaser_mcp.agentic.retrieval import (
     RetrievedCandidate,
@@ -38,6 +44,7 @@ from paper_chaser_mcp.provider_runtime import (
 from tests.helpers import (
     RecordingCrossrefClient,
     RecordingOpenAlexClient,
+    RecordingScholarApiClient,
     RecordingSemanticClient,
     RecordingUnpaywallClient,
     _payload,
@@ -84,7 +91,11 @@ def _deterministic_runtime(
     *,
     semantic: RecordingSemanticClient,
     openalex: RecordingOpenAlexClient,
+    scholarapi: RecordingScholarApiClient | None = None,
     disable_embeddings: bool = True,
+    enable_semantic_scholar: bool = True,
+    enable_openalex: bool = True,
+    enable_scholarapi: bool = False,
 ) -> tuple[WorkspaceRegistry, AgenticRuntime]:
     config = AgenticConfig(
         enabled=True,
@@ -105,11 +116,13 @@ def _deterministic_runtime(
         client=semantic,
         core_client=object(),
         openalex_client=openalex,
+        scholarapi_client=scholarapi,
         arxiv_client=object(),
         serpapi_client=None,
         enable_core=False,
-        enable_semantic_scholar=True,
-        enable_openalex=True,
+        enable_semantic_scholar=enable_semantic_scholar,
+        enable_openalex=enable_openalex,
+        enable_scholarapi=enable_scholarapi,
         enable_arxiv=False,
         enable_serpapi=False,
     )
@@ -127,6 +140,75 @@ def _deterministic_config() -> AgenticConfig:
         session_ttl_seconds=1800,
         enable_trace_log=False,
     )
+
+
+def _runtime_with_provider_bundle(
+    *,
+    config: AgenticConfig,
+    provider_bundle: Any,
+    semantic: RecordingSemanticClient,
+    openalex: RecordingOpenAlexClient,
+    provider_registry: ProviderDiagnosticsRegistry | None = None,
+) -> tuple[WorkspaceRegistry, AgenticRuntime]:
+    registry = WorkspaceRegistry(
+        ttl_seconds=1800,
+        enable_trace_log=False,
+        similarity_fn=provider_bundle.similarity,
+        async_batched_similarity_fn=provider_bundle.abatched_similarity,
+        async_embed_query_fn=(provider_bundle.aembed_query if provider_bundle.supports_embeddings() else None),
+        async_embed_texts_fn=(provider_bundle.aembed_texts if provider_bundle.supports_embeddings() else None),
+        embed_query_fn=(provider_bundle.embed_query if provider_bundle.supports_embeddings() else None),
+        embed_texts_fn=(provider_bundle.embed_texts if provider_bundle.supports_embeddings() else None),
+    )
+    runtime = AgenticRuntime(
+        config=config,
+        provider_bundle=provider_bundle,
+        workspace_registry=registry,
+        client=semantic,
+        core_client=object(),
+        openalex_client=openalex,
+        arxiv_client=object(),
+        serpapi_client=None,
+        enable_core=False,
+        enable_semantic_scholar=True,
+        enable_openalex=True,
+        enable_arxiv=False,
+        enable_serpapi=False,
+        provider_registry=provider_registry,
+    )
+    return registry, runtime
+
+
+class _StructuredInvoker:
+    def __init__(self, model: "_SequenceModel") -> None:
+        self._model = model
+
+    def invoke(self, messages: list[tuple[str, str]]) -> Any:
+        assert messages
+        return self._model.structured_responses.pop(0)
+
+    async def ainvoke(self, messages: list[tuple[str, str]]) -> Any:
+        assert messages
+        return self._model.structured_responses.pop(0)
+
+
+class _SequenceModel:
+    def __init__(self, *, structured_responses: list[Any], text_responses: list[str]) -> None:
+        self.structured_responses = list(structured_responses)
+        self.text_responses = list(text_responses)
+
+    def with_structured_output(self, schema: Any, method: str | None = None) -> _StructuredInvoker:
+        assert schema is not None
+        del method
+        return _StructuredInvoker(self)
+
+    def invoke(self, messages: list[tuple[str, str]]) -> Any:
+        assert messages
+        return types.SimpleNamespace(content=self.text_responses.pop(0))
+
+    async def ainvoke(self, messages: list[tuple[str, str]]) -> Any:
+        assert messages
+        return types.SimpleNamespace(content=self.text_responses.pop(0))
 
 
 @pytest.mark.asyncio
@@ -368,10 +450,29 @@ async def test_ask_result_set_runs_synthesis_and_scoring_concurrently(
 ) -> None:
     semantic = RecordingSemanticClient()
     openalex = RecordingOpenAlexClient()
-    registry, runtime = _deterministic_runtime(
+    config = AgenticConfig(
+        enabled=True,
+        provider="openai",
+        planner_model="gpt-5.4-mini",
+        synthesis_model="gpt-5.4",
+        embedding_model="text-embedding-3-large",
+        index_backend="memory",
+        session_ttl_seconds=1800,
+        enable_trace_log=False,
+        disable_embeddings=False,
+    )
+    provider_registry = ProviderDiagnosticsRegistry()
+    bundle = OpenAIProviderBundle(
+        config,
+        api_key="sk-test",
+        provider_registry=provider_registry,
+    )
+    registry, runtime = _runtime_with_provider_bundle(
+        config=config,
+        provider_bundle=bundle,
         semantic=semantic,
         openalex=openalex,
-        disable_embeddings=False,
+        provider_registry=provider_registry,
     )
     record = registry.save_result_set(
         source_tool="search_papers_smart",
@@ -515,9 +616,20 @@ async def test_ask_result_set_balanced_mode_skips_embedding_scoring() -> None:
     ) -> list[tuple[float, ...] | None]:
         raise AssertionError(f"balanced ask_result_set should not call embeddings: {texts!r}, {kwargs!r}")
 
+    def _unexpected_similarity(query: str, text: str) -> float:
+        raise AssertionError(f"balanced ask_result_set should not use workspace model similarity: {query!r}, {text!r}")
+
+    async def _unexpected_async_similarity(query: str, texts: list[str]) -> list[float]:
+        raise AssertionError(f"balanced ask_result_set should not use workspace async similarity: {query!r}, {texts!r}")
+
     bundle.aembed_texts = _unexpected_aembed_texts  # type: ignore[method-assign]
 
-    registry = WorkspaceRegistry(ttl_seconds=1800, enable_trace_log=False)
+    registry = WorkspaceRegistry(
+        ttl_seconds=1800,
+        enable_trace_log=False,
+        similarity_fn=_unexpected_similarity,
+        async_batched_similarity_fn=_unexpected_async_similarity,
+    )
     record = registry.save_result_set(
         source_tool="search_papers_smart",
         payload={
@@ -556,6 +668,127 @@ async def test_ask_result_set_balanced_mode_skips_embedding_scoring() -> None:
     )
 
     assert ask["answer"]
+
+
+@pytest.mark.asyncio
+async def test_search_papers_smart_known_item_fallback_honors_provider_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    scholarapi = RecordingScholarApiClient()
+    registry, runtime = _deterministic_runtime(
+        semantic=semantic,
+        openalex=openalex,
+        scholarapi=scholarapi,
+        enable_openalex=False,
+        enable_scholarapi=True,
+    )
+
+    async def fake_classify_query(**kwargs: object) -> tuple[str, PlannerDecision]:
+        query = str(kwargs["query"])
+        return (
+            query,
+            PlannerDecision(
+                intent="known_item",
+                constraints={},
+                seedIdentifiers=[],
+                candidateConcepts=[],
+                providerPlan=["scholarapi"],
+                followUpMode="qa",
+            ),
+        )
+
+    async def fake_resolve_citation(**kwargs: object) -> dict[str, object]:
+        del kwargs
+        return {"bestMatch": None, "alternatives": [], "resolutionConfidence": "low"}
+
+    async def fake_search_papers_match(**kwargs: object) -> dict[str, object]:
+        semantic.calls.append(("search_papers_match", dict(kwargs)))
+        return {"matchFound": False}
+
+    monkeypatch.setattr("paper_chaser_mcp.agentic.graphs.classify_query", fake_classify_query)
+    monkeypatch.setattr("paper_chaser_mcp.agentic.graphs.resolve_citation", fake_resolve_citation)
+    semantic.search_papers_match = fake_search_papers_match  # type: ignore[method-assign]
+
+    smart = await runtime.search_papers_smart(
+        query="Graphene Full-Text Retrieval Workflows",
+        limit=5,
+        latency_profile="fast",
+    )
+
+    assert smart["results"]
+    assert smart["results"][0]["paper"]["paperId"] == "ScholarAPI:sa-1"
+    assert not [call for call in semantic.calls if call[0] == "search_papers"]
+    assert scholarapi.calls and scholarapi.calls[0][0] == "search"
+    assert smart["strategyMetadata"]["providersUsed"] == ["scholarapi"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_budget", "expected_reason", "expected_budget_field", "expected_budget_value"),
+    [
+        (
+            {"allow_paid_providers": False},
+            "disallows paid providers",
+            "allowPaidProviders",
+            False,
+        ),
+        (
+            {"max_scholarapi_calls": 0},
+            "per-provider limit for scholarapi",
+            "maxScholarApiCalls",
+            0,
+        ),
+    ],
+)
+async def test_search_papers_smart_known_item_fallback_honors_scholarapi_budget_controls(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_budget: dict[str, object],
+    expected_reason: str,
+    expected_budget_field: str,
+    expected_budget_value: object,
+) -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    scholarapi = RecordingScholarApiClient()
+    registry, runtime = _deterministic_runtime(
+        semantic=semantic,
+        openalex=openalex,
+        scholarapi=scholarapi,
+        enable_semantic_scholar=False,
+        enable_openalex=False,
+        enable_scholarapi=True,
+    )
+
+    async def fake_resolve_citation(**kwargs: object) -> dict[str, object]:
+        del kwargs
+        return {"bestMatch": None, "alternatives": [], "resolutionConfidence": "low"}
+
+    async def fake_search_papers_match(**kwargs: object) -> dict[str, object]:
+        semantic.calls.append(("search_papers_match", dict(kwargs)))
+        return {"matchFound": False}
+
+    monkeypatch.setattr("paper_chaser_mcp.agentic.graphs.resolve_citation", fake_resolve_citation)
+    semantic.search_papers_match = fake_search_papers_match  # type: ignore[method-assign]
+
+    smart = await runtime.search_papers_smart(
+        query="Graphene Full-Text Retrieval Workflows",
+        limit=5,
+        mode="known_item",
+        latency_profile="fast",
+        provider_budget=provider_budget,
+    )
+
+    assert smart["results"] == []
+    assert scholarapi.calls == []
+    assert smart["strategyMetadata"]["providerBudgetApplied"][expected_budget_field] == expected_budget_value
+    assert any(
+        outcome["provider"] == "scholarapi"
+        and outcome["statusBucket"] == "skipped"
+        and expected_reason in str(outcome.get("fallbackReason") or "")
+        for outcome in smart["strategyMetadata"]["providerOutcomes"]
+    )
 
 
 @pytest.mark.asyncio
@@ -1059,6 +1292,243 @@ async def test_search_papers_smart_deep_mode_skips_embeddings_when_disabled() ->
         outcome
         for outcome in payload["strategyMetadata"]["providerOutcomes"]
         if outcome["provider"] == "openai" and outcome["endpoint"] == "embeddings.create"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_search_papers_smart_reports_deterministic_active_provider_when_azure_falls_back() -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    config = AgenticConfig(
+        enabled=True,
+        provider="azure-openai",
+        planner_model="planner-deployment",
+        synthesis_model="synthesis-deployment",
+        embedding_model="embedding-deployment",
+        index_backend="memory",
+        session_ttl_seconds=1800,
+        enable_trace_log=False,
+    )
+    bundle = AzureOpenAIProviderBundle(
+        config,
+        api_key=None,
+        azure_endpoint=None,
+        api_version=None,
+    )
+    _, runtime = _runtime_with_provider_bundle(
+        config=config,
+        provider_bundle=bundle,
+        semantic=semantic,
+        openalex=openalex,
+    )
+
+    payload = await runtime.search_papers_smart(
+        query="transformers",
+        limit=5,
+        latency_profile="balanced",
+    )
+
+    assert payload["results"]
+    assert payload["strategyMetadata"]["configuredSmartProvider"] == "azure-openai"
+    assert payload["strategyMetadata"]["activeSmartProvider"] == "deterministic"
+    assert payload["strategyMetadata"]["plannerModelSource"] == "deterministic"
+    assert payload["strategyMetadata"]["synthesisModelSource"] == "deterministic"
+    assert payload["strategyMetadata"]["plannerModel"] == "azure-openai:deterministic-planner"
+    assert payload["strategyMetadata"]["synthesisModel"] == "azure-openai:deterministic-synthesizer"
+
+
+@pytest.mark.asyncio
+async def test_search_papers_smart_smoke_uses_azure_openai_provider_and_embeddings() -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    config = AgenticConfig(
+        enabled=True,
+        provider="azure-openai",
+        planner_model="planner-deployment",
+        synthesis_model="synthesis-deployment",
+        embedding_model="embedding-deployment",
+        index_backend="memory",
+        session_ttl_seconds=1800,
+        enable_trace_log=False,
+        disable_embeddings=False,
+        planner_model_source="azure_deployment",
+        synthesis_model_source="azure_deployment",
+    )
+    provider_registry = ProviderDiagnosticsRegistry()
+    bundle = AzureOpenAIProviderBundle(
+        config,
+        api_key="azure-key",
+        azure_endpoint="https://example.openai.azure.com/",
+        api_version="2024-10-21",
+        provider_registry=provider_registry,
+    )
+
+    class _ResponsesClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def parse(self, **kwargs: object) -> object:
+            del kwargs
+            self.calls += 1
+            if self.calls == 1:
+                return types.SimpleNamespace(
+                    output_parsed={
+                        "intent": "discovery",
+                        "constraints": {},
+                        "seedIdentifiers": [],
+                        "candidateConcepts": ["transformers"],
+                        "providerPlan": ["semantic_scholar", "openalex"],
+                        "followUpMode": "qa",
+                    }
+                )
+            return types.SimpleNamespace(output_parsed={"expansions": []})
+
+    class _EmbeddingsClient:
+        async def create(self, **kwargs: object) -> object:
+            payload = kwargs["input"]
+            if isinstance(payload, list):
+                return {
+                    "data": [{"embedding": [1.0, 0.0] if "transformers" in text else [0.0, 1.0]} for text in payload]
+                }
+            return {"data": [{"embedding": [1.0, 0.0]}]}
+
+    class _AsyncClient:
+        responses = _ResponsesClient()
+        embeddings = _EmbeddingsClient()
+
+    bundle._async_openai_client = _AsyncClient()
+    bundle._openai_client = None
+    _, runtime = _runtime_with_provider_bundle(
+        config=config,
+        provider_bundle=bundle,
+        semantic=semantic,
+        openalex=openalex,
+        provider_registry=provider_registry,
+    )
+
+    payload = await runtime.search_papers_smart(
+        query="transformers",
+        limit=5,
+        latency_profile="deep",
+    )
+
+    assert payload["results"]
+    assert payload["strategyMetadata"]["configuredSmartProvider"] == "azure-openai"
+    assert payload["strategyMetadata"]["activeSmartProvider"] == "azure-openai"
+    assert payload["strategyMetadata"]["plannerModelSource"] == "azure_deployment"
+    assert payload["strategyMetadata"]["synthesisModelSource"] == "azure_deployment"
+    assert any(
+        outcome["provider"] == "azure-openai"
+        and outcome["endpoint"] == "responses.parse:planner"
+        and outcome["statusBucket"] == "success"
+        for outcome in payload["strategyMetadata"]["providerOutcomes"]
+    )
+    assert any(
+        outcome["provider"] == "azure-openai"
+        and outcome["endpoint"] == "embeddings.create"
+        and outcome["statusBucket"] == "success"
+        for outcome in payload["strategyMetadata"]["providerOutcomes"]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_name", "bundle_factory", "model_name"),
+    [
+        (
+            "anthropic",
+            lambda config, registry: AnthropicProviderBundle(
+                config,
+                api_key="sk-ant-test",
+                provider_registry=registry,
+            ),
+            "claude-sonnet-4-5",
+        ),
+        (
+            "google",
+            lambda config, registry: GoogleProviderBundle(
+                config,
+                api_key="google-key",
+                provider_registry=registry,
+            ),
+            "gemini-2.5-flash",
+        ),
+    ],
+)
+async def test_search_papers_smart_smoke_langchain_providers_skip_embedding_rerank(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_name: str,
+    bundle_factory: Any,
+    model_name: str,
+) -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    config = AgenticConfig(
+        enabled=True,
+        provider=provider_name,
+        planner_model=model_name,
+        synthesis_model=model_name,
+        embedding_model="text-embedding-3-large",
+        index_backend="memory",
+        session_ttl_seconds=1800,
+        enable_trace_log=False,
+        disable_embeddings=False,
+        planner_model_source="provider_default",
+        synthesis_model_source="provider_default",
+    )
+    provider_registry = ProviderDiagnosticsRegistry()
+    bundle = bundle_factory(config, provider_registry)
+    planner = _SequenceModel(
+        structured_responses=[
+            {
+                "intent": "discovery",
+                "constraints": {},
+                "seedIdentifiers": [],
+                "candidateConcepts": ["transformers"],
+                "providerPlan": ["semantic_scholar", "openalex"],
+                "followUpMode": "qa",
+            },
+            {"expansions": []},
+        ],
+        text_responses=[],
+    )
+    synthesizer = _SequenceModel(structured_responses=[], text_responses=[])
+
+    monkeypatch.setattr(bundle, "_load_models", lambda: (planner, synthesizer))
+
+    async def _explode_similarity(*args: object, **kwargs: object) -> list[float]:
+        raise AssertionError("deep rerank should not use chat-only provider embeddings")
+
+    monkeypatch.setattr(bundle, "abatched_similarity", _explode_similarity)
+    _, runtime = _runtime_with_provider_bundle(
+        config=config,
+        provider_bundle=bundle,
+        semantic=semantic,
+        openalex=openalex,
+        provider_registry=provider_registry,
+    )
+
+    payload = await runtime.search_papers_smart(
+        query="transformers",
+        limit=5,
+        latency_profile="deep",
+    )
+
+    assert payload["results"]
+    assert payload["strategyMetadata"]["configuredSmartProvider"] == provider_name
+    assert payload["strategyMetadata"]["activeSmartProvider"] == provider_name
+    assert payload["strategyMetadata"]["plannerModelSource"] == "provider_default"
+    assert payload["strategyMetadata"]["synthesisModelSource"] == "provider_default"
+    assert any(
+        outcome["provider"] == provider_name
+        and outcome["endpoint"] == "structured:planner"
+        and outcome["statusBucket"] == "success"
+        for outcome in payload["strategyMetadata"]["providerOutcomes"]
+    )
+    assert not [
+        outcome
+        for outcome in payload["strategyMetadata"]["providerOutcomes"]
+        if outcome["provider"] == provider_name and outcome["endpoint"] == "embeddings.create"
     ]
 
 
@@ -1837,8 +2307,10 @@ def test_provider_limits_reduce_expansion_fetch_sizes_for_balanced_review() -> N
 
     assert initial["semantic_scholar"] > expansion["semantic_scholar"]
     assert initial["openalex"] > expansion["openalex"]
+    assert initial["scholarapi"] > expansion["scholarapi"]
     assert expansion["semantic_scholar"] == 6
     assert expansion["openalex"] == 6
+    assert expansion["scholarapi"] == 4
     assert expansion["serpapi_google_scholar"] == 2
 
 
@@ -2171,3 +2643,90 @@ async def test_retrieve_variant_skips_serpapi_when_disabled_for_variant() -> Non
 
     assert batch.providers_used == []
     assert batch.candidates == []
+
+
+@pytest.mark.asyncio
+async def test_retrieve_variant_includes_scholarapi_when_enabled() -> None:
+    class _EmptyClient:
+        async def search(self, **kwargs: object) -> dict:
+            return {"data": []}
+
+    scholarapi = RecordingScholarApiClient()
+
+    batch = await retrieve_variant(
+        variant="graphene full text retrieval",
+        variant_source="from_input",
+        intent="discovery",
+        year="2024",
+        venue=None,
+        enable_core=False,
+        enable_semantic_scholar=False,
+        enable_openalex=False,
+        enable_arxiv=False,
+        enable_serpapi=False,
+        enable_scholarapi=True,
+        core_client=_EmptyClient(),
+        semantic_client=_EmptyClient(),
+        openalex_client=_EmptyClient(),
+        scholarapi_client=scholarapi,
+        arxiv_client=_EmptyClient(),
+        serpapi_client=None,
+        provider_plan=["scholarapi"],
+    )
+
+    assert batch.providers_used == ["scholarapi"]
+    assert batch.candidates
+    assert batch.candidates[0].provider == "scholarapi"
+    assert scholarapi.calls[0][0] == "search"
+
+
+@pytest.mark.asyncio
+async def test_search_papers_smart_can_use_scholarapi_when_enabled() -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+
+    class _SmartScholarApiClient(RecordingScholarApiClient):
+        async def search(self, **kwargs: object) -> dict:
+            self.calls.append(("search", dict(kwargs)))
+            return {
+                "provider": "scholarapi",
+                "total": 1,
+                "offset": 0,
+                "data": [
+                    {
+                        "paperId": "ScholarAPI:smart-1",
+                        "title": "Graphene Full-Text Retrieval Workflows",
+                        "abstract": "A paper about graphene retrieval workflows with accessible full text.",
+                        "year": 2024,
+                        "authors": [{"name": "Lead Author"}],
+                        "source": "scholarapi",
+                    }
+                ],
+            }
+
+    scholarapi = _SmartScholarApiClient()
+    registry, runtime = _deterministic_runtime(
+        semantic=semantic,
+        openalex=openalex,
+        scholarapi=scholarapi,
+        enable_semantic_scholar=False,
+        enable_openalex=False,
+        enable_scholarapi=True,
+    )
+
+    payload = await runtime.search_papers_smart(
+        query="graphene full text retrieval",
+        limit=5,
+        latency_profile="fast",
+        provider_budget={"max_scholarapi_calls": 1},
+    )
+
+    assert payload["results"]
+    assert payload["strategyMetadata"]["providersUsed"] == ["scholarapi"]
+    assert payload["strategyMetadata"]["paidProvidersUsed"] == ["scholarapi"]
+    assert payload["strategyMetadata"]["configuredSmartProvider"] == "deterministic"
+    assert payload["strategyMetadata"]["activeSmartProvider"] == "deterministic"
+    assert payload["strategyMetadata"]["plannerModelSource"] == "deterministic"
+    assert payload["strategyMetadata"]["synthesisModelSource"] == "deterministic"
+    assert payload["strategyMetadata"]["providerBudgetApplied"]["maxScholarApiCalls"] == 1
+    assert scholarapi.calls

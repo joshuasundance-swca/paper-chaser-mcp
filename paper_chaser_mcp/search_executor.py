@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Literal
@@ -33,6 +34,7 @@ ProviderExecutorName = Literal[
     "core",
     "arxiv",
     "serpapi_google_scholar",
+    "scholarapi",
 ]
 
 
@@ -40,6 +42,7 @@ ProviderExecutorName = Literal[
 class ProviderCapabilities:
     supports_semantic_scholar_only_filters: bool = False
     hedge_eligible: bool = False
+    supported_filter_aliases: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -63,6 +66,7 @@ class SearchClientBundle:
     openalex_client: Any = None
     arxiv_client: Any = None
     serpapi_client: Any = None
+    scholarapi_client: Any = None
 
 
 @dataclass(frozen=True)
@@ -159,6 +163,7 @@ def default_disabled_reason(provider: ProviderExecutorName) -> str:
         "core": "Disabled by PAPER_CHASER_ENABLE_CORE=false.",
         "semantic_scholar": "Disabled by PAPER_CHASER_ENABLE_SEMANTIC_SCHOLAR=false.",
         "serpapi_google_scholar": "Disabled by PAPER_CHASER_ENABLE_SERPAPI=false.",
+        "scholarapi": "Disabled by PAPER_CHASER_ENABLE_SCHOLARAPI=false.",
         "arxiv": "Disabled by PAPER_CHASER_ENABLE_ARXIV=false.",
         "openalex": "Disabled by PAPER_CHASER_ENABLE_OPENALEX=false.",
     }
@@ -172,6 +177,7 @@ def missing_client_reason(provider: ProviderExecutorName) -> str:
         "openalex": "Enabled but no OpenAlex client is configured.",
         "arxiv": "Enabled but no arXiv client is configured.",
         "serpapi_google_scholar": "Enabled but no SerpApi client is configured.",
+        "scholarapi": "Enabled but no ScholarAPI client is configured.",
     }
     return reasons[provider]
 
@@ -245,10 +251,41 @@ def _serpapi_operation(clients: SearchClientBundle, request: ProviderSearchReque
     )
 
 
+def _scholarapi_operation(clients: SearchClientBundle, request: ProviderSearchRequest) -> Callable[[], Awaitable[Any]]:
+    published_after = None
+    published_before = None
+    if request.year:
+        normalized = str(request.year).strip()
+        if re.fullmatch(r"\d{4}", normalized):
+            published_after = f"{normalized}-01-01"
+            published_before = f"{normalized}-12-31"
+        elif re.fullmatch(r"\d{4}[-:]\d{4}", normalized):
+            start_year, end_year = re.split(r"[-:]", normalized, maxsplit=1)
+            published_after = f"{start_year}-01-01"
+            published_before = f"{end_year}-12-31"
+        elif re.fullmatch(r"\d{4}-", normalized):
+            published_after = f"{normalized[:4]}-01-01"
+        elif re.fullmatch(r"-\d{4}", normalized):
+            published_before = f"{normalized[1:]}-12-31"
+    return lambda: clients.scholarapi_client.search(
+        query=request.query,
+        limit=request.limit,
+        published_after=published_after,
+        published_before=published_before,
+        has_pdf=True if request.open_access_pdf else None,
+    )
+
+
 def _serpapi_propagate_exceptions() -> tuple[type[Exception], ...]:
     from .clients.serpapi.errors import SerpApiKeyMissingError
 
     return (SerpApiKeyMissingError,)
+
+
+def _scholarapi_propagate_exceptions() -> tuple[type[Exception], ...]:
+    from .clients.scholarapi.errors import ScholarApiKeyMissingError
+
+    return (ScholarApiKeyMissingError,)
 
 
 SEARCH_PROVIDER_SPECS: dict[ProviderExecutorName, SearchProviderSpec] = {
@@ -312,6 +349,23 @@ SEARCH_PROVIDER_SPECS: dict[ProviderExecutorName, SearchProviderSpec] = {
         parse_response=serpapi_result,
         propagate_exceptions=_serpapi_propagate_exceptions,
     ),
+    "scholarapi": SearchProviderSpec(
+        provider="scholarapi",
+        endpoint="search",
+        client_attr="scholarapi_client",
+        capabilities=ProviderCapabilities(
+            supports_semantic_scholar_only_filters=False,
+            hedge_eligible=False,
+            supported_filter_aliases=frozenset({"openAccessPdf"}),
+        ),
+        build_operation=_scholarapi_operation,
+        parse_response=lambda payload, limit: SearchResponse(
+            total=int((payload or {}).get("total") or len(list((payload or {}).get("data") or []))),
+            offset=int((payload or {}).get("offset") or 0),
+            data=[Paper.model_validate(paper) for paper in list((payload or {}).get("data") or [])[:limit]],
+        ),
+        propagate_exceptions=_scholarapi_propagate_exceptions,
+    ),
 }
 
 
@@ -347,10 +401,23 @@ class SearchExecutor:
             return None
         if not ss_only_filters:
             return None
+        unsupported_filters = [
+            filter_name
+            for filter_name in ss_only_filters
+            if filter_name not in spec.capabilities.supported_filter_aliases
+        ]
+        if not unsupported_filters:
+            return None
+        reason = (
+            "Skipped because Semantic Scholar-only filters were requested: " + ", ".join(ss_only_filters)
+            if not spec.capabilities.supported_filter_aliases
+            else "Skipped because this provider cannot honor requested advanced filters: "
+            + ", ".join(unsupported_filters)
+        )
         return BrokerAttempt(
             provider=provider,
             status="skipped",
-            reason=("Skipped because Semantic Scholar-only filters were requested: " + ", ".join(ss_only_filters)),
+            reason=reason,
         )
 
     def provider_enabled(

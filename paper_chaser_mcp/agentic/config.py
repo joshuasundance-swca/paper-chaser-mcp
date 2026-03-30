@@ -8,6 +8,14 @@ from typing import Literal
 from ..settings import AppSettings
 
 LatencyProfile = Literal["fast", "balanced", "deep"]
+ModelSelectionSource = Literal["configured", "azure_deployment", "provider_default", "deterministic"]
+
+_DEFAULT_OPENAI_PLANNER_MODEL = "gpt-5.4-mini"
+_DEFAULT_OPENAI_SYNTHESIS_MODEL = "gpt-5.4"
+_PROVIDER_DEFAULT_MODELS: dict[str, tuple[str, str]] = {
+    "anthropic": ("claude-sonnet-4-5", "claude-sonnet-4-5"),
+    "google": ("gemini-2.5-flash", "gemini-2.5-flash"),
+}
 
 
 @dataclass(frozen=True)
@@ -38,6 +46,8 @@ class AgenticConfig:
     enable_trace_log: bool
     disable_embeddings: bool = True
     openai_timeout_seconds: float = 30.0
+    planner_model_source: ModelSelectionSource = "configured"
+    synthesis_model_source: ModelSelectionSource = "configured"
     max_grounded_variants: int = 3
     max_speculative_variants: int = 3
     max_total_variants: int = 6
@@ -123,14 +133,37 @@ class AgenticConfig:
 
     @classmethod
     def from_settings(cls, settings: AppSettings) -> "AgenticConfig":
+        planner_model = settings.planner_model
+        synthesis_model = settings.synthesis_model
+        planner_model_source: ModelSelectionSource = "configured"
+        synthesis_model_source: ModelSelectionSource = "configured"
+
+        if settings.agentic_provider == "azure-openai":
+            if settings.azure_openai_planner_deployment:
+                planner_model = settings.azure_openai_planner_deployment
+                planner_model_source = "azure_deployment"
+            if settings.azure_openai_synthesis_deployment:
+                synthesis_model = settings.azure_openai_synthesis_deployment
+                synthesis_model_source = "azure_deployment"
+        elif (
+            settings.agentic_provider in _PROVIDER_DEFAULT_MODELS
+            and planner_model == _DEFAULT_OPENAI_PLANNER_MODEL
+            and synthesis_model == _DEFAULT_OPENAI_SYNTHESIS_MODEL
+        ):
+            planner_model, synthesis_model = _PROVIDER_DEFAULT_MODELS[settings.agentic_provider]
+            planner_model_source = "provider_default"
+            synthesis_model_source = "provider_default"
+
         return cls(
             enabled=settings.enable_agentic,
             provider=settings.agentic_provider,
-            planner_model=settings.planner_model,
-            synthesis_model=settings.synthesis_model,
+            planner_model=planner_model,
+            synthesis_model=synthesis_model,
             embedding_model=settings.embedding_model,
             disable_embeddings=settings.disable_embeddings,
             openai_timeout_seconds=settings.agentic_openai_timeout_seconds,
+            planner_model_source=planner_model_source,
+            synthesis_model_source=synthesis_model_source,
             index_backend=settings.agentic_index_backend,
             session_ttl_seconds=settings.session_ttl_seconds,
             enable_trace_log=settings.enable_agentic_trace_log,
