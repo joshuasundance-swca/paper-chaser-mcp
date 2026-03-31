@@ -18,6 +18,7 @@ services:
       AZURE_OPENAI_SYNTHESIS_DEPLOYMENT: ${AZURE_OPENAI_SYNTHESIS_DEPLOYMENT:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
       CORE_API_KEY: ${CORE_API_KEY:-}
       SEMANTIC_SCHOLAR_API_KEY: ${SEMANTIC_SCHOLAR_API_KEY:-}
       OPENALEX_API_KEY: ${OPENALEX_API_KEY:-}
@@ -54,7 +55,7 @@ services:
       ECOS_VERIFY_TLS: ${ECOS_VERIFY_TLS:-true}
       ECOS_CA_BUNDLE: ${ECOS_CA_BUNDLE:-}
       PAPER_CHASER_PROVIDER_ORDER: ${PAPER_CHASER_PROVIDER_ORDER:-}
-      # Smart workflow providers: openai, azure-openai, anthropic, google, deterministic.
+      # Smart workflow providers: openai, azure-openai, anthropic, google, mistral, deterministic.
       # Embeddings remain disabled by default.
       PAPER_CHASER_AGENTIC_PROVIDER: ${PAPER_CHASER_AGENTIC_PROVIDER:-openai}
       PAPER_CHASER_PLANNER_MODEL: ${PAPER_CHASER_PLANNER_MODEL:-gpt-5.4-mini}

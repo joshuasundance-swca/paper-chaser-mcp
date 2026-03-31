@@ -51,7 +51,7 @@ GitHub Actions private runner
 ### Upstream provider keys
 
 The server can use keys for CORE, Semantic Scholar, OpenAlex, SerpApi, and the
-optional OpenAI, Azure OpenAI, Anthropic, or Google-backed smart layer. Those
+optional OpenAI, Azure OpenAI, Anthropic, Google, or Mistral-backed smart layer. Those
 keys are **server-side only**.
 
 - They are stored in Azure Key Vault.
