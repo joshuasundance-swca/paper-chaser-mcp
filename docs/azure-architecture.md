@@ -51,7 +51,7 @@ GitHub Actions private runner
 ### Upstream provider keys
 
 The server can use keys for CORE, Semantic Scholar, OpenAlex, SerpApi, and the
-optional OpenAI, Azure OpenAI, Anthropic, NVIDIA, Google, or Mistral-backed smart layer. Those
+optional OpenAI, Azure OpenAI, Anthropic, Hugging Face, NVIDIA, Google, or Mistral-backed smart layer. Those
 keys are **server-side only**.
 
 - They are stored in Azure Key Vault.
@@ -68,9 +68,15 @@ the CORE fallback hop.
 When the smart layer is enabled, the Container App reads the provider-specific
 credential from Key Vault and keeps all LangChain/LangGraph planning and
 synthesis calls server-side. NVIDIA is currently integrated as a chat-only
-provider in this repo; embeddings remain a later cross-provider overhaul. For `agenticProvider=azure-openai`,
-the Container App also receives `AZURE_OPENAI_ENDPOINT` and, when configured,
-`AZURE_OPENAI_API_VERSION` from non-secret Bicep params.
+provider in this repo; embeddings remain a later cross-provider overhaul.
+Hugging Face is likewise chat-only and uses an OpenAI-compatible router base
+URL rather than a second Azure-native control plane. For
+`agenticProvider=azure-openai`, the Container App also receives
+`AZURE_OPENAI_ENDPOINT` and, when configured, `AZURE_OPENAI_API_VERSION` from
+non-secret Bicep params. For `agenticProvider=nvidia`, the Container App can
+also receive optional `NVIDIA_NIM_BASE_URL` config for self-hosted NIMs, and
+for `agenticProvider=huggingface` it receives `HUGGINGFACE_BASE_URL` from the
+Azure scaffold.
 
 ### Client access credentials
 

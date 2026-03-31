@@ -57,6 +57,10 @@ These are the credentials the MCP server uses to talk to scholarly providers.
 of Key Vault unless the URL itself is sensitive, such as a private router or
 gateway hostname.
 
+`NVIDIA_NIM_BASE_URL` is also deployment config rather than an API key. Keep it
+out of Key Vault unless the endpoint itself is sensitive, such as a private NIM
+hostname inside your network.
+
 These are server-side secrets only. Embeddings remain disabled by default, and
 NVIDIA plus the documented Hugging Face path are currently chat-only in this
 repo, so no additional embedding-specific secrets are required for those

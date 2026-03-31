@@ -23,6 +23,7 @@ param keyVaultAnthropicApiKeySecretUri string
 param keyVaultAzureOpenAiApiKeySecretUri string
 param keyVaultCoreApiKeySecretUri string
 param keyVaultGoogleApiKeySecretUri string
+param keyVaultHuggingFaceApiKeySecretUri string
 param keyVaultMistralApiKeySecretUri string
 param keyVaultNvidiaApiKeySecretUri string
 param keyVaultOpenAiApiKeySecretUri string
@@ -36,6 +37,8 @@ param location string
 param managedIdentityResourceId string
 param maxReplicas int
 param minReplicas int
+param huggingFaceBaseUrl string = 'https://router.huggingface.co/v1'
+param nvidiaNimBaseUrl string = ''
 param plannerModel string
 param registryServer string
 param sessionTtlSeconds int
@@ -125,6 +128,12 @@ var secretDefinitions = concat([
     identity: managedIdentityResourceId
     keyVaultUrl: keyVaultGoogleApiKeySecretUri
     name: 'google-api-key'
+  }
+] : [], enableAgentic && agenticProvider == 'huggingface' ? [
+  {
+    identity: managedIdentityResourceId
+    keyVaultUrl: keyVaultHuggingFaceApiKeySecretUri
+    name: 'huggingface-api-key'
   }
 ] : [], enableAgentic && agenticProvider == 'mistral' ? [
   {
@@ -247,6 +256,16 @@ var containerEnv = concat([
     name: 'AZURE_OPENAI_API_VERSION'
     value: azureOpenAiApiVersion
   }
+] : [], !empty(huggingFaceBaseUrl) ? [
+  {
+    name: 'HUGGINGFACE_BASE_URL'
+    value: huggingFaceBaseUrl
+  }
+] : [], !empty(nvidiaNimBaseUrl) ? [
+  {
+    name: 'NVIDIA_NIM_BASE_URL'
+    value: nvidiaNimBaseUrl
+  }
 ] : [], [
   {
     name: 'PAPER_CHASER_AGENTIC_INDEX_BACKEND'
@@ -327,6 +346,11 @@ var containerEnv = concat([
   {
     name: 'GOOGLE_API_KEY'
     secretRef: 'google-api-key'
+  }
+] : [], enableAgentic && agenticProvider == 'huggingface' ? [
+  {
+    name: 'HUGGINGFACE_API_KEY'
+    secretRef: 'huggingface-api-key'
   }
 ] : [], enableAgentic && agenticProvider == 'mistral' ? [
   {

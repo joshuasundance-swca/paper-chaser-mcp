@@ -51,6 +51,7 @@ param enableAgentic bool = false
   'nvidia'
   'google'
   'mistral'
+  'huggingface'
   'deterministic'
 ])
 param agenticProvider string = 'openai'
@@ -60,6 +61,12 @@ param azureOpenAiEndpoint string = ''
 
 @description('Azure OpenAI API version used when agenticProvider is azure-openai. Leave empty to use the application default.')
 param azureOpenAiApiVersion string = ''
+
+@description('Optional NVIDIA NIM base URL used when agenticProvider is nvidia. Leave empty for the hosted NVIDIA API Catalog path.')
+param nvidiaNimBaseUrl string = ''
+
+@description('OpenAI-compatible Hugging Face router base URL used when agenticProvider is huggingface.')
+param huggingFaceBaseUrl string = 'https://router.huggingface.co/v1'
 
 @description('Planner model used for smart-search routing and query refinement.')
 param plannerModel string = 'gpt-5.4-mini'
@@ -273,6 +280,8 @@ module containerApp './modules/containerApp.bicep' = if (deployFull) {
     agenticOpenAiTimeoutSeconds: agenticOpenAiTimeoutSeconds
     azureOpenAiApiVersion: azureOpenAiApiVersion
     azureOpenAiEndpoint: azureOpenAiEndpoint
+    huggingFaceBaseUrl: huggingFaceBaseUrl
+    nvidiaNimBaseUrl: nvidiaNimBaseUrl
     environmentName: environmentName
     environmentResourceId: environment.outputs.resourceId
     image: '${acr.outputs.loginServer}/${imageRepository}:${imageTag}'
@@ -280,6 +289,7 @@ module containerApp './modules/containerApp.bicep' = if (deployFull) {
     keyVaultAzureOpenAiApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/azure-openai-api-key'
     keyVaultCoreApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/core-api-key'
     keyVaultGoogleApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/google-api-key'
+    keyVaultHuggingFaceApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/huggingface-api-key'
     keyVaultMistralApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/mistral-api-key'
     keyVaultNvidiaApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/nvidia-api-key'
     keyVaultOpenAiApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/openai-api-key'
