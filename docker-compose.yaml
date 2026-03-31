@@ -11,6 +11,8 @@ services:
       # configurable here; the image keeps the container bind host and internal
       # port fixed at 0.0.0.0:8080.
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      HUGGINGFACE_API_KEY: ${HUGGINGFACE_API_KEY:-}
+      HUGGINGFACE_BASE_URL: ${HUGGINGFACE_BASE_URL:-https://router.huggingface.co/v1}
       NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
       NVIDIA_NIM_BASE_URL: ${NVIDIA_NIM_BASE_URL:-}
       AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
@@ -57,7 +59,7 @@ services:
       ECOS_VERIFY_TLS: ${ECOS_VERIFY_TLS:-true}
       ECOS_CA_BUNDLE: ${ECOS_CA_BUNDLE:-}
       PAPER_CHASER_PROVIDER_ORDER: ${PAPER_CHASER_PROVIDER_ORDER:-}
-      # Smart workflow providers: openai, azure-openai, anthropic, nvidia, google, mistral, deterministic.
+      # Smart workflow providers: openai, azure-openai, anthropic, nvidia, google, mistral, huggingface, deterministic.
       # Embeddings remain disabled by default.
       PAPER_CHASER_AGENTIC_PROVIDER: ${PAPER_CHASER_AGENTIC_PROVIDER:-openai}
       PAPER_CHASER_PLANNER_MODEL: ${PAPER_CHASER_PLANNER_MODEL:-gpt-5.4-mini}
