@@ -164,10 +164,14 @@ search_papers_match(query="Attention Is All You Need")
    item may be punctuation-variant metadata, a dissertation, software release,
    report, or other output outside the indexed paper surface. Verify externally
    when needed.
-6. When `resolve_citation` sees a report-style or non-paper-looking reference,
+6. Use `enrich_paper` only after you already have a DOI-bearing identifier or
+  a concrete paper payload from `search_papers_match`, `resolve_citation`,
+  `get_paper_details`, or a smart result set. Treat it as additive metadata,
+  not a known-item resolver.
+7. When `resolve_citation` sees a report-style or non-paper-looking reference,
   prefer abstention plus alternatives over forcing a weak canonical paper
   match.
-7. When `resolve_citation` sees a clearly regulatory reference such as a
+8. When `resolve_citation` sees a clearly regulatory reference such as a
   Federal Register or CFR citation, switch to `search_federal_register`,
   `get_federal_register_document`, or `get_cfr_text` instead of continuing to
   force scholarly-paper recovery.
@@ -189,6 +193,7 @@ search_papers_match(query="Attention Is All You Need")
 - Regulatory citations are redirected into the Federal Register / CFR workflow instead of being treated as papers.
 - Exact-title recovery can escalate beyond Semantic Scholar when the paper is
   real but missing from Semantic Scholar title-match results.
+- Query-only enrichment abstains instead of promoting a weak Crossref or OpenAlex hit into a canonical DOI.
 - DOI, URL, and identifier-based lookups feel low friction.
 - Agents do not spend multiple topic-search turns on a known-item request.
 

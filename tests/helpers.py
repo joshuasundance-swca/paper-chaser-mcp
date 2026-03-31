@@ -172,7 +172,19 @@ class RecordingOpenAlexClient:
 
     async def get_paper_details(self, **kwargs) -> dict:
         self.calls.append(("get_paper_details", kwargs))
-        return {"paperId": kwargs["paper_id"], "source": "openalex"}
+        return {
+            "paperId": kwargs["paper_id"],
+            "source": "openalex",
+            "sourceId": "W1234567890",
+            "canonicalId": "10.1234/crossref-query",
+            "venue": "OpenAlex Journal",
+            "publicationTypes": "journal-article",
+            "publicationDate": "2023-02-15",
+            "year": 2023,
+            "url": "https://doi.org/10.1234/crossref-query",
+            "pdfUrl": "https://openalex.example/10.1234/crossref-query.pdf",
+            "citationCount": 11,
+        }
 
     async def get_paper_citations(self, **kwargs) -> dict:
         self.calls.append(("get_paper_citations", kwargs))
@@ -225,7 +237,20 @@ class RecordingScholarApiClient:
             "provider": "scholarapi",
             "total": 1,
             "offset": 0,
-            "data": [{"paperId": "ScholarAPI:sa-1", "source": "scholarapi"}],
+            "data": [
+                {
+                    "paperId": "ScholarAPI:sa-1",
+                    "source": "scholarapi",
+                    "contentAccess": {
+                        "scholarapi": {
+                            "paperId": "ScholarAPI:sa-1",
+                            "hasText": True,
+                            "hasPdf": False,
+                            "indexedAt": "2024-03-01T12:30:45.123Z",
+                        }
+                    },
+                }
+            ],
             "pagination": {"hasMore": True, "nextCursor": "sch-search-next"},
         }
 
@@ -235,7 +260,20 @@ class RecordingScholarApiClient:
             "provider": "scholarapi",
             "total": 1,
             "offset": 0,
-            "data": [{"paperId": "ScholarAPI:sa-list-1", "source": "scholarapi"}],
+            "data": [
+                {
+                    "paperId": "ScholarAPI:sa-list-1",
+                    "source": "scholarapi",
+                    "contentAccess": {
+                        "scholarapi": {
+                            "paperId": "ScholarAPI:sa-list-1",
+                            "hasText": False,
+                            "hasPdf": True,
+                            "indexedAt": "2024-03-01T12:30:45.123Z",
+                        }
+                    },
+                }
+            ],
             "pagination": {"hasMore": True, "nextCursor": "2024-03-01T12:30:45.123Z"},
         }
 

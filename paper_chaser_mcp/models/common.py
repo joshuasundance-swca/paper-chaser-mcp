@@ -81,11 +81,45 @@ class UnpaywallEnrichment(ApiModel):
     )
 
 
+class OpenAlexEnrichment(ApiModel):
+    """Additive paper enrichment fields sourced from OpenAlex."""
+
+    source_id: str | None = Field(default=None, alias="sourceId")
+    doi: str | None = None
+    venue: str | None = None
+    publication_type: str | None = Field(default=None, alias="publicationType")
+    publication_date: str | None = Field(default=None, alias="publicationDate")
+    year: int | None = None
+    url: str | None = None
+    pdf_url: str | None = Field(default=None, alias="pdfUrl")
+    citation_count: int | None = Field(default=None, alias="citationCount")
+
+
+class ScholarApiContentAccess(ApiModel):
+    """Structured content-access metadata surfaced from ScholarAPI."""
+
+    paper_id: str | None = Field(default=None, alias="paperId")
+    has_text: bool | None = Field(default=None, alias="hasText")
+    has_pdf: bool | None = Field(default=None, alias="hasPdf")
+    indexed_at: str | None = Field(default=None, alias="indexedAt")
+    journal_publisher: str | None = Field(default=None, alias="journalPublisher")
+    journal_issn: str | None = Field(default=None, alias="journalIssn")
+    journal_issue: str | None = Field(default=None, alias="journalIssue")
+    journal_pages: str | None = Field(default=None, alias="journalPages")
+
+
+class PaperContentAccess(ApiModel):
+    """Optional structured access metadata attached to a normalized paper."""
+
+    scholarapi: ScholarApiContentAccess | None = None
+
+
 class PaperEnrichments(ApiModel):
     """Optional additive enrichment payload attached to a normalized paper."""
 
     crossref: CrossrefEnrichment | None = None
     unpaywall: UnpaywallEnrichment | None = None
+    openalex: OpenAlexEnrichment | None = None
 
 
 class Paper(ApiModel):
@@ -148,9 +182,20 @@ class Paper(ApiModel):
         exclude_if=lambda value: value is None,
         description=(
             "Optional additive enrichment payload. Crossref can improve DOI, "
-            "publisher, venue, and publication metadata, while Unpaywall can "
-            "surface open-access and PDF availability without changing the base "
+            "publisher, venue, and publication metadata, Unpaywall can surface "
+            "open-access and PDF availability, and OpenAlex can add citation, "
+            "venue, and access-adjacent metadata without changing the base "
             "paper-search contract."
+        ),
+    )
+    content_access: PaperContentAccess | None = Field(
+        default=None,
+        alias="contentAccess",
+        exclude_if=lambda value: value is None,
+        description=(
+            "Optional structured content-access metadata. This is kept separate "
+            "from bibliographic enrichment so access/full-text availability can "
+            "be surfaced without implying new metadata provenance."
         ),
     )
 
@@ -654,8 +699,27 @@ class UnpaywallEnrichmentResult(ApiModel):
     enrichment: UnpaywallEnrichment | None = None
 
 
+class OpenAlexEnrichmentResult(ApiModel):
+    """Structured response from OpenAlex enrichment."""
+
+    provider: str = "openalex"
+    found: bool = False
+    lookup_id: str | None = Field(default=None, alias="lookupId")
+    resolved_doi: str | None = Field(default=None, alias="resolvedDoi")
+    enrichment: OpenAlexEnrichment | None = None
+
+
+class ScholarApiContentAccessResult(ApiModel):
+    """Structured response from ScholarAPI content-access augmentation."""
+
+    provider: str = "scholarapi"
+    found: bool = False
+    paper_id: str | None = Field(default=None, alias="paperId")
+    content_access: ScholarApiContentAccess | None = Field(default=None, alias="contentAccess")
+
+
 class PaperEnrichmentResponse(ApiModel):
-    """Combined Crossref + Unpaywall enrichment response."""
+    """Combined Crossref, Unpaywall, and OpenAlex enrichment response."""
 
     doi_resolution: DoiResolution = Field(
         default_factory=DoiResolution,
@@ -663,7 +727,10 @@ class PaperEnrichmentResponse(ApiModel):
     )
     crossref: CrossrefEnrichmentResult | None = None
     unpaywall: UnpaywallEnrichmentResult | None = None
+    openalex: OpenAlexEnrichmentResult | None = None
     enrichments: PaperEnrichments | None = None
+    scholarapi: ScholarApiContentAccessResult | None = None
+    content_access: PaperContentAccess | None = Field(default=None, alias="contentAccess")
 
 
 def dump_jsonable(value: Any) -> Any:

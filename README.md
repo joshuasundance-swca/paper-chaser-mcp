@@ -43,7 +43,7 @@ Paper Chaser MCP combines one stable research-oriented MCP surface with an addit
 - **Concept-level research**: `search_papers_smart` plus `ask_result_set`, `map_research_landscape`, and `expand_research_graph` for grounded follow-up over a reusable `searchSessionId`.
 - **Known-item recovery**: `resolve_citation`, `search_papers_match`, `get_paper_details`, and autocomplete tools for messy titles, incomplete references, DOIs, arXiv IDs, and URLs.
 - **Citation and author pivots**: citation/reference traversal, recommendations, batch lookups, and author workflows across Semantic Scholar and explicit OpenAlex tool families.
-- **Enrichment and access**: Crossref and Unpaywall enrichment for metadata, open-access status, and PDF discovery.
+- **Enrichment and access**: Crossref, Unpaywall, and OpenAlex enrichment for metadata, open-access status, citation context, and PDF discovery after you already have a paper or DOI-bearing identifier.
 - **Regulatory and species workflows**: ECOS dossiers plus Federal Register and CFR retrieval for primary-source research outside the normal paper graph.
 - **Agent-friendly outputs**: structured responses, `brokerMetadata.nextStepHint`, `agentHints`, `clarification`, `resourceUris`, `searchSessionId`, and provider diagnostics.
 
@@ -94,7 +94,7 @@ If you want a local env template for shell runs or Docker Compose, copy `.env.ex
 | ScholarAPI monitoring / indexed scans | `list_papers_scholarapi` |
 | Papers that cite X / refs behind X | `get_paper_citations` / `get_paper_references` |
 | Author's work | `search_authors` → `get_author_info` → `get_author_papers` |
-| OA status or full-text PDF | `get_paper_open_access_unpaywall` or `enrich_paper` |
+| OA status or full-text PDF for a known paper | `get_paper_open_access_unpaywall` or `enrich_paper` |
 | OpenAlex DOI/ID, cursor pagination, entity pivots | `*_openalex` tools |
 | Species dossier / recovery documents | `search_species_ecos` → `get_species_profile_ecos` → `list_species_documents_ecos` |
 | Federal Register notice or rule | `search_federal_register` → `get_federal_register_document` |
@@ -105,6 +105,7 @@ If you want a local env template for shell runs or Docker Compose, copy `.env.ex
 After `search_papers`: read `brokerMetadata.nextStepHint`.
 After `search_papers_smart`: reuse `searchSessionId` with `ask_result_set`, `map_research_landscape`, or `expand_research_graph`.
 For Semantic Scholar expansion tools: prefer `paper.recommendedExpansionId`; if `paper.expansionIdStatus` is `not_portable`, resolve through DOI first.
+For `enrich_paper`: treat it as additive metadata lookup, not known-item resolution. Query-only calls without a paper or DOI anchor now abstain instead of guessing a canonical DOI.
 
 ## Core workflows
 
@@ -219,11 +220,14 @@ See the [Quick start](#quick-start) JSON example above for the server definition
 | --- | --- | --- | --- |
 | Search broker | `semantic_scholar,arxiv,core,serpapi_google_scholar` | `PAPER_CHASER_ENABLE_SEMANTIC_SCHOLAR`, `PAPER_CHASER_ENABLE_ARXIV`, `PAPER_CHASER_ENABLE_CORE`, `PAPER_CHASER_ENABLE_SERPAPI`, `PAPER_CHASER_PROVIDER_ORDER` | SerpApi is opt-in and paid; CORE is off by default |
 | OpenAlex tool family | enabled | `PAPER_CHASER_ENABLE_OPENALEX`, `OPENALEX_API_KEY`, `OPENALEX_MAILTO` | Explicit tool family, not a default broker hop |
-| ScholarAPI tool family | disabled | `PAPER_CHASER_ENABLE_SCHOLARAPI`, `SCHOLARAPI_API_KEY` | Explicit discovery, monitoring, full-text, and PDF family; also available as an opt-in broker target via `preferredProvider` or `providerOrder` |
-| Enrichment | enabled | `PAPER_CHASER_ENABLE_CROSSREF`, `CROSSREF_MAILTO`, `CROSSREF_TIMEOUT_SECONDS`, `PAPER_CHASER_ENABLE_UNPAYWALL`, `UNPAYWALL_EMAIL`, `UNPAYWALL_TIMEOUT_SECONDS` | Used after you already have a paper or DOI |
+| ScholarAPI tool family | disabled | `PAPER_CHASER_ENABLE_SCHOLARAPI`, `SCHOLARAPI_API_KEY` | Explicit discovery, monitoring, full-text, and PDF family; also available as an opt-in broker target via `preferredProvider` or `providerOrder`. ScholarAPI-sourced paper results now include a separate `contentAccess` block for access/full-text metadata. |
+| Enrichment | enabled | `PAPER_CHASER_ENABLE_CROSSREF`, `CROSSREF_MAILTO`, `CROSSREF_TIMEOUT_SECONDS`, `PAPER_CHASER_ENABLE_UNPAYWALL`, `UNPAYWALL_EMAIL`, `UNPAYWALL_TIMEOUT_SECONDS`, `PAPER_CHASER_ENABLE_OPENALEX` | Used after you already have a paper or DOI |
 | ECOS | enabled | `PAPER_CHASER_ENABLE_ECOS`, `ECOS_BASE_URL`, `ECOS_TIMEOUT_SECONDS`, document timeout and size vars, TLS vars | Species and document workflows |
 | Federal Register / GovInfo | enabled | `PAPER_CHASER_ENABLE_FEDERAL_REGISTER`, `PAPER_CHASER_ENABLE_GOVINFO_CFR`, `GOVINFO_API_KEY`, GovInfo timeout and size vars | Federal Register search is keyless; authoritative CFR retrieval uses GovInfo |
 | Smart layer | disabled | `OPENAI_API_KEY`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `PAPER_CHASER_ENABLE_AGENTIC`, model and index vars | Additive only; supports `openai`, `azure-openai`, `anthropic`, `google`, and `deterministic`; embeddings remain disabled by default. When ScholarAPI is enabled, smart discovery can also route through it and cap it via `providerBudget.maxScholarApiCalls`. |
+| Hide disabled tools | disabled | `PAPER_CHASER_HIDE_DISABLED_TOOLS` | Opt-in. When true, `list_tools` hides disabled explicit provider families, hides generic Semantic Scholar-backed tools when Semantic Scholar is disabled, and hides brokered search or citation-repair entry points when no usable backend remains. Leave false for full-contract compatibility. |
+
+Recommended baseline: enable Semantic Scholar, OpenAlex, Crossref, and Unpaywall for general scholarly workflows; enable ScholarAPI when you want explicit full-text or PDF retrieval; keep SerpApi opt-in because it is a paid recall-recovery path.
 
 Broker rules that matter most:
 
@@ -445,7 +449,7 @@ Full tool reference. See the [Quick tool decision guide](#quick-tool-decision-gu
 
 | Tool | Description |
 | --- | --- |
-| `enrich_paper` | Combined Crossref + Unpaywall enrichment for one paper or DOI. |
+| `enrich_paper` | Combined Crossref + Unpaywall + OpenAlex enrichment for one known paper or DOI. Query-only calls without an anchor abstain instead of resolving a paper. |
 | `get_paper_metadata_crossref` | Explicit Crossref enrichment for a known paper or DOI. |
 | `get_paper_open_access_unpaywall` | Unpaywall OA status, PDF URL, and license lookup by DOI. Requires `UNPAYWALL_EMAIL`. |
 

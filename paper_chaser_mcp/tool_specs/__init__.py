@@ -1,9 +1,9 @@
-"""Authoritative tool metadata and result policy registry."""
+"""Authoritative tool metadata, visibility, and result policy registry."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, Mapping
 
 from pydantic import BaseModel
 
@@ -405,6 +405,112 @@ TOOL_SPECS: dict[str, ToolSpec] = {
     name: _build_spec(name, input_model) for name, input_model in TOOL_INPUT_MODELS.items()
 }
 
+_PROVIDER_TAG_ENABLE_FLAG: dict[str, str] = {
+    "provider:core": "enable_core",
+    "provider:semantic_scholar": "enable_semantic_scholar",
+    "provider:openalex": "enable_openalex",
+    "provider:scholarapi": "enable_scholarapi",
+    "provider:serpapi_google_scholar": "enable_serpapi",
+    "provider:crossref": "enable_crossref",
+    "provider:unpaywall": "enable_unpaywall",
+    "provider:ecos": "enable_ecos",
+    "provider:federal_register": "enable_federal_register",
+    "provider:arxiv": "enable_arxiv",
+}
+
+_AGENTIC_TOOL_NAMES = {
+    "search_papers_smart",
+    "ask_result_set",
+    "map_research_landscape",
+    "expand_research_graph",
+}
+
+_SEMANTIC_SCHOLAR_GENERIC_TOOL_NAMES = {
+    "search_papers_bulk",
+    "search_papers_match",
+    "paper_autocomplete",
+    "get_paper_details",
+    "get_paper_citations",
+    "get_paper_references",
+    "get_paper_authors",
+    "get_author_info",
+    "get_author_papers",
+    "search_authors",
+    "batch_get_authors",
+    "search_snippets",
+    "get_paper_recommendations",
+    "get_paper_recommendations_post",
+    "batch_get_papers",
+    "get_paper_citation_formats",
+}
+
+
+def tool_is_visible(
+    name: str,
+    *,
+    hide_disabled_tools: bool,
+    enabled_flags: Mapping[str, bool] | None = None,
+) -> bool:
+    """Return whether one tool should be advertised for the current settings."""
+
+    if not hide_disabled_tools:
+        return True
+
+    flags = enabled_flags or {}
+    if name in _AGENTIC_TOOL_NAMES:
+        return flags.get("enable_agentic", False)
+    if name in _SEMANTIC_SCHOLAR_GENERIC_TOOL_NAMES:
+        return flags.get("enable_semantic_scholar", True)
+    if name == "search_papers":
+        return any(
+            (
+                flags.get("enable_semantic_scholar", True),
+                flags.get("enable_arxiv", True),
+                flags.get("enable_core", True),
+                flags.get("enable_serpapi", True),
+                flags.get("enable_scholarapi", True),
+            )
+        )
+    if name == "resolve_citation":
+        return any(
+            (
+                flags.get("enable_semantic_scholar", True),
+                flags.get("enable_arxiv", True),
+                flags.get("enable_core", True),
+                flags.get("enable_serpapi", True),
+                flags.get("enable_openalex", True),
+            )
+        )
+    if name == "get_federal_register_document":
+        return flags.get("enable_federal_register", False) or flags.get("govinfo_available", False)
+    if name == "get_cfr_text":
+        return flags.get("enable_govinfo_cfr", False)
+
+    spec = get_tool_spec(name)
+    for tag in spec.tags:
+        flag_name = _PROVIDER_TAG_ENABLE_FLAG.get(tag)
+        if flag_name is not None:
+            return flags.get(flag_name, True)
+    return True
+
+
+def iter_visible_tool_specs(
+    *,
+    hide_disabled_tools: bool,
+    enabled_flags: Mapping[str, bool] | None = None,
+) -> tuple[ToolSpec, ...]:
+    """Return tool specs filtered by visibility settings."""
+
+    return tuple(
+        spec
+        for spec in iter_tool_specs()
+        if tool_is_visible(
+            spec.name,
+            hide_disabled_tools=hide_disabled_tools,
+            enabled_flags=enabled_flags,
+        )
+    )
+
 
 def iter_tool_specs() -> tuple[ToolSpec, ...]:
     """Return tool specs in published order."""
@@ -429,5 +535,7 @@ __all__ = [
     "ToolSpec",
     "get_tool_spec",
     "iter_tool_specs",
+    "iter_visible_tool_specs",
+    "tool_is_visible",
     "tool_tags",
 ]

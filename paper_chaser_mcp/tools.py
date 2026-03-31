@@ -1,13 +1,19 @@
 """MCP tool definitions."""
 
+from collections.abc import Mapping
+
 from mcp.types import Tool
 
 from .tool_schema import sanitize_published_schema
-from .tool_specs import iter_tool_specs
+from .tool_specs import iter_visible_tool_specs
 from .tool_specs.descriptions import OPAQUE_CURSOR_CONTRACT, TOOL_DESCRIPTIONS
 
 
-def get_tool_definitions() -> list[Tool]:
+def get_tool_definitions(
+    *,
+    hide_disabled_tools: bool = False,
+    enabled_flags: Mapping[str, bool] | None = None,
+) -> list[Tool]:
     """Return the MCP tool schema exposed by the server."""
     return [
         Tool(
@@ -15,7 +21,10 @@ def get_tool_definitions() -> list[Tool]:
             description=spec.description,
             inputSchema=sanitize_published_schema(spec.input_model.model_json_schema()),
         )
-        for spec in iter_tool_specs()
+        for spec in iter_visible_tool_specs(
+            hide_disabled_tools=hide_disabled_tools,
+            enabled_flags=enabled_flags,
+        )
     ]
 
 

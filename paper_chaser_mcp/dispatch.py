@@ -40,7 +40,7 @@ from .models.tools import (
     SearchSpeciesEcosArgs,
     SmartSearchPapersArgs,
 )
-from .provider_runtime import ProviderOutcomeEnvelope, policy_for_provider
+from .provider_runtime import ProviderOutcomeEnvelope, ProviderStatusBucket, policy_for_provider
 from .search import search_papers_with_fallback
 from .utils.cursor import (
     OFFSET_TOOLS,
@@ -73,7 +73,7 @@ def _provider_error_text(exc: Exception) -> str:
     return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
 
 
-def _scholarapi_status_bucket(exc: Exception) -> str:
+def _scholarapi_status_bucket(exc: Exception) -> ProviderStatusBucket:
     if isinstance(exc, ScholarApiKeyMissingError):
         return "auth_error"
     if isinstance(exc, ScholarApiQuotaError):
@@ -85,7 +85,7 @@ def _scholarapi_status_bucket(exc: Exception) -> str:
     return "provider_error"
 
 
-def _scholarapi_fallback_reason(status_bucket: str) -> str | None:
+def _scholarapi_fallback_reason(status_bucket: ProviderStatusBucket) -> str | None:
     reasons = {
         "auth_error": "Provider authentication failed.",
         "quota_exhausted": "Provider quota was exhausted.",
@@ -161,7 +161,9 @@ async def _call_explicit_scholarapi_tool(
             retries=0,
             paywalled=True,
             quota_metadata=quota_metadata,
-            provider_request_id=quota_metadata.get("requestId") if isinstance(quota_metadata.get("requestId"), str) else None,
+            provider_request_id=quota_metadata.get("requestId")
+            if isinstance(quota_metadata.get("requestId"), str)
+            else None,
             request_id=request_id,
         )
         provider_registry.record(outcome, policy=policy_for_provider("scholarapi"))
@@ -616,8 +618,10 @@ async def dispatch_tool(
     resolved_enrichment_service = enrichment_service or PaperEnrichmentService(
         crossref_client=crossref_client,
         unpaywall_client=unpaywall_client,
+        openalex_client=openalex_client,
         enable_crossref=enable_crossref,
         enable_unpaywall=enable_unpaywall,
+        enable_openalex=enable_openalex,
         provider_registry=provider_registry,
     )
     if name == "search_papers_smart":

@@ -784,7 +784,7 @@ class AgenticRuntime:
                 request_id=request_id,
                 progress=85,
                 message="Applying paper enrichment",
-                detail=("Enriching the final smart-ranked hits with Crossref and Unpaywall metadata."),
+                detail=("Enriching the final smart-ranked hits with Crossref, Unpaywall, and OpenAlex metadata."),
             )
             enrichment_started = time.perf_counter()
             smart_hits = await self._enrich_smart_hits(
@@ -1563,7 +1563,7 @@ class AgenticRuntime:
                 request_id=request_id,
                 progress=70,
                 message="Applying paper enrichment",
-                detail=("Enriching the resolved known item with Crossref and Unpaywall metadata."),
+                detail=("Enriching the resolved known item with Crossref, Unpaywall, and OpenAlex metadata."),
             )
             enrichment_started = time.perf_counter()
             enrichment_source = await hydrate_paper_for_enrichment(
