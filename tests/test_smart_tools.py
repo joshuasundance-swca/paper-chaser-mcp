@@ -1435,7 +1435,7 @@ async def test_search_papers_smart_smoke_uses_azure_openai_provider_and_embeddin
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("provider_name", "bundle_factory", "model_name"),
+    ("provider_name", "bundle_factory", "planner_model_name", "synthesis_model_name"),
     [
         (
             "anthropic",
@@ -1444,7 +1444,8 @@ async def test_search_papers_smart_smoke_uses_azure_openai_provider_and_embeddin
                 api_key="sk-ant-test",
                 provider_registry=registry,
             ),
-            "claude-sonnet-4-5",
+            "claude-haiku-4-5",
+            "claude-sonnet-4-6",
         ),
         (
             "google",
@@ -1454,6 +1455,7 @@ async def test_search_papers_smart_smoke_uses_azure_openai_provider_and_embeddin
                 provider_registry=registry,
             ),
             "gemini-2.5-flash",
+            "gemini-2.5-flash",
         ),
     ],
 )
@@ -1461,15 +1463,16 @@ async def test_search_papers_smart_smoke_langchain_providers_skip_embedding_rera
     monkeypatch: pytest.MonkeyPatch,
     provider_name: str,
     bundle_factory: Any,
-    model_name: str,
+    planner_model_name: str,
+    synthesis_model_name: str,
 ) -> None:
     semantic = RecordingSemanticClient()
     openalex = RecordingOpenAlexClient()
     config = AgenticConfig(
         enabled=True,
         provider=provider_name,
-        planner_model=model_name,
-        synthesis_model=model_name,
+        planner_model=planner_model_name,
+        synthesis_model=synthesis_model_name,
         embedding_model="text-embedding-3-large",
         index_backend="memory",
         session_ttl_seconds=1800,

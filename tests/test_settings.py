@@ -386,16 +386,27 @@ def test_agentic_config_tracks_azure_openai_model_sources() -> None:
 
 
 @pytest.mark.parametrize(
-    ("provider", "api_key_env", "expected_model"),
+    ("provider", "api_key_env", "expected_planner_model", "expected_synthesis_model"),
     [
-        ("anthropic", {"ANTHROPIC_API_KEY": "sk-ant-test"}, "claude-sonnet-4-5"),
-        ("google", {"GOOGLE_API_KEY": "google-key"}, "gemini-2.5-flash"),
+        (
+            "anthropic",
+            {"ANTHROPIC_API_KEY": "sk-ant-test"},
+            "claude-haiku-4-5",
+            "claude-sonnet-4-6",
+        ),
+        (
+            "google",
+            {"GOOGLE_API_KEY": "google-key"},
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+        ),
     ],
 )
 def test_agentic_config_tracks_provider_default_model_sources(
     provider: str,
     api_key_env: dict[str, str],
-    expected_model: str,
+    expected_planner_model: str,
+    expected_synthesis_model: str,
 ) -> None:
     settings = AppSettings.from_env(
         {
@@ -407,8 +418,8 @@ def test_agentic_config_tracks_provider_default_model_sources(
 
     config = AgenticConfig.from_settings(settings)
 
-    assert config.planner_model == expected_model
-    assert config.synthesis_model == expected_model
+    assert config.planner_model == expected_planner_model
+    assert config.synthesis_model == expected_synthesis_model
     assert config.planner_model_source == "provider_default"
     assert config.synthesis_model_source == "provider_default"
 

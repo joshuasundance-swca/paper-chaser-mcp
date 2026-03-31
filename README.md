@@ -224,8 +224,22 @@ See the [Quick start](#quick-start) JSON example above for the server definition
 | Enrichment | enabled | `PAPER_CHASER_ENABLE_CROSSREF`, `CROSSREF_MAILTO`, `CROSSREF_TIMEOUT_SECONDS`, `PAPER_CHASER_ENABLE_UNPAYWALL`, `UNPAYWALL_EMAIL`, `UNPAYWALL_TIMEOUT_SECONDS`, `PAPER_CHASER_ENABLE_OPENALEX` | Used after you already have a paper or DOI |
 | ECOS | enabled | `PAPER_CHASER_ENABLE_ECOS`, `ECOS_BASE_URL`, `ECOS_TIMEOUT_SECONDS`, document timeout and size vars, TLS vars | Species and document workflows |
 | Federal Register / GovInfo | enabled | `PAPER_CHASER_ENABLE_FEDERAL_REGISTER`, `PAPER_CHASER_ENABLE_GOVINFO_CFR`, `GOVINFO_API_KEY`, GovInfo timeout and size vars | Federal Register search is keyless; authoritative CFR retrieval uses GovInfo |
-| Smart layer | disabled | `OPENAI_API_KEY`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `PAPER_CHASER_ENABLE_AGENTIC`, model and index vars | Additive only; supports `openai`, `azure-openai`, `anthropic`, `google`, and `deterministic`; embeddings remain disabled by default. When ScholarAPI is enabled, smart discovery can also route through it and cap it via `providerBudget.maxScholarApiCalls`. |
+| Smart layer | disabled | `OPENAI_API_KEY`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `PAPER_CHASER_ENABLE_AGENTIC`, model and index vars | Additive only; supports `openai`, `azure-openai`, `anthropic`, `google`, and `deterministic`. OpenAI ships with checked-in model defaults, Anthropic and Google auto-swap to provider defaults when those OpenAI defaults are left untouched, and Azure OpenAI can override both roles with deployment names. Embeddings remain disabled by default. When ScholarAPI is enabled, smart discovery can also route through it and cap it via `providerBudget.maxScholarApiCalls`. |
 | Hide disabled tools | disabled | `PAPER_CHASER_HIDE_DISABLED_TOOLS` | Opt-in. When true, `list_tools` hides disabled explicit provider families, hides generic Semantic Scholar-backed tools when Semantic Scholar is disabled, and hides brokered search or citation-repair entry points when no usable backend remains. Leave false for full-contract compatibility. |
+
+### Smart-layer model defaults
+
+These are the effective planner/synthesis defaults when you enable `PAPER_CHASER_ENABLE_AGENTIC=true` and do not intentionally override the model vars.
+
+| `PAPER_CHASER_AGENTIC_PROVIDER` | Default planner | Default synthesis | Resolution rule |
+| --- | --- | --- | --- |
+| `openai` | `gpt-5.4-mini` | `gpt-5.4` | Uses the checked-in `PAPER_CHASER_PLANNER_MODEL` and `PAPER_CHASER_SYNTHESIS_MODEL` defaults directly |
+| `azure-openai` | `gpt-5.4-mini` | `gpt-5.4` | Uses the same model vars unless `AZURE_OPENAI_PLANNER_DEPLOYMENT` or `AZURE_OPENAI_SYNTHESIS_DEPLOYMENT` is set; when present, those deployment names win |
+| `anthropic` | `claude-haiku-4-5` | `claude-sonnet-4-6` | Runtime swaps to these provider defaults only when planner/synthesis are still set to the checked-in OpenAI defaults |
+| `google` | `gemini-2.5-flash` | `gemini-2.5-pro` | Runtime swaps to these provider defaults only when planner/synthesis are still set to the checked-in OpenAI defaults |
+| `deterministic` | n/a | n/a | No external LLM calls; model selection metadata is reported as deterministic instead |
+
+`PAPER_CHASER_EMBEDDING_MODEL` defaults to `text-embedding-3-large`, but embeddings stay off until you set `PAPER_CHASER_DISABLE_EMBEDDINGS=false`. In the current provider surface, embeddings are only used by providers that explicitly support them.
 
 Recommended baseline: enable Semantic Scholar, OpenAlex, Crossref, and Unpaywall for general scholarly workflows; enable ScholarAPI when you want explicit full-text or PDF retrieval; keep SerpApi opt-in because it is a paid recall-recovery path.
 

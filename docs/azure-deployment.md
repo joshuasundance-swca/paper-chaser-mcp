@@ -191,6 +191,16 @@ For Azure OpenAI, also set `azureOpenAiEndpoint` and optionally
 `azureOpenAiApiVersion`; the scaffold only exports those env vars when the
 matching Bicep params are non-empty.
 
+Effective planner/synthesis defaults by provider:
+
+- `openai`: `plannerModel=gpt-5.4-mini`, `synthesisModel=gpt-5.4`.
+- `azure-openai`: the same defaults apply unless `AZURE_OPENAI_PLANNER_DEPLOYMENT` or `AZURE_OPENAI_SYNTHESIS_DEPLOYMENT` is present at runtime; those deployment names override the model vars and are the normal Azure setup.
+- `anthropic`: if you leave `plannerModel` / `synthesisModel` on the checked-in OpenAI defaults, runtime switches to `claude-haiku-4-5` / `claude-sonnet-4-6`.
+- `google`: if you leave `plannerModel` / `synthesisModel` on the checked-in OpenAI defaults, runtime switches to `gemini-2.5-flash` / `gemini-2.5-pro`.
+- `deterministic`: no external LLM calls; the model vars do not drive inference.
+
+`embeddingModel` stays `text-embedding-3-large`, but embeddings remain off until `disableEmbeddings=false`. In the current runtime, embeddings are only used by providers that explicitly support them.
+
 ## Deployment modes
 
 ### `bootstrap`

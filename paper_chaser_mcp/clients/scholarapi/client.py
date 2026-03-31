@@ -79,6 +79,18 @@ class ScholarApiClient:
         return int(value[:4])
 
     @staticmethod
+    def _normalize_journal_issn(value: Any) -> str | None:
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or None
+        if not isinstance(value, list):
+            return None
+        normalized_values = [item.strip() for item in value if isinstance(item, str) and item.strip()]
+        if not normalized_values:
+            return None
+        return ", ".join(dict.fromkeys(normalized_values))
+
+    @staticmethod
     def _authors(names: Any) -> list[Author]:
         if not isinstance(names, list):
             return []
@@ -104,6 +116,7 @@ class ScholarApiClient:
         source_id = raw_id or None
         paper_id = cls._normalized_paper_id(raw_id) or None
         doi = cls._normalize_doi(result.get("doi"))
+        journal_issn = cls._normalize_journal_issn(result.get("journal_issn"))
         recommended_expansion_id = doi or None
         expansion_id_status: Literal["portable", "not_portable"] = (
             "portable" if recommended_expansion_id else "not_portable"
@@ -129,7 +142,7 @@ class ScholarApiClient:
                     hasPdf=bool(result.get("has_pdf")) if result.get("has_pdf") is not None else None,
                     indexedAt=result.get("indexed_at"),
                     journalPublisher=result.get("journal_publisher"),
-                    journalIssn=result.get("journal_issn"),
+                    journalIssn=journal_issn,
                     journalIssue=result.get("journal_issue"),
                     journalPages=result.get("journal_pages"),
                 )
@@ -143,7 +156,7 @@ class ScholarApiClient:
                     "indexedAt": result.get("indexed_at"),
                     "publishedDateRaw": result.get("published_date_raw"),
                     "journalPublisher": result.get("journal_publisher"),
-                    "journalIssn": result.get("journal_issn"),
+                    "journalIssn": journal_issn,
                     "journalIssue": result.get("journal_issue"),
                     "journalPages": result.get("journal_pages"),
                 }
