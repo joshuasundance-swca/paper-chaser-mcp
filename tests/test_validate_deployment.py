@@ -113,6 +113,7 @@ def test_azure_container_app_bicep_wires_agentic_env_contract() -> None:
         "sessionTtlSeconds",
         "enableAgenticTraceLog",
         "keyVaultOpenAiApiKeySecretUri",
+        "keyVaultNvidiaApiKeySecretUri",
         "keyVaultAzureOpenAiApiKeySecretUri",
         "keyVaultAnthropicApiKeySecretUri",
         "keyVaultGoogleApiKeySecretUri",
@@ -124,6 +125,7 @@ def test_azure_container_app_bicep_wires_agentic_env_contract() -> None:
 
     for expected in (
         "OPENAI_API_KEY",
+        "NVIDIA_API_KEY",
         "AZURE_OPENAI_API_KEY",
         "AZURE_OPENAI_ENDPOINT",
         "AZURE_OPENAI_API_VERSION",
@@ -153,6 +155,7 @@ def test_azure_deployment_doc_mentions_openai_secret_and_agentic_flags() -> None
     text = AZURE_DEPLOYMENT_DOC.read_text(encoding="utf-8")
 
     assert "openai-api-key" in text
+    assert "nvidia-api-key" in text
     assert "azure-openai-api-key" in text
     assert "anthropic-api-key" in text
     assert "google-api-key" in text
@@ -169,6 +172,7 @@ def test_azure_architecture_doc_mentions_provider_specific_smart_layer_inputs() 
     text = AZURE_ARCHITECTURE_DOC.read_text(encoding="utf-8")
 
     assert "Azure OpenAI" in text
+    assert "NVIDIA" in text
     assert "Anthropic" in text
     assert "Google" in text
     assert "Mistral" in text

@@ -14,6 +14,7 @@ _DEFAULT_OPENAI_PLANNER_MODEL = "gpt-5.4-mini"
 _DEFAULT_OPENAI_SYNTHESIS_MODEL = "gpt-5.4"
 _PROVIDER_DEFAULT_MODELS: dict[str, tuple[str, str]] = {
     "anthropic": ("claude-haiku-4-5", "claude-sonnet-4-6"),
+    "nvidia": ("nvidia/nemotron-3-nano-30b-a3b", "nvidia/nemotron-3-super-120b-a12b"),
     "google": ("gemini-2.5-flash", "gemini-2.5-pro"),
     "mistral": ("mistral-medium-latest", "mistral-large-latest"),
 }

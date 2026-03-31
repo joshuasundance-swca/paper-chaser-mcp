@@ -37,6 +37,7 @@ ProviderName = Literal[
     "openai",
     "azure-openai",
     "anthropic",
+    "nvidia",
     "google",
     "mistral",
     "ecos",
@@ -144,6 +145,14 @@ DEFAULT_PROVIDER_POLICIES: dict[str, ProviderPolicy] = {
         paywalled=True,
     ),
     "anthropic": ProviderPolicy(
+        concurrency_limit=4,
+        max_attempts=1,
+        base_delay_seconds=0.5,
+        failure_threshold=2,
+        suppression_seconds=60.0,
+        paywalled=True,
+    ),
+    "nvidia": ProviderPolicy(
         concurrency_limit=4,
         max_attempts=1,
         base_delay_seconds=0.5,

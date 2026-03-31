@@ -27,6 +27,7 @@ from .provider_langchain import (
     GoogleProviderBundle,
     LangChainChatProviderBundle,
     MistralProviderBundle,
+    NvidiaProviderBundle,
 )
 from .provider_openai import AzureOpenAIProviderBundle, OpenAIProviderBundle
 
@@ -39,6 +40,7 @@ __all__ = [
     "LangChainChatProviderBundle",
     "MistralProviderBundle",
     "ModelProviderBundle",
+    "NvidiaProviderBundle",
     "OpenAIProviderBundle",
     "execute_provider_call",
     "execute_provider_call_sync",
@@ -66,6 +68,8 @@ def resolve_provider_bundle(
     azure_openai_planner_deployment: str | None = None,
     azure_openai_synthesis_deployment: str | None = None,
     anthropic_api_key: str | None = None,
+    nvidia_api_key: str | None = None,
+    nvidia_nim_base_url: str | None = None,
     google_api_key: str | None = None,
     mistral_api_key: str | None = None,
     provider_registry: ProviderDiagnosticsRegistry | None = None,
@@ -87,6 +91,13 @@ def resolve_provider_bundle(
         return AnthropicProviderBundle(
             config,
             anthropic_api_key,
+            provider_registry=provider_registry,
+        )
+    if config.provider == "nvidia":
+        return NvidiaProviderBundle(
+            config,
+            nvidia_api_key,
+            base_url=nvidia_nim_base_url,
             provider_registry=provider_registry,
         )
     if config.provider == "google":

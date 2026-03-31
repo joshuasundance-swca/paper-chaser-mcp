@@ -24,6 +24,7 @@ param keyVaultAzureOpenAiApiKeySecretUri string
 param keyVaultCoreApiKeySecretUri string
 param keyVaultGoogleApiKeySecretUri string
 param keyVaultMistralApiKeySecretUri string
+param keyVaultNvidiaApiKeySecretUri string
 param keyVaultOpenAiApiKeySecretUri string
 param keyVaultOpenAlexApiKeySecretUri string
 param keyVaultOpenAlexMailtoSecretUri string
@@ -112,6 +113,12 @@ var secretDefinitions = concat([
     identity: managedIdentityResourceId
     keyVaultUrl: keyVaultAnthropicApiKeySecretUri
     name: 'anthropic-api-key'
+  }
+] : [], enableAgentic && agenticProvider == 'nvidia' ? [
+  {
+    identity: managedIdentityResourceId
+    keyVaultUrl: keyVaultNvidiaApiKeySecretUri
+    name: 'nvidia-api-key'
   }
 ] : [], enableAgentic && agenticProvider == 'google' ? [
   {
@@ -310,6 +317,11 @@ var containerEnv = concat([
   {
     name: 'ANTHROPIC_API_KEY'
     secretRef: 'anthropic-api-key'
+  }
+] : [], enableAgentic && agenticProvider == 'nvidia' ? [
+  {
+    name: 'NVIDIA_API_KEY'
+    secretRef: 'nvidia-api-key'
   }
 ] : [], enableAgentic && agenticProvider == 'google' ? [
   {

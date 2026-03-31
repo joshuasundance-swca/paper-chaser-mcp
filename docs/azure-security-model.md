@@ -43,6 +43,7 @@ These are the credentials the MCP server uses to talk to scholarly providers.
 - `OPENAI_API_KEY` when the smart layer uses the `openai` provider bundle
 - `AZURE_OPENAI_API_KEY` when the smart layer uses the `azure-openai` provider bundle
 - `ANTHROPIC_API_KEY` when the smart layer uses the `anthropic` provider bundle
+- `NVIDIA_API_KEY` when the smart layer uses the `nvidia` provider bundle
 - `GOOGLE_API_KEY` when the smart layer uses the `google` provider bundle
 - `MISTRAL_API_KEY` when the smart layer uses the `mistral` provider bundle
 - `SEMANTIC_SCHOLAR_API_KEY`
@@ -50,8 +51,9 @@ These are the credentials the MCP server uses to talk to scholarly providers.
 - `SERPAPI_API_KEY`
 - optional `OPENALEX_MAILTO` contact value
 
-These are server-side secrets only. Embeddings remain disabled by default, so no
-additional embedding-specific secrets are required for the new providers.
+These are server-side secrets only. Embeddings remain disabled by default, and
+NVIDIA is currently chat-only in this repo, so no additional embedding-specific
+secrets are required for the new providers.
 
 ## Storage and access rules
 

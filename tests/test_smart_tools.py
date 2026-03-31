@@ -27,6 +27,7 @@ from paper_chaser_mcp.agentic.providers import (
     AnthropicProviderBundle,
     AzureOpenAIProviderBundle,
     GoogleProviderBundle,
+    NvidiaProviderBundle,
     OpenAIProviderBundle,
 )
 from paper_chaser_mcp.agentic.ranking import merge_candidates, rerank_candidates
@@ -1446,6 +1447,16 @@ async def test_search_papers_smart_smoke_uses_azure_openai_provider_and_embeddin
             ),
             "claude-haiku-4-5",
             "claude-sonnet-4-6",
+        ),
+        (
+            "nvidia",
+            lambda config, registry: NvidiaProviderBundle(
+                config,
+                api_key="nvidia-key",
+                provider_registry=registry,
+            ),
+            "nvidia/nemotron-3-nano-30b-a3b",
+            "nvidia/nemotron-3-super-120b-a12b",
         ),
         (
             "google",

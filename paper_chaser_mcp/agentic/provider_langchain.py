@@ -34,6 +34,7 @@ __all__ = [
     "GoogleProviderBundle",
     "LangChainChatProviderBundle",
     "MistralProviderBundle",
+    "NvidiaProviderBundle",
 ]
 
 
@@ -755,6 +756,42 @@ class GoogleProviderBundle(LangChainChatProviderBundle):
             google_api_key=self._api_key,
             temperature=0,
         )
+
+
+class NvidiaProviderBundle(LangChainChatProviderBundle):
+    """NVIDIA NIM smart-layer adapter via LangChain."""
+
+    def __init__(
+        self,
+        config: AgenticConfig,
+        api_key: str | None,
+        *,
+        base_url: str | None = None,
+        provider_registry: ProviderDiagnosticsRegistry | None = None,
+    ) -> None:
+        super().__init__(
+            config,
+            provider_name="nvidia",
+            api_key=api_key,
+            provider_registry=provider_registry,
+        )
+        self._base_url = base_url
+
+    def _create_chat_model(self, model_name: str) -> Any:
+        from langchain_nvidia_ai_endpoints import ChatNVIDIA
+
+        kwargs: dict[str, Any] = {
+            "model": model_name,
+            "api_key": self._api_key,
+            "temperature": 0,
+        }
+        if self._base_url:
+            kwargs["base_url"] = self._base_url
+        model = ChatNVIDIA(**kwargs)
+        client = getattr(model, "_client", None)
+        if client is not None and hasattr(client, "timeout"):
+            client.timeout = self._timeout_seconds
+        return model
 
 
 class MistralProviderBundle(LangChainChatProviderBundle):

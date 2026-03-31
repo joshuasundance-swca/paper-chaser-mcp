@@ -215,6 +215,7 @@ def test_app_settings_normalizes_blank_optional_values_to_none() -> None:
         {
             "CORE_API_KEY": "   ",
             "SEMANTIC_SCHOLAR_API_KEY": "",
+            "NVIDIA_API_KEY": " ",
             "AZURE_OPENAI_API_KEY": " ",
             "AZURE_OPENAI_ENDPOINT": " ",
             "AZURE_OPENAI_API_VERSION": " ",
@@ -237,6 +238,7 @@ def test_app_settings_normalizes_blank_optional_values_to_none() -> None:
 
     assert settings.core_api_key is None
     assert settings.openai_api_key is None
+    assert settings.nvidia_api_key is None
     assert settings.azure_openai_api_key is None
     assert settings.azure_openai_endpoint is None
     assert settings.azure_openai_api_version is None
@@ -333,6 +335,12 @@ def test_app_settings_parses_agentic_configuration() -> None:
             "sk-ant-test",
         ),
         (
+            "nvidia",
+            {"NVIDIA_API_KEY": "nvidia-key"},
+            "nvidia_api_key",
+            "nvidia-key",
+        ),
+        (
             "google",
             {"GOOGLE_API_KEY": "google-key"},
             "google_api_key",
@@ -401,6 +409,12 @@ def test_agentic_config_tracks_azure_openai_model_sources() -> None:
             {"ANTHROPIC_API_KEY": "sk-ant-test"},
             "claude-haiku-4-5",
             "claude-sonnet-4-6",
+        ),
+        (
+            "nvidia",
+            {"NVIDIA_API_KEY": "nvidia-key"},
+            "nvidia/nemotron-3-nano-30b-a3b",
+            "nvidia/nemotron-3-super-120b-a12b",
         ),
         (
             "google",
