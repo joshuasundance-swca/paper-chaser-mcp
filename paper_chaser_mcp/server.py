@@ -524,6 +524,7 @@ azure_openai_planner_deployment = settings.azure_openai_planner_deployment
 azure_openai_synthesis_deployment = settings.azure_openai_synthesis_deployment
 anthropic_api_key = settings.anthropic_api_key
 google_api_key = settings.google_api_key
+mistral_api_key = settings.mistral_api_key
 core_api_key = settings.core_api_key
 openalex_api_key = settings.openalex_api_key
 openalex_mailto = settings.openalex_mailto
@@ -597,6 +598,7 @@ provider_bundle = resolve_provider_bundle(
     azure_openai_synthesis_deployment=azure_openai_synthesis_deployment,
     anthropic_api_key=anthropic_api_key,
     google_api_key=google_api_key,
+    mistral_api_key=mistral_api_key,
     provider_registry=provider_registry,
 )
 workspace_registry = WorkspaceRegistry(

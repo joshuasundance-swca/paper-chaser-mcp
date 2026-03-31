@@ -15,6 +15,7 @@ from paper_chaser_mcp.agentic.providers import (
     AzureOpenAIProviderBundle,
     DeterministicProviderBundle,
     GoogleProviderBundle,
+    MistralProviderBundle,
     OpenAIProviderBundle,
     _coerce_langchain_structured_response,
     _cosine_similarity,
@@ -1196,10 +1197,16 @@ def test_resolve_provider_bundle_routes_additional_provider_types() -> None:
         openai_api_key=None,
         google_api_key="google-key",
     )
+    mistral_bundle = resolve_provider_bundle(
+        _config(provider="mistral"),
+        openai_api_key=None,
+        mistral_api_key="mistral-key",
+    )
 
     assert isinstance(azure_bundle, AzureOpenAIProviderBundle)
     assert isinstance(anthropic_bundle, AnthropicProviderBundle)
     assert isinstance(google_bundle, GoogleProviderBundle)
+    assert isinstance(mistral_bundle, MistralProviderBundle)
 
 
 def test_azure_openai_provider_loaders(
@@ -1334,6 +1341,13 @@ def test_azure_openai_provider_loads_azure_embeddings(
             ),
             False,
         ),
+        (
+            MistralProviderBundle(
+                _config(provider="mistral", disable_embeddings=False),
+                api_key="mistral-key",
+            ),
+            False,
+        ),
     ],
 )
 def test_provider_embedding_support_flags(bundle: Any, expected: bool) -> None:
@@ -1351,6 +1365,7 @@ def test_provider_embedding_support_flags(bundle: Any, expected: bool) -> None:
         ),
         AnthropicProviderBundle(_config(provider="anthropic"), api_key=None),
         GoogleProviderBundle(_config(provider="google"), api_key=None),
+        MistralProviderBundle(_config(provider="mistral"), api_key=None),
     ],
 )
 def test_additional_provider_selection_metadata_reports_deterministic_fallback(bundle: Any) -> None:
@@ -1358,7 +1373,7 @@ def test_additional_provider_selection_metadata_reports_deterministic_fallback(b
     metadata = bundle.selection_metadata()
 
     assert isinstance(plan, PlannerDecision)
-    assert metadata["configuredSmartProvider"] in {"azure-openai", "anthropic", "google"}
+    assert metadata["configuredSmartProvider"] in {"azure-openai", "anthropic", "google", "mistral"}
     assert metadata["activeSmartProvider"] == "deterministic"
     assert metadata["plannerModelSource"] == "deterministic"
     assert metadata["synthesisModelSource"] == "deterministic"
@@ -1602,6 +1617,7 @@ def test_coerce_langchain_structured_response_extracts_json_from_markdown() -> N
     [
         (AnthropicProviderBundle(_config(provider="anthropic"), api_key="sk-ant-test"), None),
         (GoogleProviderBundle(_config(provider="google"), api_key="google-key"), "json_schema"),
+        (MistralProviderBundle(_config(provider="mistral"), api_key="mistral-key"), "json_schema"),
     ],
 )
 def test_langchain_provider_bundles_sync_high_level_methods(
@@ -1658,6 +1674,7 @@ def test_langchain_provider_bundles_sync_high_level_methods(
     [
         (AnthropicProviderBundle(_config(provider="anthropic"), api_key="sk-ant-test"), None),
         (GoogleProviderBundle(_config(provider="google"), api_key="google-key"), "json_schema"),
+        (MistralProviderBundle(_config(provider="mistral"), api_key="mistral-key"), "json_schema"),
     ],
 )
 async def test_langchain_provider_bundles_async_high_level_methods(
@@ -1713,6 +1730,7 @@ async def test_langchain_provider_bundles_async_high_level_methods(
     [
         AnthropicProviderBundle(_config(provider="anthropic"), api_key=None),
         GoogleProviderBundle(_config(provider="google"), api_key=None),
+        MistralProviderBundle(_config(provider="mistral"), api_key=None),
     ],
 )
 def test_langchain_provider_bundles_fallback_without_credentials(bundle: Any) -> None:
@@ -1728,6 +1746,7 @@ def test_langchain_provider_bundles_fallback_without_credentials(bundle: Any) ->
     [
         AnthropicProviderBundle(_config(provider="anthropic"), api_key="sk-ant-test"),
         GoogleProviderBundle(_config(provider="google"), api_key="google-key"),
+        MistralProviderBundle(_config(provider="mistral"), api_key="mistral-key"),
     ],
 )
 def test_langchain_provider_label_normalization_and_text_json_fallback(

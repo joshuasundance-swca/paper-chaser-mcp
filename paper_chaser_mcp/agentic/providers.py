@@ -26,6 +26,7 @@ from .provider_langchain import (
     AnthropicProviderBundle,
     GoogleProviderBundle,
     LangChainChatProviderBundle,
+    MistralProviderBundle,
 )
 from .provider_openai import AzureOpenAIProviderBundle, OpenAIProviderBundle
 
@@ -36,6 +37,7 @@ __all__ = [
     "DeterministicProviderBundle",
     "GoogleProviderBundle",
     "LangChainChatProviderBundle",
+    "MistralProviderBundle",
     "ModelProviderBundle",
     "OpenAIProviderBundle",
     "execute_provider_call",
@@ -65,6 +67,7 @@ def resolve_provider_bundle(
     azure_openai_synthesis_deployment: str | None = None,
     anthropic_api_key: str | None = None,
     google_api_key: str | None = None,
+    mistral_api_key: str | None = None,
     provider_registry: ProviderDiagnosticsRegistry | None = None,
 ) -> ModelProviderBundle:
     """Resolve the configured provider bundle with deterministic fallback."""
@@ -90,6 +93,12 @@ def resolve_provider_bundle(
         return GoogleProviderBundle(
             config,
             google_api_key,
+            provider_registry=provider_registry,
+        )
+    if config.provider == "mistral":
+        return MistralProviderBundle(
+            config,
+            mistral_api_key,
             provider_registry=provider_registry,
         )
     return OpenAIProviderBundle(

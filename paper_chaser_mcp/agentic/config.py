@@ -15,6 +15,7 @@ _DEFAULT_OPENAI_SYNTHESIS_MODEL = "gpt-5.4"
 _PROVIDER_DEFAULT_MODELS: dict[str, tuple[str, str]] = {
     "anthropic": ("claude-haiku-4-5", "claude-sonnet-4-6"),
     "google": ("gemini-2.5-flash", "gemini-2.5-pro"),
+    "mistral": ("mistral-medium-latest", "mistral-large-latest"),
 }
 
 

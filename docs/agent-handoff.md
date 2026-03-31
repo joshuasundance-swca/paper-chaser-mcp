@@ -68,6 +68,10 @@ This document is the current working handoff for the fork. It is intended to giv
 - The repo now exposes a compatibility-first smart layer on top of the stable
   raw MCP surface: `search_papers_smart`, `ask_result_set`,
   `map_research_landscape`, and `expand_research_graph`.
+- Mistral is now integrated as an optional LangChain-backed smart-layer
+  provider with quality-first defaults of `mistral-medium-latest` for planning
+  and `mistral-large-latest` for synthesis when the checked-in OpenAI defaults
+  are left untouched.
 - Primary read tools now surface additive agent UX metadata:
   `agentHints`, `clarification`, `resourceUris`, and reusable
   `searchSessionId` handles where appropriate.

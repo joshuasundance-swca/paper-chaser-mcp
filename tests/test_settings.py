@@ -222,6 +222,7 @@ def test_app_settings_normalizes_blank_optional_values_to_none() -> None:
             "AZURE_OPENAI_SYNTHESIS_DEPLOYMENT": " ",
             "ANTHROPIC_API_KEY": " ",
             "GOOGLE_API_KEY": " ",
+            "MISTRAL_API_KEY": " ",
             "OPENALEX_API_KEY": "   ",
             "OPENALEX_MAILTO": "",
             "SERPAPI_API_KEY": "   ",
@@ -243,6 +244,7 @@ def test_app_settings_normalizes_blank_optional_values_to_none() -> None:
     assert settings.azure_openai_synthesis_deployment is None
     assert settings.anthropic_api_key is None
     assert settings.google_api_key is None
+    assert settings.mistral_api_key is None
     assert settings.semantic_scholar_api_key is None
     assert settings.openalex_api_key is None
     assert settings.openalex_mailto is None
@@ -336,6 +338,12 @@ def test_app_settings_parses_agentic_configuration() -> None:
             "google_api_key",
             "google-key",
         ),
+        (
+            "mistral",
+            {"MISTRAL_API_KEY": "mistral-key"},
+            "mistral_api_key",
+            "mistral-key",
+        ),
     ],
 )
 def test_app_settings_parses_additional_agentic_providers(
@@ -399,6 +407,12 @@ def test_agentic_config_tracks_azure_openai_model_sources() -> None:
             {"GOOGLE_API_KEY": "google-key"},
             "gemini-2.5-flash",
             "gemini-2.5-pro",
+        ),
+        (
+            "mistral",
+            {"MISTRAL_API_KEY": "mistral-key"},
+            "mistral-medium-latest",
+            "mistral-large-latest",
         ),
     ],
 )

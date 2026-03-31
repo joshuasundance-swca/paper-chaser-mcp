@@ -33,6 +33,7 @@ __all__ = [
     "AnthropicProviderBundle",
     "GoogleProviderBundle",
     "LangChainChatProviderBundle",
+    "MistralProviderBundle",
 ]
 
 
@@ -753,4 +754,34 @@ class GoogleProviderBundle(LangChainChatProviderBundle):
             model=model_name,
             google_api_key=self._api_key,
             temperature=0,
+        )
+
+
+class MistralProviderBundle(LangChainChatProviderBundle):
+    """Mistral smart-layer adapter via LangChain."""
+
+    def __init__(
+        self,
+        config: AgenticConfig,
+        api_key: str | None,
+        *,
+        provider_registry: ProviderDiagnosticsRegistry | None = None,
+    ) -> None:
+        super().__init__(
+            config,
+            provider_name="mistral",
+            api_key=api_key,
+            provider_registry=provider_registry,
+            structured_output_method="json_schema",
+        )
+
+    def _create_chat_model(self, model_name: str) -> Any:
+        from langchain_mistralai import ChatMistralAI
+
+        return ChatMistralAI(
+            model_name=model_name,
+            api_key=SecretStr(self._api_key or ""),
+            temperature=0,
+            max_retries=0,
+            timeout=int(self._timeout_seconds),
         )
