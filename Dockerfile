@@ -19,7 +19,7 @@ COPY paper_chaser_mcp ./paper_chaser_mcp
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip \
-    && pip install ".[ai,ai-faiss]"
+  && pip install ".[ai,openai,nvidia,anthropic,google,mistral,ai-faiss]"
 
 FROM python:${PYTHON_VERSION}-slim AS runtime
 

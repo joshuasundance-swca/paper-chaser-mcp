@@ -16,6 +16,7 @@ from paper_chaser_mcp.agentic.providers import (
     DeterministicProviderBundle,
     GoogleProviderBundle,
     MistralProviderBundle,
+    NvidiaProviderBundle,
     OpenAIProviderBundle,
     _coerce_langchain_structured_response,
     _cosine_similarity,
@@ -1192,6 +1193,11 @@ def test_resolve_provider_bundle_routes_additional_provider_types() -> None:
         openai_api_key=None,
         anthropic_api_key="sk-ant-test",
     )
+    nvidia_bundle = resolve_provider_bundle(
+        _config(provider="nvidia"),
+        openai_api_key=None,
+        nvidia_api_key="nvidia-key",
+    )
     google_bundle = resolve_provider_bundle(
         _config(provider="google"),
         openai_api_key=None,
@@ -1205,8 +1211,44 @@ def test_resolve_provider_bundle_routes_additional_provider_types() -> None:
 
     assert isinstance(azure_bundle, AzureOpenAIProviderBundle)
     assert isinstance(anthropic_bundle, AnthropicProviderBundle)
+    assert isinstance(nvidia_bundle, NvidiaProviderBundle)
     assert isinstance(google_bundle, GoogleProviderBundle)
     assert isinstance(mistral_bundle, MistralProviderBundle)
+
+
+def test_nvidia_provider_loaders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[dict[str, Any]] = []
+    fake_clients: list[Any] = []
+
+    class _FakeChatNVIDIA:
+        def __init__(self, **kwargs: Any) -> None:
+            created.append(kwargs)
+            self._client = types.SimpleNamespace(timeout=None)
+            fake_clients.append(self._client)
+
+    langchain_nvidia_module = types.ModuleType("langchain_nvidia_ai_endpoints")
+    langchain_nvidia_module.ChatNVIDIA = _FakeChatNVIDIA  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "langchain_nvidia_ai_endpoints", langchain_nvidia_module)
+
+    bundle = NvidiaProviderBundle(
+        _config(provider="nvidia", timeout=17.0),
+        api_key="nvidia-key",
+    )
+
+    planner, synthesizer = bundle._load_models()
+
+    assert planner is not None
+    assert synthesizer is not None
+    assert created[0]["model"] == bundle.planner_model_name
+    assert created[1]["model"] == bundle.synthesis_model_name
+    assert created[0]["api_key"] == "nvidia-key"
+    assert created[0]["temperature"] == 0
+    assert "timeout" not in created[0]
+    assert "max_retries" not in created[0]
+    assert fake_clients[0].timeout == 17.0
+    assert fake_clients[1].timeout == 17.0
 
 
 def test_azure_openai_provider_loaders(
@@ -1335,6 +1377,13 @@ def test_azure_openai_provider_loads_azure_embeddings(
             False,
         ),
         (
+            NvidiaProviderBundle(
+                _config(provider="nvidia", disable_embeddings=False),
+                api_key="nvidia-key",
+            ),
+            False,
+        ),
+        (
             GoogleProviderBundle(
                 _config(provider="google", disable_embeddings=False),
                 api_key="google-key",
@@ -1364,6 +1413,7 @@ def test_provider_embedding_support_flags(bundle: Any, expected: bool) -> None:
             api_version=None,
         ),
         AnthropicProviderBundle(_config(provider="anthropic"), api_key=None),
+        NvidiaProviderBundle(_config(provider="nvidia"), api_key=None),
         GoogleProviderBundle(_config(provider="google"), api_key=None),
         MistralProviderBundle(_config(provider="mistral"), api_key=None),
     ],
@@ -1373,7 +1423,7 @@ def test_additional_provider_selection_metadata_reports_deterministic_fallback(b
     metadata = bundle.selection_metadata()
 
     assert isinstance(plan, PlannerDecision)
-    assert metadata["configuredSmartProvider"] in {"azure-openai", "anthropic", "google", "mistral"}
+    assert metadata["configuredSmartProvider"] in {"azure-openai", "anthropic", "nvidia", "google", "mistral"}
     assert metadata["activeSmartProvider"] == "deterministic"
     assert metadata["plannerModelSource"] == "deterministic"
     assert metadata["synthesisModelSource"] == "deterministic"
@@ -1616,6 +1666,7 @@ def test_coerce_langchain_structured_response_extracts_json_from_markdown() -> N
     ("bundle", "expected_method"),
     [
         (AnthropicProviderBundle(_config(provider="anthropic"), api_key="sk-ant-test"), None),
+        (NvidiaProviderBundle(_config(provider="nvidia"), api_key="nvidia-key"), None),
         (GoogleProviderBundle(_config(provider="google"), api_key="google-key"), "json_schema"),
         (MistralProviderBundle(_config(provider="mistral"), api_key="mistral-key"), "json_schema"),
     ],
@@ -1673,6 +1724,7 @@ def test_langchain_provider_bundles_sync_high_level_methods(
     ("bundle", "expected_method"),
     [
         (AnthropicProviderBundle(_config(provider="anthropic"), api_key="sk-ant-test"), None),
+        (NvidiaProviderBundle(_config(provider="nvidia"), api_key="nvidia-key"), None),
         (GoogleProviderBundle(_config(provider="google"), api_key="google-key"), "json_schema"),
         (MistralProviderBundle(_config(provider="mistral"), api_key="mistral-key"), "json_schema"),
     ],
@@ -1729,6 +1781,7 @@ async def test_langchain_provider_bundles_async_high_level_methods(
     "bundle",
     [
         AnthropicProviderBundle(_config(provider="anthropic"), api_key=None),
+        NvidiaProviderBundle(_config(provider="nvidia"), api_key=None),
         GoogleProviderBundle(_config(provider="google"), api_key=None),
         MistralProviderBundle(_config(provider="mistral"), api_key=None),
     ],
@@ -1745,6 +1798,7 @@ def test_langchain_provider_bundles_fallback_without_credentials(bundle: Any) ->
     "bundle",
     [
         AnthropicProviderBundle(_config(provider="anthropic"), api_key="sk-ant-test"),
+        NvidiaProviderBundle(_config(provider="nvidia"), api_key="nvidia-key"),
         GoogleProviderBundle(_config(provider="google"), api_key="google-key"),
         MistralProviderBundle(_config(provider="mistral"), api_key="mistral-key"),
     ],
@@ -1777,3 +1831,64 @@ def test_langchain_provider_label_normalization_and_text_json_fallback(
     assert label == "Retrieval-Augmented AI Systems"
     assert answer["answer"] == "Recovered answer"
     assert answer["confidence"] == "high"
+
+
+def test_nvidia_provider_normalizes_invalid_expansion_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = NvidiaProviderBundle(_config(provider="nvidia"), api_key="nvidia-key")
+    planner = _SequenceModel(
+        structured_responses=[
+            _ExpansionPayload(
+                expansions=[
+                    _ExpansionItem(
+                        variant="retrieval agents citation",
+                        source="retrieval augmented generation",
+                    )
+                ]
+            )
+        ],
+        text_responses=[],
+    )
+    synthesizer = _SequenceModel(structured_responses=[], text_responses=[])
+    monkeypatch.setattr(bundle, "_load_models", lambda: (planner, synthesizer))
+
+    expansions = bundle.suggest_speculative_expansions(
+        query="retrieval agents",
+        evidence_texts=["citation graphs for retrieval agents"],
+        max_variants=2,
+    )
+
+    assert [item.variant for item in expansions] == ["retrieval agents citation"]
+    assert expansions[0].source == "speculative"
+
+
+@pytest.mark.asyncio
+async def test_nvidia_provider_async_normalizes_invalid_expansion_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = NvidiaProviderBundle(_config(provider="nvidia"), api_key="nvidia-key")
+    planner = _SequenceModel(
+        structured_responses=[
+            _ExpansionPayload(
+                expansions=[
+                    _ExpansionItem(
+                        variant="retrieval agents graphs",
+                        source="retrieval augmented generation",
+                    )
+                ]
+            )
+        ],
+        text_responses=[],
+    )
+    synthesizer = _SequenceModel(structured_responses=[], text_responses=[])
+    monkeypatch.setattr(bundle, "_load_models", lambda: (planner, synthesizer))
+
+    expansions = await bundle.asuggest_speculative_expansions(
+        query="retrieval agents",
+        evidence_texts=["graphs for retrieval agents"],
+        max_variants=2,
+    )
+
+    assert [item.variant for item in expansions] == ["retrieval agents graphs"]
+    assert expansions[0].source == "speculative"

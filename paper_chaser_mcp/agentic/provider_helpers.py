@@ -504,11 +504,12 @@ def _filter_expansion_candidates(
 ) -> list[ExpansionCandidate]:
     variants: list[ExpansionCandidate] = []
     query_tokens = set(_tokenize(query))
+    valid_sources = {"from_input", "from_retrieved_evidence", "speculative"}
     for item in expansions[:max_variants]:
         if isinstance(item, BaseModel):
             payload = item.model_dump()
         elif isinstance(item, dict):
-            payload = item
+            payload = dict(item)
         else:
             payload = {
                 "variant": getattr(item, "variant", ""),
@@ -518,6 +519,9 @@ def _filter_expansion_candidates(
         variant = str(payload.get("variant") or "").strip()
         if not variant:
             continue
+        source = str(payload.get("source") or "speculative").strip()
+        if source not in valid_sources:
+            payload["source"] = "speculative"
         new_tokens = [token for token in _tokenize(variant) if token not in query_tokens]
         if not new_tokens or all(token in COMMON_QUERY_WORDS for token in new_tokens):
             continue

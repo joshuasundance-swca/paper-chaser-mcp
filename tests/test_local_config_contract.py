@@ -14,6 +14,8 @@ PYPROJECT = REPO_ROOT / "pyproject.toml"
 
 EXPECTED_LOCAL_CONFIG_KEYS = {
     "OPENAI_API_KEY",
+    "NVIDIA_API_KEY",
+    "NVIDIA_NIM_BASE_URL",
     "AZURE_OPENAI_API_KEY",
     "AZURE_OPENAI_ENDPOINT",
     "AZURE_OPENAI_API_VERSION",
@@ -191,6 +193,7 @@ def test_readme_agentic_install_guidance_matches_declared_optional_extras() -> N
     for expected in (
         "ai = [",
         "openai = [",
+        "nvidia = [",
         "anthropic = [",
         "google = [",
         "mistral = [",
@@ -202,6 +205,7 @@ def test_readme_agentic_install_guidance_matches_declared_optional_extras() -> N
     for expected in (
         'pip install -e ".[ai]"',
         'pip install -e ".[ai,openai]"',
+        'pip install -e ".[ai,nvidia]"',
         'pip install -e ".[ai,anthropic]"',
         'pip install -e ".[ai,google]"',
         'pip install -e ".[ai,mistral]"',

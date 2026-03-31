@@ -12,7 +12,7 @@ from .models.tools import (
     _normalize_provider_name,
 )
 
-AgenticProvider = Literal["openai", "azure-openai", "anthropic", "google", "mistral", "deterministic"]
+AgenticProvider = Literal["openai", "azure-openai", "anthropic", "nvidia", "google", "mistral", "deterministic"]
 AgenticIndexBackend = Literal["memory", "faiss"]
 
 
@@ -104,6 +104,8 @@ class AppSettings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     openai_api_key: str | None = None
+    nvidia_api_key: str | None = None
+    nvidia_nim_base_url: str | None = None
     azure_openai_api_key: str | None = None
     azure_openai_endpoint: str | None = None
     azure_openai_api_version: str | None = None
@@ -170,6 +172,8 @@ class AppSettings(BaseModel):
         env = environ if environ is not None else os.environ
         return cls(
             openai_api_key=_parse_optional_string(env, "OPENAI_API_KEY"),
+            nvidia_api_key=_parse_optional_string(env, "NVIDIA_API_KEY"),
+            nvidia_nim_base_url=_parse_optional_string(env, "NVIDIA_NIM_BASE_URL"),
             azure_openai_api_key=_parse_optional_string(env, "AZURE_OPENAI_API_KEY"),
             azure_openai_endpoint=_parse_optional_string(env, "AZURE_OPENAI_ENDPOINT"),
             azure_openai_api_version=_parse_optional_string(env, "AZURE_OPENAI_API_VERSION"),
@@ -365,10 +369,19 @@ def cast_agentic_provider(value: str | None) -> AgenticProvider:
     if value is None or value == "":
         return "openai"
     normalized = value.strip().lower()
-    if normalized in {"openai", "azure-openai", "anthropic", "google", "mistral", "deterministic"}:
+    if normalized in {
+        "openai",
+        "azure-openai",
+        "anthropic",
+        "nvidia",
+        "google",
+        "mistral",
+        "deterministic",
+    }:
         return cast(AgenticProvider, normalized)
     raise ValueError(
-        "PAPER_CHASER_AGENTIC_PROVIDER must be one of: openai, azure-openai, anthropic, google, mistral, deterministic"
+        "PAPER_CHASER_AGENTIC_PROVIDER must be one of: openai, azure-openai, "
+        "anthropic, nvidia, google, mistral, deterministic"
     )
 
 

@@ -44,6 +44,9 @@ openai = [
     "langchain-openai>=1.1.11",
     "openai>=1.109.0",
 ]
+nvidia = [
+    "langchain-nvidia-ai-endpoints>=0.4.0",
+]
 anthropic = [
     "anthropic>=0.86.0",
     "langchain-anthropic>=1.4.0",
@@ -75,7 +78,7 @@ dev = [
     "types-defusedxml>=0.7.0",
 ]
 all = [
-    "paper-chaser-mcp[ai,openai,anthropic,google,mistral,dev]",
+    "paper-chaser-mcp[ai,openai,nvidia,anthropic,google,mistral,dev]",
 ]
 
 [project.scripts]
@@ -143,6 +146,7 @@ module = [
     "langchain.*",
     "langchain_anthropic.*",
     "langchain_google_genai.*",
+    "langchain_nvidia_ai_endpoints.*",
     "langchain_mistralai.*",
     "langchain_openai.*",
     "langchain_community.*",

@@ -1393,6 +1393,7 @@ async def test_new_serpapi_tools_and_provider_diagnostics_route(
     assert provider_map["openai"]["enabled"] is False
     assert provider_map["azure-openai"]["enabled"] is False
     assert provider_map["anthropic"]["enabled"] is False
+    assert provider_map["nvidia"]["enabled"] is False
     assert provider_map["google"]["enabled"] is False
 
 
@@ -1405,9 +1406,10 @@ async def test_provider_diagnostics_can_surface_non_openai_smart_provider(monkey
                     "openai": False,
                     "azure-openai": False,
                     "anthropic": True,
+                    "nvidia": False,
                     "google": False,
                 },
-                ["anthropic", "openai", "azure-openai", "google"],
+                ["anthropic", "openai", "azure-openai", "nvidia", "google"],
             )
 
     monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
@@ -1416,6 +1418,7 @@ async def test_provider_diagnostics_can_surface_non_openai_smart_provider(monkey
     provider_map = {item["provider"]: item for item in diagnostics["providers"] if isinstance(item, dict)}
 
     assert provider_map["anthropic"]["enabled"] is True
+    assert provider_map["nvidia"]["enabled"] is False
     assert provider_map["openai"]["enabled"] is False
     assert diagnostics["providerOrder"].index("anthropic") < diagnostics["providerOrder"].index("openai")
 

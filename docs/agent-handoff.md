@@ -68,6 +68,11 @@ This document is the current working handoff for the fork. It is intended to giv
 - The repo now exposes a compatibility-first smart layer on top of the stable
   raw MCP surface: `search_papers_smart`, `ask_result_set`,
   `map_research_landscape`, and `expand_research_graph`.
+- NVIDIA is now integrated as an optional LangChain-backed chat-only smart-layer
+  provider with quality-first defaults of
+  `nvidia/nemotron-3-nano-30b-a3b` for planning and
+  `nvidia/nemotron-3-super-120b-a12b` for synthesis when the checked-in OpenAI
+  defaults are left untouched.
 - Mistral is now integrated as an optional LangChain-backed smart-layer
   provider with quality-first defaults of `mistral-medium-latest` for planning
   and `mistral-large-latest` for synthesis when the checked-in OpenAI defaults

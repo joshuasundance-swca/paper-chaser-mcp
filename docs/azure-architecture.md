@@ -51,7 +51,7 @@ GitHub Actions private runner
 ### Upstream provider keys
 
 The server can use keys for CORE, Semantic Scholar, OpenAlex, SerpApi, and the
-optional OpenAI, Azure OpenAI, Anthropic, Google, or Mistral-backed smart layer. Those
+optional OpenAI, Azure OpenAI, Anthropic, NVIDIA, Google, or Mistral-backed smart layer. Those
 keys are **server-side only**.
 
 - They are stored in Azure Key Vault.
@@ -66,8 +66,9 @@ in the relevant `.bicepparam` file and seed `core-api-key` only when you want
 the CORE fallback hop.
 
 When the smart layer is enabled, the Container App reads the provider-specific
-credential from Key Vault and keeps all LangChain/LangGraph planning,
-embedding, and synthesis calls server-side. For `agenticProvider=azure-openai`,
+credential from Key Vault and keeps all LangChain/LangGraph planning and
+synthesis calls server-side. NVIDIA is currently integrated as a chat-only
+provider in this repo; embeddings remain a later cross-provider overhaul. For `agenticProvider=azure-openai`,
 the Container App also receives `AZURE_OPENAI_ENDPOINT` and, when configured,
 `AZURE_OPENAI_API_VERSION` from non-secret Bicep params.
 

@@ -40,6 +40,7 @@ The provider upgrade program now ships these cross-cutting changes:
 | OpenAlex | Secondary graph and disambiguation surface | Explicit tools only | DOI/work lookup, autocomplete, source/institution/topic pivots, author workflows, citation/reference traversal | Ship as explicit provider |
 | SerpApi Google Scholar | Guarded recall-recovery layer | Disabled by default; explicit tools only unless smart routing opts in | Cited-by, versions, author profile/article flows, citation export, quota-aware recovery | Ship with budgets |
 | OpenAI | Smart orchestration and synthesis provider | Used by smart tools when enabled | Planning, synthesis, reranking support, theme labeling, grounded answer formatting | Ship with fallback |
+| NVIDIA | Smart orchestration and synthesis provider | Used by smart tools when enabled | Chat-only planning, synthesis, and theme labeling through hosted NVIDIA or self-hosted NIM endpoints | Ship with fallback |
 
 ## Shared Execution Policy
 
@@ -162,6 +163,14 @@ Backward compatibility rules:
 - Operational posture: use `fast` for smoke tests, `balanced` by default, and
   `deep` only when broader fanout is intentional
 - Decision: ship with direct Responses support and fallback behavior
+
+### NVIDIA
+
+- Current role: chat-only smart-path planning, synthesis, and labeling provider
+- Strengths: LangChain-native structured output support, hosted NVIDIA API Catalog access, and optional self-hosted NIM routing through a base URL
+- Risks: model capability varies by endpoint, so structured-output-safe defaults matter more than with a single hosted stack
+- Operational posture: keep it chat-only for now; embeddings are intentionally deferred to a later cross-provider overhaul
+- Decision: ship as an additive LangChain-backed provider with deterministic fallback
 
 ## Benchmark Corpus
 
