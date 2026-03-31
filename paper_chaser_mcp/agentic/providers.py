@@ -25,6 +25,7 @@ from .provider_helpers import (
 from .provider_langchain import (
     AnthropicProviderBundle,
     GoogleProviderBundle,
+    HuggingFaceProviderBundle,
     LangChainChatProviderBundle,
     MistralProviderBundle,
     NvidiaProviderBundle,
@@ -37,6 +38,7 @@ __all__ = [
     "AzureOpenAIProviderBundle",
     "DeterministicProviderBundle",
     "GoogleProviderBundle",
+    "HuggingFaceProviderBundle",
     "LangChainChatProviderBundle",
     "MistralProviderBundle",
     "ModelProviderBundle",
@@ -72,6 +74,8 @@ def resolve_provider_bundle(
     nvidia_nim_base_url: str | None = None,
     google_api_key: str | None = None,
     mistral_api_key: str | None = None,
+    huggingface_api_key: str | None = None,
+    huggingface_base_url: str = "https://router.huggingface.co/v1",
     provider_registry: ProviderDiagnosticsRegistry | None = None,
 ) -> ModelProviderBundle:
     """Resolve the configured provider bundle with deterministic fallback."""
@@ -110,6 +114,13 @@ def resolve_provider_bundle(
         return MistralProviderBundle(
             config,
             mistral_api_key,
+            provider_registry=provider_registry,
+        )
+    if config.provider == "huggingface":
+        return HuggingFaceProviderBundle(
+            config,
+            huggingface_api_key,
+            base_url=huggingface_base_url,
             provider_registry=provider_registry,
         )
     return OpenAIProviderBundle(

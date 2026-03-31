@@ -1395,6 +1395,8 @@ async def test_new_serpapi_tools_and_provider_diagnostics_route(
     assert provider_map["anthropic"]["enabled"] is False
     assert provider_map["nvidia"]["enabled"] is False
     assert provider_map["google"]["enabled"] is False
+    assert provider_map["huggingface"]["enabled"] is False
+    assert "huggingface" in diagnostics["providerOrder"]
 
 
 @pytest.mark.asyncio
@@ -1405,11 +1407,12 @@ async def test_provider_diagnostics_can_surface_non_openai_smart_provider(monkey
                 {
                     "openai": False,
                     "azure-openai": False,
-                    "anthropic": True,
+                    "anthropic": False,
                     "nvidia": False,
                     "google": False,
+                    "huggingface": True,
                 },
-                ["anthropic", "openai", "azure-openai", "nvidia", "google"],
+                ["huggingface", "openai", "azure-openai", "anthropic", "nvidia", "google"],
             )
 
     monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
@@ -1417,10 +1420,12 @@ async def test_provider_diagnostics_can_surface_non_openai_smart_provider(monkey
     diagnostics = _payload(await server.call_tool("get_provider_diagnostics", {}))
     provider_map = {item["provider"]: item for item in diagnostics["providers"] if isinstance(item, dict)}
 
-    assert provider_map["anthropic"]["enabled"] is True
+    assert provider_map["huggingface"]["enabled"] is True
+    assert provider_map["huggingface"]["paywalled"] is True
+    assert provider_map["anthropic"]["enabled"] is False
     assert provider_map["nvidia"]["enabled"] is False
     assert provider_map["openai"]["enabled"] is False
-    assert diagnostics["providerOrder"].index("anthropic") < diagnostics["providerOrder"].index("openai")
+    assert diagnostics["providerOrder"].index("huggingface") < diagnostics["providerOrder"].index("openai")
 
 
 @pytest.mark.asyncio

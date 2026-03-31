@@ -55,6 +55,7 @@ usage.
   - `openai-api-key` if you enable the smart layer with `agenticProvider=openai`
   - `azure-openai-api-key` if you enable the smart layer with `agenticProvider=azure-openai`
   - `anthropic-api-key` if you enable the smart layer with `agenticProvider=anthropic`
+  - `huggingface-api-key` if you enable the smart layer with `agenticProvider=huggingface`
   - `nvidia-api-key` if you enable the smart layer with `agenticProvider=nvidia`
   - `google-api-key` if you enable the smart layer with `agenticProvider=google`
   - `mistral-api-key` if you enable the smart layer with `agenticProvider=mistral`
@@ -77,6 +78,13 @@ usage.
   `azureOpenAiEndpoint` Bicep param and optionally `azureOpenAiApiVersion`.
   The scaffold injects `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_API_VERSION`
   into the Container App only when those params are non-empty.
+
+  The Hugging Face path also needs non-secret `huggingFaceBaseUrl`
+  deployment config because it rides an OpenAI-compatible chat router.
+
+  The NVIDIA path also accepts optional non-secret `nvidiaNimBaseUrl`
+  deployment config when you want to target a self-hosted NVIDIA NIM instead of
+  the hosted NVIDIA API Catalog. Leave it empty for the default hosted path.
 
    GovInfo CFR is enabled by default and works without a key (falls back to
    degraded HTML recovery), but provisioning a `govinfo-api-key` in Key Vault
@@ -104,9 +112,13 @@ secret.
 
 The smart layer adds one provider-specific credential requirement when
 `enableAgentic=true`: `openai-api-key`, `azure-openai-api-key`,
-`anthropic-api-key`, `nvidia-api-key`, `google-api-key`, or `mistral-api-key` depending on `agenticProvider`.
+`anthropic-api-key`, `huggingface-api-key`, `nvidia-api-key`, `google-api-key`, or `mistral-api-key` depending on the intended provider bundle.
 For `agenticProvider=azure-openai`, also set `azureOpenAiEndpoint` and,
 optionally, `azureOpenAiApiVersion`.
+For `agenticProvider=huggingface`, also set `huggingFaceBaseUrl` when you need
+to override the default `https://router.huggingface.co/v1` router.
+For `agenticProvider=nvidia`, also set `nvidiaNimBaseUrl` when you want a
+self-hosted NVIDIA NIM endpoint instead of the hosted default.
 
 ## Bicep parameters reference
 
@@ -173,9 +185,11 @@ Key Vault before you run a `full` deployment with CORE enabled.
 | Parameter | Default | Controls env var |
 | --- | --- | --- |
 | `enableAgentic` | `false` | `PAPER_CHASER_ENABLE_AGENTIC` |
-| `agenticProvider` | `openai` | `PAPER_CHASER_AGENTIC_PROVIDER` — `openai`, `azure-openai`, `anthropic`, `nvidia`, `google`, `mistral`, or `deterministic` |
+| `agenticProvider` | `openai` | `PAPER_CHASER_AGENTIC_PROVIDER` — supported Azure scaffold values are `openai`, `azure-openai`, `anthropic`, `nvidia`, `google`, `mistral`, `huggingface`, or `deterministic` |
 | `azureOpenAiEndpoint` | `''` | `AZURE_OPENAI_ENDPOINT` — only injected when non-empty; used with `agenticProvider=azure-openai` |
 | `azureOpenAiApiVersion` | `''` | `AZURE_OPENAI_API_VERSION` — only injected when non-empty; used with `agenticProvider=azure-openai` |
+| `nvidiaNimBaseUrl` | `''` | `NVIDIA_NIM_BASE_URL` — only injected when non-empty; used with `agenticProvider=nvidia` for self-hosted NIMs |
+| `huggingFaceBaseUrl` | `https://router.huggingface.co/v1` | `HUGGINGFACE_BASE_URL` — OpenAI-compatible Hugging Face router base URL; used with `agenticProvider=huggingface` |
 | `plannerModel` | `gpt-5.4-mini` | `PAPER_CHASER_PLANNER_MODEL` |
 | `synthesisModel` | `gpt-5.4` | `PAPER_CHASER_SYNTHESIS_MODEL` |
 | `embeddingModel` | `text-embedding-3-large` | `PAPER_CHASER_EMBEDDING_MODEL` |
@@ -186,24 +200,33 @@ Key Vault before you run a `full` deployment with CORE enabled.
 | `enableAgenticTraceLog` | `false` | `PAPER_CHASER_ENABLE_AGENTIC_TRACE_LOG` |
 
 Smart-layer provider secrets follow the same Key Vault pattern as the OpenAI setup.
-When `agenticProvider` is `openai`, `azure-openai`, `anthropic`, `nvidia`, `google`, or `mistral`,
+When `agenticProvider` is `openai`, `azure-openai`, `anthropic`, `nvidia`, `google`, `mistral`, or `huggingface`,
 seed the corresponding `openai-api-key`, `azure-openai-api-key`,
-`anthropic-api-key`, `nvidia-api-key`, `google-api-key`, or `mistral-api-key` secret before a `full` deployment.
+`anthropic-api-key`, `nvidia-api-key`, `google-api-key`, `mistral-api-key`, or `huggingface-api-key` secret before a `full` deployment.
 For Azure OpenAI, also set `azureOpenAiEndpoint` and optionally
 `azureOpenAiApiVersion`; the scaffold only exports those env vars when the
 matching Bicep params are non-empty.
+For Hugging Face, the scaffold also exports `HUGGINGFACE_BASE_URL` from the
+non-secret `huggingFaceBaseUrl` Bicep param.
+For NVIDIA, the scaffold also exports optional `NVIDIA_NIM_BASE_URL` from the
+non-secret `nvidiaNimBaseUrl` Bicep param.
 
 Effective planner/synthesis defaults by provider:
 
 - `openai`: `plannerModel=gpt-5.4-mini`, `synthesisModel=gpt-5.4`.
 - `azure-openai`: the same defaults apply unless `AZURE_OPENAI_PLANNER_DEPLOYMENT` or `AZURE_OPENAI_SYNTHESIS_DEPLOYMENT` is present at runtime; those deployment names override the model vars and are the normal Azure setup.
 - `anthropic`: if you leave `plannerModel` / `synthesisModel` on the checked-in OpenAI defaults, runtime switches to `claude-haiku-4-5` / `claude-sonnet-4-6`.
+- `huggingface`: chat-only OpenAI-compatible router path. If you leave
+  `plannerModel` / `synthesisModel` on the checked-in OpenAI defaults, runtime
+  switches to `moonshotai/Kimi-K2.5` /
+  `moonshotai/Kimi-K2.5` and sends those model IDs to
+  `HUGGINGFACE_BASE_URL`.
 - `nvidia`: if you leave `plannerModel` / `synthesisModel` on the checked-in OpenAI defaults, runtime switches to `nvidia/nemotron-3-nano-30b-a3b` / `nvidia/nemotron-3-super-120b-a12b`.
 - `google`: if you leave `plannerModel` / `synthesisModel` on the checked-in OpenAI defaults, runtime switches to `gemini-2.5-flash` / `gemini-2.5-pro`.
 - `mistral`: if you leave `plannerModel` / `synthesisModel` on the checked-in OpenAI defaults, runtime switches to `mistral-medium-latest` / `mistral-large-latest`.
 - `deterministic`: no external LLM calls; the model vars do not drive inference.
 
-`embeddingModel` stays `text-embedding-3-large`, but embeddings remain off until `disableEmbeddings=false`. In the current runtime, embeddings are only used by providers that explicitly support them.
+`embeddingModel` stays `text-embedding-3-large`, but embeddings remain off until `disableEmbeddings=false`. In the current runtime, embeddings are only used by providers that explicitly support them, so the documented Hugging Face path remains chat-only.
 
 ## Deployment modes
 
@@ -231,8 +254,9 @@ names.
   `PAPER_CHASER_ENABLE_AGENTIC`, `PAPER_CHASER_AGENTIC_PROVIDER`,
   `PAPER_CHASER_PLANNER_MODEL`, `PAPER_CHASER_SYNTHESIS_MODEL`,
   `PAPER_CHASER_EMBEDDING_MODEL`,
-  `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_API_VERSION` when the
-  corresponding Bicep params are non-empty,
+  `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION`,
+  `NVIDIA_NIM_BASE_URL`, and `HUGGINGFACE_BASE_URL` when the corresponding
+  Bicep params are non-empty,
   `PAPER_CHASER_AGENTIC_INDEX_BACKEND`,
   `PAPER_CHASER_SESSION_TTL_SECONDS`, and
   `PAPER_CHASER_ENABLE_AGENTIC_TRACE_LOG`.
@@ -253,7 +277,7 @@ Use this table as the deployment readiness checklist. The last two columns are t
 | Private self-hosted GitHub Actions runner | The build, ACR push, deployment, and smoke test all run from a network that can reach private Azure endpoints | `.github/workflows/deploy-azure.yml` | GitHub runner administration plus network/DNS access to the private environment | No. The repo can target a runner, but it cannot provision or register one. | Yes if you cannot register runners or cannot place one on the trusted network. |
 | GitHub Actions variables: optional `AZURE_PRIVATE_RUNNER_LABELS_JSON` | Supplies the private-runner label override without committing values to git | `.github/workflows/deploy-azure.yml` | GitHub repository or environment variable management rights | No. The repo can document the name only. | Usually not, but choose generic labels if you do not want the label set itself to reveal network or platform details. |
 | GitHub Actions secrets: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP`, `ACR_NAME`, optional `IMAGE_REPOSITORY`, `SMOKE_TEST_HEALTH_URL` | Supplies deployment identifiers and the private health endpoint without treating them as public workflow metadata | `.github/workflows/deploy-azure.yml` and post-deploy smoke checks | GitHub repository or environment secret management rights | No. The repo cannot create or populate real secrets. | Yes if you cannot edit repository or environment secrets. |
-| Key Vault secret values: optional `openai-api-key`, `azure-openai-api-key`, `anthropic-api-key`, `nvidia-api-key`, `google-api-key`, `mistral-api-key`, `core-api-key`, `semantic-scholar-api-key`, `openalex-api-key`, `openalex-mailto`, optional `serpapi-api-key`, `scholarapi-api-key`, `govinfo-api-key`, `mcp-backend-auth-token` | Supplies upstream provider credentials and the APIM-to-backend shared token | `infra/main.bicep`, runtime secret references, APIM named value resolution | Azure Key Vault secret-set permissions plus access to the real credential values | No. The repo can reference the secret names, not provide their contents. | Yes if you do not own the provider accounts, do not have the actual secrets, or cannot write them into Key Vault. |
+| Key Vault secret values: optional `openai-api-key`, `azure-openai-api-key`, `anthropic-api-key`, `huggingface-api-key`, `nvidia-api-key`, `google-api-key`, `mistral-api-key`, `core-api-key`, `semantic-scholar-api-key`, `openalex-api-key`, `openalex-mailto`, optional `serpapi-api-key`, `scholarapi-api-key`, `govinfo-api-key`, `mcp-backend-auth-token` | Supplies upstream provider credentials and the APIM-to-backend shared token | `infra/main.bicep`, runtime secret references, APIM named value resolution | Azure Key Vault secret-set permissions plus access to the real credential values | No. The repo can reference the secret names, not provide their contents. | Yes if you do not own the provider accounts, do not have the actual secrets, or cannot write them into Key Vault. |
 | ACR push path and image build prerequisites | The workflow expects Docker and ACR login to succeed before deployment | `.github/workflows/deploy-azure.yml`, `scripts/validate_deployment.py`, `Dockerfile` | Runner access and ACR access | Partially. The repo provides the image and validation logic. | Sometimes. You may be blocked if you cannot push to ACR. |
 | APIM client-access configuration | Private access is in place, but consumer authentication still needs operational setup such as subscription keys and optional JWT policy | `infra/modules/apim.bicep`, `docs/azure-security-model.md` | APIM administration rights | Partially. The repo defines the gateway and backend token path. | Yes if you need to manage client credentials but do not have APIM admin rights. |
 | A formal ACR quarantine and promotion process | This is the remaining hardening step beyond the current workflow gates | Documented as a future step in this guide | Registry policy control plus a release workflow owner | Not yet. The repo does not currently implement end-to-end quarantine promotion. | Yes if your security bar requires quarantine-based promotion before release. |
@@ -342,8 +366,12 @@ calls.
 - Use `agenticProvider=anthropic` or `agenticProvider=google` and seed the
   matching `anthropic-api-key` or `google-api-key` Key Vault secret when you
   want those hosted-provider paths.
+- Use `agenticProvider=huggingface`, seed the `huggingface-api-key` Key Vault
+  secret, and set `huggingFaceBaseUrl` when you need a non-default
+  OpenAI-compatible Hugging Face router.
 - Use `agenticProvider=nvidia` and seed the `nvidia-api-key` Key Vault secret
-  when you want the LangChain-backed NVIDIA path.
+  when you want the LangChain-backed NVIDIA path. Set `nvidiaNimBaseUrl` when
+  you want a self-hosted NIM endpoint instead of the hosted default.
 - Use `agenticProvider=mistral` and seed the `mistral-api-key` Key Vault
   secret when you want the LangChain-backed Mistral path.
 - Set `disableEmbeddings=false` to opt in to embedding-based ranking, frontier

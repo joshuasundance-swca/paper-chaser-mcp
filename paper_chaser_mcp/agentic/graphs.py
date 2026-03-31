@@ -206,7 +206,15 @@ class AgenticRuntime:
         self._compiled_graphs = self._maybe_compile_graphs()
 
     def smart_provider_diagnostics(self) -> tuple[dict[str, bool], list[str]]:
-        smart_providers = ["openai", "azure-openai", "anthropic", "nvidia", "google", "mistral"]
+        smart_providers = [
+            "openai",
+            "azure-openai",
+            "anthropic",
+            "nvidia",
+            "google",
+            "mistral",
+            "huggingface",
+        ]
         configured_provider = self._provider_bundle.configured_provider_name()
         enabled = {provider: False for provider in smart_providers}
         if self._config.enabled and configured_provider in enabled:

@@ -95,8 +95,12 @@ def test_azure_container_app_bicep_wires_agentic_env_contract() -> None:
 
     assert "param azureOpenAiEndpoint string = ''" in main_text
     assert "param azureOpenAiApiVersion string = ''" in main_text
+    assert "param nvidiaNimBaseUrl string = ''" in main_text
+    assert "param huggingFaceBaseUrl string = 'https://router.huggingface.co/v1'" in main_text
     assert "azureOpenAiEndpoint: azureOpenAiEndpoint" in main_text
     assert "azureOpenAiApiVersion: azureOpenAiApiVersion" in main_text
+    assert "nvidiaNimBaseUrl: nvidiaNimBaseUrl" in main_text
+    assert "huggingFaceBaseUrl: huggingFaceBaseUrl" in main_text
     assert "azureOpenAiEndpoint: ''" not in main_text
     assert "azureOpenAiApiVersion: ''" not in main_text
 
@@ -117,6 +121,7 @@ def test_azure_container_app_bicep_wires_agentic_env_contract() -> None:
         "keyVaultAzureOpenAiApiKeySecretUri",
         "keyVaultAnthropicApiKeySecretUri",
         "keyVaultGoogleApiKeySecretUri",
+        "keyVaultHuggingFaceApiKeySecretUri",
         "keyVaultMistralApiKeySecretUri",
         "enableScholarApi",
         "keyVaultScholarApiKeySecretUri",
@@ -126,11 +131,14 @@ def test_azure_container_app_bicep_wires_agentic_env_contract() -> None:
     for expected in (
         "OPENAI_API_KEY",
         "NVIDIA_API_KEY",
+        "NVIDIA_NIM_BASE_URL",
         "AZURE_OPENAI_API_KEY",
         "AZURE_OPENAI_ENDPOINT",
         "AZURE_OPENAI_API_VERSION",
         "ANTHROPIC_API_KEY",
         "GOOGLE_API_KEY",
+        "HUGGINGFACE_API_KEY",
+        "HUGGINGFACE_BASE_URL",
         "MISTRAL_API_KEY",
         "PAPER_CHASER_ENABLE_AGENTIC",
         "PAPER_CHASER_AGENTIC_PROVIDER",
@@ -158,12 +166,15 @@ def test_azure_deployment_doc_mentions_openai_secret_and_agentic_flags() -> None
     assert "nvidia-api-key" in text
     assert "azure-openai-api-key" in text
     assert "anthropic-api-key" in text
+    assert "huggingface-api-key" in text
     assert "google-api-key" in text
     assert "mistral-api-key" in text
     assert "enableAgentic" in text
     assert "agenticProvider" in text
     assert "azureOpenAiEndpoint" in text
     assert "azureOpenAiApiVersion" in text
+    assert "nvidiaNimBaseUrl" in text
+    assert "huggingFaceBaseUrl" in text
     assert "enableScholarApi" in text
     assert "scholarapi-api-key" in text
 
@@ -172,8 +183,11 @@ def test_azure_architecture_doc_mentions_provider_specific_smart_layer_inputs() 
     text = AZURE_ARCHITECTURE_DOC.read_text(encoding="utf-8")
 
     assert "Azure OpenAI" in text
+    assert "Hugging Face" in text
     assert "NVIDIA" in text
     assert "Anthropic" in text
     assert "Google" in text
     assert "Mistral" in text
     assert "AZURE_OPENAI_ENDPOINT" in text
+    assert "HUGGINGFACE_BASE_URL" in text
+    assert "NVIDIA_NIM_BASE_URL" in text

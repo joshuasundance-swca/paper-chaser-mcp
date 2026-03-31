@@ -527,6 +527,8 @@ azure_openai_synthesis_deployment = settings.azure_openai_synthesis_deployment
 anthropic_api_key = settings.anthropic_api_key
 google_api_key = settings.google_api_key
 mistral_api_key = settings.mistral_api_key
+huggingface_api_key = settings.huggingface_api_key
+huggingface_base_url = settings.huggingface_base_url
 core_api_key = settings.core_api_key
 openalex_api_key = settings.openalex_api_key
 openalex_mailto = settings.openalex_mailto
@@ -603,6 +605,8 @@ provider_bundle = resolve_provider_bundle(
     nvidia_nim_base_url=nvidia_nim_base_url,
     google_api_key=google_api_key,
     mistral_api_key=mistral_api_key,
+    huggingface_api_key=huggingface_api_key,
+    huggingface_base_url=huggingface_base_url,
     provider_registry=provider_registry,
 )
 workspace_registry = WorkspaceRegistry(

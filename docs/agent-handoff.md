@@ -77,6 +77,15 @@ This document is the current working handoff for the fork. It is intended to giv
   provider with quality-first defaults of `mistral-medium-latest` for planning
   and `mistral-large-latest` for synthesis when the checked-in OpenAI defaults
   are left untouched.
+- Hugging Face is now documented in packaging and operator docs as a chat-only
+  smart-layer provider path that uses the OpenAI-compatible router surface via
+  `HUGGINGFACE_API_KEY` plus `HUGGINGFACE_BASE_URL`. Embeddings remain disabled
+  for that path. The Azure scaffold now mirrors that provider path too,
+  including Key Vault-backed `huggingface-api-key` handling plus
+  `HUGGINGFACE_BASE_URL` deployment config.
+- The Azure scaffold now also mirrors the runtime's optional
+  `NVIDIA_NIM_BASE_URL` override so Azure deployments can target self-hosted
+  NVIDIA NIM endpoints instead of the hosted default.
 - Primary read tools now surface additive agent UX metadata:
   `agentHints`, `clarification`, `resourceUris`, and reusable
   `searchSessionId` handles where appropriate.

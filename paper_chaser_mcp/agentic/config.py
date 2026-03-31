@@ -17,6 +17,7 @@ _PROVIDER_DEFAULT_MODELS: dict[str, tuple[str, str]] = {
     "nvidia": ("nvidia/nemotron-3-nano-30b-a3b", "nvidia/nemotron-3-super-120b-a12b"),
     "google": ("gemini-2.5-flash", "gemini-2.5-pro"),
     "mistral": ("mistral-medium-latest", "mistral-large-latest"),
+    "huggingface": ("moonshotai/Kimi-K2.5", "moonshotai/Kimi-K2.5"),
 }
 
 

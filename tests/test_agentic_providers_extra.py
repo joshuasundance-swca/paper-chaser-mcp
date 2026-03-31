@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from paper_chaser_mcp.agentic import providers as providers_module
 from paper_chaser_mcp.agentic.config import AgenticConfig
 from paper_chaser_mcp.agentic.models import ExpansionCandidate, PlannerDecision
+from paper_chaser_mcp.agentic.provider_helpers import _ExpansionListSchema, _ExpansionSchema
 from paper_chaser_mcp.agentic.providers import (
     COMMON_QUERY_WORDS,
     AnthropicProviderBundle,
@@ -1181,6 +1182,8 @@ async def test_openai_provider_async_wrapper_and_embedding_success_paths(
 
 
 def test_resolve_provider_bundle_routes_additional_provider_types() -> None:
+    huggingface_bundle_cls = getattr(providers_module, "HuggingFaceProviderBundle", None)
+
     azure_bundle = resolve_provider_bundle(
         _config(provider="azure-openai"),
         openai_api_key=None,
@@ -1208,12 +1211,20 @@ def test_resolve_provider_bundle_routes_additional_provider_types() -> None:
         openai_api_key=None,
         mistral_api_key="mistral-key",
     )
+    assert huggingface_bundle_cls is not None
+    huggingface_bundle = resolve_provider_bundle(
+        _config(provider="huggingface"),
+        openai_api_key=None,
+        huggingface_api_key="hf-key",
+        huggingface_base_url="https://router.huggingface.co/v1",
+    )
 
     assert isinstance(azure_bundle, AzureOpenAIProviderBundle)
     assert isinstance(anthropic_bundle, AnthropicProviderBundle)
     assert isinstance(nvidia_bundle, NvidiaProviderBundle)
     assert isinstance(google_bundle, GoogleProviderBundle)
     assert isinstance(mistral_bundle, MistralProviderBundle)
+    assert isinstance(huggingface_bundle, huggingface_bundle_cls)
 
 
 def test_nvidia_provider_loaders(
@@ -1429,6 +1440,120 @@ def test_additional_provider_selection_metadata_reports_deterministic_fallback(b
     assert metadata["synthesisModelSource"] == "deterministic"
     assert metadata["plannerModel"].endswith(":deterministic-planner")
     assert metadata["synthesisModel"].endswith(":deterministic-synthesizer")
+
+
+def test_huggingface_provider_selection_metadata_reports_deterministic_fallback() -> None:
+    huggingface_bundle_cls = getattr(providers_module, "HuggingFaceProviderBundle", None)
+
+    assert huggingface_bundle_cls is not None
+    bundle = huggingface_bundle_cls(
+        _config(provider="huggingface"),
+        api_key=None,
+        base_url=None,
+    )
+
+    plan = bundle.plan_search(query="author Ada Lovelace", mode="auto")
+    metadata = bundle.selection_metadata()
+
+    assert isinstance(plan, PlannerDecision)
+    assert metadata["configuredSmartProvider"] == "huggingface"
+    assert metadata["activeSmartProvider"] == "deterministic"
+    assert metadata["plannerModelSource"] == "deterministic"
+    assert metadata["synthesisModelSource"] == "deterministic"
+    assert metadata["plannerModel"].endswith(":deterministic-planner")
+    assert metadata["synthesisModel"].endswith(":deterministic-synthesizer")
+
+
+@pytest.mark.asyncio
+async def test_huggingface_aplan_search_falls_back_to_text_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    huggingface_bundle_cls = getattr(providers_module, "HuggingFaceProviderBundle", None)
+
+    assert huggingface_bundle_cls is not None
+    bundle = huggingface_bundle_cls(
+        _config(provider="huggingface"),
+        api_key="hf-key",
+        base_url="https://router.huggingface.co/v1",
+    )
+
+    planner_response = _PlannerResponseSchema(
+        intent="review",
+        candidateConcepts=["hallucination detection", "biomedical rag"],
+        providerPlan=["semantic_scholar", "openalex", "scholarapi"],
+        followUpMode="claim_check",
+    )
+
+    monkeypatch.setattr(bundle, "_load_models", lambda: (object(), object()))
+
+    async def _fake_structured_async(**kwargs: Any) -> None:
+        return None
+
+    async def _fake_structured_from_text_async(**kwargs: Any) -> _PlannerResponseSchema:
+        assert kwargs["endpoint"] == "text:planner"
+        assert "Return only JSON" in kwargs["system_prompt"]
+        return planner_response
+
+    monkeypatch.setattr(bundle, "_structured_async", _fake_structured_async)
+    monkeypatch.setattr(bundle, "_structured_from_text_async", _fake_structured_from_text_async)
+
+    decision = await bundle.aplan_search(
+        query="hallucination detection in biomedical rag",
+        mode="review",
+        request_outcomes=[],
+        request_id="req-hf-plan",
+    )
+
+    assert isinstance(decision, PlannerDecision)
+    assert decision.intent == "review"
+    assert decision.provider_plan == ["semantic_scholar", "openalex", "scholarapi"]
+    assert bundle.selection_metadata()["activeSmartProvider"] == "huggingface"
+
+
+@pytest.mark.asyncio
+async def test_huggingface_asuggest_speculative_expansions_falls_back_to_text_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    huggingface_bundle_cls = getattr(providers_module, "HuggingFaceProviderBundle", None)
+
+    assert huggingface_bundle_cls is not None
+    bundle = huggingface_bundle_cls(
+        _config(provider="huggingface"),
+        api_key="hf-key",
+        base_url="https://router.huggingface.co/v1",
+    )
+
+    monkeypatch.setattr(bundle, "_load_models", lambda: (object(), object()))
+
+    async def _fake_structured_async(**kwargs: Any) -> None:
+        return None
+
+    async def _fake_structured_from_text_async(**kwargs: Any) -> _ExpansionListSchema:
+        assert kwargs["endpoint"] == "text:expansions"
+        assert "Return only JSON" in kwargs["system_prompt"]
+        return _ExpansionListSchema(
+            expansions=[
+                _ExpansionSchema(
+                    variant="biomedical question answering hallucination evaluation",
+                    source="from_retrieved_evidence",
+                    rationale="Matches the evidence set.",
+                )
+            ]
+        )
+
+    monkeypatch.setattr(bundle, "_structured_async", _fake_structured_async)
+    monkeypatch.setattr(bundle, "_structured_from_text_async", _fake_structured_from_text_async)
+
+    expansions = await bundle.asuggest_speculative_expansions(
+        query="hallucination detection in biomedical rag",
+        evidence_texts=["Retrieval-augmented biomedical QA evaluation benchmarks"],
+        max_variants=3,
+        request_outcomes=[],
+        request_id="req-hf-expand",
+    )
+
+    assert expansions
+    assert expansions[0].variant == "biomedical question answering hallucination evaluation"
+    assert expansions[0].source == "from_retrieved_evidence"
+    assert bundle.selection_metadata()["activeSmartProvider"] == "huggingface"
 
 
 def test_openai_provider_reloads_models_when_cache_is_partial(

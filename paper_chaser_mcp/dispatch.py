@@ -744,8 +744,17 @@ async def dispatch_tool(
             "nvidia": False,
             "google": False,
             "mistral": False,
+            "huggingface": False,
         }
-        smart_provider_order = ["openai", "azure-openai", "anthropic", "nvidia", "google", "mistral"]
+        smart_provider_order = [
+            "openai",
+            "azure-openai",
+            "anthropic",
+            "nvidia",
+            "google",
+            "mistral",
+            "huggingface",
+        ]
         if agentic_runtime is not None and hasattr(agentic_runtime, "smart_provider_diagnostics"):
             smart_provider_enabled, smart_provider_order = agentic_runtime.smart_provider_diagnostics()
 

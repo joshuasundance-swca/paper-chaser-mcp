@@ -43,6 +43,8 @@ These are the credentials the MCP server uses to talk to scholarly providers.
 - `OPENAI_API_KEY` when the smart layer uses the `openai` provider bundle
 - `AZURE_OPENAI_API_KEY` when the smart layer uses the `azure-openai` provider bundle
 - `ANTHROPIC_API_KEY` when the smart layer uses the `anthropic` provider bundle
+- `HUGGINGFACE_API_KEY` when the smart layer uses the documented Hugging Face
+  OpenAI-compatible chat router
 - `NVIDIA_API_KEY` when the smart layer uses the `nvidia` provider bundle
 - `GOOGLE_API_KEY` when the smart layer uses the `google` provider bundle
 - `MISTRAL_API_KEY` when the smart layer uses the `mistral` provider bundle
@@ -51,9 +53,18 @@ These are the credentials the MCP server uses to talk to scholarly providers.
 - `SERPAPI_API_KEY`
 - optional `OPENALEX_MAILTO` contact value
 
+`HUGGINGFACE_BASE_URL` is deployment config rather than an API key. Keep it out
+of Key Vault unless the URL itself is sensitive, such as a private router or
+gateway hostname.
+
+`NVIDIA_NIM_BASE_URL` is also deployment config rather than an API key. Keep it
+out of Key Vault unless the endpoint itself is sensitive, such as a private NIM
+hostname inside your network.
+
 These are server-side secrets only. Embeddings remain disabled by default, and
-NVIDIA is currently chat-only in this repo, so no additional embedding-specific
-secrets are required for the new providers.
+NVIDIA plus the documented Hugging Face path are currently chat-only in this
+repo, so no additional embedding-specific secrets are required for those
+providers.
 
 ## Storage and access rules
 
