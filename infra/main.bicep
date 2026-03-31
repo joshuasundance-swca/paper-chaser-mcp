@@ -49,6 +49,7 @@ param enableAgentic bool = false
   'azure-openai'
   'anthropic'
   'google'
+  'mistral'
   'deterministic'
 ])
 param agenticProvider string = 'openai'
@@ -278,6 +279,7 @@ module containerApp './modules/containerApp.bicep' = if (deployFull) {
     keyVaultAzureOpenAiApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/azure-openai-api-key'
     keyVaultCoreApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/core-api-key'
     keyVaultGoogleApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/google-api-key'
+    keyVaultMistralApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/mistral-api-key'
     keyVaultOpenAiApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/openai-api-key'
     keyVaultOpenAlexApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/openalex-api-key'
     keyVaultOpenAlexMailtoSecretUri: '${keyVault.outputs.vaultUri}secrets/openalex-mailto'

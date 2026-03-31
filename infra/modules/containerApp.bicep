@@ -23,6 +23,7 @@ param keyVaultAnthropicApiKeySecretUri string
 param keyVaultAzureOpenAiApiKeySecretUri string
 param keyVaultCoreApiKeySecretUri string
 param keyVaultGoogleApiKeySecretUri string
+param keyVaultMistralApiKeySecretUri string
 param keyVaultOpenAiApiKeySecretUri string
 param keyVaultOpenAlexApiKeySecretUri string
 param keyVaultOpenAlexMailtoSecretUri string
@@ -117,6 +118,12 @@ var secretDefinitions = concat([
     identity: managedIdentityResourceId
     keyVaultUrl: keyVaultGoogleApiKeySecretUri
     name: 'google-api-key'
+  }
+] : [], enableAgentic && agenticProvider == 'mistral' ? [
+  {
+    identity: managedIdentityResourceId
+    keyVaultUrl: keyVaultMistralApiKeySecretUri
+    name: 'mistral-api-key'
   }
 ] : [], enableGovinfoCfr ? [
   {
@@ -308,6 +315,11 @@ var containerEnv = concat([
   {
     name: 'GOOGLE_API_KEY'
     secretRef: 'google-api-key'
+  }
+] : [], enableAgentic && agenticProvider == 'mistral' ? [
+  {
+    name: 'MISTRAL_API_KEY'
+    secretRef: 'mistral-api-key'
   }
 ] : [], enableGovinfoCfr ? [
   {

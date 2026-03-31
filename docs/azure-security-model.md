@@ -44,6 +44,7 @@ These are the credentials the MCP server uses to talk to scholarly providers.
 - `AZURE_OPENAI_API_KEY` when the smart layer uses the `azure-openai` provider bundle
 - `ANTHROPIC_API_KEY` when the smart layer uses the `anthropic` provider bundle
 - `GOOGLE_API_KEY` when the smart layer uses the `google` provider bundle
+- `MISTRAL_API_KEY` when the smart layer uses the `mistral` provider bundle
 - `SEMANTIC_SCHOLAR_API_KEY`
 - `OPENALEX_API_KEY`
 - `SERPAPI_API_KEY`

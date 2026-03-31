@@ -116,6 +116,7 @@ def test_azure_container_app_bicep_wires_agentic_env_contract() -> None:
         "keyVaultAzureOpenAiApiKeySecretUri",
         "keyVaultAnthropicApiKeySecretUri",
         "keyVaultGoogleApiKeySecretUri",
+        "keyVaultMistralApiKeySecretUri",
         "enableScholarApi",
         "keyVaultScholarApiKeySecretUri",
     ):
@@ -128,6 +129,7 @@ def test_azure_container_app_bicep_wires_agentic_env_contract() -> None:
         "AZURE_OPENAI_API_VERSION",
         "ANTHROPIC_API_KEY",
         "GOOGLE_API_KEY",
+        "MISTRAL_API_KEY",
         "PAPER_CHASER_ENABLE_AGENTIC",
         "PAPER_CHASER_AGENTIC_PROVIDER",
         "PAPER_CHASER_PLANNER_MODEL",
@@ -154,6 +156,7 @@ def test_azure_deployment_doc_mentions_openai_secret_and_agentic_flags() -> None
     assert "azure-openai-api-key" in text
     assert "anthropic-api-key" in text
     assert "google-api-key" in text
+    assert "mistral-api-key" in text
     assert "enableAgentic" in text
     assert "agenticProvider" in text
     assert "azureOpenAiEndpoint" in text
@@ -168,4 +171,5 @@ def test_azure_architecture_doc_mentions_provider_specific_smart_layer_inputs() 
     assert "Azure OpenAI" in text
     assert "Anthropic" in text
     assert "Google" in text
+    assert "Mistral" in text
     assert "AZURE_OPENAI_ENDPOINT" in text

@@ -21,6 +21,7 @@ EXPECTED_LOCAL_CONFIG_KEYS = {
     "AZURE_OPENAI_SYNTHESIS_DEPLOYMENT",
     "ANTHROPIC_API_KEY",
     "GOOGLE_API_KEY",
+    "MISTRAL_API_KEY",
     "CORE_API_KEY",
     "SEMANTIC_SCHOLAR_API_KEY",
     "OPENALEX_API_KEY",
@@ -151,6 +152,16 @@ def test_compose_uses_only_documented_local_config_keys() -> None:
     assert undocumented == set()
 
 
+def test_inspector_compose_uses_only_documented_local_config_keys() -> None:
+    if not INSPECTOR_COMPOSE.exists():
+        pytest.skip("compose.inspector.yaml is not part of this checkout.")
+
+    compose_keys = _parse_compose_substitution_keys(INSPECTOR_COMPOSE)
+
+    undocumented = compose_keys - EXPECTED_LOCAL_CONFIG_KEYS - OPTIONAL_COMPOSE_ONLY_KEYS
+    assert undocumented == set()
+
+
 def test_compose_does_not_expose_container_bind_host_or_internal_port() -> None:
     compose_keys = _parse_compose_substitution_keys(DOCKER_COMPOSE)
 
@@ -182,6 +193,7 @@ def test_readme_agentic_install_guidance_matches_declared_optional_extras() -> N
         "openai = [",
         "anthropic = [",
         "google = [",
+        "mistral = [",
         "ai-faiss = [",
         "all = [",
     ):
@@ -192,6 +204,7 @@ def test_readme_agentic_install_guidance_matches_declared_optional_extras() -> N
         'pip install -e ".[ai,openai]"',
         'pip install -e ".[ai,anthropic]"',
         'pip install -e ".[ai,google]"',
+        'pip install -e ".[ai,mistral]"',
         'pip install -e ".[all]"',
         'pip install -e ".[all,ai-faiss]"',
     ):

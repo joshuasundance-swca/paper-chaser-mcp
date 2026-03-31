@@ -196,6 +196,7 @@ Optional extras for the additive AI layer:
 - OpenAI or Azure OpenAI provider support: `pip install -e ".[ai,openai]"`
 - Anthropic provider support: `pip install -e ".[ai,anthropic]"`
 - Google provider support: `pip install -e ".[ai,google]"`
+- Mistral provider support: `pip install -e ".[ai,mistral]"`
 - Add `,ai-faiss` to any of the commands above if you want the optional FAISS backend.
 
 ## Configuration
@@ -592,7 +593,7 @@ If you also want the additive AI layer plus every hosted-provider integration in
 pip install -e ".[all]"
 ```
 
-`all` expands to `ai,openai,anthropic,google,dev`, so Azure OpenAI uses the same `openai` extra as the standard OpenAI path.
+`all` expands to `ai,openai,anthropic,google,mistral,dev`, so Azure OpenAI uses the same `openai` extra as the standard OpenAI path.
 
 If you need the optional FAISS backend locally as well:
 
