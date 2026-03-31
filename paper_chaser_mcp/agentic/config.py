@@ -13,8 +13,8 @@ ModelSelectionSource = Literal["configured", "azure_deployment", "provider_defau
 _DEFAULT_OPENAI_PLANNER_MODEL = "gpt-5.4-mini"
 _DEFAULT_OPENAI_SYNTHESIS_MODEL = "gpt-5.4"
 _PROVIDER_DEFAULT_MODELS: dict[str, tuple[str, str]] = {
-    "anthropic": ("claude-sonnet-4-5", "claude-sonnet-4-5"),
-    "google": ("gemini-2.5-flash", "gemini-2.5-flash"),
+    "anthropic": ("claude-haiku-4-5", "claude-sonnet-4-6"),
+    "google": ("gemini-2.5-flash", "gemini-2.5-pro"),
 }
 
 

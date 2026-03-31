@@ -36,6 +36,7 @@ async def test_scholarapi_search_normalizes_results_and_uses_auth_header(
                             "published_date": "2023-09-14",
                             "published_date_raw": "2023-09-14",
                             "indexed_at": "2024-03-01T12:30:45.123Z",
+                            "journal_issn": ["2169-3536", "2169-3536"],
                             "has_text": True,
                             "has_pdf": True,
                             "url": "https://journal.example.org/article/96f3e91",
@@ -72,9 +73,11 @@ async def test_scholarapi_search_normalizes_results_and_uses_auth_header(
     assert paper["hasText"] is True
     assert paper["hasPdf"] is True
     assert paper["indexedAt"] == "2024-03-01T12:30:45.123Z"
+    assert paper["journalIssn"] == "2169-3536"
     assert paper["contentAccess"]["scholarapi"]["paperId"] == "ScholarAPI:96f3e91"
     assert paper["contentAccess"]["scholarapi"]["hasText"] is True
     assert paper["contentAccess"]["scholarapi"]["hasPdf"] is True
+    assert paper["contentAccess"]["scholarapi"]["journalIssn"] == "2169-3536"
     assert result["requestId"] == "req-123"
     assert result["pagination"]["nextCursor"] == "AoE/H4ANVGVzdDo2NDBhZDIxNw=="
     assert result["requestCost"] == "3"
