@@ -52,6 +52,10 @@ google = [
     "google-genai>=1.69.0",
     "langchain-google-genai>=4.2.1",
 ]
+mistral = [
+    "langchain-mistralai>=0.2.5",
+    "mistralai>=1.9.11",
+]
 ai-faiss = [
     "faiss-cpu>=1.13.2",
     "langchain-community>=0.4.1",
@@ -71,7 +75,7 @@ dev = [
     "types-defusedxml>=0.7.0",
 ]
 all = [
-    "paper-chaser-mcp[ai,openai,anthropic,google,dev]",
+    "paper-chaser-mcp[ai,openai,anthropic,google,mistral,dev]",
 ]
 
 [project.scripts]
@@ -139,11 +143,13 @@ module = [
     "langchain.*",
     "langchain_anthropic.*",
     "langchain_google_genai.*",
+    "langchain_mistralai.*",
     "langchain_openai.*",
     "langchain_community.*",
     "langchain_core.*",
     "langgraph.*",
     "faiss.*",
+    "mistralai.*",
 ]
 ignore_missing_imports = true
 

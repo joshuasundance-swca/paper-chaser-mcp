@@ -12,7 +12,7 @@ from .models.tools import (
     _normalize_provider_name,
 )
 
-AgenticProvider = Literal["openai", "azure-openai", "anthropic", "google", "deterministic"]
+AgenticProvider = Literal["openai", "azure-openai", "anthropic", "google", "mistral", "deterministic"]
 AgenticIndexBackend = Literal["memory", "faiss"]
 
 
@@ -111,6 +111,7 @@ class AppSettings(BaseModel):
     azure_openai_synthesis_deployment: str | None = None
     anthropic_api_key: str | None = None
     google_api_key: str | None = None
+    mistral_api_key: str | None = None
     semantic_scholar_api_key: str | None = None
     core_api_key: str | None = None
     openalex_api_key: str | None = None
@@ -176,6 +177,7 @@ class AppSettings(BaseModel):
             azure_openai_synthesis_deployment=_parse_optional_string(env, "AZURE_OPENAI_SYNTHESIS_DEPLOYMENT"),
             anthropic_api_key=_parse_optional_string(env, "ANTHROPIC_API_KEY"),
             google_api_key=_parse_optional_string(env, "GOOGLE_API_KEY"),
+            mistral_api_key=_parse_optional_string(env, "MISTRAL_API_KEY"),
             semantic_scholar_api_key=_parse_optional_string(
                 env,
                 "SEMANTIC_SCHOLAR_API_KEY",
@@ -363,10 +365,10 @@ def cast_agentic_provider(value: str | None) -> AgenticProvider:
     if value is None or value == "":
         return "openai"
     normalized = value.strip().lower()
-    if normalized in {"openai", "azure-openai", "anthropic", "google", "deterministic"}:
+    if normalized in {"openai", "azure-openai", "anthropic", "google", "mistral", "deterministic"}:
         return cast(AgenticProvider, normalized)
     raise ValueError(
-        "PAPER_CHASER_AGENTIC_PROVIDER must be one of: openai, azure-openai, anthropic, google, deterministic"
+        "PAPER_CHASER_AGENTIC_PROVIDER must be one of: openai, azure-openai, anthropic, google, mistral, deterministic"
     )
 
 
