@@ -49,8 +49,9 @@ ENRICHMENT_PAPER_ID_DESCRIPTION = (
 )
 DOI_INPUT_DESCRIPTION = "Bare DOI or DOI URL. When both doi and paper_id are supplied, the explicit doi wins."
 INCLUDE_ENRICHMENT_DESCRIPTION = (
-    "When true, add post-resolution Crossref and Unpaywall enrichment to the final "
-    "resolved paper output. Matching, ranking, and retrieval behavior stay unchanged."
+    "When true, add post-resolution Crossref, Unpaywall, and OpenAlex enrichment "
+    "to the final resolved paper output. Matching, ranking, and retrieval behavior "
+    "stay unchanged."
 )
 
 
@@ -551,7 +552,7 @@ class UnpaywallEnrichmentArgs(PaperEnrichmentLookupArgs):
 
 
 class EnrichPaperArgs(CrossrefEnrichmentArgs):
-    """Run Crossref and Unpaywall enrichment for one known paper or DOI."""
+    """Run Crossref, Unpaywall, and OpenAlex enrichment for one known paper or DOI."""
 
 
 class OpenAlexPaperLookupArgs(ToolArgsModel):

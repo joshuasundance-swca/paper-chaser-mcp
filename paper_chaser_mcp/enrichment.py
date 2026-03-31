@@ -1,4 +1,4 @@
-"""Crossref + Unpaywall enrichment helpers shared across tool surfaces."""
+"""Crossref, Unpaywall, and OpenAlex enrichment helpers shared across tool surfaces."""
 
 from __future__ import annotations
 
@@ -9,15 +9,20 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from .clients.crossref import CrossrefClient
-from .identifiers import resolve_doi_from_paper_payload, resolve_doi_inputs
+from .identifiers import normalize_doi, resolve_doi_from_paper_payload, resolve_doi_inputs
 from .models import (
     CrossrefEnrichment,
     CrossrefEnrichmentResult,
     CrossrefWorkSummary,
     DoiResolution,
+    OpenAlexEnrichment,
+    OpenAlexEnrichmentResult,
     Paper,
+    PaperContentAccess,
     PaperEnrichmentResponse,
     PaperEnrichments,
+    ScholarApiContentAccess,
+    ScholarApiContentAccessResult,
     UnpaywallEnrichment,
     UnpaywallEnrichmentResult,
     dump_jsonable,
@@ -112,6 +117,14 @@ def _trusted_query_fallback_match(
     return False
 
 
+def _doi_matches_requested_value(requested_doi: str | None, returned_doi: str | None) -> bool:
+    normalized_requested = normalize_doi(requested_doi)
+    normalized_returned = normalize_doi(returned_doi)
+    if not normalized_requested or not normalized_returned:
+        return True
+    return normalized_requested == normalized_returned
+
+
 def attach_enrichments_to_paper_payload(
     paper: dict[str, Any] | Paper,
     *,
@@ -125,6 +138,8 @@ def attach_enrichments_to_paper_payload(
         return enriched if isinstance(enriched, dict) else {}
     if isinstance(enriched, dict) and enriched.get("enrichments") is not None:
         base["enrichments"] = enriched["enrichments"]
+    if isinstance(enriched, dict) and enriched.get("contentAccess") is not None:
+        base["contentAccess"] = enriched["contentAccess"]
     return base
 
 
@@ -191,22 +206,64 @@ async def hydrate_paper_for_enrichment(
     return merged
 
 
+def _openalex_lookup_identifier(
+    *,
+    paper_id: str | None,
+    paper: Paper | dict[str, Any] | None,
+    resolved_doi: str | None,
+) -> str | None:
+    if resolved_doi:
+        return resolved_doi
+
+    paper_model = Paper.model_validate(paper) if paper is not None else None
+    candidates = [paper_id]
+    if paper_model is not None:
+        if paper_model.source == "openalex":
+            candidates.extend(
+                [
+                    paper_model.source_id,
+                    paper_model.paper_id,
+                    paper_model.canonical_id,
+                ]
+            )
+        candidates.extend([paper_model.recommended_expansion_id, paper_model.canonical_id])
+
+    for candidate in candidates:
+        if not isinstance(candidate, str):
+            continue
+        normalized = candidate.strip()
+        if not normalized:
+            continue
+        lowered = normalized.lower()
+        if normalized.startswith("10.") or lowered.startswith("doi:"):
+            return normalized
+        if normalized.upper().startswith("W") and normalized[1:].isdigit():
+            return normalized.upper()
+        if "openalex.org/w" in lowered or "/works/w" in lowered:
+            return normalized
+    return None
+
+
 class PaperEnrichmentService:
-    """Reusable Crossref + Unpaywall enrichment service."""
+    """Reusable Crossref, Unpaywall, and OpenAlex enrichment service."""
 
     def __init__(
         self,
         *,
         crossref_client: Any | None,
         unpaywall_client: Any | None,
+        openalex_client: Any | None = None,
         enable_crossref: bool,
         enable_unpaywall: bool,
+        enable_openalex: bool = True,
         provider_registry: ProviderDiagnosticsRegistry | None = None,
     ) -> None:
         self._crossref_client = crossref_client
         self._unpaywall_client = unpaywall_client
+        self._openalex_client = openalex_client
         self._enable_crossref = enable_crossref
         self._enable_unpaywall = enable_unpaywall
+        self._enable_openalex = enable_openalex
         self._provider_registry = provider_registry
 
     async def get_crossref_metadata(
@@ -355,6 +412,137 @@ class PaperEnrichmentService:
             enrichment=enrichment,
         )
 
+    async def get_openalex_metadata(
+        self,
+        *,
+        paper_id: str | None = None,
+        doi: str | None = None,
+        paper: dict[str, Any] | Paper | None = None,
+        request_id: str | None = None,
+        request_outcomes: list[dict[str, Any]] | None = None,
+        suppress_errors: bool = False,
+    ) -> OpenAlexEnrichmentResult:
+        openalex_client = self._openalex_client
+        if not self._enable_openalex or openalex_client is None:
+            if suppress_errors:
+                return OpenAlexEnrichmentResult(found=False)
+            raise ValueError(
+                "OpenAlex enrichment requires OpenAlex, which is disabled. "
+                "Set PAPER_CHASER_ENABLE_OPENALEX=true to use this enrichment path."
+            )
+
+        paper_model = Paper.model_validate(paper) if paper is not None else None
+        resolved_doi, _ = resolve_doi_inputs(doi=doi, paper_id=paper_id, paper=paper)
+        lookup_id = _openalex_lookup_identifier(
+            paper_id=paper_id,
+            paper=paper_model or paper,
+            resolved_doi=resolved_doi,
+        )
+        if not lookup_id:
+            if suppress_errors:
+                return OpenAlexEnrichmentResult(found=False, resolvedDoi=resolved_doi)
+            raise ValueError("OpenAlex enrichment needs a DOI-bearing identifier or OpenAlex work identifier.")
+
+        try:
+            lookup = await execute_provider_call(
+                provider="openalex",
+                endpoint="get_paper_details",
+                operation=lambda: openalex_client.get_paper_details(paper_id=lookup_id),
+                registry=self._provider_registry,
+                request_outcomes=request_outcomes,
+                request_id=request_id,
+                is_empty=lambda payload: payload is None,
+            )
+        except Exception:
+            if suppress_errors:
+                logger.debug("OpenAlex enrichment failed", exc_info=True)
+                return OpenAlexEnrichmentResult(
+                    found=False,
+                    lookupId=lookup_id,
+                    resolvedDoi=resolved_doi,
+                )
+            raise
+
+        if lookup.payload is None:
+            if lookup.outcome.status_bucket not in {"empty", "success"} and not suppress_errors:
+                raise ValueError(
+                    lookup.outcome.error or lookup.outcome.fallback_reason or "OpenAlex enrichment failed."
+                )
+            return OpenAlexEnrichmentResult(
+                found=False,
+                lookupId=lookup_id,
+                resolvedDoi=resolved_doi,
+            )
+
+        normalized_paper = Paper.model_validate(lookup.payload)
+        normalized_payload = dump_jsonable(normalized_paper)
+        resolved_doi_from_openalex, _ = resolve_doi_from_paper_payload(normalized_payload)
+        if not _doi_matches_requested_value(resolved_doi, resolved_doi_from_openalex):
+            logger.info(
+                "Rejecting OpenAlex enrichment for %r because it returned DOI %r instead of %r.",
+                lookup_id,
+                resolved_doi_from_openalex,
+                resolved_doi,
+            )
+            return OpenAlexEnrichmentResult(
+                found=False,
+                lookupId=lookup_id,
+                resolvedDoi=resolved_doi,
+            )
+        enrichment = OpenAlexEnrichment(
+            sourceId=normalized_paper.source_id,
+            doi=resolved_doi_from_openalex,
+            venue=normalized_paper.venue,
+            publicationType=normalized_paper.publication_types,
+            publicationDate=normalized_paper.publication_date,
+            year=normalized_paper.year,
+            url=normalized_paper.url,
+            pdfUrl=normalized_paper.pdf_url,
+            citationCount=normalized_paper.citation_count,
+        )
+        return OpenAlexEnrichmentResult(
+            found=True,
+            lookupId=lookup_id,
+            resolvedDoi=resolved_doi_from_openalex or resolved_doi,
+            enrichment=enrichment,
+        )
+
+    @staticmethod
+    def get_scholarapi_content_access(
+        paper: dict[str, Any] | Paper | None,
+    ) -> ScholarApiContentAccessResult:
+        """Return structured ScholarAPI access metadata already present on a paper payload."""
+
+        if paper is None:
+            return ScholarApiContentAccessResult(found=False)
+
+        paper_model = Paper.model_validate(paper)
+        if paper_model.source != "scholarapi":
+            return ScholarApiContentAccessResult(found=False, paperId=paper_model.paper_id)
+
+        content_access = paper_model.content_access
+        if content_access is None or content_access.scholarapi is None:
+            payload = dump_jsonable(paper_model)
+            scholarapi_access = ScholarApiContentAccess(
+                paperId=paper_model.paper_id,
+                hasText=payload.get("hasText"),
+                hasPdf=payload.get("hasPdf"),
+                indexedAt=payload.get("indexedAt"),
+                journalPublisher=payload.get("journalPublisher"),
+                journalIssn=payload.get("journalIssn"),
+                journalIssue=payload.get("journalIssue"),
+                journalPages=payload.get("journalPages"),
+            )
+            if not scholarapi_access.model_dump(by_alias=True, exclude_none=True):
+                return ScholarApiContentAccessResult(found=False, paperId=paper_model.paper_id)
+            content_access = PaperContentAccess(scholarapi=scholarapi_access)
+
+        return ScholarApiContentAccessResult(
+            found=True,
+            paperId=paper_model.paper_id,
+            contentAccess=content_access.scholarapi,
+        )
+
     async def enrich_paper(
         self,
         *,
@@ -369,6 +557,7 @@ class PaperEnrichmentService:
         existing_enrichments = paper_model.enrichments if paper_model is not None else None
         existing_crossref = existing_enrichments.crossref if existing_enrichments is not None else None
         existing_unpaywall = existing_enrichments.unpaywall if existing_enrichments is not None else None
+        existing_openalex = existing_enrichments.openalex if existing_enrichments is not None else None
         resolved_doi, resolution_source = resolve_doi_inputs(
             doi=doi,
             paper_id=paper_id,
@@ -378,6 +567,7 @@ class PaperEnrichmentService:
             for cached_doi in [
                 existing_crossref.doi if existing_crossref is not None else None,
                 existing_unpaywall.doi if existing_unpaywall is not None else None,
+                existing_openalex.doi if existing_openalex is not None else None,
             ]:
                 if cached_doi:
                     resolved_doi = cached_doi
@@ -406,6 +596,16 @@ class PaperEnrichmentService:
                 enrichment=existing_unpaywall,
             )
             if existing_unpaywall is not None
+            else None
+        )
+        openalex = (
+            OpenAlexEnrichmentResult(
+                found=True,
+                lookupId=existing_openalex.source_id,
+                resolvedDoi=existing_openalex.doi or resolved_doi,
+                enrichment=existing_openalex,
+            )
+            if existing_openalex is not None
             else None
         )
 
@@ -439,54 +639,103 @@ class PaperEnrichmentService:
                 if unpaywall is None
                 else None
             )
-            tasks = [task for task in [crossref_task, unpaywall_task] if task is not None]
+            openalex_task = (
+                asyncio.create_task(
+                    self.get_openalex_metadata(
+                        paper_id=paper_id,
+                        doi=resolved_doi,
+                        paper=paper_model or paper,
+                        request_id=request_id,
+                        request_outcomes=request_outcomes,
+                        suppress_errors=True,
+                    )
+                )
+                if openalex is None
+                else None
+            )
+            tasks: list[asyncio.Task[Any]] = [
+                task for task in [crossref_task, unpaywall_task, openalex_task] if task is not None
+            ]
             if tasks:
                 await asyncio.gather(*tasks)
             if crossref_task is not None:
                 crossref = crossref_task.result()
             if unpaywall_task is not None:
                 unpaywall = unpaywall_task.result()
+            if openalex_task is not None:
+                openalex = openalex_task.result()
         else:
-            if crossref is None:
-                crossref = await self.get_crossref_metadata(
-                    paper_id=paper_id,
-                    doi=resolved_doi,
-                    paper=paper_model or paper,
-                    query=query,
-                    request_id=request_id,
-                    request_outcomes=request_outcomes,
-                    suppress_errors=True,
-                )
-            resolved_doi = crossref.resolved_doi if crossref is not None and crossref.resolved_doi else resolved_doi
-            if unpaywall is None:
-                unpaywall = await self.get_unpaywall_open_access(
-                    paper_id=paper_id,
-                    doi=resolved_doi,
-                    paper=paper_model or paper,
-                    request_id=request_id,
-                    request_outcomes=request_outcomes,
-                    suppress_errors=True,
+            if paper_model is not None:
+                if crossref is None:
+                    crossref = await self.get_crossref_metadata(
+                        paper_id=paper_id,
+                        doi=resolved_doi,
+                        paper=paper_model or paper,
+                        query=query,
+                        request_id=request_id,
+                        request_outcomes=request_outcomes,
+                        suppress_errors=True,
+                    )
+                resolved_doi = crossref.resolved_doi if crossref is not None and crossref.resolved_doi else resolved_doi
+                if openalex is None:
+                    openalex = await self.get_openalex_metadata(
+                        paper_id=paper_id,
+                        doi=resolved_doi,
+                        paper=paper_model or paper,
+                        request_id=request_id,
+                        request_outcomes=request_outcomes,
+                        suppress_errors=True,
+                    )
+                if resolved_doi is None and openalex is not None and openalex.resolved_doi:
+                    resolved_doi = openalex.resolved_doi
+                if unpaywall is None:
+                    unpaywall = await self.get_unpaywall_open_access(
+                        paper_id=paper_id,
+                        doi=resolved_doi,
+                        paper=paper_model or paper,
+                        request_id=request_id,
+                        request_outcomes=request_outcomes,
+                        suppress_errors=True,
+                    )
+            else:
+                logger.info(
+                    (
+                        "Skipping combined enrichment query fallback for %r "
+                        "because no DOI-bearing identifier or paper anchor was provided."
+                    ),
+                    query,
                 )
 
         if crossref is None:
             crossref = CrossrefEnrichmentResult(found=False, resolvedDoi=resolved_doi)
-        resolved_after_crossref = crossref.resolved_doi or resolved_doi
+        if openalex is None:
+            openalex = OpenAlexEnrichmentResult(found=False, resolvedDoi=resolved_doi)
+        scholarapi = self.get_scholarapi_content_access(paper_model or paper)
+        content_access = (
+            PaperContentAccess(scholarapi=scholarapi.content_access) if scholarapi.content_access is not None else None
+        )
+        resolved_after_openalex = resolved_doi or crossref.resolved_doi or openalex.resolved_doi
         if unpaywall is None:
             unpaywall = UnpaywallEnrichmentResult(
                 found=False,
-                doi=resolved_after_crossref,
+                doi=resolved_after_openalex,
             )
-        enrichments = self._merge_enrichments(crossref=crossref, unpaywall=unpaywall)
+        enrichments = self._merge_enrichments(crossref=crossref, unpaywall=unpaywall, openalex=openalex)
         return PaperEnrichmentResponse(
             doiResolution=DoiResolution(
-                resolvedDoi=resolved_after_crossref,
+                resolvedDoi=resolved_after_openalex,
                 resolutionSource=(
-                    resolution_source or ("crossref" if crossref.found and crossref.resolved_doi else None)
+                    resolution_source
+                    or ("crossref" if crossref.found and crossref.resolved_doi else None)
+                    or ("openalex" if openalex.found and openalex.resolved_doi else None)
                 ),
             ),
             crossref=crossref,
             unpaywall=unpaywall,
+            openalex=openalex,
             enrichments=enrichments,
+            scholarapi=scholarapi,
+            contentAccess=content_access,
         )
 
     async def enrich_paper_payload(
@@ -505,25 +754,37 @@ class PaperEnrichmentService:
             request_id=request_id,
             request_outcomes=request_outcomes,
         )
-        if response.enrichments is None:
+        merged_content_access = self._merge_paper_content_access(
+            existing=paper_model.content_access,
+            incoming=response.content_access,
+        )
+        if response.enrichments is None and merged_content_access is None:
             return dump_jsonable(paper_model)
         merged = self._merge_paper_enrichments(
             existing=paper_model.enrichments,
             incoming=response.enrichments,
         )
-        return dump_jsonable(paper_model.model_copy(update={"enrichments": merged}))
+        update_payload: dict[str, Any] = {}
+        if merged is not None:
+            update_payload["enrichments"] = merged
+        if merged_content_access is not None:
+            update_payload["content_access"] = merged_content_access
+        return dump_jsonable(paper_model.model_copy(update=update_payload))
 
     @staticmethod
     def _merge_enrichments(
         *,
         crossref: CrossrefEnrichmentResult | None,
         unpaywall: UnpaywallEnrichmentResult | None,
+        openalex: OpenAlexEnrichmentResult | None,
     ) -> PaperEnrichments | None:
         payload: dict[str, Any] = {}
         if crossref is not None and isinstance(crossref.enrichment, CrossrefEnrichment):
             payload["crossref"] = crossref.enrichment
         if unpaywall is not None and isinstance(unpaywall.enrichment, UnpaywallEnrichment):
             payload["unpaywall"] = unpaywall.enrichment
+        if openalex is not None and isinstance(openalex.enrichment, OpenAlexEnrichment):
+            payload["openalex"] = openalex.enrichment
         return PaperEnrichments.model_validate(payload) if payload else None
 
     @staticmethod
@@ -539,3 +800,17 @@ class PaperEnrichmentService:
         merged = existing.model_dump(by_alias=False, exclude_none=True)
         merged.update(incoming.model_dump(by_alias=False, exclude_none=True))
         return PaperEnrichments.model_validate(merged)
+
+    @staticmethod
+    def _merge_paper_content_access(
+        *,
+        existing: PaperContentAccess | None,
+        incoming: PaperContentAccess | None,
+    ) -> PaperContentAccess | None:
+        if incoming is None:
+            return existing
+        if existing is None:
+            return incoming
+        merged = existing.model_dump(by_alias=False, exclude_none=True)
+        merged.update(incoming.model_dump(by_alias=False, exclude_none=True))
+        return PaperContentAccess.model_validate(merged)

@@ -1335,6 +1335,8 @@ async def test_search_papers_smart_reports_deterministic_active_provider_when_az
     assert payload["strategyMetadata"]["synthesisModelSource"] == "deterministic"
     assert payload["strategyMetadata"]["plannerModel"] == "azure-openai:deterministic-planner"
     assert payload["strategyMetadata"]["synthesisModel"] == "azure-openai:deterministic-synthesizer"
+    assert any("fell back to deterministic mode" in warning for warning in payload["strategyMetadata"]["driftWarnings"])
+    assert any("fell back to deterministic mode" in warning for warning in payload["agentHints"]["warnings"])
 
 
 @pytest.mark.asyncio
@@ -1763,6 +1765,145 @@ async def test_enrich_paper_reuses_existing_enrichments_without_refetching() -> 
     assert response.unpaywall.found is True
     assert response.unpaywall.enrichment.is_oa is True
     assert response.doi_resolution.resolution_source == "existing_enrichment"
+
+
+@pytest.mark.asyncio
+async def test_enrich_paper_adds_openalex_metadata_when_enabled() -> None:
+    class OpenAlexClient:
+        async def get_paper_details(self, paper_id: str) -> dict[str, object]:
+            return {
+                "paperId": paper_id,
+                "source": "openalex",
+                "sourceId": "W42",
+                "canonicalId": "10.1234/example",
+                "venue": "OpenAlex Venue",
+                "publicationTypes": "journal-article",
+                "publicationDate": "2024-06-01",
+                "year": 2024,
+                "url": "https://doi.org/10.1234/example",
+                "pdfUrl": "https://openalex.example/file.pdf",
+                "citationCount": 12,
+            }
+
+    service = PaperEnrichmentService(
+        crossref_client=None,
+        unpaywall_client=None,
+        openalex_client=OpenAlexClient(),  # type: ignore[arg-type]
+        enable_crossref=False,
+        enable_unpaywall=False,
+        enable_openalex=True,
+    )
+
+    response = await service.enrich_paper(doi="10.1234/example")
+
+    assert response.openalex is not None
+    assert response.openalex.found is True
+    assert response.openalex.lookup_id == "10.1234/example"
+    assert response.enrichments is not None
+    assert response.enrichments.openalex is not None
+    assert response.enrichments.openalex.source_id == "W42"
+    assert response.enrichments.openalex.citation_count == 12
+    assert response.crossref is not None
+    assert response.crossref.found is False
+    assert response.unpaywall is not None
+    assert response.unpaywall.found is False
+    assert response.doi_resolution.resolved_doi == "10.1234/example"
+
+
+@pytest.mark.asyncio
+async def test_enrich_paper_rejects_mismatched_openalex_doi() -> None:
+    class MismatchedOpenAlexClient:
+        async def get_paper_details(self, paper_id: str) -> dict[str, object]:
+            return {
+                "paperId": paper_id,
+                "source": "openalex",
+                "sourceId": "W99",
+                "canonicalId": "10.9999/other-work",
+                "url": "https://doi.org/10.9999/other-work",
+                "publicationDate": "2025-01-01",
+                "year": 2025,
+            }
+
+    service = PaperEnrichmentService(
+        crossref_client=None,
+        unpaywall_client=None,
+        openalex_client=MismatchedOpenAlexClient(),  # type: ignore[arg-type]
+        enable_crossref=False,
+        enable_unpaywall=False,
+        enable_openalex=True,
+    )
+
+    response = await service.enrich_paper(doi="10.1234/example")
+
+    assert response.openalex is not None
+    assert response.openalex.found is False
+    assert response.openalex.enrichment is None
+    assert response.doi_resolution.resolved_doi == "10.1234/example"
+    assert response.enrichments is None
+
+
+@pytest.mark.asyncio
+async def test_enrich_paper_prefers_trusted_doi_over_openalex_mismatch() -> None:
+    class MismatchedOpenAlexClient:
+        async def get_paper_details(self, paper_id: str) -> dict[str, object]:
+            return {
+                "paperId": paper_id,
+                "source": "openalex",
+                "sourceId": "W100",
+                "canonicalId": "10.9999/openalex-mismatch",
+                "url": "https://doi.org/10.9999/openalex-mismatch",
+                "publicationDate": "2025-01-01",
+                "year": 2025,
+            }
+
+    service = PaperEnrichmentService(
+        crossref_client=RecordingCrossrefClient(),
+        unpaywall_client=RecordingUnpaywallClient(),
+        openalex_client=MismatchedOpenAlexClient(),  # type: ignore[arg-type]
+        enable_crossref=True,
+        enable_unpaywall=True,
+        enable_openalex=True,
+    )
+
+    response = await service.enrich_paper(doi="10.1234/example")
+
+    assert response.crossref is not None
+    assert response.crossref.found is True
+    assert response.unpaywall is not None
+    assert response.unpaywall.found is True
+    assert response.openalex is not None
+    assert response.openalex.found is False
+    assert response.doi_resolution.resolved_doi == "10.1234/example"
+    assert response.doi_resolution.resolution_source == "doi"
+
+
+@pytest.mark.asyncio
+async def test_enrich_paper_query_only_abstains_without_anchor() -> None:
+    crossref = RecordingCrossrefClient()
+    unpaywall = RecordingUnpaywallClient()
+    openalex = RecordingOpenAlexClient()
+    service = PaperEnrichmentService(
+        crossref_client=crossref,
+        unpaywall_client=unpaywall,
+        openalex_client=openalex,
+        enable_crossref=True,
+        enable_unpaywall=True,
+        enable_openalex=True,
+    )
+
+    response = await service.enrich_paper(query="Attention Is All You Need")
+
+    assert crossref.calls == []
+    assert unpaywall.calls == []
+    assert openalex.calls == []
+    assert response.crossref is not None
+    assert response.crossref.found is False
+    assert response.unpaywall is not None
+    assert response.unpaywall.found is False
+    assert response.openalex is not None
+    assert response.openalex.found is False
+    assert response.enrichments is None
+    assert response.doi_resolution.resolved_doi is None
 
 
 @pytest.mark.asyncio

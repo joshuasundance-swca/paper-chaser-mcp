@@ -154,6 +154,16 @@ def test_app_settings_parses_crossref_and_unpaywall_configuration() -> None:
     assert settings.unpaywall_timeout_seconds == 9.0
 
 
+def test_app_settings_parses_hide_disabled_tools_flag() -> None:
+    settings = AppSettings.from_env(
+        {
+            "PAPER_CHASER_HIDE_DISABLED_TOOLS": "true",
+        }
+    )
+
+    assert settings.hide_disabled_tools is True
+
+
 def test_app_settings_parses_ecos_configuration() -> None:
     settings = AppSettings.from_env(
         {

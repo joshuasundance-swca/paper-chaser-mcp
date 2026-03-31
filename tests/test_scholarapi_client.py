@@ -72,6 +72,9 @@ async def test_scholarapi_search_normalizes_results_and_uses_auth_header(
     assert paper["hasText"] is True
     assert paper["hasPdf"] is True
     assert paper["indexedAt"] == "2024-03-01T12:30:45.123Z"
+    assert paper["contentAccess"]["scholarapi"]["paperId"] == "ScholarAPI:96f3e91"
+    assert paper["contentAccess"]["scholarapi"]["hasText"] is True
+    assert paper["contentAccess"]["scholarapi"]["hasPdf"] is True
     assert result["requestId"] == "req-123"
     assert result["pagination"]["nextCursor"] == "AoE/H4ANVGVzdDo2NDBhZDIxNw=="
     assert result["requestCost"] == "3"
@@ -129,9 +132,13 @@ async def test_scholarapi_list_uses_index_cursor_and_preserves_non_doi_portabili
     assert paper["paperId"] == "ScholarAPI:846a45f"
     assert paper["recommendedExpansionId"] is None
     assert paper["expansionIdStatus"] == "not_portable"
+    assert paper["contentAccess"]["scholarapi"]["paperId"] == "ScholarAPI:846a45f"
+    assert paper["contentAccess"]["scholarapi"]["hasPdf"] is True
     assert result["requestId"] == "req-list-123"
     assert result["requestCost"] == "2"
     assert result["pagination"]["nextCursor"] == "2024-03-01T12:30:45.123Z"
+    assert "sorted by indexed_at" in result["retrievalNote"]
+    assert "search_papers_scholarapi" in result["retrievalNote"]
 
 
 @pytest.mark.asyncio

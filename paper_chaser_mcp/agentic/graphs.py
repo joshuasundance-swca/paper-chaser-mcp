@@ -737,6 +737,10 @@ class AgenticRuntime:
             | {candidate.provider for candidate in recommendation_candidates}
         )
         provider_selection = provider_bundle.selection_metadata()
+        provider_fallback_warnings = _smart_provider_fallback_warnings(
+            provider_selection=provider_selection,
+            provider_outcomes=provider_outcomes,
+        )
         strategy_metadata = SearchStrategyMetadata(
             intent=planner.intent,
             latencyProfile=latency_profile,
@@ -751,7 +755,7 @@ class AgenticRuntime:
             providersUsed=providers_used,
             paidProvidersUsed=_paid_providers_used(providers_used),
             resultCoverage=_result_coverage_label(filtered_ranked),
-            driftWarnings=drift_warnings,
+            driftWarnings=[*drift_warnings, *provider_fallback_warnings],
             providerBudgetApplied=budget_state.to_dict() if budget_state else {},
             providerOutcomes=provider_outcomes,
             stageTimingsMs=stage_timings_ms,
@@ -780,7 +784,7 @@ class AgenticRuntime:
                 request_id=request_id,
                 progress=85,
                 message="Applying paper enrichment",
-                detail=("Enriching the final smart-ranked hits with Crossref and Unpaywall metadata."),
+                detail=("Enriching the final smart-ranked hits with Crossref, Unpaywall, and OpenAlex metadata."),
             )
             enrichment_started = time.perf_counter()
             smart_hits = await self._enrich_smart_hits(
@@ -808,6 +812,8 @@ class AgenticRuntime:
             ),
             resourceUris=[],
         )
+        if provider_fallback_warnings:
+            response.agent_hints.warnings.extend(provider_fallback_warnings)
         await self._emit_smart_search_status(
             ctx=ctx,
             request_id=request_id,
@@ -1557,7 +1563,7 @@ class AgenticRuntime:
                 request_id=request_id,
                 progress=70,
                 message="Applying paper enrichment",
-                detail=("Enriching the resolved known item with Crossref and Unpaywall metadata."),
+                detail=("Enriching the resolved known item with Crossref, Unpaywall, and OpenAlex metadata."),
             )
             enrichment_started = time.perf_counter()
             enrichment_source = await hydrate_paper_for_enrichment(
@@ -1592,6 +1598,10 @@ class AgenticRuntime:
         )
         provider_selection = self._provider_bundle_for_profile(latency_profile).selection_metadata()
         providers_used = [str(known_item.get("source") or "semantic_scholar")]
+        provider_fallback_warnings = _smart_provider_fallback_warnings(
+            provider_selection=provider_selection,
+            provider_outcomes=provider_outcomes,
+        )
         strategy_metadata = SearchStrategyMetadata(
             intent=planner_intent,
             latencyProfile=latency_profile,
@@ -1609,7 +1619,8 @@ class AgenticRuntime:
                 else [
                     "Known-item fallback used title-style recovery; verify the anchor before treating it as canonical."
                 ]
-            ),
+            )
+            + provider_fallback_warnings,
             providerBudgetApplied=(provider_budget.to_dict() if provider_budget else {}),
             providerOutcomes=provider_outcomes,
             stageTimingsMs=stage_timings_ms,
@@ -1628,6 +1639,8 @@ class AgenticRuntime:
             ),
             resourceUris=[],
         )
+        if provider_fallback_warnings:
+            response.agent_hints.warnings.extend(provider_fallback_warnings)
         await self._emit_smart_search_status(
             ctx=ctx,
             request_id=request_id,
@@ -1813,6 +1826,10 @@ class AgenticRuntime:
 
         provider_selection = self._provider_bundle_for_profile(latency_profile).selection_metadata()
         providers_used = sorted(batch.providers_used)
+        provider_fallback_warnings = _smart_provider_fallback_warnings(
+            provider_selection=provider_selection,
+            provider_outcomes=provider_outcomes,
+        )
         strategy_metadata = SearchStrategyMetadata(
             intent=planner_intent,
             latencyProfile=latency_profile,
@@ -1827,7 +1844,8 @@ class AgenticRuntime:
             driftWarnings=[
                 "Exact known-item resolution was not confident, so the smart workflow fell back to a broader candidate "
                 "set. Verify title, year, and venue before treating a result as canonical."
-            ],
+            ]
+            + provider_fallback_warnings,
             providerBudgetApplied=(provider_budget.to_dict() if provider_budget else {}),
             providerOutcomes=provider_outcomes,
             stageTimingsMs=stage_timings_ms,
@@ -1848,6 +1866,8 @@ class AgenticRuntime:
             ),
             resourceUris=[],
         )
+        if provider_fallback_warnings:
+            response.agent_hints.warnings.extend(provider_fallback_warnings)
         record = await self._workspace_registry.asave_result_set(
             source_tool="search_papers_smart",
             payload=dump_jsonable(response),
@@ -2574,3 +2594,33 @@ def _dedupe_variants(variants: list[str]) -> list[str]:
         seen.add(lowered)
         deduped.append(variant)
     return deduped
+
+
+def _smart_provider_fallback_warnings(
+    *,
+    provider_selection: dict[str, Any],
+    provider_outcomes: list[dict[str, Any]],
+) -> list[str]:
+    configured = str(provider_selection.get("configuredSmartProvider") or "").strip()
+    active = str(provider_selection.get("activeSmartProvider") or "").strip()
+    if not configured or not active or configured == active:
+        return []
+
+    endpoints = sorted(
+        {
+            str(outcome.get("endpoint") or "").strip()
+            for outcome in provider_outcomes
+            if str(outcome.get("provider") or "").strip() == configured
+            and str(outcome.get("statusBucket") or "").strip() not in {"success", "empty", "skipped"}
+            and str(outcome.get("endpoint") or "").strip()
+        }
+    )
+    if endpoints:
+        return [
+            f"Smart provider '{configured}' fell back to deterministic mode after issues in {', '.join(endpoints)}; "
+            "inspect providerOutcomes before trusting planning or expansion quality."
+        ]
+    return [
+        f"Smart provider '{configured}' fell back to deterministic mode; inspect providerOutcomes before trusting "
+        "planning or expansion quality."
+    ]

@@ -57,7 +57,7 @@ from .runtime import run_server
 from .search import _core_response_to_merged, _merge_search_results
 from .settings import AppSettings, _env_bool
 from .tool_schema import sanitize_published_schema
-from .tool_specs import get_tool_spec, iter_tool_specs
+from .tool_specs import get_tool_spec, iter_visible_tool_specs
 from .transport import asyncio, httpx, maybe_close_async_resource
 
 logging.basicConfig(level=logging.INFO)
@@ -116,7 +116,7 @@ After search_papers_smart: reuse searchSessionId for ask_result_set,
 map_research_landscape, or expand_research_graph, and inspect acceptedExpansions,
 rejectedExpansions, speculativeExpansions, providersUsed, driftWarnings,
 latencyProfile, providerBudgetApplied, and providerOutcomes. Set
-includeEnrichment=true only when you want Crossref and Unpaywall metadata on the
+includeEnrichment=true only when you want Crossref, Unpaywall, and OpenAlex metadata on the
 final smart-ranked hits; enrichment is post-ranking only and never changes
 retrieval or provider ordering. When ScholarAPI is enabled, smart retrieval may
 also include it explicitly, and providerBudget.maxScholarApiCalls can cap that
@@ -124,7 +124,7 @@ paid path.
 Primary read tools now also return agentHints, clarification, resourceUris, and,
 when they produce reusable result sets, searchSessionId.
 For known-item flows, includeEnrichment=true on search_papers_match,
-get_paper_details, or resolve_citation adds Crossref and Unpaywall metadata only
+get_paper_details, or resolve_citation adds Crossref, Unpaywall, and OpenAlex metadata only
 after the base paper resolution succeeds.
 For Semantic Scholar expansion tools, prefer paper.recommendedExpansionId when
 present. If paper.expansionIdStatus is not_portable, do not retry with brokered
@@ -544,6 +544,7 @@ enable_unpaywall = settings.enable_unpaywall
 enable_ecos = settings.enable_ecos
 enable_federal_register = settings.enable_federal_register
 enable_govinfo_cfr = settings.enable_govinfo_cfr
+hide_disabled_tools = settings.hide_disabled_tools
 provider_order = list(settings.provider_order)
 provider_registry = ProviderDiagnosticsRegistry()
 client = SemanticScholarClient(api_key=api_key)
@@ -580,8 +581,10 @@ unpaywall_client = UnpaywallClient(
 enrichment_service = PaperEnrichmentService(
     crossref_client=crossref_client,
     unpaywall_client=unpaywall_client,
+    openalex_client=openalex_client,
     enable_crossref=enable_crossref,
     enable_unpaywall=enable_unpaywall,
+    enable_openalex=enable_openalex,
     provider_registry=provider_registry,
 )
 provider_bundle = resolve_provider_bundle(
@@ -655,7 +658,26 @@ app = FastMCP(
 )
 app.add_middleware(TimingMiddleware(logger=logger))
 
-for _tool_spec in iter_tool_specs():
+_enabled_tool_flags = {
+    "enable_core": enable_core,
+    "enable_semantic_scholar": enable_semantic_scholar,
+    "enable_arxiv": enable_arxiv,
+    "enable_openalex": enable_openalex,
+    "enable_serpapi": enable_serpapi,
+    "enable_scholarapi": enable_scholarapi,
+    "enable_crossref": enable_crossref,
+    "enable_unpaywall": enable_unpaywall,
+    "enable_ecos": enable_ecos,
+    "enable_federal_register": enable_federal_register,
+    "enable_govinfo_cfr": enable_govinfo_cfr,
+    "enable_agentic": settings.enable_agentic,
+    "govinfo_available": bool(govinfo_api_key),
+}
+
+for _tool_spec in iter_visible_tool_specs(
+    hide_disabled_tools=hide_disabled_tools,
+    enabled_flags=_enabled_tool_flags,
+):
     _register_tool(_tool_spec.name)
 
 

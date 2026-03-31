@@ -132,6 +132,7 @@ class AppSettings(BaseModel):
     enable_ecos: bool = True
     enable_federal_register: bool = True
     enable_govinfo_cfr: bool = True
+    hide_disabled_tools: bool = False
     provider_order: tuple[SearchProvider, ...] = DEFAULT_SEARCH_PROVIDER_ORDER
     transport: Literal["stdio", "http", "streamable-http", "sse"] = "stdio"
     http_host: str = "127.0.0.1"
@@ -234,6 +235,11 @@ class AppSettings(BaseModel):
                 env,
                 "PAPER_CHASER_ENABLE_GOVINFO_CFR",
                 True,
+            ),
+            hide_disabled_tools=_parse_env_bool(
+                env,
+                "PAPER_CHASER_HIDE_DISABLED_TOOLS",
+                False,
             ),
             provider_order=_parse_provider_order(env, "PAPER_CHASER_PROVIDER_ORDER"),
             transport=cast_transport(env.get("PAPER_CHASER_TRANSPORT")),

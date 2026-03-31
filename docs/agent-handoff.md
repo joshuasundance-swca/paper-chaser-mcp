@@ -82,6 +82,20 @@ This document is the current working handoff for the fork. It is intended to giv
 - OpenAlex now has an explicit provider-specific MCP surface for OpenAlex-native
   search, cursor pagination, DOI/OpenAlex-ID lookup, citation/reference
   traversal, and author pivots without changing the default broker path.
+- The additive enrichment layer now combines Crossref, Unpaywall, and OpenAlex
+  metadata for known-item and smart `includeEnrichment` workflows without
+  changing ranking or base-paper resolution semantics.
+- Combined enrichment is now stricter too: query-only `enrich_paper` calls
+  abstain unless a DOI-bearing identifier or anchored paper payload is
+  available, and OpenAlex enrichment is rejected when the returned DOI does
+  not match the trusted input DOI.
+- ScholarAPI-sourced paper payloads now also expose a separate `contentAccess`
+  block so access/full-text metadata stays distinct from bibliographic
+  enrichment.
+- Tool advertisement can now stay compatibility-first or hide disabled tool
+  families at startup through `PAPER_CHASER_HIDE_DISABLED_TOOLS=false|true`,
+  including generic Semantic Scholar-backed tools when that backend is off and
+  brokered/citation-repair entry points when no usable backend remains.
 - The repo now also exposes a regulation-oriented raw-tool slice: keyless
   `search_federal_register` discovery, GovInfo-backed
   `get_federal_register_document`, GovInfo-only `get_cfr_text`, and ECOS
@@ -130,6 +144,10 @@ This document is the current working handoff for the fork. It is intended to giv
   citation repair abstains. The smart workflow now falls back to title/OpenAlex
   recovery and then to a broader candidate set with explicit warnings so agents
   can keep moving while still treating the result as unconfirmed.
+- DOI-backed enrichment is now safer against upstream provider drift: OpenAlex
+  mismatches no longer overwrite the trusted resolved DOI, and unanchored
+  query-only enrichment no longer invents a canonical DOI from the top
+  Crossref hit.
 - Semantic Scholar citation/reference list normalization now treats top-level
   `data: null` payloads as empty lists, preventing valid graph-expansion seeds
   from failing when upstream reference data is missing instead of merely empty.

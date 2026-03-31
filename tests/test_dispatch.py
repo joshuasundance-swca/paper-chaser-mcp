@@ -7,6 +7,7 @@ import paper_chaser_mcp.clients.serpapi.client as serpapi_client_module
 from paper_chaser_mcp import server
 from paper_chaser_mcp.clients.serpapi import SerpApiScholarClient
 from paper_chaser_mcp.enrichment import PaperEnrichmentService
+from paper_chaser_mcp.tool_specs import iter_visible_tool_specs
 from paper_chaser_mcp.utils.cursor import decode_bulk_cursor, decode_cursor
 from tests.helpers import (
     DummyResponse,
@@ -34,22 +35,27 @@ def _assert_additive_metadata(
 
 def _install_recording_enrichment(
     monkeypatch: pytest.MonkeyPatch,
-) -> tuple[RecordingCrossrefClient, RecordingUnpaywallClient]:
+) -> tuple[RecordingCrossrefClient, RecordingUnpaywallClient, RecordingOpenAlexClient]:
     crossref = RecordingCrossrefClient()
     unpaywall = RecordingUnpaywallClient()
+    openalex = RecordingOpenAlexClient()
     service = PaperEnrichmentService(
         crossref_client=crossref,
         unpaywall_client=unpaywall,
+        openalex_client=openalex,
         enable_crossref=True,
         enable_unpaywall=True,
+        enable_openalex=True,
         provider_registry=server.provider_registry,
     )
     monkeypatch.setattr(server, "enable_crossref", True)
     monkeypatch.setattr(server, "enable_unpaywall", True)
+    monkeypatch.setattr(server, "enable_openalex", True)
     monkeypatch.setattr(server, "crossref_client", crossref)
     monkeypatch.setattr(server, "unpaywall_client", unpaywall)
+    monkeypatch.setattr(server, "openalex_client", openalex)
     monkeypatch.setattr(server, "enrichment_service", service)
-    return crossref, unpaywall
+    return crossref, unpaywall, openalex
 
 
 @pytest.mark.asyncio
@@ -436,7 +442,7 @@ async def test_call_tool_routes_non_search_tools(
 async def test_explicit_enrichment_tools_route_through_recording_clients(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    crossref, unpaywall = _install_recording_enrichment(monkeypatch)
+    crossref, unpaywall, openalex = _install_recording_enrichment(monkeypatch)
 
     crossref_payload = _payload(
         await server.call_tool(
@@ -469,15 +475,109 @@ async def test_explicit_enrichment_tools_route_through_recording_clients(
     assert unpaywall_payload["pdfUrl"] == "https://oa.example/10.1234/seed-doi.pdf"
     _assert_additive_metadata(unpaywall_payload)
 
-    assert ("search_work", {"query": "Crossref Query Paper"}) in crossref.calls
-    assert (
-        "get_open_access",
-        {"doi": "10.1234/crossref-query"},
-    ) in unpaywall.calls
-    assert merged_payload["doiResolution"]["resolvedDoi"] == "10.1234/crossref-query"
-    assert merged_payload["enrichments"]["crossref"]["doi"] == "10.1234/crossref-query"
-    assert merged_payload["enrichments"]["unpaywall"]["isOa"] is True
+    assert crossref.calls == [("get_work", {"doi": "10.1234/seed-doi"})]
+    assert unpaywall.calls == [("get_open_access", {"doi": "10.1234/seed-doi"})]
+    assert openalex.calls == []
+    assert merged_payload["doiResolution"]["resolvedDoi"] is None
+    assert merged_payload["crossref"]["found"] is False
+    assert merged_payload["unpaywall"]["found"] is False
+    assert merged_payload["openalex"]["found"] is False
+    assert merged_payload.get("enrichments") is None
     _assert_additive_metadata(merged_payload)
+
+
+def test_visible_tool_specs_hide_disabled_provider_families_when_enabled() -> None:
+    visible = {
+        spec.name
+        for spec in iter_visible_tool_specs(
+            hide_disabled_tools=True,
+            enabled_flags={
+                "enable_core": False,
+                "enable_semantic_scholar": False,
+                "enable_arxiv": False,
+                "enable_openalex": False,
+                "enable_serpapi": False,
+                "enable_scholarapi": False,
+                "enable_crossref": False,
+                "enable_unpaywall": False,
+                "enable_ecos": False,
+                "enable_federal_register": False,
+                "enable_govinfo_cfr": False,
+                "enable_agentic": False,
+                "govinfo_available": False,
+            },
+        )
+    }
+
+    assert "enrich_paper" in visible
+    assert "get_provider_diagnostics" in visible
+    assert "search_papers" not in visible
+    assert "search_papers_core" not in visible
+    assert "search_papers_bulk" not in visible
+    assert "search_papers_match" not in visible
+    assert "paper_autocomplete" not in visible
+    assert "search_papers_arxiv" not in visible
+    assert "search_papers_openalex" not in visible
+    assert "search_papers_scholarapi" not in visible
+    assert "search_papers_serpapi" not in visible
+    assert "resolve_citation" not in visible
+    assert "get_paper_details" not in visible
+    assert "get_paper_citations" not in visible
+    assert "get_paper_references" not in visible
+    assert "get_paper_authors" not in visible
+    assert "get_author_info" not in visible
+    assert "get_author_papers" not in visible
+    assert "search_authors" not in visible
+    assert "batch_get_authors" not in visible
+    assert "search_snippets" not in visible
+    assert "get_paper_recommendations" not in visible
+    assert "get_paper_recommendations_post" not in visible
+    assert "batch_get_papers" not in visible
+    assert "get_paper_citation_formats" not in visible
+    assert "get_paper_metadata_crossref" not in visible
+    assert "get_paper_open_access_unpaywall" not in visible
+    assert "search_species_ecos" not in visible
+    assert "search_federal_register" not in visible
+    assert "get_federal_register_document" not in visible
+    assert "get_cfr_text" not in visible
+    assert "search_papers_smart" not in visible
+
+
+def test_visible_tool_specs_keep_govinfo_document_when_available() -> None:
+    visible = {
+        spec.name
+        for spec in iter_visible_tool_specs(
+            hide_disabled_tools=True,
+            enabled_flags={
+                "enable_federal_register": False,
+                "enable_govinfo_cfr": False,
+                "enable_agentic": False,
+                "govinfo_available": True,
+            },
+        )
+    }
+
+    assert "get_federal_register_document" in visible
+
+
+def test_visible_tool_specs_keep_search_and_repair_when_any_provider_available() -> None:
+    visible = {
+        spec.name
+        for spec in iter_visible_tool_specs(
+            hide_disabled_tools=True,
+            enabled_flags={
+                "enable_semantic_scholar": False,
+                "enable_arxiv": False,
+                "enable_core": False,
+                "enable_serpapi": False,
+                "enable_scholarapi": True,
+                "enable_openalex": True,
+            },
+        )
+    }
+
+    assert "search_papers" in visible
+    assert "resolve_citation" in visible
 
 
 @pytest.mark.asyncio
@@ -680,7 +780,7 @@ async def test_search_papers_match_include_enrichment_skips_untrusted_crossref_f
         }
 
     fake_client.search_papers_match = fake_match  # type: ignore[method-assign]
-    crossref, unpaywall = _install_recording_enrichment(monkeypatch)
+    crossref, unpaywall, _ = _install_recording_enrichment(monkeypatch)
     monkeypatch.setattr(server, "client", fake_client)
 
     enriched = _payload(
@@ -789,7 +889,7 @@ async def test_get_paper_details_include_enrichment_uses_resolved_doi(
         }
 
     fake_client.get_paper_details = fake_get_paper_details  # type: ignore[method-assign]
-    crossref, unpaywall = _install_recording_enrichment(monkeypatch)
+    crossref, unpaywall, _ = _install_recording_enrichment(monkeypatch)
     monkeypatch.setattr(server, "client", fake_client)
 
     payload = _payload(
@@ -1064,6 +1164,11 @@ async def test_scholarapi_tools_route_and_wrap_bulk_cursors(
     assert list_cursor.tool == "list_papers_scholarapi"
     assert list_cursor.token == "2024-03-01T12:30:45.123Z"
     assert list_cursor.context_hash is not None
+    assert "sorted by indexed_at" in list_payload["retrievalNote"]
+    assert "search_papers_scholarapi" in list_payload["retrievalNote"]
+    assert list_payload["agentHints"]["warnings"]
+    assert search_payload["data"][0]["contentAccess"]["scholarapi"]["hasText"] is True
+    assert list_payload["data"][0]["contentAccess"]["scholarapi"]["hasPdf"] is True
     assert text_payload["paperId"] == "ScholarAPI:sa-1"
     assert texts_payload["results"][1]["text"] is None
     assert pdf_payload["mimeType"] == "application/pdf"
@@ -1373,6 +1478,33 @@ async def test_provider_diagnostics_surface_crossref_and_unpaywall(
     assert provider_map["unpaywall"]["lastEndpoint"] == "get_open_access"
     assert provider_map["crossref"]["recentOutcomes"]
     assert provider_map["unpaywall"]["recentOutcomes"]
+
+
+@pytest.mark.asyncio
+async def test_provider_diagnostics_surface_explicit_scholarapi_tool_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scholarapi = RecordingScholarApiClient()
+    monkeypatch.setattr(server, "scholarapi_client", scholarapi)
+    monkeypatch.setattr(server, "enable_scholarapi", True)
+
+    await server.call_tool("list_papers_scholarapi", {"query": "graphene", "has_pdf": True})
+    await server.call_tool("get_paper_text_scholarapi", {"paper_id": "sa-1"})
+    await server.call_tool("get_paper_texts_scholarapi", {"paper_ids": ["sa-1", "sa-2"]})
+    await server.call_tool("get_paper_pdf_scholarapi", {"paper_id": "sa-1"})
+
+    diagnostics = _payload(await server.call_tool("get_provider_diagnostics", {}))
+    provider_map = {item["provider"]: item for item in diagnostics["providers"] if isinstance(item, dict)}
+
+    scholarapi_diag = provider_map["scholarapi"]
+    endpoints = [item["endpoint"] for item in scholarapi_diag["recentOutcomes"]]
+
+    assert scholarapi_diag["enabled"] is True
+    assert scholarapi_diag["lastEndpoint"] == "pdf"
+    assert "list" in endpoints
+    assert "text" in endpoints
+    assert "texts" in endpoints
+    assert "pdf" in endpoints
 
 
 def test_package_import_and_module_entrypoints_keep_expected_targets() -> None:

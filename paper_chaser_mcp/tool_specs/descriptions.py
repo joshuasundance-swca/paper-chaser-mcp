@@ -85,7 +85,8 @@ TOOL_DESCRIPTIONS = {
         "This uses ScholarAPI /list semantics, sorted by indexed_at rather than relevance, "
         "and is the right continuation path for ScholarAPI monitoring workflows rather than "
         "search_papers_bulk. Supported inputs are optional query, limit, cursor, indexed/published "
-        "date bounds, has_text, and has_pdf. "
+        "date bounds, has_text, and has_pdf. Treat any query as a narrowing filter on an indexed-at "
+        "stream rather than a ranked topical search; use search_papers_scholarapi for discovery. "
         f"{OPAQUE_CURSOR_CONTRACT}"
     ),
     "search_papers_bulk": (
@@ -124,8 +125,8 @@ TOOL_DESCRIPTIONS = {
         "falls back to a fuzzy Semantic Scholar title search instead of "
         "surfacing a raw 404, then tries strict OpenAlex and Crossref "
         "exact-title recovery before returning a structured no-match payload. "
-        "Optional includeEnrichment=true adds Crossref and Unpaywall metadata "
-        "only to the final matched paper, never to the candidate-selection path. "
+        "Optional includeEnrichment=true adds Crossref, Unpaywall, and OpenAlex "
+        "metadata only to the final matched paper, never to the candidate-selection path. "
         "A no-match payload can still mean the item is a dissertation, software "
         "release, report, or other output outside the indexed paper surface."
     ),
@@ -153,8 +154,9 @@ TOOL_DESCRIPTIONS = {
     "get_paper_details": (
         "Known-item lookup when you already have an identifier. Get paper "
         "details from a DOI, ArXiv ID, Semantic Scholar ID, or URL. "
-        "Optional includeEnrichment=true adds post-resolution Crossref and "
-        "Unpaywall metadata to the final paper without changing the lookup path."
+        "Optional includeEnrichment=true adds post-resolution Crossref, "
+        "Unpaywall, and OpenAlex metadata to the final paper without changing "
+        "the lookup path."
     ),
     "get_paper_text_scholarapi": (
         "Fetch one full plain-text document from ScholarAPI by ScholarAPI paper id. "
@@ -188,11 +190,11 @@ TOOL_DESCRIPTIONS = {
         "the upstream API is DOI-based and expects a contact email."
     ),
     "enrich_paper": (
-        "Combined Crossref + Unpaywall enrichment for one known paper, DOI, or "
-        "DOI-bearing identifier. Runs DOI resolution first, then Crossref, then "
-        "Unpaywall, and returns one merged enrichments object plus per-provider "
-        "results. This is additive metadata only; it does not re-rank or "
-        "re-resolve the base paper."
+        "Combined Crossref, Unpaywall, and OpenAlex enrichment for one known "
+        "paper, DOI, or DOI-bearing identifier. Runs DOI resolution first, then "
+        "fetches additive metadata from the enabled enrichment providers and returns "
+        "one merged enrichments object plus per-provider results. This is additive "
+        "metadata only; it does not re-rank or re-resolve the base paper."
     ),
     "get_paper_details_openalex": (
         "Known-item lookup using OpenAlex semantics. Get one OpenAlex work by "

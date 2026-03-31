@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 from typing import Any, Literal
 
-from ...models import Author, Paper, dump_jsonable
+from ...models import Author, Paper, PaperContentAccess, ScholarApiContentAccess, dump_jsonable
 from ...transport import httpx, maybe_close_async_resource
 from .errors import (
     ScholarApiError,
@@ -122,6 +122,18 @@ class ScholarApiClient:
             canonicalId=doi or source_id,
             recommendedExpansionId=recommended_expansion_id,
             expansionIdStatus=expansion_id_status,
+            contentAccess=PaperContentAccess(
+                scholarapi=ScholarApiContentAccess(
+                    paperId=paper_id,
+                    hasText=bool(result.get("has_text")) if result.get("has_text") is not None else None,
+                    hasPdf=bool(result.get("has_pdf")) if result.get("has_pdf") is not None else None,
+                    indexedAt=result.get("indexed_at"),
+                    journalPublisher=result.get("journal_publisher"),
+                    journalIssn=result.get("journal_issn"),
+                    journalIssue=result.get("journal_issue"),
+                    journalPages=result.get("journal_pages"),
+                )
+            ),
         )
         return dump_jsonable(
             paper.model_copy(
@@ -255,6 +267,12 @@ class ScholarApiClient:
             },
             "requestId": response.headers.get("X-Request-Id"),
             "requestCost": response.headers.get("X-Request-Cost"),
+            "retrievalNote": (
+                "ORDERING: list_papers_scholarapi follows ScholarAPI /list semantics and is sorted by indexed_at, "
+                "not by topical relevance. Use it for monitoring or date-window scans, not ranked discovery. "
+                "For topical search use search_papers_scholarapi, and pass pagination.nextCursor back exactly as "
+                "returned to continue the same stream."
+            ),
         }
 
     async def get_text(self, paper_id: str) -> dict[str, Any]:
