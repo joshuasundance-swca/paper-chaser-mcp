@@ -255,6 +255,12 @@ class ScholarApiClient:
             },
             "requestId": response.headers.get("X-Request-Id"),
             "requestCost": response.headers.get("X-Request-Cost"),
+            "retrievalNote": (
+                "ORDERING: list_papers_scholarapi follows ScholarAPI /list semantics and is sorted by indexed_at, "
+                "not by topical relevance. Use it for monitoring or date-window scans, not ranked discovery. "
+                "For topical search use search_papers_scholarapi, and pass pagination.nextCursor back exactly as "
+                "returned to continue the same stream."
+            ),
         }
 
     async def get_text(self, paper_id: str) -> dict[str, Any]:

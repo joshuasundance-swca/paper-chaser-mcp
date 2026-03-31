@@ -1335,6 +1335,10 @@ async def test_search_papers_smart_reports_deterministic_active_provider_when_az
     assert payload["strategyMetadata"]["synthesisModelSource"] == "deterministic"
     assert payload["strategyMetadata"]["plannerModel"] == "azure-openai:deterministic-planner"
     assert payload["strategyMetadata"]["synthesisModel"] == "azure-openai:deterministic-synthesizer"
+    assert any(
+        "fell back to deterministic mode" in warning for warning in payload["strategyMetadata"]["driftWarnings"]
+    )
+    assert any("fell back to deterministic mode" in warning for warning in payload["agentHints"]["warnings"])
 
 
 @pytest.mark.asyncio

@@ -85,7 +85,8 @@ TOOL_DESCRIPTIONS = {
         "This uses ScholarAPI /list semantics, sorted by indexed_at rather than relevance, "
         "and is the right continuation path for ScholarAPI monitoring workflows rather than "
         "search_papers_bulk. Supported inputs are optional query, limit, cursor, indexed/published "
-        "date bounds, has_text, and has_pdf. "
+        "date bounds, has_text, and has_pdf. Treat any query as a narrowing filter on an indexed-at "
+        "stream rather than a ranked topical search; use search_papers_scholarapi for discovery. "
         f"{OPAQUE_CURSOR_CONTRACT}"
     ),
     "search_papers_bulk": (

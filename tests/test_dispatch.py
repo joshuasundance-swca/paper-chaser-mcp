@@ -1064,6 +1064,9 @@ async def test_scholarapi_tools_route_and_wrap_bulk_cursors(
     assert list_cursor.tool == "list_papers_scholarapi"
     assert list_cursor.token == "2024-03-01T12:30:45.123Z"
     assert list_cursor.context_hash is not None
+    assert "sorted by indexed_at" in list_payload["retrievalNote"]
+    assert "search_papers_scholarapi" in list_payload["retrievalNote"]
+    assert list_payload["agentHints"]["warnings"]
     assert text_payload["paperId"] == "ScholarAPI:sa-1"
     assert texts_payload["results"][1]["text"] is None
     assert pdf_payload["mimeType"] == "application/pdf"
@@ -1373,6 +1376,33 @@ async def test_provider_diagnostics_surface_crossref_and_unpaywall(
     assert provider_map["unpaywall"]["lastEndpoint"] == "get_open_access"
     assert provider_map["crossref"]["recentOutcomes"]
     assert provider_map["unpaywall"]["recentOutcomes"]
+
+
+@pytest.mark.asyncio
+async def test_provider_diagnostics_surface_explicit_scholarapi_tool_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scholarapi = RecordingScholarApiClient()
+    monkeypatch.setattr(server, "scholarapi_client", scholarapi)
+    monkeypatch.setattr(server, "enable_scholarapi", True)
+
+    await server.call_tool("list_papers_scholarapi", {"query": "graphene", "has_pdf": True})
+    await server.call_tool("get_paper_text_scholarapi", {"paper_id": "sa-1"})
+    await server.call_tool("get_paper_texts_scholarapi", {"paper_ids": ["sa-1", "sa-2"]})
+    await server.call_tool("get_paper_pdf_scholarapi", {"paper_id": "sa-1"})
+
+    diagnostics = _payload(await server.call_tool("get_provider_diagnostics", {}))
+    provider_map = {item["provider"]: item for item in diagnostics["providers"] if isinstance(item, dict)}
+
+    scholarapi_diag = provider_map["scholarapi"]
+    endpoints = [item["endpoint"] for item in scholarapi_diag["recentOutcomes"]]
+
+    assert scholarapi_diag["enabled"] is True
+    assert scholarapi_diag["lastEndpoint"] == "pdf"
+    assert "list" in endpoints
+    assert "text" in endpoints
+    assert "texts" in endpoints
+    assert "pdf" in endpoints
 
 
 def test_package_import_and_module_entrypoints_keep_expected_targets() -> None:

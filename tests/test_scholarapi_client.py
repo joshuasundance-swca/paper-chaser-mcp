@@ -132,6 +132,8 @@ async def test_scholarapi_list_uses_index_cursor_and_preserves_non_doi_portabili
     assert result["requestId"] == "req-list-123"
     assert result["requestCost"] == "2"
     assert result["pagination"]["nextCursor"] == "2024-03-01T12:30:45.123Z"
+    assert "sorted by indexed_at" in result["retrievalNote"]
+    assert "search_papers_scholarapi" in result["retrievalNote"]
 
 
 @pytest.mark.asyncio

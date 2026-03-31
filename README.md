@@ -91,6 +91,7 @@ If you want a local env template for shell runs or Docker Compose, copy `.env.ex
 | Broken or incomplete citation | `resolve_citation` |
 | Known paper by messy title | `search_papers_match` |
 | Known paper by DOI / arXiv ID / URL | `get_paper_details` |
+| ScholarAPI monitoring / indexed scans | `list_papers_scholarapi` |
 | Papers that cite X / refs behind X | `get_paper_citations` / `get_paper_references` |
 | Author's work | `search_authors` → `get_author_info` → `get_author_papers` |
 | OA status or full-text PDF | `get_paper_open_access_unpaywall` or `enrich_paper` |

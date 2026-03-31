@@ -1,9 +1,16 @@
 """Dispatch helpers for MCP tool routing."""
 
 import re
+import time
 from typing import Any, Callable, cast
 
 from .citation_repair import looks_like_paper_identifier, resolve_citation
+from .clients.scholarapi import (
+    ScholarApiError,
+    ScholarApiKeyMissingError,
+    ScholarApiQuotaError,
+    ScholarApiUpstreamError,
+)
 from .clients.serpapi import SerpApiKeyMissingError
 from .compat import augment_tool_result, build_clarification
 from .enrichment import (
@@ -33,6 +40,7 @@ from .models.tools import (
     SearchSpeciesEcosArgs,
     SmartSearchPapersArgs,
 )
+from .provider_runtime import ProviderOutcomeEnvelope, policy_for_provider
 from .search import search_papers_with_fallback
 from .utils.cursor import (
     OFFSET_TOOLS,
@@ -52,6 +60,112 @@ CURSOR_REUSE_HINT = (
     "or fabricate cursors, and do not reuse them across a different tool or "
     "different query context."
 )
+SCHOLARAPI_LIST_RETRIEVAL_NOTE = (
+    "ORDERING: list_papers_scholarapi follows ScholarAPI /list semantics and is sorted by indexed_at, "
+    "not by topical relevance. Use it for monitoring or date-window scans, not ranked discovery. "
+    "For topical search use search_papers_scholarapi, and pass pagination.nextCursor back exactly as "
+    "returned to continue the same stream."
+)
+
+
+def _provider_error_text(exc: Exception) -> str:
+    text = str(exc).strip()
+    return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+
+
+def _scholarapi_status_bucket(exc: Exception) -> str:
+    if isinstance(exc, ScholarApiKeyMissingError):
+        return "auth_error"
+    if isinstance(exc, ScholarApiQuotaError):
+        return "quota_exhausted"
+    if isinstance(exc, ScholarApiUpstreamError):
+        return "provider_error"
+    if isinstance(exc, ScholarApiError):
+        return "provider_error"
+    return "provider_error"
+
+
+def _scholarapi_fallback_reason(status_bucket: str) -> str | None:
+    reasons = {
+        "auth_error": "Provider authentication failed.",
+        "quota_exhausted": "Provider quota was exhausted.",
+        "provider_error": "Provider returned an upstream error.",
+    }
+    return reasons.get(status_bucket)
+
+
+def _scholarapi_quota_metadata(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    metadata: dict[str, Any] = {}
+    request_id = payload.get("requestId")
+    if isinstance(request_id, str) and request_id.strip():
+        metadata["requestId"] = request_id.strip()
+    request_cost = payload.get("requestCost")
+    if request_cost is not None:
+        metadata["requestCost"] = request_cost
+    pagination = payload.get("pagination")
+    if isinstance(pagination, dict):
+        if "hasMore" in pagination:
+            metadata["hasMore"] = bool(pagination.get("hasMore"))
+        next_cursor = pagination.get("nextCursor")
+        if next_cursor is not None:
+            metadata["nextCursor"] = next_cursor
+    return metadata
+
+
+def _scholarapi_payload_is_empty(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return payload is None
+    if isinstance(payload.get("data"), list):
+        return len(payload.get("data") or []) == 0
+    if isinstance(payload.get("results"), list):
+        return len(payload.get("results") or []) == 0
+    return False
+
+
+async def _call_explicit_scholarapi_tool(
+    *,
+    operation: Callable[[], Any],
+    endpoint: str,
+    provider_registry: Any,
+    request_id: str,
+) -> Any:
+    started = time.perf_counter()
+    try:
+        payload = await operation()
+    except Exception as exc:
+        if provider_registry is not None:
+            status_bucket = _scholarapi_status_bucket(exc)
+            outcome = ProviderOutcomeEnvelope(
+                provider="scholarapi",
+                endpoint=endpoint,
+                status_bucket=status_bucket,
+                latency_ms=int((time.perf_counter() - started) * 1000),
+                retries=0,
+                fallback_reason=_scholarapi_fallback_reason(status_bucket),
+                error=_provider_error_text(exc),
+                paywalled=True,
+                request_id=request_id,
+            )
+            provider_registry.record(outcome, policy=policy_for_provider("scholarapi"))
+        raise
+
+    if provider_registry is not None:
+        quota_metadata = _scholarapi_quota_metadata(payload)
+        outcome = ProviderOutcomeEnvelope(
+            provider="scholarapi",
+            endpoint=endpoint,
+            status_bucket="empty" if _scholarapi_payload_is_empty(payload) else "success",
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            retries=0,
+            paywalled=True,
+            quota_metadata=quota_metadata,
+            provider_request_id=quota_metadata.get("requestId") if isinstance(quota_metadata.get("requestId"), str) else None,
+            request_id=request_id,
+        )
+        provider_registry.record(outcome, policy=policy_for_provider("scholarapi"))
+    return payload
 
 
 def _cursor_to_offset(
@@ -1108,21 +1222,26 @@ async def dispatch_tool(
         validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
         args_dict = validated_payload.model_dump(by_alias=False)
         ctx_hash = compute_context_hash(name, args_dict)
-        result = await scholarapi_client.search(
-            query=args_dict["query"],
-            limit=args_dict.get("limit", 10),
-            cursor=_cursor_to_bulk_token(
-                args_dict.get("cursor"),
-                tool=name,
-                context_hash=ctx_hash,
-                expected_provider="scholarapi",
+        result = await _call_explicit_scholarapi_tool(
+            operation=lambda: scholarapi_client.search(
+                query=args_dict["query"],
+                limit=args_dict.get("limit", 10),
+                cursor=_cursor_to_bulk_token(
+                    args_dict.get("cursor"),
+                    tool=name,
+                    context_hash=ctx_hash,
+                    expected_provider="scholarapi",
+                ),
+                indexed_after=args_dict.get("indexed_after"),
+                indexed_before=args_dict.get("indexed_before"),
+                published_after=args_dict.get("published_after"),
+                published_before=args_dict.get("published_before"),
+                has_text=args_dict.get("has_text"),
+                has_pdf=args_dict.get("has_pdf"),
             ),
-            indexed_after=args_dict.get("indexed_after"),
-            indexed_before=args_dict.get("indexed_before"),
-            published_after=args_dict.get("published_after"),
-            published_before=args_dict.get("published_before"),
-            has_text=args_dict.get("has_text"),
-            has_pdf=args_dict.get("has_pdf"),
+            endpoint="search",
+            provider_registry=provider_registry,
+            request_id=f"tool-{name}",
         )
         serialized = dump_jsonable(result)
         serialized = _encode_next_bulk_cursor(
@@ -1147,23 +1266,29 @@ async def dispatch_tool(
         validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
         args_dict = validated_payload.model_dump(by_alias=False)
         ctx_hash = compute_context_hash(name, args_dict)
-        result = await scholarapi_client.list_papers(
-            query=args_dict.get("query"),
-            limit=args_dict.get("limit", 100),
-            cursor=_cursor_to_bulk_token(
-                args_dict.get("cursor"),
-                tool=name,
-                context_hash=ctx_hash,
-                expected_provider="scholarapi",
+        result = await _call_explicit_scholarapi_tool(
+            operation=lambda: scholarapi_client.list_papers(
+                query=args_dict.get("query"),
+                limit=args_dict.get("limit", 100),
+                cursor=_cursor_to_bulk_token(
+                    args_dict.get("cursor"),
+                    tool=name,
+                    context_hash=ctx_hash,
+                    expected_provider="scholarapi",
+                ),
+                indexed_after=args_dict.get("indexed_after"),
+                indexed_before=args_dict.get("indexed_before"),
+                published_after=args_dict.get("published_after"),
+                published_before=args_dict.get("published_before"),
+                has_text=args_dict.get("has_text"),
+                has_pdf=args_dict.get("has_pdf"),
             ),
-            indexed_after=args_dict.get("indexed_after"),
-            indexed_before=args_dict.get("indexed_before"),
-            published_after=args_dict.get("published_after"),
-            published_before=args_dict.get("published_before"),
-            has_text=args_dict.get("has_text"),
-            has_pdf=args_dict.get("has_pdf"),
+            endpoint="list",
+            provider_registry=provider_registry,
+            request_id=f"tool-{name}",
         )
         serialized = dump_jsonable(result)
+        serialized.setdefault("retrievalNote", SCHOLARAPI_LIST_RETRIEVAL_NOTE)
         serialized = _encode_next_bulk_cursor(
             serialized,
             name,
@@ -1185,7 +1310,12 @@ async def dispatch_tool(
             )
         validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
         args_dict = validated_payload.model_dump(by_alias=False)
-        result = await scholarapi_client.get_text(paper_id=args_dict["paper_id"])
+        result = await _call_explicit_scholarapi_tool(
+            operation=lambda: scholarapi_client.get_text(paper_id=args_dict["paper_id"]),
+            endpoint="text",
+            provider_registry=provider_registry,
+            request_id=f"tool-{name}",
+        )
         return _finalize_tool_result(
             name,
             arguments,
@@ -1201,7 +1331,12 @@ async def dispatch_tool(
             )
         validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
         args_dict = validated_payload.model_dump(by_alias=False)
-        result = await scholarapi_client.get_texts(paper_ids=args_dict["paper_ids"])
+        result = await _call_explicit_scholarapi_tool(
+            operation=lambda: scholarapi_client.get_texts(paper_ids=args_dict["paper_ids"]),
+            endpoint="texts",
+            provider_registry=provider_registry,
+            request_id=f"tool-{name}",
+        )
         return _finalize_tool_result(
             name,
             arguments,
@@ -1217,7 +1352,12 @@ async def dispatch_tool(
             )
         validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
         args_dict = validated_payload.model_dump(by_alias=False)
-        result = await scholarapi_client.get_pdf(paper_id=args_dict["paper_id"])
+        result = await _call_explicit_scholarapi_tool(
+            operation=lambda: scholarapi_client.get_pdf(paper_id=args_dict["paper_id"]),
+            endpoint="pdf",
+            provider_registry=provider_registry,
+            request_id=f"tool-{name}",
+        )
         return _finalize_tool_result(
             name,
             arguments,
