@@ -26,6 +26,8 @@ The provider upgrade program now ships these cross-cutting changes:
   optional `providerBudget` on `search_papers_smart`.
 - A direct OpenAI Responses API path with structured outputs and a fallback path
   to the existing LangChain-backed bundle.
+- A documented Hugging Face smart-provider install/config surface that uses an
+  OpenAI-compatible chat router while keeping embeddings intentionally disabled.
 - Expanded OpenAlex and SerpApi explicit tool surfaces without breaking the
   existing MCP tool names.
 - CORE disabled by default pending stability validation.
@@ -40,6 +42,7 @@ The provider upgrade program now ships these cross-cutting changes:
 | OpenAlex | Secondary graph and disambiguation surface | Explicit tools only | DOI/work lookup, autocomplete, source/institution/topic pivots, author workflows, citation/reference traversal | Ship as explicit provider |
 | SerpApi Google Scholar | Guarded recall-recovery layer | Disabled by default; explicit tools only unless smart routing opts in | Cited-by, versions, author profile/article flows, citation export, quota-aware recovery | Ship with budgets |
 | OpenAI | Smart orchestration and synthesis provider | Used by smart tools when enabled | Planning, synthesis, reranking support, theme labeling, grounded answer formatting | Ship with fallback |
+| Hugging Face | Smart orchestration and synthesis provider | Used by smart tools when enabled | Chat-only planning, synthesis, and theme labeling through an OpenAI-compatible router endpoint | Ship with explicit model selection |
 | NVIDIA | Smart orchestration and synthesis provider | Used by smart tools when enabled | Chat-only planning, synthesis, and theme labeling through hosted NVIDIA or self-hosted NIM endpoints | Ship with fallback |
 
 ## Shared Execution Policy
@@ -163,6 +166,20 @@ Backward compatibility rules:
 - Operational posture: use `fast` for smoke tests, `balanced` by default, and
   `deep` only when broader fanout is intentional
 - Decision: ship with direct Responses support and fallback behavior
+
+### Hugging Face
+
+- Current role: chat-only smart-path planning, synthesis, and labeling provider
+  through an OpenAI-compatible router endpoint
+- Strengths: broad hosted-model coverage behind a familiar API shape and
+  explicit endpoint routing through `HUGGINGFACE_BASE_URL`
+- Risks: model capability varies by routed model, and this repo does not enable
+  embeddings on the Hugging Face path
+- Operational posture: keep model selection explicit through
+  `PAPER_CHASER_PLANNER_MODEL` and `PAPER_CHASER_SYNTHESIS_MODEL`, and treat
+  the path as chat-only until a broader embedding overhaul lands
+- Decision: ship as an additive OpenAI-compatible chat provider with embeddings
+  disabled
 
 ### NVIDIA
 

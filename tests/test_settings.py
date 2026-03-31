@@ -352,6 +352,15 @@ def test_app_settings_parses_agentic_configuration() -> None:
             "mistral_api_key",
             "mistral-key",
         ),
+        (
+            "huggingface",
+            {
+                "HUGGINGFACE_API_KEY": "hf-key",
+                "HUGGINGFACE_BASE_URL": "https://router.huggingface.co/v1",
+            },
+            "huggingface_api_key",
+            "hf-key",
+        ),
     ],
 )
 def test_app_settings_parses_additional_agentic_providers(
@@ -373,12 +382,16 @@ def test_app_settings_parses_additional_agentic_providers(
     if provider == "azure-openai":
         assert settings.azure_openai_planner_deployment == "azure-planner"
         assert settings.azure_openai_synthesis_deployment == "azure-synthesis"
+    if provider == "huggingface":
+        assert settings.huggingface_base_url == "https://router.huggingface.co/v1"
     assert settings.disable_embeddings is True
 
 
 def test_app_settings_rejects_invalid_agentic_provider() -> None:
-    with pytest.raises(ValueError, match="PAPER_CHASER_AGENTIC_PROVIDER"):
+    with pytest.raises(ValueError, match="PAPER_CHASER_AGENTIC_PROVIDER") as exc_info:
         AppSettings.from_env({"PAPER_CHASER_AGENTIC_PROVIDER": "unsupported"})
+
+    assert "huggingface" in str(exc_info.value)
 
 
 def test_agentic_config_tracks_azure_openai_model_sources() -> None:
@@ -450,6 +463,27 @@ def test_agentic_config_tracks_provider_default_model_sources(
     assert config.synthesis_model == expected_synthesis_model
     assert config.planner_model_source == "provider_default"
     assert config.synthesis_model_source == "provider_default"
+
+
+def test_agentic_config_tracks_huggingface_provider_default_model_sources() -> None:
+    settings = AppSettings.from_env(
+        {
+            "PAPER_CHASER_ENABLE_AGENTIC": "true",
+            "PAPER_CHASER_AGENTIC_PROVIDER": "huggingface",
+            "HUGGINGFACE_API_KEY": "hf-key",
+            "HUGGINGFACE_BASE_URL": "https://router.huggingface.co/v1",
+        }
+    )
+
+    config = AgenticConfig.from_settings(settings)
+
+    assert config.provider == "huggingface"
+    assert config.planner_model == "moonshotai/Kimi-K2.5"
+    assert config.synthesis_model == "moonshotai/Kimi-K2.5"
+    assert config.planner_model_source == "provider_default"
+    assert config.synthesis_model_source == "provider_default"
+    assert config.planner_model != "gpt-5.4-mini"
+    assert config.synthesis_model != "gpt-5.4"
 
 
 def test_run_server_logs_embedding_flag(caplog: pytest.LogCaptureFixture) -> None:

@@ -12,7 +12,16 @@ from .models.tools import (
     _normalize_provider_name,
 )
 
-AgenticProvider = Literal["openai", "azure-openai", "anthropic", "nvidia", "google", "mistral", "deterministic"]
+AgenticProvider = Literal[
+    "openai",
+    "azure-openai",
+    "anthropic",
+    "nvidia",
+    "google",
+    "mistral",
+    "huggingface",
+    "deterministic",
+]
 AgenticIndexBackend = Literal["memory", "faiss"]
 
 
@@ -114,6 +123,8 @@ class AppSettings(BaseModel):
     anthropic_api_key: str | None = None
     google_api_key: str | None = None
     mistral_api_key: str | None = None
+    huggingface_api_key: str | None = None
+    huggingface_base_url: str = "https://router.huggingface.co/v1"
     semantic_scholar_api_key: str | None = None
     core_api_key: str | None = None
     openalex_api_key: str | None = None
@@ -182,6 +193,11 @@ class AppSettings(BaseModel):
             anthropic_api_key=_parse_optional_string(env, "ANTHROPIC_API_KEY"),
             google_api_key=_parse_optional_string(env, "GOOGLE_API_KEY"),
             mistral_api_key=_parse_optional_string(env, "MISTRAL_API_KEY"),
+            huggingface_api_key=_parse_optional_string(env, "HUGGINGFACE_API_KEY"),
+            huggingface_base_url=(
+                env.get("HUGGINGFACE_BASE_URL", "https://router.huggingface.co/v1").strip()
+                or "https://router.huggingface.co/v1"
+            ),
             semantic_scholar_api_key=_parse_optional_string(
                 env,
                 "SEMANTIC_SCHOLAR_API_KEY",
@@ -376,12 +392,13 @@ def cast_agentic_provider(value: str | None) -> AgenticProvider:
         "nvidia",
         "google",
         "mistral",
+        "huggingface",
         "deterministic",
     }:
         return cast(AgenticProvider, normalized)
     raise ValueError(
         "PAPER_CHASER_AGENTIC_PROVIDER must be one of: openai, azure-openai, "
-        "anthropic, nvidia, google, mistral, deterministic"
+        "anthropic, nvidia, google, mistral, huggingface, deterministic"
     )
 
 

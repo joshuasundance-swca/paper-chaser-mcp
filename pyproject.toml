@@ -44,6 +44,10 @@ openai = [
     "langchain-openai>=1.1.11",
     "openai>=1.109.0",
 ]
+huggingface = [
+    "langchain-openai>=1.1.11",
+    "openai>=1.109.0",
+]
 nvidia = [
     "langchain-nvidia-ai-endpoints>=0.4.0",
 ]
@@ -78,7 +82,7 @@ dev = [
     "types-defusedxml>=0.7.0",
 ]
 all = [
-    "paper-chaser-mcp[ai,openai,nvidia,anthropic,google,mistral,dev]",
+    "paper-chaser-mcp[ai,openai,huggingface,nvidia,anthropic,google,mistral,dev]",
 ]
 
 [project.scripts]

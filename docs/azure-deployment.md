@@ -55,6 +55,8 @@ usage.
   - `openai-api-key` if you enable the smart layer with `agenticProvider=openai`
   - `azure-openai-api-key` if you enable the smart layer with `agenticProvider=azure-openai`
   - `anthropic-api-key` if you enable the smart layer with `agenticProvider=anthropic`
+  - `huggingface-api-key` for the documented chat-only Hugging Face router path;
+    validate Azure scaffold parity before relying on `agenticProvider=huggingface`
   - `nvidia-api-key` if you enable the smart layer with `agenticProvider=nvidia`
   - `google-api-key` if you enable the smart layer with `agenticProvider=google`
   - `mistral-api-key` if you enable the smart layer with `agenticProvider=mistral`
@@ -77,6 +79,12 @@ usage.
   `azureOpenAiEndpoint` Bicep param and optionally `azureOpenAiApiVersion`.
   The scaffold injects `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_API_VERSION`
   into the Container App only when those params are non-empty.
+
+  The documented Hugging Face path also needs non-secret
+  `HUGGINGFACE_BASE_URL` deployment config because it rides an OpenAI-compatible
+  chat router. The checked-in Azure scaffold does not yet advertise
+  `agenticProvider=huggingface` in its Bicep allow-list or secret/env wiring,
+  so validate IaC parity before using that path in a real Azure rollout.
 
    GovInfo CFR is enabled by default and works without a key (falls back to
    degraded HTML recovery), but provisioning a `govinfo-api-key` in Key Vault
@@ -104,9 +112,12 @@ secret.
 
 The smart layer adds one provider-specific credential requirement when
 `enableAgentic=true`: `openai-api-key`, `azure-openai-api-key`,
-`anthropic-api-key`, `nvidia-api-key`, `google-api-key`, or `mistral-api-key` depending on `agenticProvider`.
+`anthropic-api-key`, `huggingface-api-key`, `nvidia-api-key`, `google-api-key`, or `mistral-api-key` depending on the intended provider bundle.
 For `agenticProvider=azure-openai`, also set `azureOpenAiEndpoint` and,
 optionally, `azureOpenAiApiVersion`.
+For the documented Hugging Face chat-router path, also set
+`HUGGINGFACE_BASE_URL` as deployment config and validate Azure scaffold parity
+before expecting the current Bicep layer to inject it.
 
 ## Bicep parameters reference
 
@@ -173,7 +184,7 @@ Key Vault before you run a `full` deployment with CORE enabled.
 | Parameter | Default | Controls env var |
 | --- | --- | --- |
 | `enableAgentic` | `false` | `PAPER_CHASER_ENABLE_AGENTIC` |
-| `agenticProvider` | `openai` | `PAPER_CHASER_AGENTIC_PROVIDER` — `openai`, `azure-openai`, `anthropic`, `nvidia`, `google`, `mistral`, or `deterministic` |
+| `agenticProvider` | `openai` | `PAPER_CHASER_AGENTIC_PROVIDER` — current Azure scaffold values are `openai`, `azure-openai`, `anthropic`, `nvidia`, `google`, `mistral`, or `deterministic`; the documented Hugging Face chat-router path still needs matching Bicep allow-list and env wiring before Azure can select it directly |
 | `azureOpenAiEndpoint` | `''` | `AZURE_OPENAI_ENDPOINT` — only injected when non-empty; used with `agenticProvider=azure-openai` |
 | `azureOpenAiApiVersion` | `''` | `AZURE_OPENAI_API_VERSION` — only injected when non-empty; used with `agenticProvider=azure-openai` |
 | `plannerModel` | `gpt-5.4-mini` | `PAPER_CHASER_PLANNER_MODEL` |
@@ -192,18 +203,26 @@ seed the corresponding `openai-api-key`, `azure-openai-api-key`,
 For Azure OpenAI, also set `azureOpenAiEndpoint` and optionally
 `azureOpenAiApiVersion`; the scaffold only exports those env vars when the
 matching Bicep params are non-empty.
+For the documented Hugging Face path, plan on `huggingface-api-key` plus
+non-secret `HUGGINGFACE_BASE_URL`, but validate the Azure scaffold first
+because the checked-in IaC does not yet mount or inject those values.
 
 Effective planner/synthesis defaults by provider:
 
 - `openai`: `plannerModel=gpt-5.4-mini`, `synthesisModel=gpt-5.4`.
 - `azure-openai`: the same defaults apply unless `AZURE_OPENAI_PLANNER_DEPLOYMENT` or `AZURE_OPENAI_SYNTHESIS_DEPLOYMENT` is present at runtime; those deployment names override the model vars and are the normal Azure setup.
 - `anthropic`: if you leave `plannerModel` / `synthesisModel` on the checked-in OpenAI defaults, runtime switches to `claude-haiku-4-5` / `claude-sonnet-4-6`.
+- `huggingface`: chat-only OpenAI-compatible router path. If you leave
+  `plannerModel` / `synthesisModel` on the checked-in OpenAI defaults, runtime
+  switches to `moonshotai/Kimi-K2.5` /
+  `moonshotai/Kimi-K2.5` and sends those model IDs to
+  `HUGGINGFACE_BASE_URL`.
 - `nvidia`: if you leave `plannerModel` / `synthesisModel` on the checked-in OpenAI defaults, runtime switches to `nvidia/nemotron-3-nano-30b-a3b` / `nvidia/nemotron-3-super-120b-a12b`.
 - `google`: if you leave `plannerModel` / `synthesisModel` on the checked-in OpenAI defaults, runtime switches to `gemini-2.5-flash` / `gemini-2.5-pro`.
 - `mistral`: if you leave `plannerModel` / `synthesisModel` on the checked-in OpenAI defaults, runtime switches to `mistral-medium-latest` / `mistral-large-latest`.
 - `deterministic`: no external LLM calls; the model vars do not drive inference.
 
-`embeddingModel` stays `text-embedding-3-large`, but embeddings remain off until `disableEmbeddings=false`. In the current runtime, embeddings are only used by providers that explicitly support them.
+`embeddingModel` stays `text-embedding-3-large`, but embeddings remain off until `disableEmbeddings=false`. In the current runtime, embeddings are only used by providers that explicitly support them, so the documented Hugging Face path remains chat-only.
 
 ## Deployment modes
 
@@ -342,6 +361,9 @@ calls.
 - Use `agenticProvider=anthropic` or `agenticProvider=google` and seed the
   matching `anthropic-api-key` or `google-api-key` Key Vault secret when you
   want those hosted-provider paths.
+- Use the documented Hugging Face path only after validating Azure scaffold
+  parity, then seed `huggingface-api-key`, set `HUGGINGFACE_BASE_URL`, and use
+  router-supported chat model IDs in `plannerModel` / `synthesisModel`.
 - Use `agenticProvider=nvidia` and seed the `nvidia-api-key` Key Vault secret
   when you want the LangChain-backed NVIDIA path.
 - Use `agenticProvider=mistral` and seed the `mistral-api-key` Key Vault

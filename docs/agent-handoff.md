@@ -77,6 +77,11 @@ This document is the current working handoff for the fork. It is intended to giv
   provider with quality-first defaults of `mistral-medium-latest` for planning
   and `mistral-large-latest` for synthesis when the checked-in OpenAI defaults
   are left untouched.
+- Hugging Face is now documented in packaging and operator docs as a chat-only
+  smart-layer provider path that uses the OpenAI-compatible router surface via
+  `HUGGINGFACE_API_KEY` plus `HUGGINGFACE_BASE_URL`. Embeddings remain disabled
+  for that path, and the runtime / Azure scaffold still need parity validation
+  before production rollout relies on it.
 - Primary read tools now surface additive agent UX metadata:
   `agentHints`, `clarification`, `resourceUris`, and reusable
   `searchSessionId` handles where appropriate.

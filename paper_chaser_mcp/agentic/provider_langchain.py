@@ -32,6 +32,7 @@ logger = logging.getLogger("paper-chaser-mcp")
 __all__ = [
     "AnthropicProviderBundle",
     "GoogleProviderBundle",
+    "HuggingFaceProviderBundle",
     "LangChainChatProviderBundle",
     "MistralProviderBundle",
     "NvidiaProviderBundle",
@@ -287,6 +288,17 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
             logger.exception("%s text-to-structured parse failed for %s.", self._provider_name, endpoint)
             return None
 
+    @staticmethod
+    def _json_only_system_prompt(
+        base_prompt: str,
+        *,
+        json_shape: str,
+    ) -> str:
+        return (
+            f"{base_prompt} Return only JSON matching this shape: {json_shape}. "
+            "Do not wrap the JSON in markdown fences and do not add commentary."
+        )
+
     def plan_search(
         self,
         *,
@@ -298,15 +310,16 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
     ) -> PlannerDecision:
         planner, _ = self._load_models()
         try:
+            base_prompt = (
+                "Plan a grounded literature-search workflow. Keep providerPlan "
+                "limited to semantic_scholar, openalex, scholarapi, core, and arxiv. "
+                "Return compact structured output only."
+            )
             direct = self._structured_sync(
                 endpoint="structured:planner",
                 model=planner,
                 response_model=_PlannerResponseSchema,
-                system_prompt=(
-                    "Plan a grounded literature-search workflow. Keep providerPlan "
-                    "limited to semantic_scholar, openalex, scholarapi, core, and arxiv. "
-                    "Return compact structured output only."
-                ),
+                system_prompt=base_prompt,
                 payload={
                     "query": query,
                     "mode": mode,
@@ -318,6 +331,30 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
             if direct is not None:
                 self._mark_provider_used()
                 return direct.to_planner_decision()
+            text_fallback = self._structured_from_text_sync(
+                endpoint="text:planner",
+                model=planner,
+                response_model=_PlannerResponseSchema,
+                system_prompt=self._json_only_system_prompt(
+                    base_prompt,
+                    json_shape=(
+                        '{"intent":"discovery|review|known_item|author|citation",'
+                        '"constraints":{"year":"optional","venue":"optional","focus":"optional"},'
+                        '"seedIdentifiers":["..."],"candidateConcepts":["..."],'
+                        '"providerPlan":["semantic_scholar"],"followUpMode":"qa|claim_check|comparison"}'
+                    ),
+                ),
+                payload={
+                    "query": query,
+                    "mode": mode,
+                    "year": year,
+                    "venue": venue,
+                    "focus": focus,
+                },
+            )
+            if text_fallback is not None:
+                self._mark_provider_used()
+                return text_fallback.to_planner_decision()
         except Exception:
             logger.exception("%s planner failed; falling back to deterministic planning.", self._provider_name)
         self._mark_deterministic_fallback()
@@ -336,15 +373,16 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
     ) -> PlannerDecision:
         planner, _ = self._load_models()
         try:
+            base_prompt = (
+                "Plan a grounded literature-search workflow. Keep providerPlan "
+                "limited to semantic_scholar, openalex, scholarapi, core, and arxiv. "
+                "Return compact structured output only."
+            )
             direct = await self._structured_async(
                 endpoint="structured:planner",
                 model=planner,
                 response_model=_PlannerResponseSchema,
-                system_prompt=(
-                    "Plan a grounded literature-search workflow. Keep providerPlan "
-                    "limited to semantic_scholar, openalex, scholarapi, core, and arxiv. "
-                    "Return compact structured output only."
-                ),
+                system_prompt=base_prompt,
                 payload={
                     "query": query,
                     "mode": mode,
@@ -358,6 +396,32 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
             if direct is not None:
                 self._mark_provider_used()
                 return direct.to_planner_decision()
+            text_fallback = await self._structured_from_text_async(
+                endpoint="text:planner",
+                model=planner,
+                response_model=_PlannerResponseSchema,
+                system_prompt=self._json_only_system_prompt(
+                    base_prompt,
+                    json_shape=(
+                        '{"intent":"discovery|review|known_item|author|citation",'
+                        '"constraints":{"year":"optional","venue":"optional","focus":"optional"},'
+                        '"seedIdentifiers":["..."],"candidateConcepts":["..."],'
+                        '"providerPlan":["semantic_scholar"],"followUpMode":"qa|claim_check|comparison"}'
+                    ),
+                ),
+                payload={
+                    "query": query,
+                    "mode": mode,
+                    "year": year,
+                    "venue": venue,
+                    "focus": focus,
+                },
+                request_outcomes=request_outcomes,
+                request_id=request_id,
+            )
+            if text_fallback is not None:
+                self._mark_provider_used()
+                return text_fallback.to_planner_decision()
         except Exception:
             logger.exception("%s planner failed; falling back to deterministic planning.", self._provider_name)
         self._mark_deterministic_fallback()
@@ -372,23 +436,39 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
     ) -> list[ExpansionCandidate]:
         planner, _ = self._load_models()
         try:
+            base_prompt = (
+                "Suggest at most three short literature-search expansions. "
+                "Each expansion must preserve the user's research intent, "
+                "must not add unrelated domains, and must avoid stopwords, "
+                "generic verbs, or filler terms. Label each expansion as "
+                "from_input, from_retrieved_evidence, or speculative."
+            )
             direct = self._structured_sync(
                 endpoint="structured:expansions",
                 model=planner,
                 response_model=_ExpansionListSchema,
-                system_prompt=(
-                    "Suggest at most three short literature-search expansions. "
-                    "Each expansion must preserve the user's research intent, "
-                    "must not add unrelated domains, and must avoid stopwords, "
-                    "generic verbs, or filler terms. Label each expansion as "
-                    "from_input, from_retrieved_evidence, or speculative."
-                ),
+                system_prompt=base_prompt,
                 payload={
                     "query": query,
                     "evidence": evidence_texts[:5],
                     "max_variants": max_variants,
                 },
             )
+            if direct is None:
+                direct = self._structured_from_text_sync(
+                    endpoint="text:expansions",
+                    model=planner,
+                    response_model=_ExpansionListSchema,
+                    system_prompt=self._json_only_system_prompt(
+                        base_prompt,
+                        json_shape='{"expansions":[{"variant":"...","source":"from_input|from_retrieved_evidence|speculative","rationale":"..."}]}',
+                    ),
+                    payload={
+                        "query": query,
+                        "evidence": evidence_texts[:5],
+                        "max_variants": max_variants,
+                    },
+                )
             if direct is None:
                 self._mark_deterministic_fallback()
                 return super().suggest_speculative_expansions(
@@ -425,17 +505,18 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
     ) -> list[ExpansionCandidate]:
         planner, _ = self._load_models()
         try:
+            base_prompt = (
+                "Suggest at most three short literature-search expansions. "
+                "Each expansion must preserve the user's research intent, "
+                "must not add unrelated domains, and must avoid stopwords, "
+                "generic verbs, or filler terms. Label each expansion as "
+                "from_input, from_retrieved_evidence, or speculative."
+            )
             direct = await self._structured_async(
                 endpoint="structured:expansions",
                 model=planner,
                 response_model=_ExpansionListSchema,
-                system_prompt=(
-                    "Suggest at most three short literature-search expansions. "
-                    "Each expansion must preserve the user's research intent, "
-                    "must not add unrelated domains, and must avoid stopwords, "
-                    "generic verbs, or filler terms. Label each expansion as "
-                    "from_input, from_retrieved_evidence, or speculative."
-                ),
+                system_prompt=base_prompt,
                 payload={
                     "query": query,
                     "evidence": evidence_texts[:5],
@@ -444,6 +525,23 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
                 request_outcomes=request_outcomes,
                 request_id=request_id,
             )
+            if direct is None:
+                direct = await self._structured_from_text_async(
+                    endpoint="text:expansions",
+                    model=planner,
+                    response_model=_ExpansionListSchema,
+                    system_prompt=self._json_only_system_prompt(
+                        base_prompt,
+                        json_shape='{"expansions":[{"variant":"...","source":"from_input|from_retrieved_evidence|speculative","rationale":"..."}]}',
+                    ),
+                    payload={
+                        "query": query,
+                        "evidence": evidence_texts[:5],
+                        "max_variants": max_variants,
+                    },
+                    request_outcomes=request_outcomes,
+                    request_id=request_id,
+                )
             if direct is None:
                 self._mark_deterministic_fallback()
                 return super().suggest_speculative_expansions(
@@ -821,4 +919,36 @@ class MistralProviderBundle(LangChainChatProviderBundle):
             temperature=0,
             max_retries=0,
             timeout=int(self._timeout_seconds),
+        )
+
+
+class HuggingFaceProviderBundle(LangChainChatProviderBundle):
+    """Hugging Face router smart-layer adapter via OpenAI-compatible chat completions."""
+
+    def __init__(
+        self,
+        config: AgenticConfig,
+        api_key: str | None,
+        *,
+        base_url: str = "https://router.huggingface.co/v1",
+        provider_registry: ProviderDiagnosticsRegistry | None = None,
+    ) -> None:
+        super().__init__(
+            config,
+            provider_name="huggingface",
+            api_key=api_key,
+            provider_registry=provider_registry,
+        )
+        self._base_url = base_url
+
+    def _create_chat_model(self, model_name: str) -> Any:
+        from langchain_openai import ChatOpenAI
+
+        return ChatOpenAI(
+            model=model_name,
+            api_key=SecretStr(self._api_key or ""),
+            base_url=self._base_url,
+            temperature=0,
+            max_retries=0,
+            timeout=self._timeout_seconds,
         )
