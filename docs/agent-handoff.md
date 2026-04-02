@@ -68,6 +68,14 @@ This document is the current working handoff for the fork. It is intended to giv
 - The repo now exposes a compatibility-first smart layer on top of the stable
   raw MCP surface: `search_papers_smart`, `ask_result_set`,
   `map_research_landscape`, and `expand_research_graph`.
+- Smart responses now expose first-class trust grading: `verifiedFindings`,
+  `likelyUnverified`, `evidenceGaps`, `structuredSources`, and explicit
+  `coverageSummary`/`failureSummary` blocks on the brokered and smart paths.
+- `search_papers_smart` now also supports a regulatory-primary-source branch in
+  `auto` mode: clearly regulatory/environmental asks can route through ECOS,
+  Federal Register, and GovInfo/CFR retrieval and return a structured
+  `regulatoryTimeline` instead of pretending every query is best served by
+  paper ranking.
 - NVIDIA is now integrated as an optional LangChain-backed chat-only smart-layer
   provider with quality-first defaults of
   `nvidia/nemotron-3-nano-30b-a3b` for planning and
@@ -248,6 +256,10 @@ This document is the current working handoff for the fork. It is intended to giv
 - `pyproject.toml` project description and keywords are updated to reflect the
   full current provider surface (Semantic Scholar, CORE, arXiv, OpenAlex,
   SerpApi, Crossref, Unpaywall, ECOS, Federal Register, GovInfo).
+- Runtime truth is now explicit too: `get_provider_diagnostics` includes a
+  `runtimeSummary` block with effective transport, enabled and disabled
+  providers, broker order, embedding state, and user-facing warnings for
+  narrow broker coverage or config that does not affect the active transport.
 
 ## Recent Repo Rename Follow-up
 

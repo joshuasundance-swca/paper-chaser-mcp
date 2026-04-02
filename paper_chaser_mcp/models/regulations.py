@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import Field
 
-from .common import ApiModel
+from .common import ApiModel, VerificationStatus
 
 
 class FederalRegisterAgency(ApiModel):
@@ -35,6 +35,8 @@ class FederalRegisterDocument(ApiModel):
     govinfo_link: str | None = Field(default=None, alias="govInfoLink")
     govinfo_package_id: str | None = Field(default=None, alias="govInfoPackageId")
     govinfo_granule_id: str | None = Field(default=None, alias="govInfoGranuleId")
+    is_primary_source: bool | None = Field(default=True, alias="isPrimarySource")
+    verification_status: VerificationStatus | None = Field(default="verified_metadata", alias="verificationStatus")
 
 
 class FederalRegisterSearchResponse(ApiModel):
@@ -52,6 +54,8 @@ class FederalRegisterDocumentTextResponse(ApiModel):
     content_source: str | None = Field(default=None, alias="contentSource")
     content_type: str | None = Field(default=None, alias="contentType")
     authoritative_url: str | None = Field(default=None, alias="authoritativeUrl")
+    is_primary_source: bool = Field(default=True, alias="isPrimarySource")
+    verification_status: VerificationStatus = Field(default="verified_primary_source", alias="verificationStatus")
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -71,4 +75,29 @@ class CfrTextResponse(ApiModel):
     content_type: str | None = Field(default=None, alias="contentType")
     source_url: str | None = Field(default=None, alias="sourceUrl")
     markdown: str | None = None
+    is_primary_source: bool = Field(default=True, alias="isPrimarySource")
+    verification_status: VerificationStatus = Field(default="verified_primary_source", alias="verificationStatus")
     warnings: list[str] = Field(default_factory=list)
+
+
+class RegulatoryTimelineEvent(ApiModel):
+    """One dated event in a regulatory history response."""
+
+    event_date: str | None = Field(default=None, alias="eventDate")
+    event_type: str = Field(alias="eventType")
+    title: str | None = None
+    source_type: str = Field(default="primary_regulatory", alias="sourceType")
+    verification_status: VerificationStatus = Field(default="verified_metadata", alias="verificationStatus")
+    citation: str | None = None
+    canonical_url: str | None = Field(default=None, alias="canonicalUrl")
+    provider: str | None = None
+    note: str | None = None
+
+
+class RegulatoryTimeline(ApiModel):
+    """Chronological regulatory history with explicit gaps."""
+
+    query: str
+    subject: str | None = None
+    events: list[RegulatoryTimelineEvent] = Field(default_factory=list)
+    evidence_gaps: list[str] = Field(default_factory=list, alias="evidenceGaps")

@@ -355,9 +355,10 @@ TOOL_DESCRIPTIONS = {
     "get_provider_diagnostics": (
         "Return shared provider-health diagnostics for Semantic Scholar, OpenAlex, "
         "CORE, arXiv, SerpApi, Crossref, Unpaywall, OpenAI, and ECOS. Includes "
-        "suppression state, recent rate limits and failures, and normalized "
-        "outcome envelopes so transport and provider issues are visible without "
-        "reading raw logs."
+        "suppression state, recent rate limits and failures, normalized "
+        "outcome envelopes, and a runtimeSummary that exposes effective transport, "
+        "enabled/disabled providers, broker order, embeddings state, and warnings "
+        "so transport and provider issues are visible without reading raw logs."
     ),
     "search_species_ecos": (
         "Search the U.S. Fish and Wildlife Service ECOS species catalog using "
@@ -429,13 +430,18 @@ TOOL_DESCRIPTIONS = {
         "deep execution modes, providerBudget lets advanced clients cap total, "
         "per-provider, or paid usage for one smart search, and includeEnrichment "
         "adds Crossref + Unpaywall metadata only to the final returned hits after "
-        "ranking is complete. Returns compact smart hits, strategyMetadata, "
-        "agentHints, resourceUris, and a concrete next-step recommendation. Best "
+        "ranking is complete. Returns compact smart hits, strategyMetadata, trust-graded "
+        "sections such as verifiedFindings/likelyUnverified/evidenceGaps/structuredSources, "
+        "coverage/failure summaries, agentHints, resourceUris, and a concrete next-step "
+        "recommendation. Best "
         "entry point for concept discovery, but treat it as a lead generator on "
         "sparse cross-domain queries and inspect strategyMetadata, driftWarnings, "
         "and the returned evidence before trusting borderline results. In known-item "
         "mode, if exact paper recovery is weak, the tool now falls back to a broader "
-        "candidate set instead of ending in a dead-end configuration error."
+        "candidate set instead of ending in a dead-end configuration error. For clearly "
+        "regulatory or species-history queries, auto mode can route into ECOS, Federal "
+        "Register, and CFR retrieval first and return a regulatoryTimeline instead of "
+        "paper-centric ranking."
     ),
     "ask_result_set": (
         "Grounded follow-up over a saved searchSessionId. Answer a question using "

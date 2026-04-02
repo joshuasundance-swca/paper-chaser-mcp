@@ -6,7 +6,8 @@ from typing import Any, Literal
 
 from pydantic import Field
 
-from ..models.common import ApiModel, Paper
+from ..models.common import ApiModel, CoverageSummary, FailureSummary, Paper
+from ..models.regulations import RegulatoryTimeline
 
 
 class AgentHints(ApiModel):
@@ -133,6 +134,25 @@ class SearchStrategyMetadata(ApiModel):
     )
 
 
+class StructuredSourceRecord(ApiModel):
+    """Trust-graded source record for smart responses."""
+
+    title: str | None = None
+    provider: str | None = None
+    source_type: str | None = Field(default=None, alias="sourceType")
+    verification_status: str | None = Field(default=None, alias="verificationStatus")
+    access_status: str | None = Field(default=None, alias="accessStatus")
+    confidence: str | None = None
+    is_primary_source: bool | None = Field(default=None, alias="isPrimarySource")
+    canonical_url: str | None = Field(default=None, alias="canonicalUrl")
+    retrieved_url: str | None = Field(default=None, alias="retrievedUrl")
+    full_text_observed: bool | None = Field(default=None, alias="fullTextObserved")
+    abstract_observed: bool | None = Field(default=None, alias="abstractObserved")
+    citation: str | None = None
+    date: str | None = None
+    note: str | None = None
+
+
 class ScoreBreakdown(ApiModel):
     """Scoring signals behind a smart-ranked hit."""
 
@@ -219,6 +239,13 @@ class SmartSearchResponse(ApiModel):
         default_factory=list,
         alias="resourceUris",
     )
+    verified_findings: list[str] = Field(default_factory=list, alias="verifiedFindings")
+    likely_unverified: list[str] = Field(default_factory=list, alias="likelyUnverified")
+    evidence_gaps: list[str] = Field(default_factory=list, alias="evidenceGaps")
+    structured_sources: list[StructuredSourceRecord] = Field(default_factory=list, alias="structuredSources")
+    coverage_summary: CoverageSummary | None = Field(default=None, alias="coverageSummary")
+    failure_summary: FailureSummary | None = Field(default=None, alias="failureSummary")
+    regulatory_timeline: RegulatoryTimeline | None = Field(default=None, alias="regulatoryTimeline")
     clarification: Clarification | None = None
 
 
@@ -251,6 +278,12 @@ class AskResultSetResponse(ApiModel):
         default_factory=list,
         alias="resourceUris",
     )
+    verified_findings: list[str] = Field(default_factory=list, alias="verifiedFindings")
+    likely_unverified: list[str] = Field(default_factory=list, alias="likelyUnverified")
+    evidence_gaps: list[str] = Field(default_factory=list, alias="evidenceGaps")
+    structured_sources: list[StructuredSourceRecord] = Field(default_factory=list, alias="structuredSources")
+    coverage_summary: CoverageSummary | None = Field(default=None, alias="coverageSummary")
+    failure_summary: FailureSummary | None = Field(default=None, alias="failureSummary")
 
 
 class LandscapeTheme(ApiModel):
@@ -288,6 +321,12 @@ class LandscapeResponse(ApiModel):
         default_factory=list,
         alias="resourceUris",
     )
+    verified_findings: list[str] = Field(default_factory=list, alias="verifiedFindings")
+    likely_unverified: list[str] = Field(default_factory=list, alias="likelyUnverified")
+    evidence_gaps: list[str] = Field(default_factory=list, alias="evidenceGaps")
+    structured_sources: list[StructuredSourceRecord] = Field(default_factory=list, alias="structuredSources")
+    coverage_summary: CoverageSummary | None = Field(default=None, alias="coverageSummary")
+    failure_summary: FailureSummary | None = Field(default=None, alias="failureSummary")
 
 
 class GraphNode(ApiModel):
@@ -336,6 +375,7 @@ class PlannerDecision(ApiModel):
         "known_item",
         "author",
         "citation",
+        "regulatory",
     ] = "discovery"
     constraints: dict[str, str] = Field(default_factory=dict)
     seed_identifiers: list[str] = Field(

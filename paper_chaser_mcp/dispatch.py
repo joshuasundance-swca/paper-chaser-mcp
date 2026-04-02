@@ -2,6 +2,8 @@
 
 import re
 import time
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as package_version
 from typing import Any, Callable, cast
 
 from .citation_repair import looks_like_paper_identifier, resolve_citation
@@ -18,7 +20,7 @@ from .enrichment import (
     attach_enrichments_to_paper_payload,
     hydrate_paper_for_enrichment,
 )
-from .models import TOOL_INPUT_MODELS, CitationFormatsResponse, dump_jsonable
+from .models import TOOL_INPUT_MODELS, CitationFormatsResponse, RuntimeSummary, dump_jsonable
 from .models.common import CitationFormat, ExportLink
 from .models.tools import (
     AskResultSetArgs,
@@ -611,6 +613,10 @@ async def dispatch_tool(
     provider_registry: Any = None,
     workspace_registry: Any = None,
     agentic_runtime: Any = None,
+    transport_mode: str = "stdio",
+    hide_disabled_tools: bool = False,
+    session_ttl_seconds: int | None = None,
+    embeddings_enabled: bool | None = None,
     ctx: Any = None,
     allow_elicitation: bool = True,
 ) -> dict[str, Any]:
@@ -731,11 +737,85 @@ async def dispatch_tool(
     if name == "get_provider_diagnostics":
         validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
         args_dict = validated_payload.model_dump(by_alias=False)
+        package_version_value: str | None
+        try:
+            package_version_value = package_version("paper-chaser-mcp")
+        except PackageNotFoundError:
+            package_version_value = None
+        active_provider_set = [
+            provider
+            for provider, enabled in {
+                "semantic_scholar": enable_semantic_scholar,
+                "openalex": enable_openalex,
+                "core": enable_core,
+                "arxiv": enable_arxiv,
+                "serpapi_google_scholar": enable_serpapi,
+                "scholarapi": enable_scholarapi,
+                "crossref": enable_crossref,
+                "unpaywall": enable_unpaywall,
+                "ecos": enable_ecos,
+                "federal_register": enable_federal_register,
+                "govinfo": enable_govinfo_cfr,
+            }.items()
+            if enabled
+        ]
+        disabled_provider_set = [
+            provider
+            for provider, enabled in {
+                "semantic_scholar": enable_semantic_scholar,
+                "openalex": enable_openalex,
+                "core": enable_core,
+                "arxiv": enable_arxiv,
+                "serpapi_google_scholar": enable_serpapi,
+                "scholarapi": enable_scholarapi,
+                "crossref": enable_crossref,
+                "unpaywall": enable_unpaywall,
+                "ecos": enable_ecos,
+                "federal_register": enable_federal_register,
+                "govinfo": enable_govinfo_cfr,
+            }.items()
+            if not enabled
+        ]
+        runtime_warnings: list[str] = []
+        enabled_raw_providers = [provider for provider in (provider_order or []) if provider in active_provider_set]
+        if len(enabled_raw_providers) <= 1:
+            runtime_warnings.append(
+                "The effective broker order is very narrow, so no-result responses "
+                "may reflect limited provider coverage rather than absence of evidence."
+            )
+        if not enable_serpapi and serpapi_client is not None:
+            runtime_warnings.append(
+                "SerpApi client state is present but PAPER_CHASER_ENABLE_SERPAPI is "
+                "false, so paid recall recovery is disabled."
+            )
+        if not enable_scholarapi and scholarapi_client is not None:
+            runtime_warnings.append(
+                "ScholarAPI client state is present but PAPER_CHASER_ENABLE_"
+                "SCHOLARAPI is false, so ScholarAPI discovery and full-text paths "
+                "are inactive."
+            )
+        if transport_mode == "stdio":
+            runtime_warnings.append(
+                "The current runtime is stdio, so HTTP deployment settings do not affect this invocation path."
+            )
+        runtime_summary = RuntimeSummary(
+            transportMode=transport_mode,
+            smartLayerEnabled=agentic_runtime is not None,
+            activeProviderSet=sorted(active_provider_set),
+            disabledProviderSet=sorted(disabled_provider_set),
+            providerOrderEffective=list(provider_order or []),
+            toolsHidden=hide_disabled_tools,
+            sessionTtlSeconds=session_ttl_seconds,
+            embeddingsEnabled=embeddings_enabled,
+            version=package_version_value,
+            warnings=runtime_warnings,
+        )
         if provider_registry is None:
             return {
                 "generatedAt": None,
                 "providerOrder": list(provider_order or []),
                 "providers": [],
+                "runtimeSummary": runtime_summary.model_dump(by_alias=True, exclude_none=True),
             }
         smart_provider_enabled = {
             "openai": False,
@@ -789,6 +869,7 @@ async def dispatch_tool(
             for provider in snapshot.get("providers", []):
                 if isinstance(provider, dict):
                     provider["recentOutcomes"] = []
+        snapshot["runtimeSummary"] = runtime_summary.model_dump(by_alias=True, exclude_none=True)
         return snapshot
 
     if name == "search_species_ecos":

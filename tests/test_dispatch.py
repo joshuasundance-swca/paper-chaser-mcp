@@ -1426,6 +1426,26 @@ async def test_provider_diagnostics_can_surface_non_openai_smart_provider(monkey
     assert provider_map["nvidia"]["enabled"] is False
     assert provider_map["openai"]["enabled"] is False
     assert diagnostics["providerOrder"].index("huggingface") < diagnostics["providerOrder"].index("openai")
+    runtime = diagnostics["runtimeSummary"]
+    assert runtime["smartLayerEnabled"] is True
+    assert runtime["transportMode"] == server.settings.transport
+    assert runtime["toolsHidden"] == server.settings.hide_disabled_tools
+    assert runtime["embeddingsEnabled"] is (not server.settings.disable_embeddings)
+    assert "stdio" in runtime["transportMode"]
+
+
+@pytest.mark.asyncio
+async def test_provider_diagnostics_runtime_summary_warns_on_narrow_provider_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(server, "provider_order", ["semantic_scholar"])
+
+    diagnostics = _payload(await server.call_tool("get_provider_diagnostics", {}))
+    runtime = diagnostics["runtimeSummary"]
+
+    assert runtime["providerOrderEffective"] == ["semantic_scholar"]
+    assert runtime["activeProviderSet"]
+    assert any("narrow" in warning.lower() for warning in runtime["warnings"])
 
 
 @pytest.mark.asyncio

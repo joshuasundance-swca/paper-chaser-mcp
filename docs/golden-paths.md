@@ -34,7 +34,10 @@ result-set paths are exercised by the agentic smoke test in
 3. Save the returned `searchSessionId`.
 4. Use `ask_result_set` for grounded QA, `map_research_landscape` for themes,
    and `expand_research_graph` for compact citation/reference/author expansion.
-5. If `mode="known_item"` does not confirm one exact anchor, the smart workflow
+5. Read `verifiedFindings`, `likelyUnverified`, `evidenceGaps`,
+   `structuredSources`, and `coverageSummary` before treating the result set as
+   complete.
+6. If `mode="known_item"` does not confirm one exact anchor, the smart workflow
   now returns a broader candidate set with warnings instead of a dead-end
   error; verify title, year, and venue before treating that fallback set as
   canonical.
@@ -54,6 +57,7 @@ search_papers_smart(query="retrieval-augmented generation for coding agents", li
 
 - The first smart result set is useful even when the starting query is concept-level.
 - `strategyMetadata` explains what the server tried instead of acting like a black box.
+- The trust boundary is explicit: verified evidence, likely-but-unverified leads, and evidence gaps are separated instead of being mixed into one prose blob.
 - When ScholarAPI is enabled, smart retrieval can explicitly include it in the
   provider fanout instead of treating it as a raw-tool-only surface.
 - `searchSessionId` is enough to continue without rerunning the whole discovery step.
@@ -232,6 +236,12 @@ search_authors(query="Yoshua Bengio", limit=5)
 
 ## Secondary Workflows
 
+- **Regulatory-smart routing**: when the ask is clearly about regulatory history,
+  listed species, CFR text, or Federal Register actions, `search_papers_smart`
+  can route into ECOS, Federal Register, and GovInfo/CFR retrieval first. The
+  preferred review order is `verifiedFindings` -> `structuredSources` ->
+  `regulatoryTimeline` -> raw document tools.
+
 - **Regulatory follow-through from ECOS**: when an ECOS dossier or flattened
   ECOS document inventory exposes `frCitation` or a GovInfo FR link, use
   `get_federal_register_document` to anchor the Federal Register notice or
@@ -269,6 +279,9 @@ search_authors(query="Yoshua Bengio", limit=5)
   workflow-created issues still get assigned to GitHub Copilot without
   duplicates.
   After 3 failed fix attempts the issue escalates to `needs-human`.
+  Environmental and regulatory feature probes should now inspect trust grading,
+  partial-failure handling, and whether smart routing lands on primary sources
+  without forcing a paper-only workflow.
 - **Explicit OpenAlex workflows**: use `search_papers_openalex` for one
   OpenAlex page, `search_papers_openalex_bulk` for OpenAlex cursor traversal,
   `get_paper_details_openalex` for OpenAlex W-id/DOI lookup, and the OpenAlex

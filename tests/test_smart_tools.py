@@ -93,10 +93,16 @@ def _deterministic_runtime(
     semantic: RecordingSemanticClient,
     openalex: RecordingOpenAlexClient,
     scholarapi: RecordingScholarApiClient | None = None,
+    ecos: Any = None,
+    federal_register: Any = None,
+    govinfo: Any = None,
     disable_embeddings: bool = True,
     enable_semantic_scholar: bool = True,
     enable_openalex: bool = True,
     enable_scholarapi: bool = False,
+    enable_ecos: bool = False,
+    enable_federal_register: bool = False,
+    enable_govinfo_cfr: bool = False,
 ) -> tuple[WorkspaceRegistry, AgenticRuntime]:
     config = AgenticConfig(
         enabled=True,
@@ -120,12 +126,18 @@ def _deterministic_runtime(
         scholarapi_client=scholarapi,
         arxiv_client=object(),
         serpapi_client=None,
+        ecos_client=ecos,
+        federal_register_client=federal_register,
+        govinfo_client=govinfo,
         enable_core=False,
         enable_semantic_scholar=enable_semantic_scholar,
         enable_openalex=enable_openalex,
         enable_scholarapi=enable_scholarapi,
         enable_arxiv=False,
         enable_serpapi=False,
+        enable_ecos=enable_ecos,
+        enable_federal_register=enable_federal_register,
+        enable_govinfo_cfr=enable_govinfo_cfr,
     )
     return registry, runtime
 
@@ -170,11 +182,17 @@ def _runtime_with_provider_bundle(
         openalex_client=openalex,
         arxiv_client=object(),
         serpapi_client=None,
+        ecos_client=None,
+        federal_register_client=None,
+        govinfo_client=None,
         enable_core=False,
         enable_semantic_scholar=True,
         enable_openalex=True,
         enable_arxiv=False,
         enable_serpapi=False,
+        enable_ecos=False,
+        enable_federal_register=False,
+        enable_govinfo_cfr=False,
         provider_registry=provider_registry,
     )
     return registry, runtime
@@ -232,6 +250,9 @@ async def test_smart_search_and_follow_up_tools_work_with_deterministic_runtime(
     assert "semantic_scholar" in smart["strategyMetadata"]["providersUsed"]
     assert "resourceUris" in smart
     assert "agentHints" in smart
+    assert smart["verifiedFindings"]
+    assert smart["structuredSources"]
+    assert smart["coverageSummary"]["searchMode"] == "smart_literature_review"
 
     ask = _payload(
         await server.call_tool(
@@ -261,6 +282,7 @@ async def test_smart_search_and_follow_up_tools_work_with_deterministic_runtime(
     assert landscape["themes"]
     assert landscape["searchSessionId"] == smart["searchSessionId"]
     assert landscape["suggestedNextSearches"]
+    assert landscape["structuredSources"]
 
     graph = _payload(
         await server.call_tool(
@@ -275,6 +297,137 @@ async def test_smart_search_and_follow_up_tools_work_with_deterministic_runtime(
     assert graph["nodes"]
     assert graph["edges"]
     assert graph["frontier"]
+
+
+@pytest.mark.asyncio
+async def test_search_papers_smart_routes_regulatory_queries_to_primary_sources() -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+
+    class FakeEcosClient:
+        async def search_species(self, *, query: str, limit: int = 10, match_mode: str = "auto") -> dict[str, Any]:
+            del limit, match_mode
+            assert "regulatory history" in query.lower()
+            return {
+                "query": query,
+                "matchMode": "auto",
+                "total": 1,
+                "data": [
+                    {
+                        "speciesId": "sp-1",
+                        "commonName": "California condor",
+                        "scientificName": "Gymnogyps californianus",
+                        "profileUrl": "https://ecos.fws.gov/ecp/species/sp-1",
+                    }
+                ],
+            }
+
+        async def get_species_profile(self, *, species_id: str) -> dict[str, Any]:
+            assert species_id == "sp-1"
+            return {
+                "species": {
+                    "speciesId": "sp-1",
+                    "commonName": "California condor",
+                    "scientificName": "Gymnogyps californianus",
+                    "profileUrl": "https://ecos.fws.gov/ecp/species/sp-1",
+                },
+                "speciesEntities": [
+                    {
+                        "entityId": 12,
+                        "status": "Endangered",
+                        "statusCategory": "Listed",
+                        "listingDate": "1967-03-11",
+                    }
+                ],
+            }
+
+        async def list_species_documents(
+            self, *, species_id: str, document_kinds: list[str] | None = None
+        ) -> dict[str, Any]:
+            del document_kinds
+            assert species_id == "sp-1"
+            return {
+                "speciesId": species_id,
+                "total": 2,
+                "documentKindsApplied": [],
+                "data": [
+                    {
+                        "documentKind": "recovery_plan",
+                        "title": "California Condor Recovery Plan",
+                        "url": "https://ecos.fws.gov/docs/recovery_plan.pdf",
+                        "documentDate": "2023-01-15",
+                        "documentType": "Recovery Plan",
+                    },
+                    {
+                        "documentKind": "federal_register",
+                        "title": "Endangered Status for California Condor",
+                        "url": "https://www.govinfo.gov/link/fr/32/4001",
+                        "documentDate": "1967-03-11",
+                        "frCitation": "32 FR 4001",
+                        "documentType": "Final Rule",
+                    },
+                ],
+            }
+
+    class FakeFederalRegisterClient:
+        async def search_documents(self, *, query: str, limit: int = 10, **kwargs: Any) -> dict[str, Any]:
+            del limit, kwargs
+            assert "condor" in query.lower()
+            return {
+                "total": 1,
+                "data": [
+                    {
+                        "documentNumber": "2024-12345",
+                        "title": "Critical Habitat Revision for California Condor",
+                        "documentType": "RULE",
+                        "publicationDate": "2024-02-01",
+                        "citation": "89 FR 83510",
+                        "htmlUrl": "https://www.federalregister.gov/d/2024-12345",
+                        "cfrReferences": ["50 CFR 17.95"],
+                    }
+                ],
+            }
+
+    class FakeGovInfoClient:
+        async def get_cfr_text(self, **kwargs: Any) -> dict[str, Any]:
+            assert kwargs["title_number"] == 50
+            assert kwargs["part_number"] == 17
+            return {
+                "titleNumber": 50,
+                "partNumber": 17,
+                "sectionNumber": "95",
+                "citation": "50 CFR 17.95",
+                "effectiveDate": "2024-02-01",
+                "sourceUrl": "https://www.govinfo.gov/app/details/CFR-2024-title50-vol1/CFR-2024-title50-vol1-sec17-95",
+                "markdown": "Authoritative CFR text",
+                "verificationStatus": "verified_primary_source",
+            }
+
+    _, runtime = _deterministic_runtime(
+        semantic=semantic,
+        openalex=openalex,
+        ecos=FakeEcosClient(),
+        federal_register=FakeFederalRegisterClient(),
+        govinfo=FakeGovInfoClient(),
+        enable_ecos=True,
+        enable_federal_register=True,
+        enable_govinfo_cfr=True,
+    )
+
+    payload = await runtime.search_papers_smart(
+        query="Regulatory history of California condor under 50 CFR 17.95",
+        limit=5,
+    )
+
+    assert payload["results"] == []
+    assert payload["strategyMetadata"]["intent"] == "regulatory"
+    assert payload["structuredSources"]
+    assert payload["verifiedFindings"]
+    assert payload["coverageSummary"]["searchMode"] == "regulatory_primary_source"
+    assert payload["regulatoryTimeline"]["events"]
+    assert any(source["provider"] == "govinfo" for source in payload["structuredSources"])
+    assert any(source["provider"] == "ecos" for source in payload["structuredSources"])
+    assert any(source["provider"] == "federal_register" for source in payload["structuredSources"])
 
 
 @pytest.mark.asyncio

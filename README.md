@@ -40,11 +40,11 @@ An MCP server for academic research — search papers, chase citations, look up 
 Paper Chaser MCP combines one stable research-oriented MCP surface with an additive smart layer and a few specialized non-paper workflows:
 
 - **Discovery**: `search_papers` for a fast brokered first page, `search_papers_bulk` for exhaustive retrieval, and provider-specific search tools when you need explicit source control.
-- **Concept-level research**: `search_papers_smart` plus `ask_result_set`, `map_research_landscape`, and `expand_research_graph` for grounded follow-up over a reusable `searchSessionId`.
+- **Concept-level research**: `search_papers_smart` plus `ask_result_set`, `map_research_landscape`, and `expand_research_graph` for grounded follow-up over a reusable `searchSessionId`, with trust-graded `verifiedFindings`, `likelyUnverified`, `evidenceGaps`, `structuredSources`, and coverage/failure summaries.
 - **Known-item recovery**: `resolve_citation`, `search_papers_match`, `get_paper_details`, and autocomplete tools for messy titles, incomplete references, DOIs, arXiv IDs, and URLs.
 - **Citation and author pivots**: citation/reference traversal, recommendations, batch lookups, and author workflows across Semantic Scholar and explicit OpenAlex tool families.
 - **Enrichment and access**: Crossref, Unpaywall, and OpenAlex enrichment for metadata, open-access status, citation context, and PDF discovery after you already have a paper or DOI-bearing identifier.
-- **Regulatory and species workflows**: ECOS dossiers plus Federal Register and CFR retrieval for primary-source research outside the normal paper graph.
+- **Regulatory and species workflows**: ECOS dossiers plus Federal Register and CFR retrieval for primary-source research outside the normal paper graph. `search_papers_smart` can now route clearly regulatory asks into a primary-source timeline instead of forcing a paper-only workflow.
 - **Agent-friendly outputs**: structured responses, `brokerMetadata.nextStepHint`, `agentHints`, `clarification`, `resourceUris`, `searchSessionId`, and provider diagnostics.
 
 ## Quick start
@@ -104,6 +104,7 @@ If you want a local env template for shell runs or Docker Compose, copy `.env.ex
 
 After `search_papers`: read `brokerMetadata.nextStepHint`.
 After `search_papers_smart`: reuse `searchSessionId` with `ask_result_set`, `map_research_landscape`, or `expand_research_graph`.
+After trust-graded responses: read `verifiedFindings`, `likelyUnverified`, `evidenceGaps`, `structuredSources`, and `coverageSummary` before treating a result set as complete.
 For Semantic Scholar expansion tools: prefer `paper.recommendedExpansionId`; if `paper.expansionIdStatus` is `not_portable`, resolve through DOI first.
 For `enrich_paper`: treat it as additive metadata lookup, not known-item resolution. Query-only calls without a paper or DOI anchor now abstain instead of guessing a canonical DOI.
 
@@ -130,6 +131,14 @@ search_papers_smart(query="retrieval-augmented generation for coding agents", li
 → ask_result_set(searchSessionId="...", question="What evaluation tradeoffs show up here?")
 → map_research_landscape(searchSessionId="...")
 → expand_research_graph(seedSearchSessionId="...", direction="citations")
+```
+
+For clearly regulatory or environmental-history asks, `search_papers_smart` can also be the first step:
+
+```text
+search_papers_smart(query="regulatory history of California condor under 50 CFR 17.95", limit=5)
+→ inspect verifiedFindings, structuredSources, regulatoryTimeline, coverageSummary, failureSummary
+→ pivot into get_species_profile_ecos, list_species_documents_ecos, get_federal_register_document, or get_cfr_text
 ```
 
 ### Known-item lookup and citation chasing
@@ -166,6 +175,10 @@ These fields are the high-value response contracts to pay attention to:
 | --- | --- | --- |
 | `brokerMetadata.nextStepHint` | `search_papers` | Treat it as the server's recommended next move after the first page |
 | `searchSessionId` | smart workflows and saved result sets | Reuse it for grounded follow-up instead of rerunning discovery |
+| `verifiedFindings` / `likelyUnverified` / `evidenceGaps` | smart workflows | Treat these as the trust boundary: verified evidence first, weaker leads second, explicit gaps third |
+| `structuredSources` | smart workflows | Use this when you need provenance, access state, primary-source status, or audit-ready citations |
+| `coverageSummary` / `failureSummary` | brokered and smart workflows | Use these to understand partial success, provider coverage, and whether retries or alternate tools are justified |
+| `runtimeSummary` | `get_provider_diagnostics` | Use this to confirm the effective transport, enabled providers, warnings, embeddings state, and active broker order |
 | `agentHints` | primary read tools | Use for retry guidance, follow-on tool suggestions, and warning handling |
 | `clarification` | ambiguous cases | Ask the user only when the server surfaces a bounded clarification request |
 | `resourceUris` | primary read tools | Open follow-on resources directly when your MCP client supports them |
@@ -416,7 +429,7 @@ Full tool reference. See the [Quick tool decision guide](#quick-tool-decision-gu
 
 | Tool | Description |
 | --- | --- |
-| `search_papers_smart` | Concept-level discovery with query expansion, multi-provider fusion, reranking, and reusable `searchSessionId`. Supports `latencyProfile` (`fast`/`balanced`/`deep`) and optional `providerBudget`. |
+| `search_papers_smart` | Concept-level discovery with query expansion, multi-provider fusion, reranking, reusable `searchSessionId`, and trust-graded sections (`verifiedFindings`, `likelyUnverified`, `evidenceGaps`, `structuredSources`, `coverageSummary`, `failureSummary`). In `auto` mode it can also route clearly regulatory asks into a primary-source timeline. Supports `mode`, `latencyProfile` (`fast`/`balanced`/`deep`), and optional `providerBudget`. |
 | `ask_result_set` | Grounded QA, claim checks, and comparisons over a saved `searchSessionId`. |
 | `map_research_landscape` | Cluster a saved result set into themes, gaps, disagreements, and next-search suggestions. |
 | `expand_research_graph` | Expand paper anchors or a saved session into a citation/reference/author graph with frontier ranking. |

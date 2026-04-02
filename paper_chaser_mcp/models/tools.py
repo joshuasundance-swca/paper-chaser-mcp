@@ -1060,12 +1060,13 @@ class SmartSearchPapersArgs(ToolArgsModel):
         "known_item",
         "author",
         "citation",
+        "regulatory",
     ] = Field(
         default="auto",
         description=(
             "Task shape hint. Use auto unless the agent already knows whether "
             "this is discovery, literature review, known-item lookup, author "
-            "pivot, or citation chasing."
+            "pivot, citation chasing, or a regulatory primary-source workflow."
         ),
     )
     year: str | None = Field(

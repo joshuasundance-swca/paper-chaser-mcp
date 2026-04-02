@@ -4,6 +4,7 @@ import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
 from .models import (
@@ -11,6 +12,8 @@ from .models import (
     BrokerAttempt,
     BrokerMetadata,
     CoreSearchResponse,
+    CoverageSummary,
+    FailureSummary,
     Paper,
     SearchResponse,
     SemanticSearchResponse,
@@ -29,6 +32,7 @@ from .search_executor import (
     ProviderSearchRequest,
     SearchClientBundle,
     SearchExecutor,
+    annotate_paper_trust_metadata,
     arxiv_result,
     core_result,
     earlier_result_attempt,
@@ -201,7 +205,89 @@ def _dump_search_response(response: SearchResponse) -> dict[str, Any]:
     }
     if response.broker_metadata is not None:
         result["brokerMetadata"] = response.broker_metadata.model_dump(by_alias=True)
+    if response.coverage_summary is not None:
+        result["coverageSummary"] = response.coverage_summary.model_dump(by_alias=True, exclude_none=True)
+    if response.failure_summary is not None:
+        result["failureSummary"] = response.failure_summary.model_dump(by_alias=True, exclude_none=True)
     return result
+
+
+def _coverage_summary(
+    *,
+    provider_used: str,
+    attempts: list[BrokerAttempt],
+    result_status: Literal["returned_results", "no_results", "provider_failed"],
+) -> CoverageSummary:
+    attempted = [attempt.provider for attempt in attempts]
+    succeeded = [attempt.provider for attempt in attempts if attempt.status == "returned_results"]
+    failed = [attempt.provider for attempt in attempts if attempt.status == "failed"]
+    zero_results = [attempt.provider for attempt in attempts if attempt.status == "returned_no_results"]
+    retrieval_notes: list[str] = []
+    if provider_used != "none":
+        retrieval_notes.append(
+            "Single-page brokered search is best for orientation. Use "
+            "search_papers_smart or search_papers_bulk for broader coverage."
+        )
+    if failed:
+        retrieval_notes.append("One or more providers failed upstream, so the result set may be incomplete.")
+    if any(attempt.status == "skipped" for attempt in attempts):
+        retrieval_notes.append(
+            "Provider coverage was narrowed by broker routing, query filters, or earlier successful results."
+        )
+    likely_completeness: Literal["likely_complete", "partial", "unknown", "incomplete"]
+    if result_status == "provider_failed":
+        likely_completeness = "incomplete"
+    elif provider_used != "none":
+        likely_completeness = "partial"
+    elif zero_results and not failed:
+        likely_completeness = "unknown"
+    else:
+        likely_completeness = "incomplete"
+    return CoverageSummary(
+        providersAttempted=attempted,
+        providersSucceeded=succeeded,
+        providersFailed=failed,
+        providersZeroResults=zero_results,
+        dateSearched=datetime.now(timezone.utc).isoformat(),
+        likelyCompleteness=likely_completeness,
+        searchMode="brokered_single_page",
+        retrievalNotes=retrieval_notes,
+    )
+
+
+def _failure_summary(
+    *,
+    provider_used: str,
+    attempts: list[BrokerAttempt],
+    result_status: Literal["returned_results", "no_results", "provider_failed"],
+) -> FailureSummary | None:
+    failed = [attempt.provider for attempt in attempts if attempt.status == "failed"]
+    if not failed and result_status != "provider_failed":
+        return None
+    fallback_attempted = len([attempt for attempt in attempts if attempt.status != "skipped"]) > 1
+    if result_status == "provider_failed":
+        return FailureSummary(
+            whatFailed="All attempted providers failed upstream before the broker could return results.",
+            whatStillWorked="The broker recorded provider-level failure details for retry and debugging.",
+            fallbackAttempted=fallback_attempted,
+            completenessImpact=(
+                "Coverage is incomplete because the search did not receive a successful provider response."
+            ),
+            recommendedNextAction="retry_or_pivot",
+        )
+    return FailureSummary(
+        whatFailed=("One or more providers failed during broker fallback: " + ", ".join(failed) + "."),
+        whatStillWorked=(
+            f"{provider_used} still returned results, so the search produced a usable but partial orientation set."
+            if provider_used != "none"
+            else "No provider returned results."
+        ),
+        fallbackAttempted=fallback_attempted,
+        completenessImpact=(
+            "Coverage may be partial because failed providers could have contributed additional results."
+        ),
+        recommendedNextAction="review_partial_results",
+    )
 
 
 def _result_quality(
@@ -587,6 +673,7 @@ def _merge_search_results(
     arxiv_search = ArxivSearchResponse.model_validate(arxiv_response)
 
     s2_data = [_enrich_ss_paper(paper) for paper in semantic_search.data]
+    s2_data = [annotate_paper_trust_metadata(paper) for paper in s2_data]
     arxiv_entries = list(arxiv_search.entries)
 
     seen_arxiv_ids = set()
@@ -601,7 +688,7 @@ def _merge_search_results(
         arxiv_id = paper.paper_id or ""
         if arxiv_id and arxiv_id not in seen_arxiv_ids:
             seen_arxiv_ids.add(arxiv_id)
-            merged.append(paper)
+            merged.append(annotate_paper_trust_metadata(paper))
 
     return _dump_search_response(
         SearchResponse(
@@ -619,7 +706,10 @@ def _core_response_to_merged(core_response: dict[str, Any], limit: int) -> dict[
         SearchResponse(
             total=core_search.total or len(core_search.entries),
             offset=0,
-            data=core_search.entries[:limit],
+            data=[
+                annotate_paper_trust_metadata(paper.model_copy(update={"source": paper.source or "core"}))
+                for paper in core_search.entries[:limit]
+            ],
         )
     )
 
@@ -831,6 +921,16 @@ async def search_papers_with_fallback(
                             provider_order=provider_order,
                             suppressed_low_relevance_title=True,
                         ),
+                        coverage_summary=_coverage_summary(
+                            provider_used="none",
+                            attempts=attempts,
+                            result_status="no_results",
+                        ),
+                        failure_summary=_failure_summary(
+                            provider_used="none",
+                            attempts=attempts,
+                            result_status="no_results",
+                        ),
                     )
                 )
         attempts.extend(_earlier_result_attempt(provider) for provider in effective_order[processed_providers:])
@@ -844,17 +944,38 @@ async def search_papers_with_fallback(
                 provider_order=provider_order,
                 low_relevance=low_relevance,
             )
+            result.coverage_summary = _coverage_summary(
+                provider_used=provider_used,
+                attempts=attempts,
+                result_status=result.broker_metadata.result_status,
+            )
+            result.failure_summary = _failure_summary(
+                provider_used=provider_used,
+                attempts=attempts,
+                result_status=result.broker_metadata.result_status,
+            )
 
     if result is None:
+        metadata = _metadata(
+            provider_used="none",
+            attempts=attempts,
+            ss_only_filters=trace.ss_only_filters,
+            venue=venue,
+            preferred_provider=preferred_provider,
+            provider_order=provider_order,
+        )
         return _dump_search_response(
             SearchResponse(
-                broker_metadata=_metadata(
+                broker_metadata=metadata,
+                coverage_summary=_coverage_summary(
                     provider_used="none",
                     attempts=attempts,
-                    ss_only_filters=trace.ss_only_filters,
-                    venue=venue,
-                    preferred_provider=preferred_provider,
-                    provider_order=provider_order,
+                    result_status=metadata.result_status,
+                ),
+                failure_summary=_failure_summary(
+                    provider_used="none",
+                    attempts=attempts,
+                    result_status=metadata.result_status,
                 ),
             )
         )

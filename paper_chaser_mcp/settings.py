@@ -367,6 +367,55 @@ class AppSettings(BaseModel):
             ecos_ca_bundle=_parse_optional_string(env, "ECOS_CA_BUNDLE"),
         )
 
+    def runtime_warnings(self) -> list[str]:
+        """Return user-facing warnings for risky or misleading runtime configuration."""
+
+        warnings: list[str] = []
+        enabled_provider_order = [provider for provider in self.provider_order if self._provider_enabled(provider)]
+        if len(enabled_provider_order) <= 1:
+            warnings.append(
+                "The effective raw broker order is very narrow, so no-result "
+                "responses may reflect limited provider coverage."
+            )
+        if self.transport == "stdio" and (
+            self.http_auth_token or self.allowed_origins or self.http_host != "127.0.0.1" or self.http_port != 8000
+        ):
+            warnings.append(
+                "HTTP transport settings are configured, but the current runtime "
+                "transport is stdio, so they do not affect the active invocation path."
+            )
+        if self.serpapi_api_key and not self.enable_serpapi:
+            warnings.append(
+                "SERPAPI_API_KEY is present, but PAPER_CHASER_ENABLE_SERPAPI is "
+                "false, so paid recall recovery is disabled."
+            )
+        if self.scholarapi_api_key and not self.enable_scholarapi:
+            warnings.append(
+                "SCHOLARAPI_API_KEY is present, but PAPER_CHASER_ENABLE_"
+                "SCHOLARAPI is false, so ScholarAPI discovery and full-text paths "
+                "are disabled."
+            )
+        if self.ecos_verify_tls is False:
+            warnings.append(
+                "ECOS TLS verification is disabled. This should be a temporary "
+                "troubleshooting state, not the default production configuration."
+            )
+        if self.hide_disabled_tools:
+            warnings.append(
+                "Disabled tools are hidden from list_tools output, which can make "
+                "capability gaps harder to diagnose from clients."
+            )
+        return warnings
+
+    def _provider_enabled(self, provider: SearchProvider) -> bool:
+        return {
+            "core": self.enable_core,
+            "semantic_scholar": self.enable_semantic_scholar,
+            "serpapi_google_scholar": self.enable_serpapi,
+            "scholarapi": self.enable_scholarapi,
+            "arxiv": self.enable_arxiv,
+        }.get(provider, False)
+
 
 def cast_transport(
     value: str | None,

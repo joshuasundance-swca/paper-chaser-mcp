@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
@@ -122,6 +123,72 @@ class PaperEnrichments(ApiModel):
     openalex: OpenAlexEnrichment | None = None
 
 
+SourceType = Literal[
+    "primary_regulatory",
+    "scholarly_article",
+    "repository_record",
+    "mirror",
+    "secondary_summary",
+    "unknown",
+]
+VerificationStatus = Literal[
+    "verified_primary_source",
+    "verified_metadata",
+    "search_hit_only",
+    "unverified",
+]
+AccessStatus = Literal[
+    "full_text_verified",
+    "abstract_only",
+    "oa_verified",
+    "oa_uncertain",
+    "access_unverified",
+    "mirror_only",
+]
+LikelyCompleteness = Literal["likely_complete", "partial", "unknown", "incomplete"]
+
+
+class CoverageSummary(ApiModel):
+    """Structured provider-coverage summary for one retrieval run."""
+
+    providers_attempted: list[str] = Field(default_factory=list, alias="providersAttempted")
+    providers_succeeded: list[str] = Field(default_factory=list, alias="providersSucceeded")
+    providers_failed: list[str] = Field(default_factory=list, alias="providersFailed")
+    providers_zero_results: list[str] = Field(default_factory=list, alias="providersZeroResults")
+    date_searched: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        alias="dateSearched",
+    )
+    likely_completeness: LikelyCompleteness = Field(default="unknown", alias="likelyCompleteness")
+    search_mode: str | None = Field(default=None, alias="searchMode")
+    retrieval_notes: list[str] = Field(default_factory=list, alias="retrievalNotes")
+
+
+class FailureSummary(ApiModel):
+    """Compact, user-facing explanation of degraded or failed retrieval."""
+
+    what_failed: str | None = Field(default=None, alias="whatFailed")
+    what_still_worked: str | None = Field(default=None, alias="whatStillWorked")
+    fallback_attempted: bool = Field(default=False, alias="fallbackAttempted")
+    completeness_impact: str | None = Field(default=None, alias="completenessImpact")
+    recommended_next_action: str | None = Field(default=None, alias="recommendedNextAction")
+
+
+class RuntimeSummary(ApiModel):
+    """Effective runtime state for debugging and support."""
+
+    transport_mode: str = Field(alias="transportMode")
+    smart_layer_enabled: bool = Field(alias="smartLayerEnabled")
+    active_provider_set: list[str] = Field(default_factory=list, alias="activeProviderSet")
+    disabled_provider_set: list[str] = Field(default_factory=list, alias="disabledProviderSet")
+    provider_order_effective: list[str] = Field(default_factory=list, alias="providerOrderEffective")
+    tools_hidden: bool = Field(default=False, alias="toolsHidden")
+    session_ttl_seconds: int | None = Field(default=None, alias="sessionTtlSeconds")
+    embeddings_enabled: bool | None = Field(default=None, alias="embeddingsEnabled")
+    version: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
 class Paper(ApiModel):
     """Normalized paper payload used across providers."""
 
@@ -198,6 +265,15 @@ class Paper(ApiModel):
             "be surfaced without implying new metadata provenance."
         ),
     )
+    source_type: SourceType | None = Field(default=None, alias="sourceType")
+    verification_status: VerificationStatus | None = Field(default=None, alias="verificationStatus")
+    access_status: AccessStatus | None = Field(default=None, alias="accessStatus")
+    canonical_url: str | None = Field(default=None, alias="canonicalUrl")
+    retrieved_url: str | None = Field(default=None, alias="retrievedUrl")
+    confidence: Literal["high", "medium", "low"] | None = None
+    is_primary_source: bool | None = Field(default=None, alias="isPrimarySource")
+    full_text_observed: bool | None = Field(default=None, alias="fullTextObserved")
+    abstract_observed: bool | None = Field(default=None, alias="abstractObserved")
 
 
 class BrokerMetadata(BaseModel):
@@ -353,6 +429,14 @@ class SearchResponse(ApiModel):
     broker_metadata: BrokerMetadata | None = Field(
         default=None,
         serialization_alias="brokerMetadata",
+    )
+    coverage_summary: CoverageSummary | None = Field(
+        default=None,
+        serialization_alias="coverageSummary",
+    )
+    failure_summary: FailureSummary | None = Field(
+        default=None,
+        serialization_alias="failureSummary",
     )
 
 

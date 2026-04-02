@@ -1,6 +1,7 @@
 """Shared Pydantic models and helpers."""
 
 from .common import (
+    AccessStatus,
     ApiModel,
     ArxivSearchResponse,
     Author,
@@ -16,11 +17,14 @@ from .common import (
     CitationResolutionCandidate,
     CitationResolutionResponse,
     CoreSearchResponse,
+    CoverageSummary,
     CrossrefEnrichment,
     CrossrefEnrichmentResult,
     CrossrefWorkSummary,
     DoiResolution,
     ExportLink,
+    FailureSummary,
+    LikelyCompleteness,
     OpenAlexEnrichment,
     OpenAlexEnrichmentResult,
     Pagination,
@@ -31,6 +35,7 @@ from .common import (
     PaperEnrichments,
     PaperListResponse,
     RecommendationResponse,
+    RuntimeSummary,
     ScholarApiContentAccess,
     ScholarApiContentAccessResult,
     SearchResponse,
@@ -38,8 +43,10 @@ from .common import (
     SnippetObject,
     SnippetResult,
     SnippetSearchResponse,
+    SourceType,
     UnpaywallEnrichment,
     UnpaywallEnrichmentResult,
+    VerificationStatus,
     dump_jsonable,
 )
 from .ecos import (
@@ -60,11 +67,14 @@ from .regulations import (
     FederalRegisterDocument,
     FederalRegisterDocumentTextResponse,
     FederalRegisterSearchResponse,
+    RegulatoryTimeline,
+    RegulatoryTimelineEvent,
 )
 from .tools import TOOL_INPUT_MODELS
 
 __all__ = [
     "ApiModel",
+    "AccessStatus",
     "ArxivSearchResponse",
     "Author",
     "AuthorListResponse",
@@ -78,6 +88,7 @@ __all__ = [
     "CitationResolutionCandidate",
     "CitationResolutionResponse",
     "CitationFormatsResponse",
+    "CoverageSummary",
     "CoreSearchResponse",
     "CrossrefEnrichment",
     "CrossrefEnrichmentResult",
@@ -95,10 +106,13 @@ __all__ = [
     "EcosSpeciesHit",
     "EcosSpeciesProfile",
     "ExportLink",
+    "FailureSummary",
     "FederalRegisterAgency",
     "FederalRegisterDocument",
     "FederalRegisterDocumentTextResponse",
     "FederalRegisterSearchResponse",
+    "RegulatoryTimeline",
+    "RegulatoryTimelineEvent",
     "OpenAlexEnrichment",
     "OpenAlexEnrichmentResult",
     "PaperContentAccess",
@@ -109,6 +123,7 @@ __all__ = [
     "PaperAuthorListResponse",
     "PaperListResponse",
     "RecommendationResponse",
+    "RuntimeSummary",
     "ScholarApiContentAccess",
     "ScholarApiContentAccessResult",
     "SearchResponse",
@@ -116,8 +131,11 @@ __all__ = [
     "SnippetObject",
     "SnippetResult",
     "SnippetSearchResponse",
+    "SourceType",
     "TOOL_INPUT_MODELS",
     "UnpaywallEnrichment",
     "UnpaywallEnrichmentResult",
+    "VerificationStatus",
+    "LikelyCompleteness",
     "dump_jsonable",
 ]

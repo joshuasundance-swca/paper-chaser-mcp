@@ -67,7 +67,9 @@ SERVER_INSTRUCTIONS = """
 Decision tree for tool selection:
 
 1. CONCEPT-LEVEL DISCOVERY / REVIEW → search_papers_smart
-   (returns searchSessionId, strategyMetadata, resourceUris, and agentHints;
+    (returns searchSessionId, strategyMetadata, trust-graded sections such as
+    verifiedFindings/likelyUnverified/evidenceGaps/structuredSources, plus
+    resourceUris and agentHints;
    use latencyProfile=fast for smoke tests, balanced for default work, and deep
    for controlled multi-provider expansion)
 2. QUICK RAW DISCOVERY → search_papers
@@ -113,14 +115,18 @@ Decision tree for tool selection:
 
 After search_papers: read brokerMetadata.nextStepHint for the recommended next move.
 After search_papers_smart: reuse searchSessionId for ask_result_set,
-map_research_landscape, or expand_research_graph, and inspect acceptedExpansions,
-rejectedExpansions, speculativeExpansions, providersUsed, driftWarnings,
-latencyProfile, providerBudgetApplied, and providerOutcomes. Set
+map_research_landscape, or expand_research_graph, and inspect verifiedFindings,
+likelyUnverified, evidenceGaps, structuredSources, coverageSummary,
+failureSummary, acceptedExpansions, rejectedExpansions, speculativeExpansions,
+providersUsed, driftWarnings, latencyProfile, providerBudgetApplied, and
+providerOutcomes. Set
 includeEnrichment=true only when you want Crossref, Unpaywall, and OpenAlex metadata on the
 final smart-ranked hits; enrichment is post-ranking only and never changes
 retrieval or provider ordering. When ScholarAPI is enabled, smart retrieval may
 also include it explicitly, and providerBudget.maxScholarApiCalls can cap that
 paid path.
+When the query is clearly regulatory or species-history oriented, search_papers_smart can also route into
+ECOS/Federal Register/CFR retrieval first and return a regulatoryTimeline instead of paper-centric ranking.
 Primary read tools now also return agentHints, clarification, resourceUris, and,
 when they produce reusable result sets, searchSessionId.
 For known-item flows, includeEnrichment=true on search_papers_match,
@@ -509,11 +515,17 @@ async def _execute_tool(
         provider_registry=provider_registry,
         workspace_registry=workspace_registry,
         agentic_runtime=agentic_runtime,
+        transport_mode=settings.transport,
+        hide_disabled_tools=settings.hide_disabled_tools,
+        session_ttl_seconds=settings.session_ttl_seconds,
+        embeddings_enabled=not settings.disable_embeddings,
         ctx=ctx,
     )
 
 
 settings = AppSettings.from_env()
+for warning in settings.runtime_warnings():
+    logger.warning("Runtime configuration warning: %s", warning)
 agentic_config = AgenticConfig.from_settings(settings)
 api_key = settings.semantic_scholar_api_key
 openai_api_key = settings.openai_api_key
@@ -630,12 +642,18 @@ agentic_runtime = AgenticRuntime(
     scholarapi_client=scholarapi_client,
     arxiv_client=arxiv_client,
     serpapi_client=serpapi_client,
+    ecos_client=ecos_client,
+    federal_register_client=federal_register_client,
+    govinfo_client=govinfo_client,
     enable_core=enable_core,
     enable_semantic_scholar=enable_semantic_scholar,
     enable_openalex=enable_openalex,
     enable_scholarapi=enable_scholarapi,
     enable_arxiv=enable_arxiv,
     enable_serpapi=enable_serpapi,
+    enable_ecos=enable_ecos,
+    enable_federal_register=enable_federal_register,
+    enable_govinfo_cfr=enable_govinfo_cfr,
     provider_registry=provider_registry,
     enrichment_service=enrichment_service,
 )
