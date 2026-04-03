@@ -62,10 +62,10 @@ def test_core_and_full_tool_assets_exist_and_use_streamable_http() -> None:
     assert "get_document_text_ecos" in full["tools"]
 
 
-def test_microsoft_plugin_sample_points_at_full_tool_asset() -> None:
+def test_microsoft_plugin_sample_points_at_guided_tool_asset() -> None:
     sample = _read_json(PLUGIN_SAMPLE)
 
-    assert sample["tool_package"] == "mcp-tools.full.json"
+    assert sample["tool_package"] == "mcp-tools.core.json"
     assert len(sample["conversation_starters"]) >= 5
     assert "research" in sample["description_for_model"]
     assert "follow_up_research" in sample["description_for_model"]
@@ -74,9 +74,9 @@ def test_microsoft_plugin_sample_points_at_full_tool_asset() -> None:
     assert any(
         "citation" in starter.lower() or "reference" in starter.lower() for starter in sample["conversation_starters"]
     )
-    assert any("Federal Register" in starter for starter in sample["conversation_starters"])
     assert any(
-        "full text" in starter.lower() or "pdf" in starter.lower() for starter in sample["conversation_starters"]
+        "regulatory" in starter.lower() or "cfr" in starter.lower() for starter in sample["conversation_starters"]
     )
     assert any("PAPER_CHASER_TOOL_PROFILE=expert" in note for note in sample["notes"])
+    assert any("PAPER_CHASER_TOOL_PROFILE=guided" in note for note in sample["notes"])
     assert any("searchSessionId" in note for note in sample["notes"])

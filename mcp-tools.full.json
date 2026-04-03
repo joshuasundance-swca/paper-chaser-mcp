@@ -1,7 +1,7 @@
 {
   "name": "paper-chaser-full",
   "title": "Paper Chaser Full Expert Tool Set",
-  "description": "Full Microsoft-facing package for operator and power-user environments. It includes the guided tools plus the raw/provider-specific expert surface for broker control, graph expansion, provider diagnostics, full-text retrieval, and regulatory primary-source workflows. Pair this package with PAPER_CHASER_TOOL_PROFILE=expert when you want the server to advertise the full surface.",
+  "description": "Full Microsoft-facing package for operator and power-user environments. It includes the guided tools plus the raw/provider-specific expert surface for broker control, graph expansion, provider diagnostics, full-text retrieval, and regulatory primary-source workflows. Pair this package with PAPER_CHASER_TOOL_PROFILE=expert when you want the server to advertise the broader expert-visible surface; leave PAPER_CHASER_HIDE_DISABLED_TOOLS=false if you also want disabled expert tools to remain listed.",
   "transport": {
     "type": "streamable-http",
     "path": "/mcp"

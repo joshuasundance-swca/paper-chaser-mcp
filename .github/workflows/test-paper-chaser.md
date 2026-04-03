@@ -182,8 +182,10 @@ important as functional pass/fail results.
 
 - `guided`: validate the default 5-tool public surface. Expert tools may be
   hidden, and that is expected behavior.
-- `expert`: validate the same guided baseline first, then use raw, smart, and
-  provider-specific tools only where they add meaningful coverage.
+- `expert`: validate the same guided baseline first, then use the enabled
+  visible expert tools where they add meaningful coverage. This workflow keeps
+  disabled tools hidden, so expert runs do not necessarily advertise every
+  optional tool family.
 
 ## Test protocol
 
@@ -206,7 +208,7 @@ important as functional pass/fail results.
 2. **Guided discovery** (all modes)
    - Call `research(query="graph neural networks", limit=5)`.
    - Record `status`, `searchSessionId`, `summary`, `trustSummary`, the first
-     few `sources`, and any `candidateLeads`.
+     few `sources`, and any `unverifiedLeads`.
    - Verify the response gives a clear next step through `nextActions` or
      `clarification`.
    - **UX check**: Could a low-context agent understand what to do next from the
@@ -244,10 +246,10 @@ important as functional pass/fail results.
      abstention.
    - Unrelated wildlife notices must not appear as verified findings or
      timeline events.
-   - If `candidateLeads` are present, verify they are clearly separated from
+   - If `unverifiedLeads` are present, verify they are clearly separated from
      trusted findings.
    - **UX check**: Does the response make the regulatory confidence state
-     obvious, or could a low-context user mistake candidate leads for verified
+     obvious, or could a low-context user mistake unverified leads for verified
      evidence?
 
 7. **No-results / abstention behavior** (all modes)

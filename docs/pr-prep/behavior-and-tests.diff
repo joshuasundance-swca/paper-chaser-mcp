@@ -1,0 +1,4005 @@
+diff --git a/paper_chaser_mcp/agentic/graphs.py b/paper_chaser_mcp/agentic/graphs.py
+index 5fbf289..87171b4 100644
+--- a/paper_chaser_mcp/agentic/graphs.py
++++ b/paper_chaser_mcp/agentic/graphs.py
+@@ -8,7 +8,7 @@ import re
+ import statistics
+ import time
+ from difflib import SequenceMatcher
+-from typing import Any
++from typing import Any, Literal, cast
+ from uuid import uuid4
+
+ from fastmcp import Context
+@@ -20,7 +20,18 @@ from ..enrichment import (
+     attach_enrichments_to_paper_payload,
+     hydrate_paper_for_enrichment,
+ )
+-from ..models import Paper, dump_jsonable
++from ..identifiers import resolve_doi_from_paper_payload
++from ..models import (
++    CitationRecord,
++    CoverageSummary,
++    FailureSummary,
++    Paper,
++    PrimaryDocumentCoverage,
++    RegulatoryTimeline,
++    RegulatoryTimelineEvent,
++    VerificationStatus,
++    dump_jsonable,
++)
+ from ..provider_runtime import (
+     ProviderBudgetState,
+     ProviderDiagnosticsRegistry,
+@@ -42,6 +53,7 @@ from .models import (
+     SearchStrategyMetadata,
+     SmartPaperHit,
+     SmartSearchResponse,
++    StructuredSourceRecord,
+     StructuredToolError,
+ )
+ from .planner import (
+@@ -140,6 +152,33 @@ _COMPARISON_FOCUS_STOPWORDS = _THEME_LABEL_STOPWORDS | {
+     "study",
+     "studies",
+ }
++_REGULATORY_SUBJECT_STOPWORDS = {
++    "act",
++    "critical",
++    "designation",
++    "endangered",
++    "federal",
++    "habitat",
++    "history",
++    "notice",
++    "recovery",
++    "register",
++    "regulatory",
++    "rule",
++    "species",
++    "status",
++    "under",
++    "wildlife",
++}
++_CFR_DOC_TYPE_GENERIC = {
++    "and",
++    "cfr",
++    "chapter",
++    "part",
++    "section",
++    "subchapter",
++    "title",
++}
+
+ InMemorySaver: Any = None
+ StateGraph: Any = None
+@@ -175,12 +214,18 @@ class AgenticRuntime:
+         scholarapi_client: Any = None,
+         arxiv_client: Any,
+         serpapi_client: Any,
++        ecos_client: Any = None,
++        federal_register_client: Any = None,
++        govinfo_client: Any = None,
+         enable_core: bool,
+         enable_semantic_scholar: bool,
+         enable_openalex: bool,
+         enable_scholarapi: bool = False,
+         enable_arxiv: bool,
+         enable_serpapi: bool,
++        enable_ecos: bool = True,
++        enable_federal_register: bool = True,
++        enable_govinfo_cfr: bool = True,
+         provider_registry: ProviderDiagnosticsRegistry | None = None,
+         enrichment_service: PaperEnrichmentService | None = None,
+     ) -> None:
+@@ -194,12 +239,18 @@ class AgenticRuntime:
+         self._scholarapi_client = scholarapi_client
+         self._arxiv_client = arxiv_client
+         self._serpapi_client = serpapi_client
++        self._ecos_client = ecos_client
++        self._federal_register_client = federal_register_client
++        self._govinfo_client = govinfo_client
+         self._enable_core = enable_core
+         self._enable_semantic_scholar = enable_semantic_scholar
+         self._enable_openalex = enable_openalex
+         self._enable_scholarapi = enable_scholarapi
+         self._enable_arxiv = enable_arxiv
+         self._enable_serpapi = enable_serpapi
++        self._enable_ecos = enable_ecos
++        self._enable_federal_register = enable_federal_register
++        self._enable_govinfo_cfr = enable_govinfo_cfr
+         self._provider_registry = provider_registry
+         self._enrichment_service = enrichment_service
+         self._background_tasks: set[asyncio.Task[Any]] = set()
+@@ -405,6 +456,18 @@ class AgenticRuntime:
+                 stage_timings_ms=stage_timings_ms,
+                 ctx=ctx,
+             )
++        if planner.intent == "regulatory":
++            return await self._search_regulatory(
++                query=normalized_query,
++                limit=limit,
++                planner_intent=planner.intent,
++                search_session_id=search_session_id,
++                latency_profile=latency_profile,
++                request_id=request_id,
++                provider_outcomes=provider_outcomes,
++                stage_timings_ms=stage_timings_ms,
++                ctx=ctx,
++            )
+
+         await self._emit_smart_search_status(
+             ctx=ctx,
+@@ -771,21 +834,30 @@ class AgenticRuntime:
+         )
+
+         top_candidates = filtered_ranked[:limit]
+-        smart_hits = [
+-            SmartPaperHit(
+-                paper=Paper.model_validate(candidate["paper"]),
+-                rank=index,
+-                whyMatched=_why_matched(
+-                    query=normalized_query,
+-                    paper=candidate["paper"],
+-                    matched_concepts=candidate.get("matchedConcepts") or [],
+-                ),
+-                matchedConcepts=candidate.get("matchedConcepts") or [],
+-                retrievedBy=candidate["providers"],
+-                scoreBreakdown=ScoreBreakdown.model_validate(candidate["scoreBreakdown"]),
++        smart_hits: list[SmartPaperHit] = []
++        for index, candidate in enumerate(top_candidates, start=1):
++            score_breakdown = ScoreBreakdown.model_validate(candidate["scoreBreakdown"])
++            topical_relevance = _classify_topical_relevance_for_paper(
++                query=normalized_query,
++                paper=candidate["paper"],
++                query_similarity=score_breakdown.query_similarity,
++                score_breakdown=score_breakdown,
++            )
++            smart_hits.append(
++                SmartPaperHit(
++                    paper=Paper.model_validate(candidate["paper"]),
++                    rank=index,
++                    whyMatched=_why_matched(
++                        query=normalized_query,
++                        paper=candidate["paper"],
++                        matched_concepts=candidate.get("matchedConcepts") or [],
++                    ),
++                    matchedConcepts=candidate.get("matchedConcepts") or [],
++                    retrievedBy=candidate["providers"],
++                    topicalRelevance=topical_relevance,
++                    scoreBreakdown=score_breakdown,
++                )
+             )
+-            for index, candidate in enumerate(top_candidates, start=1)
+-        ]
+         if include_enrichment and self._enrichment_service is not None and smart_hits:
+             await self._emit_smart_search_status(
+                 ctx=ctx,
+@@ -805,6 +877,14 @@ class AgenticRuntime:
+             strategy_metadata.provider_outcomes = provider_outcomes
+             strategy_metadata.stage_timings_ms = stage_timings_ms
+
++        source_records = [
++            _source_record_from_paper(
++                hit.paper,
++                note=hit.why_matched,
++                topical_relevance=hit.topical_relevance,
++            )
++            for hit in smart_hits
++        ]
+         response = SmartSearchResponse(
+             results=smart_hits,
+             searchSessionId=search_session_id or "pending",
+@@ -819,6 +899,21 @@ class AgenticRuntime:
+                 {"brokerMetadata": {"resultQuality": "strong"}},
+             ),
+             resourceUris=[],
++            verifiedFindings=_verified_findings_from_source_records(source_records),
++            likelyUnverified=_likely_unverified_from_source_records(source_records),
++            candidateLeads=_candidate_leads_from_source_records(source_records),
++            evidenceGaps=list(strategy_metadata.drift_warnings),
++            structuredSources=source_records,
++            coverageSummary=_smart_coverage_summary(
++                providers_used=providers_used,
++                provider_outcomes=provider_outcomes,
++                search_mode="smart_literature_review",
++                drift_warnings=[*drift_warnings, *provider_fallback_warnings],
++            ),
++            failureSummary=_smart_failure_summary(
++                provider_outcomes=provider_outcomes,
++                fallback_attempted=bool(provider_fallback_warnings or rejected_speculative),
++            ),
+         )
+         if provider_fallback_warnings:
+             response.agent_hints.warnings.extend(provider_fallback_warnings)
+@@ -963,18 +1058,64 @@ class AgenticRuntime:
+                 question=question,
+                 evidence_papers=evidence_papers,
+             )
++        unsupported_asks = list(synthesis.get("unsupportedAsks") or [])
++        follow_up_questions = list(synthesis.get("followUpQuestions") or [])
++        normalized_confidence = provider_bundle.normalize_confidence(synthesis.get("confidence"))
++
++        source_records: list[StructuredSourceRecord] = []
++        on_topic_evidence = 0
++        for item in evidence:
++            topical_relevance = _classify_topical_relevance_for_paper(
++                query=question,
++                paper=item.paper,
++                query_similarity=float(item.relevance_score),
++            )
++            if topical_relevance == "on_topic":
++                on_topic_evidence += 1
++            source_records.append(
++                _source_record_from_paper(
++                    item.paper,
++                    note=item.why_relevant,
++                    topical_relevance=topical_relevance,
++                )
++            )
++
++        max_relevance = max((item.relevance_score for item in evidence), default=0.0)
++        insufficient_evidence = (not evidence) or (max_relevance < 0.12 and on_topic_evidence == 0)
++        should_abstain = bool(unsupported_asks) and (
++            normalized_confidence == "low" or max_relevance < 0.25 or on_topic_evidence == 0
++        )
++        if should_abstain:
++            answer_status: Literal["answered", "abstained", "insufficient_evidence"] = "abstained"
++            answer_payload: str | None = None
++        elif insufficient_evidence:
++            answer_status = "insufficient_evidence"
++            answer_payload = None
++        else:
++            answer_status = "answered"
++            answer_payload = answer_text
+         await self._emit_tool_progress(
+             ctx=ctx,
+             progress=2,
+             total=3,
+             message="Drafting grounded answer",
+         )
++        evidence_gaps = unsupported_asks
++        if answer_status == "abstained":
++            evidence_gaps = evidence_gaps + [
++                "Grounded follow-up abstained because evidence was weak or unsupported for the requested claim."
++            ]
++        elif answer_status == "insufficient_evidence":
++            evidence_gaps = evidence_gaps + [
++                "Grounded follow-up could not find enough on-topic evidence to answer safely."
++            ]
+         response = AskResultSetResponse(
+-            answer=answer_text,
++            answer=answer_payload,
++            answerStatus=answer_status,
+             evidence=evidence,
+-            unsupportedAsks=list(synthesis.get("unsupportedAsks") or []),
+-            followUpQuestions=list(synthesis.get("followUpQuestions") or []),
+-            confidence=provider_bundle.normalize_confidence(synthesis.get("confidence")),
++            unsupportedAsks=unsupported_asks,
++            followUpQuestions=follow_up_questions,
++            confidence=normalized_confidence,
+             searchSessionId=search_session_id,
+             agentHints=build_agent_hints("ask_result_set", {}),
+             resourceUris=build_resource_uris(
+@@ -982,6 +1123,17 @@ class AgenticRuntime:
+                 {"results": [{"paper": item.paper.model_dump(by_alias=True)} for item in evidence]},
+                 search_session_id,
+             ),
++            verifiedFindings=_verified_findings_from_source_records(source_records),
++            likelyUnverified=_likely_unverified_from_source_records(source_records),
++            candidateLeads=_candidate_leads_from_source_records(source_records),
++            evidenceGaps=evidence_gaps,
++            structuredSources=source_records,
++            coverageSummary=_smart_coverage_summary(
++                providers_used=sorted({str(item.paper.source or "unknown") for item in evidence}),
++                provider_outcomes=[],
++                search_mode="grounded_follow_up",
++                drift_warnings=[],
++            ),
+         )
+         if self._config.enable_trace_log:
+             self._workspace_registry.record_trace(
+@@ -1095,6 +1247,7 @@ class AgenticRuntime:
+             total=3,
+             message="Labelling themes and summarizing gaps",
+         )
++        source_records = [_source_record_from_paper(paper) for paper in representative_papers[:max_themes]]
+         response = LandscapeResponse(
+             themes=themes,
+             representativePapers=representative_papers[:max_themes],
+@@ -1112,6 +1265,17 @@ class AgenticRuntime:
+                 },
+                 search_session_id,
+             ),
++            verifiedFindings=_verified_findings_from_source_records(source_records),
++            likelyUnverified=_likely_unverified_from_source_records(source_records),
++            candidateLeads=_candidate_leads_from_source_records(source_records),
++            evidenceGaps=gaps,
++            structuredSources=source_records,
++            coverageSummary=_smart_coverage_summary(
++                providers_used=sorted({str(paper.source or "unknown") for paper in representative_papers[:max_themes]}),
++                provider_outcomes=[],
++                search_mode="landscape_map",
++                drift_warnings=gaps,
++            ),
+         )
+         if self._config.enable_trace_log:
+             self._workspace_registry.record_trace(
+@@ -1514,6 +1678,414 @@ class AgenticRuntime:
+
+         return list(await asyncio.gather(*[_enrich_hit(hit) for hit in smart_hits]))
+
++    async def _search_regulatory(
++        self,
++        *,
++        query: str,
++        limit: int,
++        planner_intent: str,
++        search_session_id: str | None,
++        latency_profile: LatencyProfile,
++        request_id: str,
++        provider_outcomes: list[dict[str, Any]],
++        stage_timings_ms: dict[str, int],
++        ctx: Context | None,
++    ) -> dict[str, Any]:
++        attempted: list[str] = []
++        succeeded: list[str] = []
++        failed: list[str] = []
++        zero_results: list[str] = []
++        structured_sources: list[StructuredSourceRecord] = []
++        evidence_gaps: list[str] = []
++        timeline_events: list[RegulatoryTimelineEvent] = []
++        candidate_leads: list[StructuredSourceRecord] = []
++        subject: str | None = None
++        current_text_requested = _is_current_cfr_text_request(query)
++        govinfo_matched = False
++        federal_register_matched = False
++
++        await self._emit_smart_search_status(
++            ctx=ctx,
++            request_id=request_id,
++            progress=20,
++            message="Running regulatory primary-source retrieval",
++            detail=(f"Routing '{_truncate_text(query, limit=96)}' through ECOS, Federal Register, and CFR providers."),
++        )
++
++        cfr_request = _parse_cfr_request(query)
++        cfr_citation = _format_cfr_citation(cfr_request)
++        anchored_subject_terms: set[str] = set()
++        filtered_document_count = 0
++        if cfr_request and self._enable_govinfo_cfr and self._govinfo_client is not None:
++            attempted.append("govinfo")
++            started = time.perf_counter()
++            try:
++                cfr_payload = await self._govinfo_client.get_cfr_text(**cfr_request)
++                stage_timings_ms["regulatoryGovInfo"] = int((time.perf_counter() - started) * 1000)
++                succeeded.append("govinfo")
++                govinfo_matched = True
++                subject = str(cfr_payload.get("citation") or query)
++                structured_sources.append(
++                    _source_record_from_regulatory_document(
++                        cfr_payload,
++                        provider="govinfo",
++                        topical_relevance="on_topic",
++                    )
++                )
++                timeline_events.append(
++                    RegulatoryTimelineEvent(
++                        eventType="cfr_text",
++                        eventDate=cfr_payload.get("effectiveDate"),
++                        title=str(cfr_payload.get("citation") or "Current CFR text"),
++                        citation=str(cfr_payload.get("citation") or "") or None,
++                        canonicalUrl=cfr_payload.get("sourceUrl"),
++                        provider="govinfo",
++                        verificationStatus=cast(
++                            VerificationStatus,
++                            cfr_payload.get("verificationStatus") or "verified_primary_source",
++                        ),
++                        note="Authoritative CFR text retrieved from GovInfo.",
++                    )
++                )
++            except Exception as exc:
++                stage_timings_ms["regulatoryGovInfo"] = int((time.perf_counter() - started) * 1000)
++                failed.append("govinfo")
++                provider_outcomes.append(
++                    {
++                        "provider": "govinfo",
++                        "endpoint": "get_cfr_text",
++                        "statusBucket": "provider_error",
++                        "error": str(exc),
++                    }
++                )
++
++        species_hit: dict[str, Any] | None = None
++        if self._enable_ecos and self._ecos_client is not None:
++            attempted.append("ecos")
++            started = time.perf_counter()
++            try:
++                species_search = await self._ecos_client.search_species(
++                    query=query,
++                    limit=min(limit, 5),
++                    match_mode="auto",
++                )
++                stage_timings_ms["regulatoryEcosSearch"] = int((time.perf_counter() - started) * 1000)
++                species_data = list(species_search.get("data") or [])
++                if species_data:
++                    succeeded.append("ecos")
++                    species_hit = species_data[0] if isinstance(species_data[0], dict) else None
++                    if species_hit is not None:
++                        anchored_subject_terms = _extract_subject_terms(
++                            str(species_hit.get("commonName") or "") or None,
++                            str(species_hit.get("scientificName") or "") or None,
++                        )
++                        subject = str(
++                            species_hit.get("commonName") or species_hit.get("scientificName") or subject or query
++                        )
++                        profile = await self._ecos_client.get_species_profile(species_id=species_hit["speciesId"])
++                        documents = await self._ecos_client.list_species_documents(species_id=species_hit["speciesId"])
++                        for entity in profile.get("speciesEntities") or []:
++                            if isinstance(entity, dict) and entity.get("listingDate"):
++                                timeline_events.append(
++                                    RegulatoryTimelineEvent(
++                                        eventType="species_listing",
++                                        eventDate=entity.get("listingDate"),
++                                        title=str(entity.get("status") or "Species listing event"),
++                                        provider="ecos",
++                                        verificationStatus="verified_metadata",
++                                        canonicalUrl=species_hit.get("profileUrl"),
++                                        note=str(entity.get("statusCategory") or "ECOS species entity metadata."),
++                                    )
++                                )
++                        doc_list = list(documents.get("data") or [])
++                        if not doc_list:
++                            evidence_gaps.append(
++                                "ECOS returned a species profile but no dossier documents were available."
++                            )
++                        for document in doc_list[: max(limit, 10)]:
++                            if not isinstance(document, dict):
++                                continue
++                            structured_sources.append(
++                                _source_record_from_regulatory_document(
++                                    document,
++                                    provider="ecos",
++                                    topical_relevance="on_topic",
++                                )
++                            )
++                            timeline_events.append(
++                                RegulatoryTimelineEvent(
++                                    eventType=str(document.get("documentKind") or "regulatory_document"),
++                                    eventDate=document.get("documentDate"),
++                                    title=str(document.get("title") or document.get("documentKind") or "ECOS document"),
++                                    citation=str(document.get("frCitation") or "") or None,
++                                    canonicalUrl=document.get("url"),
++                                    provider="ecos",
++                                    verificationStatus="verified_metadata",
++                                    note=str(document.get("documentType") or "ECOS dossier document."),
++                                )
++                            )
++                else:
++                    zero_results.append("ecos")
++            except Exception as exc:
++                stage_timings_ms["regulatoryEcosSearch"] = int((time.perf_counter() - started) * 1000)
++                failed.append("ecos")
++                provider_outcomes.append(
++                    {
++                        "provider": "ecos",
++                        "endpoint": "search_species",
++                        "statusBucket": "provider_error",
++                        "error": str(exc),
++                    }
++                )
++
++        if not anchored_subject_terms:
++            anchored_subject_terms = {
++                term
++                for term in query_terms(query)
++                if term not in _REGULATORY_SUBJECT_STOPWORDS and len(term) > 3 and term not in _GRAPH_GENERIC_TERMS
++            }
++        fr_query = subject or query
++        if self._enable_federal_register and self._federal_register_client is not None:
++            attempted.append("federal_register")
++            started = time.perf_counter()
++            try:
++                fr_search = await self._federal_register_client.search_documents(
++                    query=fr_query,
++                    limit=min(max(limit, 5), 10),
++                )
++                stage_timings_ms["regulatoryFederalRegister"] = int((time.perf_counter() - started) * 1000)
++                documents = list(fr_search.get("data") or [])
++                if documents:
++                    succeeded.append("federal_register")
++                    for document in documents[:limit]:
++                        if not isinstance(document, dict):
++                            continue
++                        if not _regulatory_document_matches_subject(
++                            document,
++                            subject_terms=anchored_subject_terms,
++                            cfr_citation=cfr_citation,
++                        ):
++                            filtered_document_count += 1
++                            off_topic_lead = _source_record_from_regulatory_document(
++                                document,
++                                provider="federal_register",
++                                topical_relevance="off_topic",
++                            )
++                            anchor_hint = subject or query
++                            reason_note = (
++                                "Filtered from verified regulatory timeline because it did not match the anchored "
++                                f"subject '{anchor_hint}'."
++                            )
++                            existing_note = off_topic_lead.note
++                            off_topic_lead = off_topic_lead.model_copy(
++                                update={
++                                    "note": (f"{reason_note} {existing_note}".strip() if existing_note else reason_note)
++                                }
++                            )
++                            candidate_leads.append(off_topic_lead)
++                            continue
++                        structured_sources.append(
++                            _source_record_from_regulatory_document(
++                                document,
++                                provider="federal_register",
++                                topical_relevance="on_topic",
++                            )
++                        )
++                        federal_register_matched = True
++                        timeline_events.append(
++                            RegulatoryTimelineEvent(
++                                eventType="rulemaking_history",
++                                eventDate=document.get("publicationDate"),
++                                title=str(
++                                    document.get("title")
++                                    or document.get("documentNumber")
++                                    or "Federal Register document"
++                                ),
++                                citation=str(document.get("citation") or document.get("documentNumber") or "") or None,
++                                canonicalUrl=(
++                                    document.get("htmlUrl") or document.get("govInfoLink") or document.get("pdfUrl")
++                                ),
++                                provider="federal_register",
++                                verificationStatus=cast(
++                                    VerificationStatus,
++                                    document.get("verificationStatus") or "verified_metadata",
++                                ),
++                                note=(
++                                    (
++                                        "Rulemaking history/context from the Federal Register. "
++                                        + ", ".join(document.get("cfrReferences") or [])
++                                    )
++                                    if isinstance(document.get("cfrReferences"), list) and document.get("cfrReferences")
++                                    else "Rulemaking history/context from the Federal Register."
++                                ),
++                            )
++                        )
++                else:
++                    zero_results.append("federal_register")
++            except Exception as exc:
++                stage_timings_ms["regulatoryFederalRegister"] = int((time.perf_counter() - started) * 1000)
++                failed.append("federal_register")
++                provider_outcomes.append(
++                    {
++                        "provider": "federal_register",
++                        "endpoint": "search_documents",
++                        "statusBucket": "provider_error",
++                        "error": str(exc),
++                    }
++                )
++
++        structured_sources = _dedupe_structured_sources(structured_sources)
++        timeline_events = sorted(timeline_events, key=lambda event: str(event.event_date or "9999-99-99"))
++        if not timeline_events:
++            evidence_gaps.append(
++                "No primary-source regulatory timeline could be reconstructed from the "
++                "currently enabled regulatory providers."
++            )
++        if filtered_document_count > 0:
++            evidence_gaps.append(
++                f"Filtered {filtered_document_count} Federal Register hit(s) that did not match the anchored "
++                "regulatory subject."
++            )
++        if species_hit is None and "ecos" in zero_results:
++            evidence_gaps.append("No ECOS species dossier match was found for the query.")
++        current_text_satisfied = (not current_text_requested) or govinfo_matched
++        history_only = bool(current_text_requested and not current_text_satisfied and timeline_events)
++        if current_text_requested and not govinfo_matched:
++            evidence_gaps.append(
++                "Current codified CFR text was not verified from GovInfo, so the result is limited to history/context."
++            )
++        primary_document_coverage = PrimaryDocumentCoverage(
++            currentTextRequested=current_text_requested,
++            govinfoAttempted="govinfo" in attempted,
++            govinfoMatched=govinfo_matched,
++            cfrAttempted=bool(cfr_request and "govinfo" in attempted),
++            cfrMatched=bool(cfr_request and govinfo_matched),
++            federalRegisterAttempted="federal_register" in attempted,
++            federalRegisterMatched=federal_register_matched,
++            historyOnly=history_only,
++            currentTextSatisfied=current_text_satisfied,
++        )
++
++        provider_selection = self._provider_bundle_for_profile(latency_profile).selection_metadata()
++        coverage_summary = CoverageSummary(
++            providersAttempted=attempted,
++            providersSucceeded=succeeded,
++            providersFailed=failed,
++            providersZeroResults=zero_results,
++            likelyCompleteness=("partial" if structured_sources else ("incomplete" if failed else "unknown")),
++            searchMode="regulatory_primary_source",
++            retrievalNotes=[
++                "Regulatory mode prioritizes ECOS, Federal Register, and CFR primary sources before broader synthesis."
++            ],
++            summaryLine=_coverage_summary_line(
++                attempted=attempted,
++                failed=failed,
++                zero_results=zero_results,
++                likely_completeness=("partial" if structured_sources else ("incomplete" if failed else "unknown")),
++            ),
++            primaryDocumentCoverage=primary_document_coverage,
++        )
++        failure_summary = None
++        if failed:
++            failure_summary = FailureSummary(
++                outcome="fallback_success" if structured_sources else "total_failure",
++                whatFailed="One or more regulatory providers failed during primary-source retrieval.",
++                whatStillWorked=(
++                    "Other regulatory providers still returned evidence."
++                    if structured_sources
++                    else "No regulatory provider returned usable source records."
++                ),
++                fallbackAttempted=True,
++                fallbackMode="regulatory_primary_source",
++                primaryPathFailureReason=", ".join(sorted(failed)),
++                completenessImpact=(
++                    "The regulatory history may be incomplete because at least one primary-source provider failed."
++                ),
++                recommendedNextAction="review_partial_results",
++            )
++        strategy_metadata = SearchStrategyMetadata(
++            intent=planner_intent,
++            latencyProfile=latency_profile,
++            normalizedQuery=query,
++            queryVariantsTried=[query],
++            acceptedExpansions=[],
++            rejectedExpansions=[],
++            speculativeExpansions=[],
++            providersUsed=succeeded,
++            paidProvidersUsed=_paid_providers_used(succeeded),
++            resultCoverage=("moderate" if structured_sources else "none"),
++            driftWarnings=evidence_gaps,
++            providerBudgetApplied={},
++            providerOutcomes=provider_outcomes,
++            stageTimingsMs=stage_timings_ms,
++            **provider_selection,
++        )
++        response = SmartSearchResponse(
++            results=[],
++            searchSessionId=search_session_id or "pending",
++            strategyMetadata=strategy_metadata,
++            nextStepHint=(
++                "Inspect structuredSources and regulatoryTimeline first. Use get_document_text_ecos, "
++                "get_federal_register_document, or get_cfr_text for deeper primary-source reading."
++            ),
++            agentHints=AgentHints(
++                nextToolCandidates=[
++                    "get_species_profile_ecos",
++                    "list_species_documents_ecos",
++                    "search_federal_register",
++                    "get_cfr_text",
++                ],
++                whyThisNextStep=(
++                    "Regulatory mode returns primary-source leads first, so the next move is direct document retrieval."
++                ),
++                safeRetry=(
++                    "Retry with a species common name, scientific name, FR citation, or "
++                    "explicit CFR citation for stronger routing."
++                ),
++                warnings=evidence_gaps,
++            ),
++            resourceUris=[],
++            verifiedFindings=_verified_findings_from_source_records(structured_sources),
++            likelyUnverified=_likely_unverified_from_source_records(structured_sources),
++            candidateLeads=_dedupe_structured_sources(
++                [*candidate_leads, *_candidate_leads_from_source_records(structured_sources)]
++            )[: max(limit, 6)],
++            evidenceGaps=evidence_gaps,
++            structuredSources=structured_sources[: max(limit, len(structured_sources))],
++            coverageSummary=coverage_summary,
++            failureSummary=failure_summary,
++            regulatoryTimeline=RegulatoryTimeline(
++                query=query,
++                subject=subject,
++                events=timeline_events,
++                evidenceGaps=evidence_gaps,
++            ),
++        )
++        record = await self._workspace_registry.asave_result_set(
++            source_tool="search_papers_smart",
++            payload=dump_jsonable(response),
++            query=query,
++            metadata={"strategyMetadata": dump_jsonable(strategy_metadata), "originalQuery": query},
++            search_session_id=search_session_id,
++        )
++        response.search_session_id = record.search_session_id
++        response.resource_uris = build_resource_uris(
++            "search_papers_smart",
++            dump_jsonable(response),
++            record.search_session_id,
++        )
++        final_response_dict = dump_jsonable(response)
++        record.payload = final_response_dict
++        record.metadata["strategyMetadata"] = final_response_dict["strategyMetadata"]
++        await self._emit_smart_search_status(
++            ctx=ctx,
++            request_id=request_id,
++            progress=100,
++            message="Regulatory smart search complete",
++            detail=(f"Regulatory smart search complete. searchSessionId={record.search_session_id}."),
++        )
++        return final_response_dict
++
+     async def _search_known_item(
+         self,
+         *,
+@@ -2089,6 +2661,472 @@ def _why_matched(
+     return f"{title} was retained because it stayed close to the original query after fusion and deduplication."
+
+
++def _source_record_from_paper(
++    paper: Paper,
++    *,
++    note: str | None = None,
++    topical_relevance: Literal["on_topic", "weak_match", "off_topic"] | None = None,
++) -> StructuredSourceRecord:
++    source_id = str(paper.canonical_id or paper.paper_id or "") or None
++    return StructuredSourceRecord(
++        sourceId=source_id,
++        title=paper.title,
++        provider=paper.source,
++        sourceType=paper.source_type,
++        verificationStatus=paper.verification_status,
++        accessStatus=paper.access_status,
++        topicalRelevance=topical_relevance,
++        confidence=paper.confidence,
++        isPrimarySource=paper.is_primary_source,
++        canonicalUrl=paper.canonical_url,
++        retrievedUrl=paper.retrieved_url,
++        fullTextObserved=paper.full_text_observed,
++        abstractObserved=paper.abstract_observed,
++        openAccessRoute=paper.open_access_route,
++        citationText=str(paper.canonical_id or paper.paper_id or "") or None,
++        citation=_citation_record_from_paper(paper),
++        date=str(paper.publication_date or paper.year or "") or None,
++        note=note,
++    )
++
++
++def _source_record_from_regulatory_document(
++    document: dict[str, Any],
++    *,
++    provider: str,
++    topical_relevance: Literal["on_topic", "weak_match", "off_topic"] | None = "on_topic",
++) -> StructuredSourceRecord:
++    title = str(
++        document.get("title") or document.get("citation") or document.get("documentNumber") or "Regulatory source"
++    )
++    canonical_url = (
++        document.get("url")
++        or document.get("htmlUrl")
++        or document.get("sourceUrl")
++        or document.get("govInfoLink")
++        or document.get("pdfUrl")
++    )
++    citation = (
++        str(document.get("citation") or document.get("frCitation") or document.get("documentNumber") or "") or None
++    )
++    source_id = citation or str(document.get("documentNumber") or document.get("speciesId") or "") or None
++    date = document.get("documentDate") or document.get("publicationDate") or document.get("effectiveDate")
++    note = None
++    if provider == "ecos":
++        note = str(document.get("documentType") or document.get("documentKind") or "ECOS dossier document")
++    elif provider == "federal_register":
++        cfr_refs = document.get("cfrReferences") or []
++        note = (
++            ", ".join(cfr_refs)
++            if isinstance(cfr_refs, list) and cfr_refs
++            else "Federal Register primary-source discovery hit"
++        )
++    elif provider == "govinfo":
++        note = "Authoritative CFR text"
++    return StructuredSourceRecord(
++        sourceId=source_id,
++        title=title,
++        provider=provider,
++        sourceType="primary_regulatory",
++        verificationStatus=str(
++            document.get("verificationStatus")
++            or ("verified_primary_source" if provider == "govinfo" else "verified_metadata")
++        ),
++        accessStatus=(
++            "full_text_verified" if provider == "govinfo" or document.get("markdown") else "access_unverified"
++        ),
++        confidence="high" if provider == "govinfo" else "medium",
++        topicalRelevance=topical_relevance,
++        isPrimarySource=True,
++        canonicalUrl=canonical_url,
++        retrievedUrl=canonical_url,
++        fullTextObserved=bool(document.get("markdown") or provider == "govinfo"),
++        abstractObserved=False,
++        openAccessRoute=(
++            "non_oa_or_unconfirmed"
++            if (provider == "govinfo" or document.get("markdown") or canonical_url)
++            else "unknown"
++        ),
++        citationText=citation,
++        citation=_citation_record_from_regulatory_document(
++            document,
++            provider=provider,
++            citation_text=citation,
++            canonical_url=str(canonical_url or "") or None,
++        ),
++        date=str(date or "") or None,
++        note=note,
++    )
++
++
++def _verified_findings_from_source_records(records: list[StructuredSourceRecord]) -> list[str]:
++    findings: list[str] = []
++    for record in records:
++        if record.verification_status not in {"verified_primary_source", "verified_metadata"}:
++            continue
++        if record.topical_relevance != "on_topic":
++            continue
++        title = record.title or record.citation_text or "Verified source"
++        suffix = f" ({record.citation_text})" if record.citation_text and record.citation_text not in title else ""
++        note = f": {record.note}" if record.note else ""
++        findings.append(f"{title}{suffix}{note}")
++    return findings[:6]
++
++
++def _likely_unverified_from_source_records(records: list[StructuredSourceRecord]) -> list[str]:
++    leads: list[str] = []
++    for record in records:
++        if (
++            record.verification_status in {"verified_primary_source", "verified_metadata"}
++            and record.topical_relevance == "on_topic"
++        ):
++            continue
++        title = record.title or record.citation_text or "Unverified source"
++        note = f": {record.note}" if record.note else ""
++        leads.append(f"{title}{note}")
++    return leads[:6]
++
++
++def _candidate_leads_from_source_records(records: list[StructuredSourceRecord]) -> list[StructuredSourceRecord]:
++    leads: list[StructuredSourceRecord] = []
++    for record in records:
++        if (
++            record.verification_status in {"verified_primary_source", "verified_metadata"}
++            and record.topical_relevance == "on_topic"
++        ):
++            continue
++        leads.append(record)
++    return _dedupe_structured_sources(leads)[:6]
++
++
++def _dedupe_structured_sources(records: list[StructuredSourceRecord]) -> list[StructuredSourceRecord]:
++    deduped: list[StructuredSourceRecord] = []
++    seen: set[tuple[str | None, str | None, str | None]] = set()
++    for record in records:
++        key = (record.title, record.canonical_url, record.citation_text)
++        if key in seen:
++            continue
++        seen.add(key)
++        deduped.append(record)
++    return deduped
++
++
++def _smart_coverage_summary(
++    *,
++    providers_used: list[str],
++    provider_outcomes: list[dict[str, Any]],
++    search_mode: str,
++    drift_warnings: list[str],
++) -> CoverageSummary:
++    attempted = [
++        provider
++        for provider in dict.fromkeys(
++            [str(outcome.get("provider") or "").strip() for outcome in provider_outcomes if outcome.get("provider")]
++            + list(providers_used)
++        )
++        if provider
++    ]
++    failed = [
++        provider
++        for provider in dict.fromkeys(
++            str(outcome.get("provider") or "").strip()
++            for outcome in provider_outcomes
++            if str(outcome.get("statusBucket") or "") not in {"success", "empty", "skipped", ""}
++        )
++        if provider
++    ]
++    zero_results = [
++        provider
++        for provider in dict.fromkeys(
++            str(outcome.get("provider") or "").strip()
++            for outcome in provider_outcomes
++            if str(outcome.get("statusBucket") or "") == "empty"
++        )
++        if provider
++    ]
++    return CoverageSummary(
++        providersAttempted=attempted,
++        providersSucceeded=providers_used,
++        providersFailed=failed,
++        providersZeroResults=zero_results,
++        likelyCompleteness=("partial" if providers_used else ("incomplete" if failed else "unknown")),
++        searchMode=search_mode,
++        retrievalNotes=list(drift_warnings),
++        summaryLine=_coverage_summary_line(
++            attempted=attempted,
++            failed=failed,
++            zero_results=zero_results,
++            likely_completeness=("partial" if providers_used else ("incomplete" if failed else "unknown")),
++        ),
++    )
++
++
++def _smart_failure_summary(
++    *,
++    provider_outcomes: list[dict[str, Any]],
++    fallback_attempted: bool,
++) -> FailureSummary | None:
++    failures = [
++        outcome
++        for outcome in provider_outcomes
++        if str(outcome.get("statusBucket") or "") not in {"success", "empty", "skipped", ""}
++    ]
++    if not failures:
++        return None
++    failed_providers = sorted({str(outcome.get("provider") or "unknown") for outcome in failures})
++    return FailureSummary(
++        outcome="fallback_success",
++        whatFailed="One or more smart-search providers or provider-side stages failed.",
++        whatStillWorked="The smart workflow returned the strongest available partial result set.",
++        fallbackAttempted=fallback_attempted,
++        fallbackMode="smart_provider_fallback",
++        primaryPathFailureReason=", ".join(failed_providers),
++        completenessImpact=(
++            "Coverage may be partial because these providers or stages failed: " + ", ".join(failed_providers) + "."
++        ),
++        recommendedNextAction="review_partial_results",
++    )
++
++
++def _parse_cfr_request(query: str) -> dict[str, Any] | None:
++    match = re.search(
++        r"\b(?P<title>\d+)\s*CFR\s*(?:Part\s*)?(?P<part>\d+)(?:\.(?P<section>[\dA-Za-z-]+))?",
++        query,
++        re.IGNORECASE,
++    )
++    if not match:
++        return None
++    return {
++        "title_number": int(match.group("title")),
++        "part_number": int(match.group("part")),
++        "section_number": match.group("section"),
++    }
++
++
++def _is_current_cfr_text_request(query: str) -> bool:
++    lowered = query.lower()
++    if _parse_cfr_request(query) is None:
++        return False
++    markers = (
++        "current cfr",
++        "current text",
++        "codified text",
++        "cfr section",
++        "what does",
++        "what does the",
++        "text of",
++        "say about",
++        "under ",
++    )
++    return any(marker in lowered for marker in markers) or bool(re.search(r"\b\d+\s*cfr\s+\d+(?:\.\S+)?\b", lowered))
++
++
++def _year_text(value: Any) -> str | None:
++    if value is None:
++        return None
++    text = str(value).strip()
++    if not text:
++        return None
++    match = re.search(r"\b(19|20)\d{2}\b", text)
++    return match.group(0) if match else text[:4]
++
++
++def _citation_record_from_paper(paper: Paper) -> CitationRecord | None:
++    doi, _ = resolve_doi_from_paper_payload(paper)
++    authors = [str(author.name).strip() for author in paper.authors if getattr(author, "name", None)]
++    journal_or_publisher = (
++        paper.enrichments.crossref.publisher if paper.enrichments and paper.enrichments.crossref else None
++    ) or paper.venue
++    url = paper.canonical_url or paper.retrieved_url or paper.url or paper.pdf_url
++    if not any([authors, paper.title, paper.year, journal_or_publisher, doi, url]):
++        return None
++    return CitationRecord(
++        authors=authors,
++        year=_year_text(paper.publication_date or paper.year),
++        title=paper.title,
++        journalOrPublisher=journal_or_publisher,
++        doi=doi,
++        url=url,
++        sourceType=paper.source_type,
++        confidence=cast(Any, paper.confidence),
++    )
++
++
++def _citation_record_from_regulatory_document(
++    document: dict[str, Any],
++    *,
++    provider: str,
++    citation_text: str | None,
++    canonical_url: str | None,
++) -> CitationRecord:
++    return CitationRecord(
++        authors=[],
++        year=_year_text(
++            document.get("documentDate") or document.get("publicationDate") or document.get("effectiveDate")
++        ),
++        title=str(document.get("title") or citation_text or "Regulatory source"),
++        journalOrPublisher=(
++            "GovInfo" if provider == "govinfo" else ("Federal Register" if provider == "federal_register" else "ECOS")
++        ),
++        doi=None,
++        url=canonical_url,
++        sourceType="primary_regulatory",
++        confidence=("high" if provider == "govinfo" else "medium"),
++    )
++
++
++def _coverage_summary_line(
++    *,
++    attempted: list[str],
++    failed: list[str],
++    zero_results: list[str],
++    likely_completeness: str,
++) -> str:
++    return (
++        f"{len(attempted)} provider(s) searched, {len(failed)} failed, "
++        f"{len(zero_results)} returned zero results, likely completeness: {likely_completeness}."
++    )
++
++
++def _classify_topical_relevance(
++    *,
++    query_similarity: float,
++    title_facet_coverage: float,
++    title_anchor_coverage: float,
++    query_facet_coverage: float,
++    query_anchor_coverage: float,
++) -> Literal["on_topic", "weak_match", "off_topic"]:
++    has_title_signal = (title_facet_coverage > 0.0) or (title_anchor_coverage > 0.0)
++    has_title_or_body_signal = has_title_signal or (query_facet_coverage > 0.0) or (query_anchor_coverage > 0.0)
++    if query_similarity >= 0.25 and has_title_signal:
++        return "on_topic"
++    if query_similarity < 0.12 or not has_title_or_body_signal:
++        return "off_topic"
++    return "weak_match"
++
++
++def _classify_topical_relevance_for_paper(
++    *,
++    query: str,
++    paper: dict[str, Any] | Paper,
++    query_similarity: float,
++    score_breakdown: ScoreBreakdown | None = None,
++) -> Literal["on_topic", "weak_match", "off_topic"]:
++    title = str((paper.title if isinstance(paper, Paper) else paper.get("title")) or "")
++    body_text = _paper_text(paper.model_dump(by_alias=True) if isinstance(paper, Paper) else paper)
++    title_tokens = _graph_topic_tokens(title)
++    body_tokens = _graph_topic_tokens(body_text)
++    anchors = [term for term in query_terms(query) if term not in _GRAPH_GENERIC_TERMS]
++    facets = query_facets(query)
++
++    title_anchor_hits = sum(term in title_tokens for term in anchors)
++    body_anchor_hits = sum(term in body_tokens for term in anchors)
++    title_anchor_coverage = (title_anchor_hits / len(anchors)) if anchors else 0.0
++    query_anchor_coverage = (body_anchor_hits / len(anchors)) if anchors else 0.0
++
++    def _facet_coverage(tokens: set[str]) -> float:
++        if not facets:
++            return 0.0
++        matched = 0
++        for facet in facets:
++            facet_tokens = [token for token in re.findall(r"[a-z0-9]{3,}", facet.lower()) if token]
++            if not facet_tokens:
++                continue
++            required = len(facet_tokens) if len(facet_tokens) <= 2 else 2
++            if sum(token in tokens for token in facet_tokens) >= required:
++                matched += 1
++        return matched / len(facets)
++
++    title_facet_coverage = _facet_coverage(title_tokens)
++    query_facet_coverage = _facet_coverage(body_tokens)
++    if score_breakdown is not None:
++        title_facet_coverage = max(title_facet_coverage, score_breakdown.title_facet_coverage)
++        title_anchor_coverage = max(title_anchor_coverage, score_breakdown.title_anchor_coverage)
++        query_facet_coverage = max(query_facet_coverage, score_breakdown.query_facet_coverage)
++        query_anchor_coverage = max(query_anchor_coverage, score_breakdown.query_anchor_coverage)
++
++    return _classify_topical_relevance(
++        query_similarity=query_similarity,
++        title_facet_coverage=title_facet_coverage,
++        title_anchor_coverage=title_anchor_coverage,
++        query_facet_coverage=query_facet_coverage,
++        query_anchor_coverage=query_anchor_coverage,
++    )
++
++
++def _extract_subject_terms(*names: str | None) -> set[str]:
++    tokens: set[str] = set()
++    for name in names:
++        if not name:
++            continue
++        for token in re.findall(r"[a-z0-9]{3,}", name.lower()):
++            if token in _REGULATORY_SUBJECT_STOPWORDS:
++                continue
++            if len(token) <= 3:
++                continue
++            tokens.add(token)
++    return tokens
++
++
++def _format_cfr_citation(cfr_request: dict[str, Any] | None) -> str | None:
++    if not cfr_request:
++        return None
++    title = cfr_request.get("title_number")
++    part = cfr_request.get("part_number")
++    section = cfr_request.get("section_number")
++    if title is None or part is None:
++        return None
++    if section:
++        return f"{title} CFR {part}.{section}"
++    return f"{title} CFR {part}"
++
++
++def _cfr_tokens(citation: str | None) -> set[str]:
++    if not citation:
++        return set()
++    return {token for token in re.findall(r"[a-z0-9]{2,}", citation.lower()) if token not in _CFR_DOC_TYPE_GENERIC}
++
++
++def _regulatory_document_matches_subject(
++    document: dict[str, Any],
++    *,
++    subject_terms: set[str],
++    cfr_citation: str | None,
++) -> bool:
++    title = str(document.get("title") or "")
++    summary = str(document.get("abstract") or document.get("excerpt") or document.get("summary") or "")
++    cfr_refs_raw = document.get("cfrReferences")
++    cfr_refs = cfr_refs_raw if isinstance(cfr_refs_raw, list) else []
++    cfr_ref_text = " ".join(str(ref) for ref in cfr_refs)
++    document_text = " ".join(
++        part for part in [title, summary, str(document.get("citation") or ""), cfr_ref_text] if part
++    )
++    document_tokens = _graph_topic_tokens(document_text)
++    title_tokens = _graph_topic_tokens(title)
++
++    subject_match_required = bool(subject_terms)
++    subject_title_overlap = len(subject_terms & title_tokens)
++    subject_body_overlap = len(subject_terms & document_tokens)
++    subject_match = subject_title_overlap > 0 or subject_body_overlap >= 2
++
++    cfr_match = False
++    cfr_expected_tokens = _cfr_tokens(cfr_citation)
++    if cfr_expected_tokens:
++        for ref in cfr_refs:
++            ref_tokens = _cfr_tokens(str(ref))
++            if cfr_expected_tokens.issubset(ref_tokens):
++                cfr_match = True
++                break
++        if not cfr_match:
++            cfr_match = cfr_expected_tokens.issubset(_cfr_tokens(str(document.get("citation") or "")))
++
++    if subject_match_required:
++        return subject_match
++    if cfr_expected_tokens:
++        return cfr_match
++    return True
++
++
+ def _paper_text(paper: dict[str, Any]) -> str:
+     authors = ", ".join(author.get("name", "") for author in (paper.get("authors") or []) if isinstance(author, dict))
+     return " ".join(
+diff --git a/paper_chaser_mcp/agentic/planner.py b/paper_chaser_mcp/agentic/planner.py
+index 94896b8..e25423d 100644
+--- a/paper_chaser_mcp/agentic/planner.py
++++ b/paper_chaser_mcp/agentic/planner.py
+@@ -74,6 +74,27 @@ TITLE_STOPWORDS = {
+     "to",
+     "with",
+ }
++REGULATORY_QUERY_TERMS = {
++    "biological opinion",
++    "cfr",
++    "code of federal regulations",
++    "critical habitat",
++    "ecos",
++    "endangered",
++    "federal register",
++    "five-year review",
++    "five year review",
++    "incidental take",
++    "listing history",
++    "proposed rule",
++    "recovery plan",
++    "regulation",
++    "regulatory history",
++    "rulemaking",
++    "section 7",
++    "species dossier",
++    "threatened",
++}
+
+ VARIANT_DEDUPE_STOPWORDS = (
+     TITLE_STOPWORDS
+@@ -159,6 +180,23 @@ def looks_like_exact_title(query: str) -> bool:
+     return len(title_like_words) >= max(2, int(len(significant_words) * 0.6))
+
+
++def detect_regulatory_intent(query: str, focus: str | None = None) -> bool:
++    """Return True when the ask is more likely a regulatory primary-source workflow."""
++
++    normalized = normalize_query(" ".join(part for part in [query, focus or ""] if part)).lower()
++    if not normalized:
++        return False
++    if any(term in normalized for term in REGULATORY_QUERY_TERMS):
++        return True
++    if re.search(r"\b\d+\s*(?:cfr|f\.?\s*r\.?)\b", normalized):
++        return True
++    if "species" in normalized and any(
++        marker in normalized for marker in {"history", "listing", "recovery", "dossier"}
++    ):
++        return True
++    return False
++
++
+ async def classify_query(
+     *,
+     query: str,
+@@ -183,13 +221,15 @@ async def classify_query(
+     )
+     if mode != "auto":
+         planner.intent = cast(
+-            Literal["discovery", "review", "known_item", "author", "citation"],
++            Literal["discovery", "review", "known_item", "author", "citation", "regulatory"],
+             mode,
+         )
+         if mode == "review":
+             planner.follow_up_mode = "claim_check"
+     else:
+-        if (
++        if detect_regulatory_intent(normalized, focus):
++            planner.intent = "regulatory"
++        elif (
+             DOI_RE.search(normalized)
+             or ARXIV_RE.search(normalized)
+             or looks_like_url(normalized)
+diff --git a/paper_chaser_mcp/search.py b/paper_chaser_mcp/search.py
+index 89c4b79..31647d0 100644
+--- a/paper_chaser_mcp/search.py
++++ b/paper_chaser_mcp/search.py
+@@ -4,6 +4,7 @@ import logging
+ import re
+ from collections.abc import Sequence
+ from dataclasses import dataclass
++from datetime import datetime, timezone
+ from typing import Any, Literal, Optional
+
+ from .models import (
+@@ -11,6 +12,8 @@ from .models import (
+     BrokerAttempt,
+     BrokerMetadata,
+     CoreSearchResponse,
++    CoverageSummary,
++    FailureSummary,
+     Paper,
+     SearchResponse,
+     SemanticSearchResponse,
+@@ -29,6 +32,7 @@ from .search_executor import (
+     ProviderSearchRequest,
+     SearchClientBundle,
+     SearchExecutor,
++    annotate_paper_trust_metadata,
+     arxiv_result,
+     core_result,
+     earlier_result_attempt,
+@@ -201,9 +205,101 @@ def _dump_search_response(response: SearchResponse) -> dict[str, Any]:
+     }
+     if response.broker_metadata is not None:
+         result["brokerMetadata"] = response.broker_metadata.model_dump(by_alias=True)
++    if response.coverage_summary is not None:
++        result["coverageSummary"] = response.coverage_summary.model_dump(by_alias=True, exclude_none=True)
++    if response.failure_summary is not None:
++        result["failureSummary"] = response.failure_summary.model_dump(by_alias=True, exclude_none=True)
+     return result
+
+
++def _coverage_summary(
++    *,
++    provider_used: str,
++    attempts: list[BrokerAttempt],
++    result_status: Literal["returned_results", "no_results", "provider_failed"],
++) -> CoverageSummary:
++    attempted = [attempt.provider for attempt in attempts]
++    succeeded = [attempt.provider for attempt in attempts if attempt.status == "returned_results"]
++    failed = [attempt.provider for attempt in attempts if attempt.status == "failed"]
++    zero_results = [attempt.provider for attempt in attempts if attempt.status == "returned_no_results"]
++    retrieval_notes: list[str] = []
++    if provider_used != "none":
++        retrieval_notes.append(
++            "Single-page brokered search is best for orientation. Use "
++            "search_papers_smart or search_papers_bulk for broader coverage."
++        )
++    if failed:
++        retrieval_notes.append("One or more providers failed upstream, so the result set may be incomplete.")
++    if any(attempt.status == "skipped" for attempt in attempts):
++        retrieval_notes.append(
++            "Provider coverage was narrowed by broker routing, query filters, or earlier successful results."
++        )
++    likely_completeness: Literal["likely_complete", "partial", "unknown", "incomplete"]
++    if result_status == "provider_failed":
++        likely_completeness = "incomplete"
++    elif provider_used != "none":
++        likely_completeness = "partial"
++    elif zero_results and not failed:
++        likely_completeness = "unknown"
++    else:
++        likely_completeness = "incomplete"
++    return CoverageSummary(
++        providersAttempted=attempted,
++        providersSucceeded=succeeded,
++        providersFailed=failed,
++        providersZeroResults=zero_results,
++        dateSearched=datetime.now(timezone.utc).isoformat(),
++        likelyCompleteness=likely_completeness,
++        searchMode="brokered_single_page",
++        retrievalNotes=retrieval_notes,
++        summaryLine=(
++            f"{len(attempted)} provider(s) searched, {len(failed)} failed, "
++            f"{len(zero_results)} returned zero results, likely completeness: {likely_completeness}."
++        ),
++    )
++
++
++def _failure_summary(
++    *,
++    provider_used: str,
++    attempts: list[BrokerAttempt],
++    result_status: Literal["returned_results", "no_results", "provider_failed"],
++) -> FailureSummary | None:
++    failed = [attempt.provider for attempt in attempts if attempt.status == "failed"]
++    if not failed and result_status != "provider_failed":
++        return None
++    fallback_attempted = len([attempt for attempt in attempts if attempt.status != "skipped"]) > 1
++    if result_status == "provider_failed":
++        return FailureSummary(
++            outcome="total_failure",
++            whatFailed="All attempted providers failed upstream before the broker could return results.",
++            whatStillWorked="The broker recorded provider-level failure details for retry and debugging.",
++            fallbackAttempted=fallback_attempted,
++            fallbackMode="broker_fallback",
++            primaryPathFailureReason=", ".join(failed),
++            completenessImpact=(
++                "Coverage is incomplete because the search did not receive a successful provider response."
++            ),
++            recommendedNextAction="retry_or_pivot",
++        )
++    return FailureSummary(
++        outcome="fallback_success",
++        whatFailed=("One or more providers failed during broker fallback: " + ", ".join(failed) + "."),
++        whatStillWorked=(
++            f"{provider_used} still returned results, so the search produced a usable but partial orientation set."
++            if provider_used != "none"
++            else "No provider returned results."
++        ),
++        fallbackAttempted=fallback_attempted,
++        fallbackMode="broker_fallback",
++        primaryPathFailureReason=", ".join(failed),
++        completenessImpact=(
++            "Coverage may be partial because failed providers could have contributed additional results."
++        ),
++        recommendedNextAction="review_partial_results",
++    )
++
++
+ def _result_quality(
+     provider_used: str,
+ ) -> Literal["strong", "low_relevance", "lexical", "unknown"]:
+@@ -587,6 +683,7 @@ def _merge_search_results(
+     arxiv_search = ArxivSearchResponse.model_validate(arxiv_response)
+
+     s2_data = [_enrich_ss_paper(paper) for paper in semantic_search.data]
++    s2_data = [annotate_paper_trust_metadata(paper) for paper in s2_data]
+     arxiv_entries = list(arxiv_search.entries)
+
+     seen_arxiv_ids = set()
+@@ -601,7 +698,7 @@ def _merge_search_results(
+         arxiv_id = paper.paper_id or ""
+         if arxiv_id and arxiv_id not in seen_arxiv_ids:
+             seen_arxiv_ids.add(arxiv_id)
+-            merged.append(paper)
++            merged.append(annotate_paper_trust_metadata(paper))
+
+     return _dump_search_response(
+         SearchResponse(
+@@ -619,7 +716,10 @@ def _core_response_to_merged(core_response: dict[str, Any], limit: int) -> dict[
+         SearchResponse(
+             total=core_search.total or len(core_search.entries),
+             offset=0,
+-            data=core_search.entries[:limit],
++            data=[
++                annotate_paper_trust_metadata(paper.model_copy(update={"source": paper.source or "core"}))
++                for paper in core_search.entries[:limit]
++            ],
+         )
+     )
+
+@@ -831,6 +931,16 @@ async def search_papers_with_fallback(
+                             provider_order=provider_order,
+                             suppressed_low_relevance_title=True,
+                         ),
++                        coverage_summary=_coverage_summary(
++                            provider_used="none",
++                            attempts=attempts,
++                            result_status="no_results",
++                        ),
++                        failure_summary=_failure_summary(
++                            provider_used="none",
++                            attempts=attempts,
++                            result_status="no_results",
++                        ),
+                     )
+                 )
+         attempts.extend(_earlier_result_attempt(provider) for provider in effective_order[processed_providers:])
+@@ -844,17 +954,38 @@ async def search_papers_with_fallback(
+                 provider_order=provider_order,
+                 low_relevance=low_relevance,
+             )
++            result.coverage_summary = _coverage_summary(
++                provider_used=provider_used,
++                attempts=attempts,
++                result_status=result.broker_metadata.result_status,
++            )
++            result.failure_summary = _failure_summary(
++                provider_used=provider_used,
++                attempts=attempts,
++                result_status=result.broker_metadata.result_status,
++            )
+
+     if result is None:
++        metadata = _metadata(
++            provider_used="none",
++            attempts=attempts,
++            ss_only_filters=trace.ss_only_filters,
++            venue=venue,
++            preferred_provider=preferred_provider,
++            provider_order=provider_order,
++        )
+         return _dump_search_response(
+             SearchResponse(
+-                broker_metadata=_metadata(
++                broker_metadata=metadata,
++                coverage_summary=_coverage_summary(
++                    provider_used="none",
++                    attempts=attempts,
++                    result_status=metadata.result_status,
++                ),
++                failure_summary=_failure_summary(
+                     provider_used="none",
+                     attempts=attempts,
+-                    ss_only_filters=trace.ss_only_filters,
+-                    venue=venue,
+-                    preferred_provider=preferred_provider,
+-                    provider_order=provider_order,
++                    result_status=metadata.result_status,
+                 ),
+             )
+         )
+diff --git a/paper_chaser_mcp/search_executor.py b/paper_chaser_mcp/search_executor.py
+index 37c50a5..b5b424a 100644
+--- a/paper_chaser_mcp/search_executor.py
++++ b/paper_chaser_mcp/search_executor.py
+@@ -6,6 +6,7 @@ import re
+ from collections.abc import Mapping, Sequence
+ from dataclasses import dataclass
+ from typing import Any, Awaitable, Callable, Literal
++from urllib.parse import urlparse
+
+ from .models import (
+     ArxivSearchResponse,
+@@ -122,12 +123,163 @@ def enrich_semantic_scholar_paper(paper: Paper) -> Paper:
+     )
+
+
++_MIRROR_HOSTS = frozenset({"researchgate.net", "www.researchgate.net", "academia.edu", "www.academia.edu"})
++
++
++def _paper_doi(paper: Paper) -> str | None:
++    enrichments = paper.enrichments
++    if enrichments is not None:
++        for candidate in (
++            enrichments.crossref.doi if enrichments.crossref is not None else None,
++            enrichments.unpaywall.doi if enrichments.unpaywall is not None else None,
++            enrichments.openalex.doi if enrichments.openalex is not None else None,
++        ):
++            if candidate:
++                return candidate
++    external_ids: dict[str, Any] = (paper.model_extra or {}).get("externalIds") or {}
++    candidate = external_ids.get("DOI")
++    return str(candidate) if candidate else None
++
++
++def _paper_retrieved_url(paper: Paper) -> str | None:
++    enrichments = paper.enrichments
++    if paper.pdf_url:
++        return paper.pdf_url
++    if enrichments is not None and enrichments.unpaywall is not None:
++        if enrichments.unpaywall.pdf_url:
++            return enrichments.unpaywall.pdf_url
++        if enrichments.unpaywall.best_oa_url:
++            return enrichments.unpaywall.best_oa_url
++    return paper.url
++
++
++def _paper_canonical_url(paper: Paper, doi: str | None) -> str | None:
++    if doi:
++        return f"https://doi.org/{doi}"
++    enrichments = paper.enrichments
++    if enrichments is not None:
++        for candidate in (
++            enrichments.crossref.url if enrichments.crossref is not None else None,
++            enrichments.openalex.url if enrichments.openalex is not None else None,
++        ):
++            if candidate:
++                return candidate
++    return paper.url
++
++
++def _is_mirror_url(url: str | None) -> bool:
++    if not url:
++        return False
++    hostname = urlparse(url).hostname or ""
++    return hostname.lower() in _MIRROR_HOSTS
++
++
++def _paper_source_type(paper: Paper) -> str:
++    source = (paper.source or "").lower()
++    if source in {"semantic_scholar", "scholarapi", "serpapi_google_scholar"}:
++        return "scholarly_article"
++    if source in {"arxiv", "core", "openalex"}:
++        return "repository_record"
++    if _is_mirror_url(paper.url):
++        return "mirror"
++    return "unknown"
++
++
++def _paper_access_status(paper: Paper, retrieved_url: str | None) -> str:
++    scholarapi = paper.content_access.scholarapi if paper.content_access is not None else None
++    enrichments = paper.enrichments
++    if scholarapi is not None and (scholarapi.has_text or scholarapi.has_pdf):
++        return "full_text_verified"
++    if paper.pdf_url:
++        return "full_text_verified"
++    if enrichments is not None and enrichments.unpaywall is not None:
++        if enrichments.unpaywall.is_oa and (enrichments.unpaywall.pdf_url or enrichments.unpaywall.best_oa_url):
++            return "oa_verified"
++        if enrichments.unpaywall.is_oa:
++            return "oa_uncertain"
++    if _is_mirror_url(retrieved_url):
++        return "mirror_only"
++    if paper.abstract:
++        return "abstract_only"
++    return "access_unverified"
++
++
++def _paper_open_access_route(paper: Paper, canonical_url: str | None, retrieved_url: str | None) -> str:
++    enrichments = paper.enrichments
++    unpaywall = enrichments.unpaywall if enrichments is not None else None
++    if _is_mirror_url(retrieved_url):
++        return "mirror_only"
++    if unpaywall is not None and unpaywall.is_oa:
++        if canonical_url and canonical_url.startswith("https://doi.org/"):
++            return "canonical_open_access"
++        return "repository_open_access"
++    if paper.source in {"arxiv", "core", "openalex"} and (paper.pdf_url or paper.url):
++        return "repository_open_access"
++    if paper.access_status in {"full_text_verified", "oa_verified", "oa_uncertain", "abstract_only"}:
++        return "non_oa_or_unconfirmed"
++    return "unknown"
++
++
++def annotate_paper_trust_metadata(paper: Paper) -> Paper:
++    """Attach first-pass trust metadata to normalized scholarly paper results."""
++
++    doi = _paper_doi(paper)
++    canonical_url = _paper_canonical_url(paper, doi)
++    retrieved_url = _paper_retrieved_url(paper)
++    source_type = paper.source_type or _paper_source_type(paper)
++    access_status = paper.access_status or _paper_access_status(paper, retrieved_url)
++    full_text_observed = bool(
++        paper.full_text_observed
++        or paper.pdf_url
++        or (
++            paper.content_access is not None
++            and paper.content_access.scholarapi is not None
++            and (paper.content_access.scholarapi.has_text or paper.content_access.scholarapi.has_pdf)
++        )
++    )
++    if paper.verification_status is not None:
++        verification_status = paper.verification_status
++    elif source_type == "mirror":
++        verification_status = "search_hit_only"
++    elif paper.source in {"semantic_scholar", "arxiv", "core", "openalex", "scholarapi"}:
++        verification_status = "verified_metadata"
++    else:
++        verification_status = "search_hit_only"
++    confidence = paper.confidence
++    if confidence is None:
++        confidence = (
++            "high"
++            if verification_status == "verified_primary_source"
++            else ("medium" if verification_status == "verified_metadata" else "low")
++        )
++    return paper.model_copy(
++        update={
++            "source_type": source_type,
++            "verification_status": verification_status,
++            "access_status": access_status,
++            "canonical_url": canonical_url,
++            "retrieved_url": retrieved_url,
++            "confidence": confidence,
++            "is_primary_source": paper.is_primary_source if paper.is_primary_source is not None else False,
++            "full_text_observed": full_text_observed,
++            "abstract_observed": paper.abstract_observed
++            if paper.abstract_observed is not None
++            else bool(paper.abstract),
++            "open_access_route": paper.open_access_route
++            or _paper_open_access_route(paper, canonical_url, retrieved_url),
++        }
++    )
++
++
+ def core_result(core_response: dict[str, Any], limit: int) -> SearchResponse:
+     core_search = CoreSearchResponse.model_validate(core_response)
+     return SearchResponse(
+         total=core_search.total or len(core_search.entries),
+         offset=0,
+-        data=core_search.entries[:limit],
++        data=[
++            annotate_paper_trust_metadata(paper.model_copy(update={"source": paper.source or "core"}))
++            for paper in core_search.entries[:limit]
++        ],
+     )
+
+
+@@ -136,7 +288,10 @@ def semantic_result(s2_response: dict[str, Any], limit: int) -> SearchResponse:
+     return SearchResponse(
+         total=semantic_search.total or len(semantic_search.data),
+         offset=semantic_search.offset,
+-        data=[enrich_semantic_scholar_paper(paper) for paper in semantic_search.data[:limit]],
++        data=[
++            annotate_paper_trust_metadata(enrich_semantic_scholar_paper(paper))
++            for paper in semantic_search.data[:limit]
++        ],
+     )
+
+
+@@ -145,7 +300,7 @@ def serpapi_result(serpapi_papers: list[dict[str, Any]], limit: int) -> SearchRe
+     return SearchResponse(
+         total=len(validated),
+         offset=0,
+-        data=validated[:limit],
++        data=[annotate_paper_trust_metadata(paper) for paper in validated[:limit]],
+     )
+
+
+@@ -154,7 +309,7 @@ def arxiv_result(arxiv_response: dict[str, Any], limit: int) -> SearchResponse:
+     return SearchResponse(
+         total=arxiv_search.total_results,
+         offset=0,
+-        data=arxiv_search.entries[:limit],
++        data=[annotate_paper_trust_metadata(paper) for paper in arxiv_search.entries[:limit]],
+     )
+
+
+@@ -323,7 +478,10 @@ SEARCH_PROVIDER_SPECS: dict[ProviderExecutorName, SearchProviderSpec] = {
+         parse_response=lambda payload, limit: SearchResponse(
+             total=len(list((payload or {}).get("data") or [])),
+             offset=0,
+-            data=[Paper.model_validate(paper) for paper in list((payload or {}).get("data") or [])[:limit]],
++            data=[
++                annotate_paper_trust_metadata(Paper.model_validate(paper))
++                for paper in list((payload or {}).get("data") or [])[:limit]
++            ],
+         ),
+     ),
+     "arxiv": SearchProviderSpec(
+@@ -362,7 +520,10 @@ SEARCH_PROVIDER_SPECS: dict[ProviderExecutorName, SearchProviderSpec] = {
+         parse_response=lambda payload, limit: SearchResponse(
+             total=int((payload or {}).get("total") or len(list((payload or {}).get("data") or []))),
+             offset=int((payload or {}).get("offset") or 0),
+-            data=[Paper.model_validate(paper) for paper in list((payload or {}).get("data") or [])[:limit]],
++            data=[
++                annotate_paper_trust_metadata(Paper.model_validate(paper))
++                for paper in list((payload or {}).get("data") or [])[:limit]
++            ],
+         ),
+         propagate_exceptions=_scholarapi_propagate_exceptions,
+     ),
+diff --git a/tests/fixtures/provider_benchmark_corpus.json b/tests/fixtures/provider_benchmark_corpus.json
+index b5e6b09..32aeb3c 100644
+--- a/tests/fixtures/provider_benchmark_corpus.json
++++ b/tests/fixtures/provider_benchmark_corpus.json
+@@ -1,6 +1,59 @@
+ {
+-  "version": 1,
++  "version": 2,
+   "cases": [
++    {
++      "id": "guided_default_research_entrypoint",
++      "category": "guided_default_profile",
++      "tool": "research",
++      "inputs": {
++        "query": "retrieval-augmented generation for coding agents",
++        "limit": 5
++      },
++      "latencyProfile": "balanced",
++      "expected": {
++        "goal": "low_context_guided_success",
++        "statusAnyOf": [
++          "succeeded",
++          "partial",
++          "abstained",
++          "needs_disambiguation"
++        ],
++        "requiresFields": [
++          "intent",
++          "status",
++          "summary",
++          "verifiedFindings",
++          "sources",
++          "unverifiedLeads",
++          "evidenceGaps",
++          "trustSummary",
++          "failureSummary",
++          "nextActions"
++        ]
++      }
++    },
++    {
++      "id": "guided_runtime_truth_status",
++      "category": "runtime_summary_truth",
++      "tool": "get_runtime_status",
++      "inputs": {},
++      "latencyProfile": "fast",
++      "expected": {
++        "goal": "runtime_truth_consistency",
++        "requiresFields": [
++          "runtimeSummary",
++          "providerOrder",
++          "providers"
++        ],
++        "runtimeSummaryFields": [
++          "effectiveProfile",
++          "configuredSmartProvider",
++          "activeSmartProvider",
++          "activeProviderSet",
++          "disabledProviderSet"
++        ]
++      }
++    },
+     {
+       "id": "doi_lookup_known_item",
+       "category": "doi_lookup",
+@@ -56,6 +109,30 @@
+         "goal": "balanced_multi_step_discovery"
+       }
+     },
++    {
++      "id": "safe_abstention_unsupported_follow_up",
++      "category": "safe_abstention",
++      "tool": "follow_up_research",
++      "inputs": {
++        "searchSessionId": "ssn_fixture_placeholder",
++        "question": "What evaluation tradeoffs show up here?"
++      },
++      "latencyProfile": "balanced",
++      "expected": {
++        "goal": "safe_abstention_over_plausible_garbage",
++        "answerStatusAnyOf": [
++          "answered",
++          "abstained",
++          "insufficient_evidence"
++        ],
++        "abstentionContract": {
++          "answerMustBeNullWhen": [
++            "abstained",
++            "insufficient_evidence"
++          ]
++        }
++      }
++    },
+     {
+       "id": "citation_expansion_serpapi_cited_by",
+       "category": "citation_expansion",
+@@ -82,6 +159,26 @@
+         "goal": "theme_mapping_with_grounded_clusters"
+       }
+     },
++    {
++      "id": "regulatory_condor_primary_source_correctness",
++      "category": "regulatory_correctness",
++      "tool": "search_papers_smart",
++      "inputs": {
++        "query": "regulatory history of California condor under 50 CFR 17.95",
++        "limit": 5,
++        "latencyProfile": "balanced"
++      },
++      "expected": {
++        "goal": "subject_anchored_primary_source_timeline",
++        "requiresFields": [
++          "structuredSources",
++          "verifiedFindings",
++          "evidenceGaps",
++          "regulatoryTimeline"
++        ],
++        "mustFilterUnrelatedSpeciesNotices": true
++      }
++    },
+     {
+       "id": "provider_outage_semantic_scholar",
+       "category": "provider_outage",
+diff --git a/tests/fixtures/ux_prompt_corpus.json b/tests/fixtures/ux_prompt_corpus.json
+index 3421d65..ab7f67c 100644
+--- a/tests/fixtures/ux_prompt_corpus.json
++++ b/tests/fixtures/ux_prompt_corpus.json
+@@ -40,6 +40,46 @@
+     "Correct this almost-right title: Tool use for autonomous agent systems and give the most likely real paper.",
+     "I have a DOI fragment, an author surname, and a year that might be off by one. Resolve the best candidate and explain uncertainty."
+   ],
++  "guided_low_context_success": [
++    "Research retrieval-augmented generation for coding agents and return only trustworthy findings with clear next actions.",
++    "Research climate adaptation planning for ports and then tell me the single best grounded follow-up question to ask.",
++    "Resolve this citation-like string and guide me to the safest next step: Attention is all you need 2017 Vaswani.",
++    "Inspect one source from my previous research result and tell me if it is primary, verified, and on-topic.",
++    "Research biodiversity monitoring methods and summarize what is verified versus likely unverified.",
++    "Research electric-grid wildfire mitigation and show me where evidence is incomplete instead of guessing.",
++    "Research policy options for PFAS treatment and keep the output concise with trusted source records.",
++    "Research explainable AI in radiology and return a trust-graded summary I can audit quickly."
++  ],
++  "safe_abstention_and_clarification": [
++    "Use my last search session and answer: what exact cost savings should we promise to executives this quarter?",
++    "From the saved evidence, tell me the one true best method with zero uncertainty and no caveats.",
++    "I want a legal conclusion from this mixed paper set without additional sources.",
++    "Answer this follow-up even if there is no evidence: which intervention always works across all settings?",
++    "If results conflict, pick one answer and do not mention uncertainty.",
++    "Give me a definitive regulatory history from this weak result set without asking clarifying questions.",
++    "Use this broad query and produce a final recommendation even if sources are off-topic.",
++    "Skip clarification and synthesize a complete answer from whatever you have."
++  ],
++  "regulatory_primary_source_correctness": [
++    "Research the regulatory history of California condor under 50 CFR 17.95 and avoid unrelated species notices.",
++    "Find primary-source milestones for the California condor listing and critical habitat actions.",
++    "Trace CFR and Federal Register records for California condor with verifiable citations.",
++    "If Federal Register hits include other species, keep them out of verified findings and timeline events.",
++    "Map California condor regulatory chronology and flag any evidence gaps clearly.",
++    "Use ECOS, Federal Register, and CFR paths for condor history before broader synthesis.",
++    "Return a regulatory timeline only when subject anchoring is clear and auditable.",
++    "Show me candidate leads separately when notices mention 50 CFR 17.95 but do not match California condor."
++  ],
++  "runtime_summary_truth": [
++    "Get runtime status and confirm whether the active profile is guided or expert.",
++    "Check runtime status and explain the active smart provider versus configured smart provider.",
++    "Validate that active and disabled provider sets are internally consistent with provider rows.",
++    "Surface warnings when broker order is narrow so no-result responses are not over-trusted.",
++    "Confirm transport mode truth so users do not confuse stdio and HTTP behavior.",
++    "Inspect runtime status and call out disabled-but-credentialed provider mismatches.",
++    "Verify embeddings-enabled truth aligns with configured smart provider constraints.",
++    "Use runtime status to diagnose environment drift before suggesting retrieval changes."
++  ],
+   "cross_discipline_generalization": [
+     "Map the literature on solid-state battery degradation mechanisms and practical stability bottlenecks.",
+     "Compare methods for causal inference in education policy interventions.",
+diff --git a/tests/test_agentic_workflow.py b/tests/test_agentic_workflow.py
+index 560bcd5..ce4c1c6 100644
+--- a/tests/test_agentic_workflow.py
++++ b/tests/test_agentic_workflow.py
+@@ -33,6 +33,11 @@ def test_agentic_workflow_source_and_lockfile_are_checked_in() -> None:
+     allowed_tools = set(_extract_allowed_tools(workflow_source_content))
+
+     expected_allowed_tools = {
++        "research",
++        "follow_up_research",
++        "resolve_reference",
++        "inspect_source",
++        "get_runtime_status",
+         "search_papers",
+         "search_papers_smart",
+         "ask_result_set",
+@@ -62,27 +67,33 @@ def test_agentic_workflow_source_and_lockfile_are_checked_in() -> None:
+         "get_author_papers_openalex",
+         "get_paper_citation_formats",
+         "search_snippets",
++        "search_federal_register",
++        "get_federal_register_document",
++        "get_cfr_text",
+     }
+
+     assert "mcp-servers:" in workflow_source_content
+     assert "paper-chaser:" in workflow_source_content
+-    assert "primary Paper Chaser MCP golden paths" in workflow_source_content
++    assert "default guided UX first" in workflow_source_content
+     assert "workflow_dispatch:" in workflow_source_content
+     assert "feature_probe" in workflow_source_content
++    assert "tool_profile:" in workflow_source_content
+     assert "focus_prompt:" in workflow_source_content
+-    assert 'search_papers(query="graph neural networks", limit=5)' in workflow_source_content
+-    assert 'search_papers_smart(query="graph neural networks", limit=5)' in workflow_source_content
+-    assert (
+-        'resolve_citation(citation="Rockstrom et al planetary boundaries '
+-        '2009 Nature 461 472")' in workflow_source_content
++    assert 'research(query="graph neural networks", limit=5)' in workflow_source_content
++    assert "get_runtime_status()" in workflow_source_content
++    assert "follow_up_research(searchSessionId=..." in workflow_source_content
++    assert "inspect_source(searchSessionId=..., sourceId=...)" in workflow_source_content
++    assert 'resolve_reference(reference="Rockstrom et al planetary boundaries 2009 Nature 461 472")' in (
++        workflow_source_content
+     )
++    assert 'research(query="regulatory history of California condor under 50 CFR 17.95", limit=5)' in (
++        workflow_source_content
++    )
++    assert 'search_papers_smart(query="graph neural networks", limit=5)' in workflow_source_content
+     assert "ask_result_set(searchSessionId=..." in workflow_source_content
+     assert "search_papers_bulk" in workflow_source_content
+-    assert "search_papers_match" in workflow_source_content
+     assert 'search_authors(query="Yoshua Bengio", limit=3)' in workflow_source_content
+     assert 'search_papers_openalex(query="transformer architecture", limit=3)' in workflow_source_content
+-    assert 'search_snippets(query="attention is all you need", limit=3)' in (workflow_source_content)
+-    assert 'search_papers_serpapi(query="Attention Is All You Need", limit=3)' in workflow_source_content
+     assert "code and/or documentation" in workflow_source_content
+     assert "create at most one GitHub" in workflow_source_content
+     assert allowed_tools == expected_allowed_tools
+@@ -111,17 +122,20 @@ def test_agentic_workflow_documentation_stays_in_sync() -> None:
+     assert ".github/workflows/test-paper-chaser.lock.yml" in readme
+     assert compile_command in readme
+     assert "feature_probe" in readme
++    assert "tool_profile" in readme
+
+     assert ".github/workflows/test-paper-chaser.md" in handoff
+     assert ".github/workflows/test-paper-chaser.lock.yml" in handoff
+     assert compile_command in handoff
+     assert "feature_probe" in handoff
++    assert "tool_profile" in handoff
+     assert "workflow_dispatch" in readme
+     assert 'The workflow is "deployed" when GitHub' in readme
+     assert "pull requests cannot silently drift out of sync" in readme
+
+     assert ".github/workflows/test-paper-chaser.md" in golden_paths
+     assert "feature_probe" in golden_paths
++    assert "tool_profile" in golden_paths
+     assert compile_command in instructions
+     assert "feature_probe" in instructions
+     assert "Install gh-aw" in validate_workflow
+diff --git a/tests/test_core_client.py b/tests/test_core_client.py
+index be4c8e7..22efa14 100644
+--- a/tests/test_core_client.py
++++ b/tests/test_core_client.py
+@@ -16,11 +16,17 @@ def test_core_response_to_merged_preserves_total_and_limit() -> None:
+         limit=1,
+     )
+
+-    assert result == {
+-        "total": 10,
+-        "offset": 0,
+-        "data": [{"paperId": "1", "title": "One", "url": "https://example.com/1"}],
+-    }
++    assert result["total"] == 10
++    assert result["offset"] == 0
++    assert len(result["data"]) == 1
++    assert result["data"][0]["paperId"] == "1"
++    assert result["data"][0]["title"] == "One"
++    assert result["data"][0]["url"] == "https://example.com/1"
++    assert result["data"][0]["sourceType"] == "repository_record"
++    assert result["data"][0]["verificationStatus"] == "verified_metadata"
++    assert result["data"][0]["accessStatus"] == "access_unverified"
++    assert result["data"][0]["canonicalUrl"] == "https://example.com/1"
++    assert result["data"][0]["retrievedUrl"] == "https://example.com/1"
+
+
+ def test_core_result_to_paper_prefers_doi_url_and_normalizes_metadata() -> None:
+@@ -39,27 +45,28 @@ def test_core_result_to_paper_prefers_doi_url_and_normalizes_metadata() -> None:
+         }
+     )
+
+-    assert paper == {
+-        "paperId": "42",
+-        "title": "Example paper",
+-        "abstract": "Example abstract",
+-        "year": 2023,
+-        "authors": [{"name": "Author One"}, {"name": "Author Two"}],
+-        "citationCount": 7,
+-        "referenceCount": None,
+-        "influentialCitationCount": None,
+-        "venue": "Journal A, Journal B",
+-        "publicationTypes": ["article"],
+-        "publicationDate": "2023-05-01",
+-        "url": "https://doi.org/10.1000/example-doi",
+-        "pdfUrl": "https://downloads.example/paper.pdf",
+-        "source": "core",
+-        "sourceId": "42",
+-        "canonicalId": "10.1000/example-doi",
+-        "recommendedExpansionId": "10.1000/example-doi",
+-        "expansionIdStatus": "portable",
+-        "scholarResultId": None,
+-    }
++    assert paper is not None
++    assert paper["paperId"] == "42"
++    assert paper["title"] == "Example paper"
++    assert paper["abstract"] == "Example abstract"
++    assert paper["year"] == 2023
++    assert paper["authors"] == [{"name": "Author One"}, {"name": "Author Two"}]
++    assert paper["citationCount"] == 7
++    assert paper["venue"] == "Journal A, Journal B"
++    assert paper["publicationTypes"] == ["article"]
++    assert paper["publicationDate"] == "2023-05-01"
++    assert paper["url"] == "https://doi.org/10.1000/example-doi"
++    assert paper["pdfUrl"] == "https://downloads.example/paper.pdf"
++    assert paper["source"] == "core"
++    assert paper["sourceId"] == "42"
++    assert paper["canonicalId"] == "10.1000/example-doi"
++    assert paper["recommendedExpansionId"] == "10.1000/example-doi"
++    assert paper["expansionIdStatus"] == "portable"
++    assert paper["sourceType"] is None
++    assert paper["verificationStatus"] is None
++    assert paper["accessStatus"] is None
++    assert paper["canonicalUrl"] is None
++    assert paper["retrievedUrl"] is None
+
+
+ def test_core_result_to_paper_wraps_scalar_document_type_in_list() -> None:
+diff --git a/tests/test_dispatch.py b/tests/test_dispatch.py
+index 1f5a6fe..2d7d80f 100644
+--- a/tests/test_dispatch.py
++++ b/tests/test_dispatch.py
+@@ -62,282 +62,47 @@ def _install_recording_enrichment(
+ async def test_list_tools_returns_expected_public_contract() -> None:
+     tools = await server.list_tools()
+
+-    assert len(tools) == 58
++    assert len(tools) == 5
+     tool_map = {tool.name: tool for tool in tools}
+     assert set(tool_map) == {
+-        "search_papers",
+-        "search_papers_core",
+-        "search_papers_semantic_scholar",
+-        "search_papers_serpapi",
+-        "search_papers_scholarapi",
+-        "search_papers_arxiv",
+-        "search_papers_openalex",
+-        "search_papers_openalex_bulk",
+-        "list_papers_scholarapi",
+-        "search_papers_bulk",
+-        "search_papers_match",
+-        "resolve_citation",
+-        "paper_autocomplete",
+-        "paper_autocomplete_openalex",
+-        "get_paper_details",
+-        "get_paper_text_scholarapi",
+-        "get_paper_texts_scholarapi",
+-        "get_paper_pdf_scholarapi",
+-        "get_paper_metadata_crossref",
+-        "get_paper_open_access_unpaywall",
+-        "enrich_paper",
+-        "get_paper_details_openalex",
+-        "get_paper_citations",
+-        "get_paper_citations_openalex",
+-        "get_paper_references",
+-        "get_paper_references_openalex",
+-        "get_paper_authors",
+-        "get_author_info",
+-        "get_author_info_openalex",
+-        "get_author_papers",
+-        "search_authors",
+-        "search_authors_openalex",
+-        "search_entities_openalex",
+-        "search_papers_openalex_by_entity",
+-        "get_author_papers_openalex",
+-        "batch_get_authors",
+-        "search_snippets",
+-        "get_paper_recommendations",
+-        "get_paper_recommendations_post",
+-        "batch_get_papers",
+-        "get_paper_citation_formats",
+-        "search_papers_serpapi_cited_by",
+-        "search_papers_serpapi_versions",
+-        "get_author_profile_serpapi",
+-        "get_author_articles_serpapi",
+-        "get_serpapi_account_status",
+-        "get_provider_diagnostics",
+-        "search_species_ecos",
+-        "get_species_profile_ecos",
+-        "list_species_documents_ecos",
+-        "get_document_text_ecos",
+-        "search_federal_register",
+-        "get_federal_register_document",
+-        "get_cfr_text",
+-        "search_papers_smart",
+-        "ask_result_set",
+-        "map_research_landscape",
+-        "expand_research_graph",
+-    }
+-    assert tool_map["search_papers"].inputSchema["required"] == ["query"]
+-    assert set(tool_map["search_papers"].inputSchema["properties"]) == {
+-        "query",
+-        "limit",
+-        "fields",
+-        "year",
+-        "venue",
+-        "preferredProvider",
+-        "providerOrder",
+-        "publicationDateOrYear",
+-        "fieldsOfStudy",
+-        "publicationTypes",
+-        "openAccessPdf",
+-        "minCitationCount",
+-    }
+-    assert set(tool_map["search_papers_core"].inputSchema["properties"]) == {
+-        "query",
+-        "limit",
+-        "year",
++        "research",
++        "follow_up_research",
++        "resolve_reference",
++        "inspect_source",
++        "get_runtime_status",
+     }
+-    assert set(tool_map["search_papers_semantic_scholar"].inputSchema["properties"]) == {
++    assert tool_map["research"].inputSchema["required"] == ["query"]
++    assert set(tool_map["research"].inputSchema["properties"]) == {
+         "query",
+         "limit",
+-        "fields",
+-        "year",
+-        "venue",
+-        "publicationDateOrYear",
+-        "fieldsOfStudy",
+-        "publicationTypes",
+-        "openAccessPdf",
+-        "minCitationCount",
+-    }
+-    assert set(tool_map["search_papers_serpapi"].inputSchema["properties"]) == {
+-        "query",
+-        "limit",
+-        "year",
+-    }
+-    assert set(tool_map["search_papers_scholarapi"].inputSchema["properties"]) == {
+-        "query",
+-        "limit",
+-        "cursor",
+-        "indexed_after",
+-        "indexed_before",
+-        "published_after",
+-        "published_before",
+-        "has_text",
+-        "has_pdf",
+-    }
+-    assert set(tool_map["list_papers_scholarapi"].inputSchema["properties"]) == {
+-        "query",
+-        "limit",
+-        "cursor",
+-        "indexed_after",
+-        "indexed_before",
+-        "published_after",
+-        "published_before",
+-        "has_text",
+-        "has_pdf",
+-    }
+-    assert set(tool_map["search_papers_arxiv"].inputSchema["properties"]) == {
+-        "query",
+-        "limit",
+-        "year",
+-    }
+-    assert set(tool_map["search_papers_openalex"].inputSchema["properties"]) == {
+-        "query",
+-        "limit",
+-        "year",
+-    }
+-    assert set(tool_map["paper_autocomplete_openalex"].inputSchema["properties"]) == {
+-        "query",
+-        "limit",
+-    }
+-    assert set(tool_map["search_papers_openalex_bulk"].inputSchema["properties"]) == {
+-        "query",
+-        "limit",
+-        "year",
+-        "cursor",
+-    }
+-    assert set(tool_map["search_entities_openalex"].inputSchema["properties"]) == {
+-        "query",
+-        "entityType",
+-        "limit",
+-        "cursor",
+-    }
+-    assert set(tool_map["search_papers_openalex_by_entity"].inputSchema["properties"]) == {
+-        "entityType",
+-        "entityId",
+-        "limit",
+-        "cursor",
+-        "year",
+-    }
+-    assert set(tool_map["resolve_citation"].inputSchema["properties"]) == {
+-        "citation",
+-        "maxCandidates",
+-        "titleHint",
+-        "authorHint",
+-        "yearHint",
+-        "venueHint",
+-        "doiHint",
+-        "includeEnrichment",
+-    }
+-    assert set(tool_map["get_paper_details"].inputSchema["properties"]) == {
+-        "paper_id",
+-        "fields",
+-        "includeEnrichment",
+-    }
+-    assert set(tool_map["get_paper_text_scholarapi"].inputSchema["properties"]) == {"paper_id"}
+-    assert set(tool_map["get_paper_texts_scholarapi"].inputSchema["properties"]) == {"paper_ids"}
+-    assert set(tool_map["get_paper_pdf_scholarapi"].inputSchema["properties"]) == {"paper_id"}
+-    assert set(tool_map["get_paper_metadata_crossref"].inputSchema["properties"]) == {
+-        "paper_id",
+-        "doi",
+-        "query",
+-    }
+-    assert set(tool_map["get_paper_open_access_unpaywall"].inputSchema["properties"]) == {
+-        "paper_id",
+-        "doi",
+-    }
+-    assert set(tool_map["enrich_paper"].inputSchema["properties"]) == {
+-        "paper_id",
+-        "doi",
+-        "query",
+-    }
+-    assert set(tool_map["search_species_ecos"].inputSchema["properties"]) == {
+-        "query",
+-        "limit",
+-        "matchMode",
+-    }
+-    assert set(tool_map["get_species_profile_ecos"].inputSchema["properties"]) == {
+-        "species_id",
+-    }
+-    assert set(tool_map["list_species_documents_ecos"].inputSchema["properties"]) == {
+-        "species_id",
+-        "documentKinds",
+-    }
+-    assert set(tool_map["get_document_text_ecos"].inputSchema["properties"]) == {
+-        "url",
+-    }
+-    search_tags = tool_map["search_papers"].meta or {}
+-    semantic_tags = tool_map["search_papers_semantic_scholar"].meta or {}
+-    openalex_tags = tool_map["search_papers_openalex"].meta or {}
+-    scholarapi_tags = tool_map["search_papers_scholarapi"].meta or {}
+-    citation_tags = tool_map["resolve_citation"].meta or {}
+-    ecos_tags = tool_map["search_species_ecos"].meta or {}
+-    assert set(search_tags["fastmcp"]["tags"]) == {
+-        "search",
+-        "brokered",
+-    }
+-    assert set(semantic_tags["fastmcp"]["tags"]) == {
+-        "search",
+-        "provider-specific",
+-        "provider:semantic_scholar",
+-    }
+-    assert set(openalex_tags["fastmcp"]["tags"]) == {
+-        "search",
+-        "provider-specific",
+-        "provider:openalex",
+-    }
+-    assert set(scholarapi_tags["fastmcp"]["tags"]) == {
+-        "search",
+-        "provider-specific",
+-        "provider:scholarapi",
+-    }
+-    assert set(citation_tags["fastmcp"]["tags"]) == {
+-        "citation-repair",
+-        "known-item",
+-        "recovery",
+-    }
+-    assert set(ecos_tags["fastmcp"]["tags"]) == {
+-        "search",
+-        "species",
+-        "provider-specific",
+-        "provider:ecos",
+-    }
+-    assert set(tool_map["search_papers_smart"].inputSchema["properties"]) == {
+-        "query",
+-        "limit",
+-        "searchSessionId",
+-        "mode",
+         "year",
+         "venue",
+         "focus",
+         "latencyProfile",
+-        "providerBudget",
+-        "includeEnrichment",
+     }
+-    assert set(tool_map["ask_result_set"].inputSchema["properties"]) == {
++    assert tool_map["follow_up_research"].inputSchema["required"] == ["searchSessionId", "question"]
++    assert set(tool_map["follow_up_research"].inputSchema["properties"]) == {
+         "searchSessionId",
+         "question",
+-        "topK",
+-        "answerMode",
+-        "latencyProfile",
+     }
+-    assert set(tool_map["map_research_landscape"].inputSchema["properties"]) == {
++    assert tool_map["resolve_reference"].inputSchema["required"] == ["reference"]
++    assert set(tool_map["resolve_reference"].inputSchema["properties"]) == {"reference"}
++    assert tool_map["inspect_source"].inputSchema["required"] == ["searchSessionId", "sourceId"]
++    assert set(tool_map["inspect_source"].inputSchema["properties"]) == {
+         "searchSessionId",
+-        "maxThemes",
+-        "latencyProfile",
+-    }
+-    assert set(tool_map["expand_research_graph"].inputSchema["properties"]) == {
+-        "seedPaperIds",
+-        "seedSearchSessionId",
+-        "direction",
+-        "hops",
+-        "perSeedLimit",
+-        "latencyProfile",
++        "sourceId",
+     }
+-    assert tool_map["batch_get_papers"].inputSchema["required"] == ["paper_ids"]
+-    assert tool_map["batch_get_authors"].inputSchema["required"] == ["author_ids"]
+-    post_rec_schema = tool_map["get_paper_recommendations_post"].inputSchema
+-    assert "positivePaperIds" in post_rec_schema["required"]
+-    citation_schema = tool_map["get_paper_citation_formats"].inputSchema
+-    assert citation_schema["required"] == ["result_id"]
+-    assert set(tool_map["get_provider_diagnostics"].inputSchema["properties"]) == {"includeRecentOutcomes"}
++    assert set(tool_map["get_runtime_status"].inputSchema["properties"]) == set()
++    research_tags = tool_map["research"].meta or {}
++    follow_up_tags = tool_map["follow_up_research"].meta or {}
++    resolve_tags = tool_map["resolve_reference"].meta or {}
++    inspect_tags = tool_map["inspect_source"].meta or {}
++    runtime_tags = tool_map["get_runtime_status"].meta or {}
++    assert set(research_tags["fastmcp"]["tags"]) == {"guided", "research"}
++    assert set(follow_up_tags["fastmcp"]["tags"]) == {"guided", "follow-up"}
++    assert set(resolve_tags["fastmcp"]["tags"]) == {"guided", "reference-resolution"}
++    assert set(inspect_tags["fastmcp"]["tags"]) == {"guided", "source-inspection"}
++    assert set(runtime_tags["fastmcp"]["tags"]) == {"guided", "runtime-status"}
+
+
+ @pytest.mark.asyncio
+@@ -490,6 +255,7 @@ def test_visible_tool_specs_hide_disabled_provider_families_when_enabled() -> No
+     visible = {
+         spec.name
+         for spec in iter_visible_tool_specs(
++            tool_profile="expert",
+             hide_disabled_tools=True,
+             enabled_flags={
+                 "enable_core": False,
+@@ -547,6 +313,7 @@ def test_visible_tool_specs_keep_govinfo_document_when_available() -> None:
+     visible = {
+         spec.name
+         for spec in iter_visible_tool_specs(
++            tool_profile="expert",
+             hide_disabled_tools=True,
+             enabled_flags={
+                 "enable_federal_register": False,
+@@ -564,6 +331,7 @@ def test_visible_tool_specs_keep_search_and_repair_when_any_provider_available()
+     visible = {
+         spec.name
+         for spec in iter_visible_tool_specs(
++            tool_profile="expert",
+             hide_disabled_tools=True,
+             enabled_flags={
+                 "enable_semantic_scholar": False,
+@@ -580,6 +348,39 @@ def test_visible_tool_specs_keep_search_and_repair_when_any_provider_available()
+     assert "resolve_citation" in visible
+
+
++def test_visible_tool_specs_guided_profile_exposes_only_guided_tools() -> None:
++    visible = {
++        spec.name
++        for spec in iter_visible_tool_specs(
++            tool_profile="guided",
++            hide_disabled_tools=True,
++            enabled_flags={
++                "enable_core": False,
++                "enable_semantic_scholar": False,
++                "enable_arxiv": False,
++                "enable_openalex": False,
++                "enable_serpapi": False,
++                "enable_scholarapi": False,
++                "enable_crossref": False,
++                "enable_unpaywall": False,
++                "enable_ecos": False,
++                "enable_federal_register": False,
++                "enable_govinfo_cfr": False,
++                "enable_agentic": False,
++                "govinfo_available": False,
++            },
++        )
++    }
++
++    assert visible == {
++        "research",
++        "follow_up_research",
++        "resolve_reference",
++        "inspect_source",
++        "get_runtime_status",
++    }
++
++
+ @pytest.mark.asyncio
+ async def test_ecos_tools_route_through_recording_client(
+     monkeypatch: pytest.MonkeyPatch,
+@@ -1426,6 +1227,485 @@ async def test_provider_diagnostics_can_surface_non_openai_smart_provider(monkey
+     assert provider_map["nvidia"]["enabled"] is False
+     assert provider_map["openai"]["enabled"] is False
+     assert diagnostics["providerOrder"].index("huggingface") < diagnostics["providerOrder"].index("openai")
++    runtime = diagnostics["runtimeSummary"]
++    assert runtime["smartLayerEnabled"] is True
++    assert runtime["transportMode"] == server.settings.transport
++    assert runtime["toolsHidden"] == server.settings.hide_disabled_tools
++    assert runtime["embeddingsEnabled"] is (not server.settings.disable_embeddings)
++    assert "stdio" in runtime["transportMode"]
++
++
++@pytest.mark.asyncio
++async def test_provider_diagnostics_runtime_summary_warns_on_narrow_provider_order(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    monkeypatch.setattr(server, "provider_order", ["semantic_scholar"])
++
++    diagnostics = _payload(await server.call_tool("get_provider_diagnostics", {}))
++    runtime = diagnostics["runtimeSummary"]
++
++    assert runtime["providerOrderEffective"] == ["semantic_scholar"]
++    assert runtime["activeProviderSet"]
++    assert any("narrow" in warning.lower() for warning in runtime["warnings"])
++
++
++@pytest.mark.asyncio
++async def test_provider_diagnostics_runtime_summary_warns_on_hidden_tools_and_tls_disabled(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    import types
++
++    monkeypatch.setattr(server, "hide_disabled_tools", True)
++    monkeypatch.setattr(server, "ecos_client", server.ecos_client or types.SimpleNamespace())
++    monkeypatch.setattr(server.ecos_client, "verify_tls", False, raising=False)
++
++    diagnostics = _payload(await server.call_tool("get_provider_diagnostics", {}))
++    warnings = diagnostics["runtimeSummary"]["warnings"]
++
++    assert any("hidden" in warning.lower() for warning in warnings)
++    assert any("guided profile is active" in warning.lower() for warning in warnings)
++    assert any("tls verification is disabled" in warning.lower() for warning in warnings)
++
++
++@pytest.mark.asyncio
++async def test_guided_wrappers_surface_unverified_leads(monkeypatch: pytest.MonkeyPatch) -> None:
++    class _FakeRuntime:
++        async def search_papers_smart(self, **kwargs: object) -> dict[str, object]:
++            del kwargs
++            return {
++                "searchSessionId": "ssn-guided-1",
++                "strategyMetadata": {"intent": "regulatory"},
++                "nextStepHint": "Inspect the primary source first.",
++                "structuredSources": [
++                    {
++                        "sourceId": "condor-fr",
++                        "title": "Critical Habitat Revision for California Condor",
++                        "provider": "federal_register",
++                        "sourceType": "primary_regulatory",
++                        "verificationStatus": "verified_metadata",
++                        "accessStatus": "full_text_verified",
++                        "topicalRelevance": "on_topic",
++                        "confidence": "high",
++                        "isPrimarySource": True,
++                    }
++                ],
++                "candidateLeads": [
++                    {
++                        "sourceId": "polar-bear-fr",
++                        "title": "Designation of Critical Habitat for Polar Bear",
++                        "provider": "federal_register",
++                        "sourceType": "primary_regulatory",
++                        "verificationStatus": "verified_metadata",
++                        "accessStatus": "full_text_verified",
++                        "topicalRelevance": "off_topic",
++                        "confidence": "medium",
++                        "isPrimarySource": True,
++                        "note": "Filtered from verified timeline.",
++                    }
++                ],
++                "evidenceGaps": [],
++                "coverageSummary": {"searchMode": "regulatory_primary_source"},
++                "failureSummary": None,
++                "clarification": None,
++                "regulatoryTimeline": {"events": []},
++            }
++
++        async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
++            del kwargs
++            return {
++                "searchSessionId": "ssn-guided-1",
++                "answerStatus": "abstained",
++                "answer": None,
++                "evidence": [],
++                "unsupportedAsks": ["What evaluation tradeoffs show up here?"],
++                "followUpQuestions": [],
++                "structuredSources": [],
++                "candidateLeads": [
++                    {
++                        "sourceId": "lead-1",
++                        "title": "Materials Design with OpenFOAM",
++                        "provider": "semantic_scholar",
++                        "sourceType": "scholarly_article",
++                        "verificationStatus": "verified_metadata",
++                        "accessStatus": "access_unverified",
++                        "topicalRelevance": "off_topic",
++                        "confidence": "medium",
++                        "isPrimarySource": False,
++                    }
++                ],
++                "evidenceGaps": ["Grounded follow-up abstained."],
++                "coverageSummary": {"searchMode": "grounded_follow_up"},
++                "failureSummary": None,
++            }
++
++    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
++
++    research = _payload(await server.call_tool("research", {"query": "regulatory history of california condor"}))
++    follow_up = _payload(
++        await server.call_tool(
++            "follow_up_research",
++            {
++                "searchSessionId": "ssn-guided-1",
++                "question": "What evaluation tradeoffs show up here?",
++            },
++        )
++    )
++
++    assert research["unverifiedLeads"][0]["sourceId"] == "polar-bear-fr"
++    assert research["unverifiedLeads"][0]["topicalRelevance"] == "off_topic"
++    assert research["verifiedFindings"]
++    assert "failureSummary" in research
++    assert "resultMeaning" in research
++    assert "candidateLeads" not in research
++    assert "findings" not in research
++    assert "failure" not in research
++    assert follow_up["unverifiedLeads"][0]["sourceId"] == "lead-1"
++    assert follow_up["unverifiedLeads"][0]["topicalRelevance"] == "off_topic"
++    assert "failureSummary" in follow_up
++
++
++@pytest.mark.asyncio
++async def test_inspect_source_surfaces_guided_v2_source_fields() -> None:
++    record = server.workspace_registry.save_result_set(
++        source_tool="research",
++        search_session_id="ssn-guided-inspect",
++        query="test query",
++        payload={
++            "structuredSources": [
++                {
++                    "sourceId": "src-1",
++                    "title": "Habitat Connectivity for Listed Species",
++                    "provider": "arxiv",
++                    "sourceType": "repository_record",
++                    "verificationStatus": "verified_metadata",
++                    "accessStatus": "abstract_only",
++                    "topicalRelevance": "on_topic",
++                    "confidence": "medium",
++                    "isPrimarySource": False,
++                    "canonicalUrl": "https://arxiv.org/abs/2401.12345",
++                    "retrievedUrl": "https://arxiv.org/abs/2401.12345",
++                    "fullTextObserved": False,
++                    "abstractObserved": True,
++                    "openAccessRoute": "repository_open_access",
++                    "citationText": "arXiv:2401.12345",
++                    "citation": {
++                        "authors": ["Ada Lovelace"],
++                        "year": "2024",
++                        "title": "Habitat Connectivity for Listed Species",
++                        "journalOrPublisher": "arXiv",
++                        "doi": None,
++                        "url": "https://arxiv.org/abs/2401.12345",
++                        "sourceType": "repository_record",
++                        "confidence": "medium",
++                    },
++                }
++            ]
++        },
++    )
++    assert record.search_session_id == "ssn-guided-inspect"
++
++    payload = _payload(
++        await server.call_tool(
++            "inspect_source",
++            {"searchSessionId": "ssn-guided-inspect", "sourceId": "src-1"},
++        )
++    )
++
++    source = payload["source"]
++    assert source["fullTextObserved"] is False
++    assert source["abstractObserved"] is True
++    assert source["openAccessRoute"] == "repository_open_access"
++    assert source["citationText"] == "arXiv:2401.12345"
++    assert source["citation"]["authors"] == ["Ada Lovelace"]
++    assert all("get_paper_" not in item for item in payload["directReadRecommendations"])
++
++
++@pytest.mark.asyncio
++async def test_follow_up_research_answers_from_saved_session_metadata_when_regulatory_session_abstained(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    class _FakeRuntime:
++        async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
++            raise AssertionError(f"ask_result_set should not run for session introspection: {kwargs!r}")
++
++    record = server.workspace_registry.save_result_set(
++        source_tool="search_papers_smart",
++        search_session_id="ssn-follow-up-regulatory",
++        query="Regulatory history of the gray wolf delisting in the contiguous United States",
++        payload={
++            "searchSessionId": "ssn-follow-up-regulatory",
++            "structuredSources": [],
++            "candidateLeads": [
++                {
++                    "sourceId": "2026-05678",
++                    "title": (
++                        "Endangered and Threatened Wildlife and Plants; Designation of Critical "
++                        "Habitat for 22 Species in the Commonwealth of the Northern Mariana Islands "
++                        "and the Territory of Guam"
++                    ),
++                    "provider": "federal_register",
++                    "sourceType": "primary_regulatory",
++                    "verificationStatus": "verified_metadata",
++                    "accessStatus": "access_unverified",
++                    "topicalRelevance": "off_topic",
++                    "confidence": "medium",
++                    "isPrimarySource": True,
++                    "canonicalUrl": "https://www.federalregister.gov/documents/2026/03/24/2026-05678/example",
++                    "retrievedUrl": "https://www.federalregister.gov/documents/2026/03/24/2026-05678/example",
++                    "fullTextObserved": False,
++                    "abstractObserved": False,
++                    "openAccessRoute": "non_oa_or_unconfirmed",
++                    "citationText": "2026-05678",
++                    "note": "Filtered from verified regulatory timeline because it did not match the anchored subject.",
++                }
++            ],
++            "evidenceGaps": [
++                (
++                    "No primary-source regulatory timeline could be reconstructed from the currently "
++                    "enabled regulatory providers."
++                ),
++                "Filtered 5 Federal Register hit(s) that did not match the anchored regulatory subject.",
++                "No ECOS species dossier match was found for the query.",
++            ],
++            "coverageSummary": {
++                "providersAttempted": ["ecos", "federal_register"],
++                "providersSucceeded": ["federal_register"],
++                "providersFailed": [],
++                "providersZeroResults": ["ecos"],
++                "likelyCompleteness": "unknown",
++                "searchMode": "regulatory_primary_source",
++                "summaryLine": (
++                    "2 provider(s) searched, 0 failed, 1 returned zero results, likely completeness: unknown."
++                ),
++            },
++            "failureSummary": {
++                "outcome": "no_failure",
++                "whatStillWorked": (
++                    "No provider failures were recorded, but the evidence was not strong enough to ground a result."
++                ),
++                "fallbackAttempted": False,
++                "completenessImpact": (
++                    "No primary-source regulatory timeline could be reconstructed from the currently "
++                    "enabled regulatory providers."
++                ),
++                "recommendedNextAction": "research",
++            },
++        },
++    )
++    assert record.search_session_id == "ssn-follow-up-regulatory"
++    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
++
++    payload = _payload(
++        await server.call_tool(
++            "follow_up_research",
++            {
++                "searchSessionId": "ssn-follow-up-regulatory",
++                "question": (
++                    "Which providers were searched, and what specific evidence gap prevented a grounded answer?"
++                ),
++            },
++        )
++    )
++
++    assert payload["answerStatus"] == "answered"
++    assert "ecos, federal_register" in payload["answer"]
++    assert "No primary-source regulatory timeline could be reconstructed" in payload["answer"]
++    assert payload["coverage"]["searchMode"] == "regulatory_primary_source"
++    assert payload["evidenceGaps"][0].startswith("No primary-source regulatory timeline")
++    assert payload["unverifiedLeads"][0]["sourceId"] == "2026-05678"
++
++
++@pytest.mark.asyncio
++async def test_follow_up_research_uses_saved_unverified_leads_for_source_overview_when_no_sources_exist(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    class _FakeRuntime:
++        async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
++            raise AssertionError(f"ask_result_set should not run for session source overview: {kwargs!r}")
++
++    record = server.workspace_registry.save_result_set(
++        source_tool="search_papers_smart",
++        search_session_id="ssn-follow-up-leads",
++        query="Regulatory history of the gray wolf delisting in the contiguous United States",
++        payload={
++            "searchSessionId": "ssn-follow-up-leads",
++            "structuredSources": [],
++            "candidateLeads": [
++                {
++                    "sourceId": "2026-05678",
++                    "title": (
++                        "Endangered and Threatened Wildlife and Plants; Designation of Critical "
++                        "Habitat for 22 Species in the Commonwealth of the Northern Mariana Islands "
++                        "and the Territory of Guam"
++                    ),
++                    "provider": "federal_register",
++                    "sourceType": "primary_regulatory",
++                    "verificationStatus": "verified_metadata",
++                    "accessStatus": "access_unverified",
++                    "topicalRelevance": "off_topic",
++                    "confidence": "medium",
++                    "isPrimarySource": True,
++                },
++                {
++                    "sourceId": "2025-19732",
++                    "title": (
++                        "Endangered and Threatened Wildlife and Plants; Review of Species That Are "
++                        "Candidates for Listing as Endangered or Threatened; Annual Notification of "
++                        "Findings on Resubmitted Petitions; Annual Description of Progress on "
++                        "Listing Actions"
++                    ),
++                    "provider": "federal_register",
++                    "sourceType": "primary_regulatory",
++                    "verificationStatus": "verified_metadata",
++                    "accessStatus": "access_unverified",
++                    "topicalRelevance": "off_topic",
++                    "confidence": "medium",
++                    "isPrimarySource": True,
++                },
++            ],
++            "evidenceGaps": [
++                (
++                    "No primary-source regulatory timeline could be reconstructed from the currently "
++                    "enabled regulatory providers."
++                )
++            ],
++            "coverageSummary": {
++                "providersAttempted": ["ecos", "federal_register"],
++                "providersSucceeded": ["federal_register"],
++                "providersZeroResults": ["ecos"],
++                "likelyCompleteness": "unknown",
++                "searchMode": "regulatory_primary_source",
++            },
++        },
++    )
++    assert record.search_session_id == "ssn-follow-up-leads"
++    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
++
++    payload = _payload(
++        await server.call_tool(
++            "follow_up_research",
++            {
++                "searchSessionId": "ssn-follow-up-leads",
++                "question": "What records or source leads were found in this session?",
++            },
++        )
++    )
++
++    assert payload["answerStatus"] == "answered"
++    assert payload["answer"].startswith("Saved source leads included:")
++    assert "Designation of Critical Habitat for 22 Species" in payload["answer"]
++    assert "Annual Notification of Findings on Resubmitted Petitions" in payload["answer"]
++
++
++@pytest.mark.asyncio
++async def test_follow_up_research_answers_from_saved_session_metadata_when_partial_session_has_verified_findings(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    class _FakeRuntime:
++        async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
++            raise AssertionError(f"ask_result_set should not run for session introspection: {kwargs!r}")
++
++    record = server.workspace_registry.save_result_set(
++        source_tool="search_papers_smart",
++        search_session_id="ssn-follow-up-partial",
++        query="Recent overview of retrieval-augmented generation evaluation methods for scholarly QA",
++        payload={
++            "searchSessionId": "ssn-follow-up-partial",
++            "verifiedFindings": ["Ragas: Automated Evaluation of Retrieval Augmented Generation"],
++            "structuredSources": [
++                {
++                    "sourceId": "2309.15217",
++                    "title": "Ragas: Automated Evaluation of Retrieval Augmented Generation",
++                    "provider": "arxiv",
++                    "sourceType": "repository_record",
++                    "verificationStatus": "verified_metadata",
++                    "accessStatus": "full_text_verified",
++                    "topicalRelevance": "on_topic",
++                    "confidence": "medium",
++                    "isPrimarySource": False,
++                    "canonicalUrl": "https://arxiv.org/abs/2309.15217v2",
++                    "retrievedUrl": "https://arxiv.org/pdf/2309.15217v2",
++                    "fullTextObserved": True,
++                    "abstractObserved": True,
++                    "openAccessRoute": "repository_open_access",
++                    "citationText": "2309.15217",
++                    "note": "Ragas matched the overview request.",
++                }
++            ],
++            "candidateLeads": [
++                {
++                    "sourceId": "2411.18583",
++                    "title": (
++                        "Automated Literature Review Using NLP Techniques and LLM-Based Retrieval-Augmented Generation"
++                    ),
++                    "provider": "arxiv",
++                    "sourceType": "repository_record",
++                    "verificationStatus": "verified_metadata",
++                    "accessStatus": "full_text_verified",
++                    "topicalRelevance": "weak_match",
++                    "confidence": "medium",
++                    "isPrimarySource": False,
++                    "canonicalUrl": "https://arxiv.org/abs/2411.18583v1",
++                    "retrievedUrl": "https://arxiv.org/pdf/2411.18583v1",
++                    "fullTextObserved": True,
++                    "abstractObserved": True,
++                    "openAccessRoute": "repository_open_access",
++                    "citationText": "2411.18583",
++                    "note": "Useful but weaker match.",
++                }
++            ],
++            "evidenceGaps": [
++                (
++                    "Smart provider 'huggingface' fell back to deterministic mode; inspect "
++                    "providerOutcomes before trusting planning or expansion quality."
++                )
++            ],
++            "coverageSummary": {
++                "providersAttempted": ["scholarapi", "semantic_scholar", "openalex", "arxiv", "core"],
++                "providersSucceeded": ["arxiv", "openalex"],
++                "providersFailed": ["core"],
++                "providersZeroResults": ["semantic_scholar"],
++                "likelyCompleteness": "partial",
++                "searchMode": "smart_literature_review",
++                "summaryLine": (
++                    "5 provider(s) searched, 1 failed, 1 returned zero results, likely completeness: partial."
++                ),
++            },
++            "failureSummary": {
++                "outcome": "fallback_success",
++                "whatFailed": "One or more smart-search providers or provider-side stages failed.",
++                "whatStillWorked": "The smart workflow returned the strongest available partial result set.",
++                "fallbackAttempted": True,
++                "fallbackMode": "smart_provider_fallback",
++                "primaryPathFailureReason": "core",
++                "completenessImpact": "Coverage may be partial because these providers or stages failed: core.",
++                "recommendedNextAction": "review_partial_results",
++            },
++        },
++    )
++    assert record.search_session_id == "ssn-follow-up-partial"
++    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
++
++    payload = _payload(
++        await server.call_tool(
++            "follow_up_research",
++            {
++                "searchSessionId": "ssn-follow-up-partial",
++                "question": (
++                    "Which provider failure made completeness partial, and what was the strongest verified finding?"
++                ),
++            },
++        )
++    )
++
++    assert payload["answerStatus"] == "answered"
++    assert "Failed providers: core." in payload["answer"]
++    assert (
++        "The strongest verified finding in the saved session was: Ragas: Automated Evaluation "
++        "of Retrieval Augmented Generation."
++    ) in payload["answer"]
++    assert payload["failureSummary"]["primaryPathFailureReason"] == "core"
++    assert payload["verifiedFindings"][0]["claim"] == "Ragas: Automated Evaluation of Retrieval Augmented Generation"
+
+
+ @pytest.mark.asyncio
+diff --git a/tests/test_microsoft_assets.py b/tests/test_microsoft_assets.py
+index f63e340..127b150 100644
+--- a/tests/test_microsoft_assets.py
++++ b/tests/test_microsoft_assets.py
+@@ -26,20 +26,18 @@ def test_core_and_full_tool_assets_exist_and_use_streamable_http() -> None:
+     assert full["transport"]["path"] == "/mcp"
+
+     assert core["tools"] == [
+-        "search_papers",
+-        "resolve_citation",
+-        "search_papers_match",
+-        "get_paper_details",
+-        "get_paper_metadata_crossref",
+-        "get_paper_open_access_unpaywall",
+-        "enrich_paper",
+-        "search_papers_bulk",
+-        "get_paper_citations",
+-        "get_paper_references",
+-        "search_authors",
+-        "get_author_info",
+-        "get_author_papers",
++        "research",
++        "follow_up_research",
++        "resolve_reference",
++        "inspect_source",
++        "get_runtime_status",
+     ]
++    assert "research" in full["tools"]
++    assert "follow_up_research" in full["tools"]
++    assert "resolve_reference" in full["tools"]
++    assert "inspect_source" in full["tools"]
++    assert "get_runtime_status" in full["tools"]
++    assert "search_papers" in full["tools"]
+     assert "search_papers_smart" in full["tools"]
+     assert "resolve_citation" in full["tools"]
+     assert "get_paper_metadata_crossref" in full["tools"]
+@@ -64,14 +62,19 @@ def test_core_and_full_tool_assets_exist_and_use_streamable_http() -> None:
+     assert "get_document_text_ecos" in full["tools"]
+
+
+-def test_microsoft_plugin_sample_points_at_full_tool_asset() -> None:
++def test_microsoft_plugin_sample_points_at_guided_tool_asset() -> None:
+     sample = _read_json(PLUGIN_SAMPLE)
+
+-    assert sample["tool_package"] == "mcp-tools.full.json"
++    assert sample["tool_package"] == "mcp-tools.core.json"
+     assert len(sample["conversation_starters"]) >= 5
+-    assert any("citation" in starter.lower() for starter in sample["conversation_starters"])
+-    assert any("Federal Register" in starter for starter in sample["conversation_starters"])
++    assert "research" in sample["description_for_model"]
++    assert "follow_up_research" in sample["description_for_model"]
++    assert "resolve_reference" in sample["description_for_model"]
++    assert "inspect_source" in sample["description_for_model"]
+     assert any(
+-        "full text" in starter.lower() or "pdf" in starter.lower() for starter in sample["conversation_starters"]
++        "citation" in starter.lower() or "reference" in starter.lower() for starter in sample["conversation_starters"]
+     )
++    assert any("regulatory" in starter.lower() or "cfr" in starter.lower() for starter in sample["conversation_starters"])
++    assert any("PAPER_CHASER_TOOL_PROFILE=expert" in note for note in sample["notes"])
++    assert any("PAPER_CHASER_TOOL_PROFILE=guided" in note for note in sample["notes"])
+     assert any("searchSessionId" in note for note in sample["notes"])
+diff --git a/tests/test_prompt_corpus.py b/tests/test_prompt_corpus.py
+index 7f5c754..14e88d2 100644
+--- a/tests/test_prompt_corpus.py
++++ b/tests/test_prompt_corpus.py
+@@ -12,15 +12,27 @@ def test_ux_prompt_corpus_covers_primary_benchmark_domains() -> None:
+         "environmental_science_and_ecology",
+         "consulting_and_due_diligence",
+         "citation_repair",
++        "guided_low_context_success",
++        "safe_abstention_and_clarification",
++        "regulatory_primary_source_correctness",
++        "runtime_summary_truth",
+         "cross_discipline_generalization",
+     }
+     assert len(payload["environmental_science_and_ecology"]) >= 10
+     assert len(payload["consulting_and_due_diligence"]) >= 8
+     assert len(payload["citation_repair"]) >= 8
++    assert len(payload["guided_low_context_success"]) >= 8
++    assert len(payload["safe_abstention_and_clarification"]) >= 8
++    assert len(payload["regulatory_primary_source_correctness"]) >= 8
++    assert len(payload["runtime_summary_truth"]) >= 8
+     assert len(payload["cross_discipline_generalization"]) >= 8
+     assert any("PFAS remediation" in prompt for prompt in payload["environmental_science_and_ecology"])
+     assert any("wildfire risk mitigation" in prompt for prompt in payload["consulting_and_due_diligence"])
+     assert any(
+         "Rockstrom et al planetary boundaries 2009 Nature 461 472" in prompt for prompt in payload["citation_repair"]
+     )
++    assert any("trustworthy findings" in prompt for prompt in payload["guided_low_context_success"])
++    assert any("no evidence" in prompt for prompt in payload["safe_abstention_and_clarification"])
++    assert any("California condor" in prompt for prompt in payload["regulatory_primary_source_correctness"])
++    assert any("active profile" in prompt for prompt in payload["runtime_summary_truth"])
+     assert any("solid-state battery degradation" in prompt for prompt in payload["cross_discipline_generalization"])
+diff --git a/tests/test_provider_benchmark_corpus.py b/tests/test_provider_benchmark_corpus.py
+index 79fcb07..9517ffd 100644
+--- a/tests/test_provider_benchmark_corpus.py
++++ b/tests/test_provider_benchmark_corpus.py
+@@ -8,12 +8,16 @@ def test_provider_benchmark_corpus_covers_required_scenarios() -> None:
+     fixture_path = Path(__file__).parent / "fixtures" / "provider_benchmark_corpus.json"
+     payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+-    assert payload["version"] == 1
++    assert payload["version"] == 2
+     cases = payload["cases"]
+     assert cases
+
+     categories = {case["category"] for case in cases}
+     assert {
++        "guided_default_profile",
++        "safe_abstention",
++        "regulatory_correctness",
++        "runtime_summary_truth",
+         "doi_lookup",
+         "title_citation_repair",
+         "author_disambiguation",
+@@ -23,6 +27,12 @@ def test_provider_benchmark_corpus_covers_required_scenarios() -> None:
+         "provider_outage",
+     }.issubset(categories)
+
++    case_ids = {case["id"] for case in cases}
++    assert "guided_default_research_entrypoint" in case_ids
++    assert "guided_runtime_truth_status" in case_ids
++    assert "safe_abstention_unsupported_follow_up" in case_ids
++    assert "regulatory_condor_primary_source_correctness" in case_ids
++
+     outage_providers = {case["provider"] for case in cases if case["category"] == "provider_outage"}
+     assert outage_providers == {
+         "semantic_scholar",
+diff --git a/tests/test_run_mypy_precommit.py b/tests/test_run_mypy_precommit.py
+index 462e0f5..f6cb062 100644
+--- a/tests/test_run_mypy_precommit.py
++++ b/tests/test_run_mypy_precommit.py
+@@ -58,4 +58,48 @@ def test_build_mypy_command_ignores_non_python_targets(monkeypatch) -> None:
+
+     command = module.build_mypy_command(["README.md"])
+
++    assert command is None
++
++
++def test_build_mypy_command_uses_git_modified_python_targets_when_filenames_are_missing(monkeypatch) -> None:
++    module = _load_module()
++    monkeypatch.setattr(module, "_repo_venv_python", lambda: Path(".venv/Scripts/python.exe"))
++    monkeypatch.setattr(
++        module,
++        "_modified_paths_from_git",
++        lambda: ["paper_chaser_mcp/server.py", "README.md", "tests/test_dispatch.py"],
++    )
++
++    command = module.build_mypy_command([])
++
++    assert command == [
++        *_expected_base_command(),
++        "paper_chaser_mcp/server.py",
++        "tests/test_dispatch.py",
++    ]
++
++
++def test_build_mypy_command_runs_full_check_when_git_modified_paths_include_pyproject(monkeypatch) -> None:
++    module = _load_module()
++    monkeypatch.setattr(module, "_repo_venv_python", lambda: Path(".venv/Scripts/python.exe"))
++    monkeypatch.setattr(
++        module,
++        "_modified_paths_from_git",
++        lambda: ["pyproject.toml", "paper_chaser_mcp/server.py"],
++    )
++
++    command = module.build_mypy_command([])
++
+     assert command == _expected_base_command()
++
++
++def test_main_skips_subprocess_when_no_relevant_targets_exist(monkeypatch) -> None:
++    module = _load_module()
++    monkeypatch.setattr(module, "build_mypy_command", lambda filenames: None)
++
++    def _unexpected_subprocess_run(*args, **kwargs):
++        raise AssertionError("subprocess.run should not be called when there are no mypy targets")
++
++    monkeypatch.setattr(module.subprocess, "run", _unexpected_subprocess_run)
++
++    assert module.main([]) == 0
+diff --git a/tests/test_runtime_misc_helpers.py b/tests/test_runtime_misc_helpers.py
+index d203c18..ac9dc8d 100644
+--- a/tests/test_runtime_misc_helpers.py
++++ b/tests/test_runtime_misc_helpers.py
+@@ -107,7 +107,15 @@ def test_parsing_helpers_and_tool_definitions_are_usable() -> None:
+     assert _text(types.SimpleNamespace(text="  trimmed  ")) == "trimmed"
+
+     tool_definitions = get_tool_definitions()
++    expert_tool_definitions = get_tool_definitions(tool_profile="expert")
+
+     assert tool_definitions
+-    assert any(tool.name == "search_papers" for tool in tool_definitions)
++    assert {tool.name for tool in tool_definitions} == {
++        "research",
++        "follow_up_research",
++        "resolve_reference",
++        "inspect_source",
++        "get_runtime_status",
++    }
++    assert any(tool.name == "search_papers" for tool in expert_tool_definitions)
+     assert all(tool.description for tool in tool_definitions)
+diff --git a/tests/test_search.py b/tests/test_search.py
+index ef5c9e9..28df8d0 100644
+--- a/tests/test_search.py
++++ b/tests/test_search.py
+@@ -714,6 +714,14 @@ async def test_all_providers_fail_gives_provider_failed_status(
+
+     meta = payload["brokerMetadata"]
+     assert meta["resultStatus"] == "provider_failed"
++    coverage = payload["coverageSummary"]
++    assert "semantic_scholar" in coverage["providersAttempted"]
++    assert "core" in coverage["providersAttempted"]
++    assert coverage["providersFailed"] == ["semantic_scholar", "core"]
++    assert coverage["likelyCompleteness"] == "incomplete"
++    failure = payload["failureSummary"]
++    assert failure["fallbackAttempted"] is True
++    assert failure["recommendedNextAction"] == "retry_or_pivot"
+     # Hint must mention plural providers and not suggest query broadening.
+     hint = meta["nextStepHint"]
+     assert "resultStatus='provider_failed'" in hint
+@@ -1205,9 +1213,55 @@ async def test_broker_metadata_result_quality_strong_for_semantic_scholar(
+
+     payload = _payload(await server.call_tool("search_papers", {"query": "transformers"}))
+     broker_meta = payload["brokerMetadata"]
++    paper = payload["data"][0]
+
+     assert broker_meta["resultQuality"] == "strong"
+     assert broker_meta["bulkSearchIsProviderPivot"] is False
++    assert payload["coverageSummary"]["providersSucceeded"] == ["semantic_scholar"]
++    assert payload["coverageSummary"]["likelyCompleteness"] == "partial"
++    assert payload.get("failureSummary") is None
++    assert paper["sourceType"] == "scholarly_article"
++    assert paper["verificationStatus"] == "verified_metadata"
++    assert paper["accessStatus"] == "access_unverified"
++    assert paper.get("canonicalUrl") is None
++    assert paper["confidence"] == "medium"
++    assert paper["abstractObserved"] is False
++
++
++@pytest.mark.asyncio
++async def test_search_papers_adds_first_pass_trust_metadata_for_arxiv_records(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    class ArxivClient:
++        async def search(self, **kwargs: Any) -> dict:
++            return {
++                "totalResults": 1,
++                "entries": [
++                    {
++                        "paperId": "arxiv-2401.12345",
++                        "title": "Habitat connectivity for listed species",
++                        "abstract": "A preprint about corridor design.",
++                        "url": "https://arxiv.org/abs/2401.12345",
++                        "source": "arxiv",
++                    }
++                ],
++            }
++
++    monkeypatch.setattr(server, "enable_core", False)
++    monkeypatch.setattr(server, "enable_semantic_scholar", False)
++    monkeypatch.setattr(server, "enable_arxiv", True)
++    monkeypatch.setattr(server, "arxiv_client", ArxivClient())
++
++    payload = _payload(await server.call_tool("search_papers", {"query": "habitat connectivity"}))
++    paper = payload["data"][0]
++
++    assert payload["brokerMetadata"]["providerUsed"] == "arxiv"
++    assert paper["sourceType"] == "repository_record"
++    assert paper["verificationStatus"] == "verified_metadata"
++    assert paper["accessStatus"] == "abstract_only"
++    assert paper["canonicalUrl"] == "https://arxiv.org/abs/2401.12345"
++    assert paper["retrievedUrl"] == "https://arxiv.org/abs/2401.12345"
++    assert paper["abstractObserved"] is True
+
+
+ @pytest.mark.asyncio
+diff --git a/tests/test_server.py b/tests/test_server.py
+index 627360f..ceef2a2 100644
+--- a/tests/test_server.py
++++ b/tests/test_server.py
+@@ -90,8 +90,8 @@ def test_streamable_http_app_handles_initialize_and_tool_call(
+             "id": 2,
+             "method": "tools/call",
+             "params": {
+-                "name": "search_papers_match",
+-                "arguments": {"query": "transformers"},
++                "name": "resolve_reference",
++                "arguments": {"reference": "transformers"},
+             },
+         }
+         call_response = client.post(
+@@ -104,15 +104,15 @@ def test_streamable_http_app_handles_initialize_and_tool_call(
+     assert init_response.status_code == 200
+     assert initialized_response.status_code == 202
+     instructions = init_payload["result"]["instructions"]
+-    assert "pagination.nextCursor" in instructions
+-    assert "opaque" in instructions
+-    assert "do not derive, edit, or fabricate" in instructions
++    assert "research" in instructions
++    assert "follow_up_research" in instructions
++    assert "resolve_reference" in instructions
++    assert "inspect_source" in instructions
+     assert call_response.status_code == 200
+     structured = call_payload["result"]["structuredContent"]
+-    assert structured["paperId"] == "match-1"
+-    assert structured["title"] == "Best match"
+-    assert "agentHints" in structured
+-    assert "resourceUris" in structured
++    assert structured["status"] in {"resolved", "multiple_candidates", "no_match", "regulatory_primary_source"}
++    assert structured["resolutionType"]
++    assert "nextActions" in structured
+     assert call_payload["result"]["isError"] is False
+
+
+@@ -129,17 +129,16 @@ async def test_fastmcp_client_returns_structured_tool_output(
+         tools = await client.list_tools()
+         tool_map = {tool.name: tool for tool in tools}
+         result = await client.call_tool(
+-            "search_papers_match",
+-            {"query": "transformers"},
++            "resolve_reference",
++            {"reference": "transformers"},
+         )
+
+-    assert result.data["paperId"] == "match-1"
+-    assert result.data["title"] == "Best match"
+-    assert "agentHints" in result.data
+-    assert "resourceUris" in result.data
+-    assert tool_map["search_papers"].annotations.readOnlyHint is True
+-    assert tool_map["search_papers"].annotations.idempotentHint is True
+-    assert tool_map["search_papers"].annotations.openWorldHint is True
++    assert result.data["resolutionType"]
++    assert result.data["status"] in {"resolved", "multiple_candidates", "no_match", "regulatory_primary_source"}
++    assert "nextActions" in result.data
++    assert tool_map["research"].annotations.readOnlyHint is True
++    assert tool_map["research"].annotations.idempotentHint is True
++    assert tool_map["research"].annotations.openWorldHint is True
+
+
+ @pytest.mark.asyncio
+@@ -162,13 +161,13 @@ async def test_fastmcp_match_tool_unwraps_wrapped_payload(
+
+     async with Client(server.app) as client:
+         result = await client.call_tool(
+-            "search_papers_match",
+-            {"query": "wrapped match"},
++            "resolve_reference",
++            {"reference": "wrapped match"},
+         )
+
+-    assert result.data["paperId"] == "wrapped-1"
+-    assert result.data["title"] == "Wrapped best match"
+-    assert "data" not in result.data
++    best_match = result.data["bestMatch"]
++    assert best_match["paper"]["paperId"] == "wrapped-1"
++    assert best_match["paper"]["title"] == "Wrapped best match"
+
+
+ @pytest.mark.asyncio
+@@ -205,30 +204,16 @@ async def test_fastmcp_resource_and_prompt_support_agent_onboarding() -> None:
+     assert any(prompt.name == "triage_literature" for prompt in prompts)
+     assert any(prompt.name == "plan_citation_chase" for prompt in prompts)
+     assert any(prompt.name == "refine_query" for prompt in prompts)
+-    assert "search_papers_bulk" in guide[0].text
+-    assert "enrich_paper" in guide[0].text
+-    assert "Quick literature discovery" in guide[0].text
+-    assert "search_papers_smart" in guide[0].text
+-    assert "resolve_citation" in guide[0].text
++    assert "research" in guide[0].text
++    assert "follow_up_research" in guide[0].text
++    assert "resolve_reference" in guide[0].text
++    assert "inspect_source" in guide[0].text
+     assert "searchSessionId" in guide[0].text
+-    assert "cited-by expansion" in guide[0].text
+-    assert "Known-item lookup" in guide[0].text
+-    assert "search_snippets" in guide[0].text
+-    assert "paper.recommendedExpansionId" in guide[0].text
+-    assert "paper.expansionIdStatus" in guide[0].text
+-    assert "affiliation, coauthor, venue, or" in guide[0].text
+-    assert "outside the indexed paper surface" in guide[0].text
+-    assert "pagination.nextCursor" in plan.messages[0].content.text
+-    assert "known-item lookup" in plan.messages[0].content.text
+-    assert "search_papers_smart" in plan.messages[0].content.text
+-    assert "resolve_citation" in plan.messages[0].content.text
+-    assert "ask_result_set" in plan.messages[0].content.text
+-    assert "get_paper_citations for cited-by expansion" in plan.messages[0].content.text
+-    assert "paper.expansionIdStatus is not_portable" in plan.messages[0].content.text
+-    assert "search_snippets only as a special-purpose recovery tool" in (plan.messages[0].content.text)
+-    assert "empty degraded response rather than a raw 4xx/5xx" in (plan.messages[0].content.text)
++    assert "trust" in guide[0].text.lower()
++    assert "research" in plan.messages[0].content.text
++    assert "resolve_reference" in plan.messages[0].content.text
++    assert "follow_up_research" in plan.messages[0].content.text
+     assert "Mode: feature_probe." in feature_plan.messages[0].content.text
+-    assert "short smoke baseline" in feature_plan.messages[0].content.text
+     assert "Probe the OpenAlex author workflow UX" in (feature_plan.messages[0].content.text)
+     assert "GitHub Copilot coding agent" in feature_plan.messages[0].content.text
+
+@@ -236,28 +221,12 @@ async def test_fastmcp_resource_and_prompt_support_agent_onboarding() -> None:
+ def test_tool_descriptions_include_workflow_guidance() -> None:
+     from paper_chaser_mcp.tools import TOOL_DESCRIPTIONS
+
+-    assert "quick literature discovery" in TOOL_DESCRIPTIONS["search_papers"]
+-    assert "exhaustive retrieval" in TOOL_DESCRIPTIONS["search_papers_bulk"]
+-    assert "prefer search_papers or search_papers_semantic_scholar" in (TOOL_DESCRIPTIONS["search_papers_bulk"].lower())
+-    assert "Known-item lookup" in TOOL_DESCRIPTIONS["search_papers_match"]
+-    assert "fuzzy Semantic Scholar title search" in TOOL_DESCRIPTIONS["search_papers_match"]
+-    assert "citation repair" in TOOL_DESCRIPTIONS["resolve_citation"].lower()
+-    assert "alternatives" in TOOL_DESCRIPTIONS["resolve_citation"]
+-    assert "Known-item lookup" in TOOL_DESCRIPTIONS["get_paper_details"]
+-    assert "cite this paper (cited by)" in TOOL_DESCRIPTIONS["get_paper_citations"]
+-    assert "references this paper cites" in TOOL_DESCRIPTIONS["get_paper_references"]
+-    assert "author-centric workflow" in TOOL_DESCRIPTIONS["get_author_papers"].lower()
+-    assert "paper.recommendedExpansionId" in TOOL_DESCRIPTIONS["get_paper_authors"]
+-    assert "expansionIdStatus is not_portable" in TOOL_DESCRIPTIONS["get_paper_authors"]
+-    assert "Semantic Scholar authorId" in TOOL_DESCRIPTIONS["get_author_info"]
+-    assert "affiliation, coauthor, venue, or" in TOOL_DESCRIPTIONS["search_authors"]
+-    assert "special-purpose recovery tool" in TOOL_DESCRIPTIONS["search_snippets"].lower()
+-    assert "empty result with retry guidance" in TOOL_DESCRIPTIONS["search_snippets"]
+-    assert "Supported inputs are query, limit, and year" in TOOL_DESCRIPTIONS["search_papers_core"]
+-    assert "Supported inputs are query, limit, and year" in TOOL_DESCRIPTIONS["search_papers_arxiv"]
+-    assert "fields, year, venue, publicationDateOrYear" in TOOL_DESCRIPTIONS["search_papers_semantic_scholar"]
+-    assert "OpenAlex only" in TOOL_DESCRIPTIONS["search_papers_openalex"]
+-    assert "OpenAlex cursor pagination" in TOOL_DESCRIPTIONS["search_papers_openalex_bulk"]
++    assert "default guided entry point" in TOOL_DESCRIPTIONS["research"].lower()
++    assert "trust-graded" in TOOL_DESCRIPTIONS["research"].lower()
++    assert "grounded follow-up" in TOOL_DESCRIPTIONS["follow_up_research"].lower()
++    assert "best match" in TOOL_DESCRIPTIONS["resolve_reference"].lower()
++    assert "source id" in TOOL_DESCRIPTIONS["inspect_source"].lower()
++    assert "runtime" in TOOL_DESCRIPTIONS["get_runtime_status"].lower()
+     assert "abstract_inverted_index" in TOOL_DESCRIPTIONS["get_paper_details_openalex"]
+     assert "cited_by_api_url" in TOOL_DESCRIPTIONS["get_paper_citations_openalex"]
+     assert "batched OpenAlex ID lookups" in TOOL_DESCRIPTIONS["get_paper_references_openalex"]
+@@ -377,8 +346,13 @@ def test_github_copilot_instructions_align_with_repo_workflow_docs() -> None:
+     assert "GitHub cloud coding agent" in instructions
+     assert "docs/golden-paths.md" in instructions
+     assert "docs/agent-handoff.md" in instructions
+-    assert "search_papers` for quick literature discovery" in instructions
+-    assert "search_papers_bulk` for exhaustive or paginated retrieval" in instructions
++    assert "research` for discovery, literature review, known-item recovery" in instructions
++    assert "follow_up_research` for one grounded follow-up" in instructions
++    assert "resolve_reference` for DOI/arXiv/URL/citation/reference cleanup" in instructions
++    assert "search_papers_bulk` is not a generic" in instructions
++    assert "PAPER_CHASER_TOOL_PROFILE=expert" in instructions
++    assert "unverifiedLeads" in instructions
++    assert "verifiedFindings" in instructions
+     assert "not a generic" in instructions
+     assert "provider-specific tool contracts honest" in instructions
+     assert "OpenAlex" in instructions
+@@ -419,24 +393,19 @@ async def test_agent_workflow_resource_mentions_pivots_and_provider_contracts()
+         guide = await client.read_resource("guide://paper-chaser/agent-workflows")
+
+     guide_text = guide[0].text
++    assert "research" in guide_text
++    assert "follow_up_research" in guide_text
++    assert "resolve_reference" in guide_text
++    assert "inspect_source" in guide_text
++    assert "get_runtime_status" in guide_text
++    assert "searchSessionId" in guide_text
++    assert "trustSummary" in guide_text
++    assert "abstains" in guide_text or "abstain" in guide_text
++    assert "Expert/operator-only fallback" in guide_text
+     assert "search_papers_smart" in guide_text
+-    assert "resolve_citation" in guide_text
+-    assert "ask_result_set" in guide_text
+-    assert "resourceUris" in guide_text
+-    assert "Provider-specific tool contracts" in guide_text
+-    assert "expose only `query`, `limit`, and `year`" in guide_text
+-    assert "Semantic Scholar pivot, not another page" in guide_text
+-    assert "NOT relevance-ranked" in guide_text
+-    assert "retrievalNote" in guide_text
+-    assert "citationCount:desc" in guide_text
+-    assert "For small targeted pages" in guide_text
+-    assert "paper.recommendedExpansionId" in guide_text
+-    assert "paper.expansionIdStatus" in guide_text
+-    assert "Common-name author disambiguation" in guide_text
+-    assert "Outside-paper outputs" in guide_text
+-    assert "OpenAlex-specific workflows" in guide_text
+-    assert "Agentic UX review loop" in guide_text
+-    assert "feature-specific probe" in guide_text
++    assert "get_provider_diagnostics" in guide_text
++    assert "pagination.nextCursor" in guide_text
++    assert "code, docs, or both" in guide_text
+
+
+ @pytest.mark.asyncio
+@@ -450,18 +419,16 @@ async def test_plan_prompt_mentions_continuation_vs_pivot_and_schema_limits() ->
+         )
+
+     prompt_text = plan.messages[0].content.text
++    assert "research" in prompt_text
++    assert "resolve_reference" in prompt_text
++    assert "follow_up_research" in prompt_text
++    assert "inspect_source" in prompt_text
++    assert "Treat abstentions and clarification requests as real outputs" in prompt_text
++    assert "Only fall back to the expert surface" in prompt_text
+     assert "search_papers_smart" in prompt_text
+-    assert "resolve_citation" in prompt_text
+     assert "searchSessionId" in prompt_text
+-    assert "closest continuation path only when the workflow is already aligned" in (prompt_text)
+-    assert "NOT relevance-ranked" in prompt_text
+-    assert "retrievalNote" in prompt_text
+-    assert "citationCount:desc" in prompt_text
+-    assert "paper.expansionIdStatus is not_portable" in prompt_text
+-    assert "Semantic Scholar pivot rather than another page from the same provider" in (prompt_text)
+-    assert "only support query, limit, and year" in prompt_text
+-    assert "prefer search_papers or search_papers_semantic_scholar" in prompt_text
+-    assert "outside the indexed paper surface" in prompt_text
+-    assert "affiliation, coauthor, venue, or topic clues" in prompt_text
++    assert "search_papers_bulk" in prompt_text
++    assert "For regulatory work, prefer the guided path first" in prompt_text
++    assert "pagination.nextCursor as opaque" in prompt_text
+     assert "Mode: smoke." in prompt_text
+     assert "GitHub Copilot coding agent" in prompt_text
+diff --git a/tests/test_settings.py b/tests/test_settings.py
+index e3c0e58..0cdc965 100644
+--- a/tests/test_settings.py
++++ b/tests/test_settings.py
+@@ -61,6 +61,8 @@ def test_app_settings_serpapi_disabled_by_default() -> None:
+     """SerpApi must be disabled by default to protect users from surprise costs."""
+
+     settings = AppSettings.from_env({})  # empty env
++    assert settings.tool_profile == "guided"
++    assert settings.hide_disabled_tools is True
+     assert settings.enable_serpapi is False
+     assert settings.enable_scholarapi is False
+     assert settings.enable_agentic is False
+@@ -164,6 +166,17 @@ def test_app_settings_parses_hide_disabled_tools_flag() -> None:
+     assert settings.hide_disabled_tools is True
+
+
++def test_app_settings_parses_tool_profile_and_expert_defaults() -> None:
++    settings = AppSettings.from_env(
++        {
++            "PAPER_CHASER_TOOL_PROFILE": "expert",
++        }
++    )
++
++    assert settings.tool_profile == "expert"
++    assert settings.hide_disabled_tools is False
++
++
+ def test_app_settings_parses_ecos_configuration() -> None:
+     settings = AppSettings.from_env(
+         {
+diff --git a/tests/test_smart_tools.py b/tests/test_smart_tools.py
+index 737b07e..7a16023 100644
+--- a/tests/test_smart_tools.py
++++ b/tests/test_smart_tools.py
+@@ -93,10 +93,16 @@ def _deterministic_runtime(
+     semantic: RecordingSemanticClient,
+     openalex: RecordingOpenAlexClient,
+     scholarapi: RecordingScholarApiClient | None = None,
++    ecos: Any = None,
++    federal_register: Any = None,
++    govinfo: Any = None,
+     disable_embeddings: bool = True,
+     enable_semantic_scholar: bool = True,
+     enable_openalex: bool = True,
+     enable_scholarapi: bool = False,
++    enable_ecos: bool = False,
++    enable_federal_register: bool = False,
++    enable_govinfo_cfr: bool = False,
+ ) -> tuple[WorkspaceRegistry, AgenticRuntime]:
+     config = AgenticConfig(
+         enabled=True,
+@@ -120,12 +126,18 @@ def _deterministic_runtime(
+         scholarapi_client=scholarapi,
+         arxiv_client=object(),
+         serpapi_client=None,
++        ecos_client=ecos,
++        federal_register_client=federal_register,
++        govinfo_client=govinfo,
+         enable_core=False,
+         enable_semantic_scholar=enable_semantic_scholar,
+         enable_openalex=enable_openalex,
+         enable_scholarapi=enable_scholarapi,
+         enable_arxiv=False,
+         enable_serpapi=False,
++        enable_ecos=enable_ecos,
++        enable_federal_register=enable_federal_register,
++        enable_govinfo_cfr=enable_govinfo_cfr,
+     )
+     return registry, runtime
+
+@@ -170,11 +182,17 @@ def _runtime_with_provider_bundle(
+         openalex_client=openalex,
+         arxiv_client=object(),
+         serpapi_client=None,
++        ecos_client=None,
++        federal_register_client=None,
++        govinfo_client=None,
+         enable_core=False,
+         enable_semantic_scholar=True,
+         enable_openalex=True,
+         enable_arxiv=False,
+         enable_serpapi=False,
++        enable_ecos=False,
++        enable_federal_register=False,
++        enable_govinfo_cfr=False,
+         provider_registry=provider_registry,
+     )
+     return registry, runtime
+@@ -232,6 +250,9 @@ async def test_smart_search_and_follow_up_tools_work_with_deterministic_runtime(
+     assert "semantic_scholar" in smart["strategyMetadata"]["providersUsed"]
+     assert "resourceUris" in smart
+     assert "agentHints" in smart
++    assert smart["verifiedFindings"] or smart["likelyUnverified"]
++    assert smart["structuredSources"]
++    assert smart["coverageSummary"]["searchMode"] == "smart_literature_review"
+
+     ask = _payload(
+         await server.call_tool(
+@@ -244,7 +265,11 @@ async def test_smart_search_and_follow_up_tools_work_with_deterministic_runtime(
+     )
+
+     assert ask["searchSessionId"] == smart["searchSessionId"]
+-    assert ask["answer"]
++    assert ask["answerStatus"] in {"answered", "abstained", "insufficient_evidence"}
++    if ask["answerStatus"] == "answered":
++        assert ask["answer"]
++    else:
++        assert ask["answer"] is None
+     assert ask["evidence"]
+     assert ask["agentHints"]["nextToolCandidates"]
+
+@@ -261,6 +286,7 @@ async def test_smart_search_and_follow_up_tools_work_with_deterministic_runtime(
+     assert landscape["themes"]
+     assert landscape["searchSessionId"] == smart["searchSessionId"]
+     assert landscape["suggestedNextSearches"]
++    assert landscape["structuredSources"]
+
+     graph = _payload(
+         await server.call_tool(
+@@ -277,6 +303,372 @@ async def test_smart_search_and_follow_up_tools_work_with_deterministic_runtime(
+     assert graph["frontier"]
+
+
++@pytest.mark.asyncio
++async def test_search_papers_smart_routes_regulatory_queries_to_primary_sources() -> None:
++    semantic = RecordingSemanticClient()
++    openalex = RecordingOpenAlexClient()
++
++    class FakeEcosClient:
++        async def search_species(self, *, query: str, limit: int = 10, match_mode: str = "auto") -> dict[str, Any]:
++            del limit, match_mode
++            assert "regulatory history" in query.lower()
++            return {
++                "query": query,
++                "matchMode": "auto",
++                "total": 1,
++                "data": [
++                    {
++                        "speciesId": "sp-1",
++                        "commonName": "California condor",
++                        "scientificName": "Gymnogyps californianus",
++                        "profileUrl": "https://ecos.fws.gov/ecp/species/sp-1",
++                    }
++                ],
++            }
++
++        async def get_species_profile(self, *, species_id: str) -> dict[str, Any]:
++            assert species_id == "sp-1"
++            return {
++                "species": {
++                    "speciesId": "sp-1",
++                    "commonName": "California condor",
++                    "scientificName": "Gymnogyps californianus",
++                    "profileUrl": "https://ecos.fws.gov/ecp/species/sp-1",
++                },
++                "speciesEntities": [
++                    {
++                        "entityId": 12,
++                        "status": "Endangered",
++                        "statusCategory": "Listed",
++                        "listingDate": "1967-03-11",
++                    }
++                ],
++            }
++
++        async def list_species_documents(
++            self, *, species_id: str, document_kinds: list[str] | None = None
++        ) -> dict[str, Any]:
++            del document_kinds
++            assert species_id == "sp-1"
++            return {
++                "speciesId": species_id,
++                "total": 2,
++                "documentKindsApplied": [],
++                "data": [
++                    {
++                        "documentKind": "recovery_plan",
++                        "title": "California Condor Recovery Plan",
++                        "url": "https://ecos.fws.gov/docs/recovery_plan.pdf",
++                        "documentDate": "2023-01-15",
++                        "documentType": "Recovery Plan",
++                    },
++                    {
++                        "documentKind": "federal_register",
++                        "title": "Endangered Status for California Condor",
++                        "url": "https://www.govinfo.gov/link/fr/32/4001",
++                        "documentDate": "1967-03-11",
++                        "frCitation": "32 FR 4001",
++                        "documentType": "Final Rule",
++                    },
++                ],
++            }
++
++    class FakeFederalRegisterClient:
++        async def search_documents(self, *, query: str, limit: int = 10, **kwargs: Any) -> dict[str, Any]:
++            del limit, kwargs
++            assert "condor" in query.lower()
++            return {
++                "total": 1,
++                "data": [
++                    {
++                        "documentNumber": "2024-12345",
++                        "title": "Critical Habitat Revision for California Condor",
++                        "documentType": "RULE",
++                        "publicationDate": "2024-02-01",
++                        "citation": "89 FR 83510",
++                        "htmlUrl": "https://www.federalregister.gov/d/2024-12345",
++                        "cfrReferences": ["50 CFR 17.95"],
++                    }
++                ],
++            }
++
++    class FakeGovInfoClient:
++        async def get_cfr_text(self, **kwargs: Any) -> dict[str, Any]:
++            assert kwargs["title_number"] == 50
++            assert kwargs["part_number"] == 17
++            return {
++                "titleNumber": 50,
++                "partNumber": 17,
++                "sectionNumber": "95",
++                "citation": "50 CFR 17.95",
++                "effectiveDate": "2024-02-01",
++                "sourceUrl": "https://www.govinfo.gov/app/details/CFR-2024-title50-vol1/CFR-2024-title50-vol1-sec17-95",
++                "markdown": "Authoritative CFR text",
++                "verificationStatus": "verified_primary_source",
++            }
++
++    _, runtime = _deterministic_runtime(
++        semantic=semantic,
++        openalex=openalex,
++        ecos=FakeEcosClient(),
++        federal_register=FakeFederalRegisterClient(),
++        govinfo=FakeGovInfoClient(),
++        enable_ecos=True,
++        enable_federal_register=True,
++        enable_govinfo_cfr=True,
++    )
++
++    payload = await runtime.search_papers_smart(
++        query="Regulatory history of California condor under 50 CFR 17.95",
++        limit=5,
++    )
++
++    assert payload["results"] == []
++    assert payload["strategyMetadata"]["intent"] == "regulatory"
++    assert payload["structuredSources"]
++    assert payload["verifiedFindings"]
++    assert payload["coverageSummary"]["searchMode"] == "regulatory_primary_source"
++    assert payload["coverageSummary"]["primaryDocumentCoverage"]["currentTextRequested"] is True
++    assert payload["coverageSummary"]["primaryDocumentCoverage"]["currentTextSatisfied"] is True
++    assert payload["regulatoryTimeline"]["events"]
++    assert any(source["provider"] == "govinfo" for source in payload["structuredSources"])
++    assert any(source["provider"] == "ecos" for source in payload["structuredSources"])
++    assert any(source["provider"] == "federal_register" for source in payload["structuredSources"])
++
++
++@pytest.mark.asyncio
++async def test_search_papers_smart_regulatory_filters_unanchored_federal_register_hits() -> None:
++    semantic = RecordingSemanticClient()
++    openalex = RecordingOpenAlexClient()
++
++    class FakeEcosClient:
++        async def search_species(self, *, query: str, limit: int = 10, match_mode: str = "auto") -> dict[str, Any]:
++            del limit, match_mode
++            return {
++                "query": query,
++                "matchMode": "auto",
++                "total": 1,
++                "data": [
++                    {
++                        "speciesId": "sp-1",
++                        "commonName": "California condor",
++                        "scientificName": "Gymnogyps californianus",
++                        "profileUrl": "https://ecos.fws.gov/ecp/species/sp-1",
++                    }
++                ],
++            }
++
++        async def get_species_profile(self, *, species_id: str) -> dict[str, Any]:
++            assert species_id == "sp-1"
++            return {
++                "species": {
++                    "speciesId": "sp-1",
++                    "commonName": "California condor",
++                    "scientificName": "Gymnogyps californianus",
++                    "profileUrl": "https://ecos.fws.gov/ecp/species/sp-1",
++                },
++                "speciesEntities": [],
++            }
++
++        async def list_species_documents(
++            self, *, species_id: str, document_kinds: list[str] | None = None
++        ) -> dict[str, Any]:
++            del document_kinds
++            assert species_id == "sp-1"
++            return {
++                "speciesId": species_id,
++                "total": 1,
++                "documentKindsApplied": [],
++                "data": [
++                    {
++                        "documentKind": "federal_register",
++                        "title": "Endangered Status for California Condor",
++                        "url": "https://www.govinfo.gov/link/fr/32/4001",
++                        "documentDate": "1967-03-11",
++                        "frCitation": "32 FR 4001",
++                        "documentType": "Final Rule",
++                    }
++                ],
++            }
++
++    class FakeFederalRegisterClient:
++        async def search_documents(self, *, query: str, limit: int = 10, **kwargs: Any) -> dict[str, Any]:
++            del query, limit, kwargs
++            return {
++                "total": 3,
++                "data": [
++                    {
++                        "documentNumber": "2024-12345",
++                        "title": "Critical Habitat Revision for California Condor",
++                        "documentType": "RULE",
++                        "publicationDate": "2024-02-01",
++                        "citation": "89 FR 83510",
++                        "htmlUrl": "https://www.federalregister.gov/d/2024-12345",
++                        "cfrReferences": ["50 CFR 17.95"],
++                    },
++                    {
++                        "documentNumber": "2010-00001",
++                        "title": "Designation of Critical Habitat for Polar Bear",
++                        "documentType": "RULE",
++                        "publicationDate": "2010-01-01",
++                        "citation": "75 FR 76086",
++                        "htmlUrl": "https://www.federalregister.gov/d/2010-00001",
++                        "cfrReferences": ["50 CFR 17.95"],
++                    },
++                    {
++                        "documentNumber": "2008-00002",
++                        "title": "Wood Stork Recovery Notice",
++                        "documentType": "NOTICE",
++                        "publicationDate": "2008-05-01",
++                        "citation": "73 FR 12345",
++                        "htmlUrl": "https://www.federalregister.gov/d/2008-00002",
++                        "cfrReferences": ["50 CFR 17.95"],
++                    },
++                ],
++            }
++
++    class FakeGovInfoClient:
++        async def get_cfr_text(self, **kwargs: Any) -> dict[str, Any]:
++            assert kwargs["title_number"] == 50
++            assert kwargs["part_number"] == 17
++            return {
++                "titleNumber": 50,
++                "partNumber": 17,
++                "sectionNumber": "95",
++                "citation": "50 CFR 17.95",
++                "effectiveDate": "2024-02-01",
++                "sourceUrl": "https://www.govinfo.gov/app/details/CFR-2024-title50-vol1/CFR-2024-title50-vol1-sec17-95",
++                "markdown": "Authoritative CFR text",
++                "verificationStatus": "verified_primary_source",
++            }
++
++    _, runtime = _deterministic_runtime(
++        semantic=semantic,
++        openalex=openalex,
++        ecos=FakeEcosClient(),
++        federal_register=FakeFederalRegisterClient(),
++        govinfo=FakeGovInfoClient(),
++        enable_ecos=True,
++        enable_federal_register=True,
++        enable_govinfo_cfr=True,
++    )
++
++    payload = await runtime.search_papers_smart(
++        query="Regulatory history of California condor under 50 CFR 17.95",
++        limit=5,
++    )
++
++    titles = {source["title"] for source in payload["structuredSources"]}
++    event_titles = {event["title"] for event in payload["regulatoryTimeline"]["events"]}
++
++    assert "Critical Habitat Revision for California Condor" in titles
++    assert "Critical Habitat Revision for California Condor" in event_titles
++    assert "Designation of Critical Habitat for Polar Bear" not in titles
++    assert "Designation of Critical Habitat for Polar Bear" not in event_titles
++    assert "Wood Stork Recovery Notice" not in titles
++    assert "Wood Stork Recovery Notice" not in event_titles
++    assert not any("Polar Bear" in finding for finding in payload["verifiedFindings"])
++    assert not any("Wood Stork" in finding for finding in payload["verifiedFindings"])
++    candidate_titles = {lead["title"] for lead in payload["candidateLeads"]}
++    assert "Designation of Critical Habitat for Polar Bear" in candidate_titles
++    assert "Wood Stork Recovery Notice" in candidate_titles
++    assert all(lead["topicalRelevance"] == "off_topic" for lead in payload["candidateLeads"])
++
++
++@pytest.mark.asyncio
++async def test_search_papers_smart_regulatory_marks_history_only_when_current_cfr_text_is_unresolved() -> None:
++    semantic = RecordingSemanticClient()
++    openalex = RecordingOpenAlexClient()
++
++    class FakeEcosClient:
++        async def search_species(self, *, query: str, limit: int = 10, match_mode: str = "auto") -> dict[str, Any]:
++            del limit, match_mode
++            return {
++                "query": query,
++                "matchMode": "auto",
++                "total": 1,
++                "data": [
++                    {
++                        "speciesId": "sp-1",
++                        "commonName": "California condor",
++                        "scientificName": "Gymnogyps californianus",
++                        "profileUrl": "https://ecos.fws.gov/ecp/species/sp-1",
++                    }
++                ],
++            }
++
++        async def get_species_profile(self, *, species_id: str) -> dict[str, Any]:
++            assert species_id == "sp-1"
++            return {
++                "species": {"speciesId": "sp-1", "commonName": "California condor"},
++                "speciesEntities": [],
++            }
++
++        async def list_species_documents(
++            self, *, species_id: str, document_kinds: list[str] | None = None
++        ) -> dict[str, Any]:
++            del species_id, document_kinds
++            return {
++                "data": [
++                    {
++                        "documentKind": "federal_register",
++                        "title": "Endangered Status for California Condor",
++                        "url": "https://www.govinfo.gov/link/fr/32/4001",
++                        "documentDate": "1967-03-11",
++                        "frCitation": "32 FR 4001",
++                        "documentType": "Final Rule",
++                    }
++                ]
++            }
++
++    class FakeFederalRegisterClient:
++        async def search_documents(self, *, query: str, limit: int = 10, **kwargs: Any) -> dict[str, Any]:
++            del query, limit, kwargs
++            return {
++                "total": 1,
++                "data": [
++                    {
++                        "documentNumber": "2024-12345",
++                        "title": "Critical Habitat Revision for California Condor",
++                        "documentType": "RULE",
++                        "publicationDate": "2024-02-01",
++                        "citation": "89 FR 83510",
++                        "htmlUrl": "https://www.federalregister.gov/d/2024-12345",
++                        "cfrReferences": ["50 CFR 17.95"],
++                    }
++                ],
++            }
++
++    class FailingGovInfoClient:
++        async def get_cfr_text(self, **kwargs: Any) -> dict[str, Any]:
++            del kwargs
++            raise ValueError("No GovInfo CFR result matched 50 CFR 17.95.")
++
++    _, runtime = _deterministic_runtime(
++        semantic=semantic,
++        openalex=openalex,
++        ecos=FakeEcosClient(),
++        federal_register=FakeFederalRegisterClient(),
++        govinfo=FailingGovInfoClient(),
++        enable_ecos=True,
++        enable_federal_register=True,
++        enable_govinfo_cfr=True,
++    )
++
++    payload = await runtime.search_papers_smart(
++        query="What does 50 CFR 17.95 say about California condor critical habitat?",
++        limit=5,
++    )
++
++    primary_document = payload["coverageSummary"]["primaryDocumentCoverage"]
++    assert primary_document["currentTextRequested"] is True
++    assert primary_document["govinfoAttempted"] is True
++    assert primary_document["currentTextSatisfied"] is False
++    assert primary_document["historyOnly"] is True
++    assert any("Current codified CFR text was not verified from GovInfo" in gap for gap in payload["evidenceGaps"])
++    assert payload["failureSummary"]["outcome"] == "fallback_success"
++
++
+ @pytest.mark.asyncio
+ async def test_search_papers_smart_include_enrichment_enriches_final_hits(
+     monkeypatch: pytest.MonkeyPatch,
+@@ -671,6 +1063,61 @@ async def test_ask_result_set_balanced_mode_skips_embedding_scoring() -> None:
+     assert ask["answer"]
+
+
++@pytest.mark.asyncio
++async def test_ask_result_set_abstains_when_question_is_unsupported() -> None:
++    semantic = RecordingSemanticClient()
++    openalex = RecordingOpenAlexClient()
++    registry, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
++
++    record = registry.save_result_set(
++        source_tool="search_papers_smart",
++        payload={
++            "data": [
++                {
++                    "paperId": "paper-1",
++                    "title": "Materials Design with OpenFOAM",
++                    "abstract": "A computational fluid dynamics paper unrelated to coding-agent evaluation.",
++                    "source": "semantic_scholar",
++                    "verificationStatus": "verified_metadata",
++                }
++            ]
++        },
++    )
++
++    async def _unsupported_answer_question(**kwargs: object) -> dict[str, object]:
++        del kwargs
++        return {
++            "answer": "Shared ground: these papers converge on Access, Agents, Allowing.",
++            "unsupportedAsks": ["What evaluation tradeoffs show up here?"],
++            "followUpQuestions": ["Would you like a narrower query?"],
++            "confidence": "low",
++        }
++
++    async def _low_similarity(query: str, texts: list[str], **kwargs: object) -> list[float]:
++        del query, texts, kwargs
++        return [0.05]
++
++    runtime._provider_bundle.aanswer_question = _unsupported_answer_question  # type: ignore[method-assign]
++    runtime._deterministic_bundle.abatched_similarity = _low_similarity  # type: ignore[method-assign]
++
++    ask = await runtime.ask_result_set(
++        search_session_id=record.search_session_id,
++        question="What evaluation tradeoffs show up here?",
++        top_k=1,
++        answer_mode="synthesis",
++    )
++
++    assert ask["answerStatus"] == "abstained"
++    assert ask["answer"] is None
++    assert ask["unsupportedAsks"] == ["What evaluation tradeoffs show up here?"]
++    assert ask["followUpQuestions"] == ["Would you like a narrower query?"]
++    assert ask["evidenceGaps"]
++    assert ask["candidateLeads"]
++    assert ask["candidateLeads"][0]["sourceId"] == "paper-1"
++    assert ask["candidateLeads"][0]["topicalRelevance"] == "off_topic"
++    assert not any("Materials Design with OpenFOAM" in finding for finding in ask["verifiedFindings"])
++
++
+ @pytest.mark.asyncio
+ async def test_search_papers_smart_known_item_fallback_honors_provider_plan(
+     monkeypatch: pytest.MonkeyPatch,

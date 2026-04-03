@@ -1421,6 +1421,294 @@ async def test_inspect_source_surfaces_guided_v2_source_fields() -> None:
 
 
 @pytest.mark.asyncio
+async def test_follow_up_research_answers_from_saved_session_metadata_when_regulatory_session_abstained(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRuntime:
+        async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
+            raise AssertionError(f"ask_result_set should not run for session introspection: {kwargs!r}")
+
+    record = server.workspace_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-follow-up-regulatory",
+        query="Regulatory history of the gray wolf delisting in the contiguous United States",
+        payload={
+            "searchSessionId": "ssn-follow-up-regulatory",
+            "structuredSources": [],
+            "candidateLeads": [
+                {
+                    "sourceId": "2026-05678",
+                    "title": (
+                        "Endangered and Threatened Wildlife and Plants; Designation of Critical "
+                        "Habitat for 22 Species in the Commonwealth of the Northern Mariana Islands "
+                        "and the Territory of Guam"
+                    ),
+                    "provider": "federal_register",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "access_unverified",
+                    "topicalRelevance": "off_topic",
+                    "confidence": "medium",
+                    "isPrimarySource": True,
+                    "canonicalUrl": "https://www.federalregister.gov/documents/2026/03/24/2026-05678/example",
+                    "retrievedUrl": "https://www.federalregister.gov/documents/2026/03/24/2026-05678/example",
+                    "fullTextObserved": False,
+                    "abstractObserved": False,
+                    "openAccessRoute": "non_oa_or_unconfirmed",
+                    "citationText": "2026-05678",
+                    "note": "Filtered from verified regulatory timeline because it did not match the anchored subject.",
+                }
+            ],
+            "evidenceGaps": [
+                (
+                    "No primary-source regulatory timeline could be reconstructed from the currently "
+                    "enabled regulatory providers."
+                ),
+                "Filtered 5 Federal Register hit(s) that did not match the anchored regulatory subject.",
+                "No ECOS species dossier match was found for the query.",
+            ],
+            "coverageSummary": {
+                "providersAttempted": ["ecos", "federal_register"],
+                "providersSucceeded": ["federal_register"],
+                "providersFailed": [],
+                "providersZeroResults": ["ecos"],
+                "likelyCompleteness": "unknown",
+                "searchMode": "regulatory_primary_source",
+                "summaryLine": (
+                    "2 provider(s) searched, 0 failed, 1 returned zero results, likely completeness: unknown."
+                ),
+            },
+            "failureSummary": {
+                "outcome": "no_failure",
+                "whatStillWorked": (
+                    "No provider failures were recorded, but the evidence was not strong enough to ground a result."
+                ),
+                "fallbackAttempted": False,
+                "completenessImpact": (
+                    "No primary-source regulatory timeline could be reconstructed from the currently "
+                    "enabled regulatory providers."
+                ),
+                "recommendedNextAction": "research",
+            },
+        },
+    )
+    assert record.search_session_id == "ssn-follow-up-regulatory"
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(
+        await server.call_tool(
+            "follow_up_research",
+            {
+                "searchSessionId": "ssn-follow-up-regulatory",
+                "question": (
+                    "Which providers were searched, and what specific evidence gap prevented a grounded answer?"
+                ),
+            },
+        )
+    )
+
+    assert payload["answerStatus"] == "answered"
+    assert "ecos, federal_register" in payload["answer"]
+    assert "No primary-source regulatory timeline could be reconstructed" in payload["answer"]
+    assert payload["coverage"]["searchMode"] == "regulatory_primary_source"
+    assert payload["evidenceGaps"][0].startswith("No primary-source regulatory timeline")
+    assert payload["unverifiedLeads"][0]["sourceId"] == "2026-05678"
+
+
+@pytest.mark.asyncio
+async def test_follow_up_research_uses_saved_unverified_leads_for_source_overview_when_no_sources_exist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRuntime:
+        async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
+            raise AssertionError(f"ask_result_set should not run for session source overview: {kwargs!r}")
+
+    record = server.workspace_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-follow-up-leads",
+        query="Regulatory history of the gray wolf delisting in the contiguous United States",
+        payload={
+            "searchSessionId": "ssn-follow-up-leads",
+            "structuredSources": [],
+            "candidateLeads": [
+                {
+                    "sourceId": "2026-05678",
+                    "title": (
+                        "Endangered and Threatened Wildlife and Plants; Designation of Critical "
+                        "Habitat for 22 Species in the Commonwealth of the Northern Mariana Islands "
+                        "and the Territory of Guam"
+                    ),
+                    "provider": "federal_register",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "access_unverified",
+                    "topicalRelevance": "off_topic",
+                    "confidence": "medium",
+                    "isPrimarySource": True,
+                },
+                {
+                    "sourceId": "2025-19732",
+                    "title": (
+                        "Endangered and Threatened Wildlife and Plants; Review of Species That Are "
+                        "Candidates for Listing as Endangered or Threatened; Annual Notification of "
+                        "Findings on Resubmitted Petitions; Annual Description of Progress on "
+                        "Listing Actions"
+                    ),
+                    "provider": "federal_register",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "access_unverified",
+                    "topicalRelevance": "off_topic",
+                    "confidence": "medium",
+                    "isPrimarySource": True,
+                },
+            ],
+            "evidenceGaps": [
+                (
+                    "No primary-source regulatory timeline could be reconstructed from the currently "
+                    "enabled regulatory providers."
+                )
+            ],
+            "coverageSummary": {
+                "providersAttempted": ["ecos", "federal_register"],
+                "providersSucceeded": ["federal_register"],
+                "providersZeroResults": ["ecos"],
+                "likelyCompleteness": "unknown",
+                "searchMode": "regulatory_primary_source",
+            },
+        },
+    )
+    assert record.search_session_id == "ssn-follow-up-leads"
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(
+        await server.call_tool(
+            "follow_up_research",
+            {
+                "searchSessionId": "ssn-follow-up-leads",
+                "question": "What records or source leads were found in this session?",
+            },
+        )
+    )
+
+    assert payload["answerStatus"] == "answered"
+    assert payload["answer"].startswith("Saved source leads included:")
+    assert "Designation of Critical Habitat for 22 Species" in payload["answer"]
+    assert "Annual Notification of Findings on Resubmitted Petitions" in payload["answer"]
+
+
+@pytest.mark.asyncio
+async def test_follow_up_research_answers_from_saved_session_metadata_when_partial_session_has_verified_findings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRuntime:
+        async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
+            raise AssertionError(f"ask_result_set should not run for session introspection: {kwargs!r}")
+
+    record = server.workspace_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-follow-up-partial",
+        query="Recent overview of retrieval-augmented generation evaluation methods for scholarly QA",
+        payload={
+            "searchSessionId": "ssn-follow-up-partial",
+            "verifiedFindings": ["Ragas: Automated Evaluation of Retrieval Augmented Generation"],
+            "structuredSources": [
+                {
+                    "sourceId": "2309.15217",
+                    "title": "Ragas: Automated Evaluation of Retrieval Augmented Generation",
+                    "provider": "arxiv",
+                    "sourceType": "repository_record",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "full_text_verified",
+                    "topicalRelevance": "on_topic",
+                    "confidence": "medium",
+                    "isPrimarySource": False,
+                    "canonicalUrl": "https://arxiv.org/abs/2309.15217v2",
+                    "retrievedUrl": "https://arxiv.org/pdf/2309.15217v2",
+                    "fullTextObserved": True,
+                    "abstractObserved": True,
+                    "openAccessRoute": "repository_open_access",
+                    "citationText": "2309.15217",
+                    "note": "Ragas matched the overview request.",
+                }
+            ],
+            "candidateLeads": [
+                {
+                    "sourceId": "2411.18583",
+                    "title": (
+                        "Automated Literature Review Using NLP Techniques and LLM-Based Retrieval-Augmented Generation"
+                    ),
+                    "provider": "arxiv",
+                    "sourceType": "repository_record",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "full_text_verified",
+                    "topicalRelevance": "weak_match",
+                    "confidence": "medium",
+                    "isPrimarySource": False,
+                    "canonicalUrl": "https://arxiv.org/abs/2411.18583v1",
+                    "retrievedUrl": "https://arxiv.org/pdf/2411.18583v1",
+                    "fullTextObserved": True,
+                    "abstractObserved": True,
+                    "openAccessRoute": "repository_open_access",
+                    "citationText": "2411.18583",
+                    "note": "Useful but weaker match.",
+                }
+            ],
+            "evidenceGaps": [
+                (
+                    "Smart provider 'huggingface' fell back to deterministic mode; inspect "
+                    "providerOutcomes before trusting planning or expansion quality."
+                )
+            ],
+            "coverageSummary": {
+                "providersAttempted": ["scholarapi", "semantic_scholar", "openalex", "arxiv", "core"],
+                "providersSucceeded": ["arxiv", "openalex"],
+                "providersFailed": ["core"],
+                "providersZeroResults": ["semantic_scholar"],
+                "likelyCompleteness": "partial",
+                "searchMode": "smart_literature_review",
+                "summaryLine": (
+                    "5 provider(s) searched, 1 failed, 1 returned zero results, likely completeness: partial."
+                ),
+            },
+            "failureSummary": {
+                "outcome": "fallback_success",
+                "whatFailed": "One or more smart-search providers or provider-side stages failed.",
+                "whatStillWorked": "The smart workflow returned the strongest available partial result set.",
+                "fallbackAttempted": True,
+                "fallbackMode": "smart_provider_fallback",
+                "primaryPathFailureReason": "core",
+                "completenessImpact": "Coverage may be partial because these providers or stages failed: core.",
+                "recommendedNextAction": "review_partial_results",
+            },
+        },
+    )
+    assert record.search_session_id == "ssn-follow-up-partial"
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(
+        await server.call_tool(
+            "follow_up_research",
+            {
+                "searchSessionId": "ssn-follow-up-partial",
+                "question": (
+                    "Which provider failure made completeness partial, and what was the strongest verified finding?"
+                ),
+            },
+        )
+    )
+
+    assert payload["answerStatus"] == "answered"
+    assert "Failed providers: core." in payload["answer"]
+    assert (
+        "The strongest verified finding in the saved session was: Ragas: Automated Evaluation "
+        "of Retrieval Augmented Generation."
+    ) in payload["answer"]
+    assert payload["failureSummary"]["primaryPathFailureReason"] == "core"
+    assert payload["verifiedFindings"][0]["claim"] == "Ragas: Automated Evaluation of Retrieval Augmented Generation"
+
+
+@pytest.mark.asyncio
 async def test_get_serpapi_account_status_sanitizes_upstream_response_in_public_tool_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

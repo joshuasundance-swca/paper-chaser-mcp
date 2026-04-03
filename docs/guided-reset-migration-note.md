@@ -35,6 +35,8 @@ environments even though the server still supports those tools in expert mode.
 ### 2) Opt Into Expert Surface
 
 - Set `PAPER_CHASER_TOOL_PROFILE=expert`.
+- Leave `PAPER_CHASER_HIDE_DISABLED_TOOLS=false` if you want expert
+  `list_tools` output to advertise the broadest visible expert surface.
 - Use expert packaging metadata when publishing a full tool set.
 - Keep guided tools as the default decision path in agent prompts even in expert
   environments unless there is a concrete expert-only requirement.
@@ -58,7 +60,9 @@ environments even though the server still supports those tools in expert mode.
 
 - Validate both profile contracts in CI:
   - guided: only guided tools are advertised
-  - expert: full surface is advertised
+  - expert: the expert-visible surface is advertised; under default expert
+    settings with disabled-tool hiding off, that is typically the broadest
+    expert surface
 - Run fixture-based acceptance checks for:
   - low-context guided success
   - safe abstention over plausible garbage

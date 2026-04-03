@@ -1245,6 +1245,362 @@ def _direct_read_recommendations(source: dict[str, Any], *, tool_profile: str) -
     return recommendations[:3]
 
 
+def _guided_follow_up_status(status: str | None) -> str:
+    normalized = str(status or "").strip()
+    if normalized in {"succeeded", "partial", "needs_disambiguation", "abstained", "failed"}:
+        return normalized
+    if normalized == "answered":
+        return "succeeded"
+    if normalized == "insufficient_evidence":
+        return "partial"
+    return "partial"
+
+
+def _guided_session_findings(payload: dict[str, Any], sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for finding in payload.get("verifiedFindings") or []:
+        if isinstance(finding, dict):
+            claim = str(finding.get("claim") or "").strip()
+            if claim:
+                findings.append(
+                    {
+                        "claim": claim,
+                        "supportingSourceIds": list(finding.get("supportingSourceIds") or []),
+                        "trustLevel": str(finding.get("trustLevel") or "verified"),
+                    }
+                )
+            continue
+        if isinstance(finding, str) and finding.strip():
+            supporting_source_ids = [
+                str(source.get("sourceId") or "")
+                for source in sources
+                if finding.strip() in str(source.get("title") or source.get("note") or source.get("sourceId") or "")
+            ]
+            findings.append(
+                {
+                    "claim": finding.strip(),
+                    "supportingSourceIds": [source_id for source_id in supporting_source_ids if source_id][:1],
+                    "trustLevel": "verified",
+                }
+            )
+    return findings or _guided_findings_from_sources(sources)
+
+
+def _guided_session_state(
+    *,
+    workspace_registry: Any,
+    search_session_id: str,
+) -> dict[str, Any] | None:
+    if workspace_registry is None:
+        return None
+    try:
+        record = workspace_registry.get(search_session_id)
+    except Exception:
+        return None
+    payload = record.payload if isinstance(record.payload, dict) else {}
+    sources = [source for source in payload.get("sources") or [] if isinstance(source, dict)]
+    if not sources:
+        sources = [
+            _guided_source_record_from_structured_source(source, index=index)
+            for index, source in enumerate(payload.get("structuredSources") or [], start=1)
+            if isinstance(source, dict)
+        ]
+    if not sources:
+        query = str(record.query or payload.get("query") or "")
+        sources = [
+            _guided_source_record_from_paper(query, paper, index=index)
+            for index, paper in enumerate(record.papers, start=1)
+            if isinstance(paper, dict)
+        ]
+    unverified_leads = [lead for lead in payload.get("unverifiedLeads") or [] if isinstance(lead, dict)]
+    if not unverified_leads:
+        unverified_leads = [
+            _guided_source_record_from_structured_source(source, index=index)
+            for index, source in enumerate(payload.get("candidateLeads") or [], start=1)
+            if isinstance(source, dict)
+        ] or _guided_unverified_leads_from_sources(sources)
+    verified_findings = _guided_session_findings(payload, sources)
+    evidence_gaps = list(payload.get("evidenceGaps") or [])
+    coverage = cast(dict[str, Any] | None, payload.get("coverage") or payload.get("coverageSummary"))
+    status = _guided_follow_up_status(payload.get("status") or payload.get("answerStatus"))
+    failure_summary = _guided_failure_summary(
+        failure_summary=cast(dict[str, Any] | None, payload.get("failureSummary")),
+        status=status,
+        sources=sources,
+        evidence_gaps=evidence_gaps,
+    )
+    return {
+        "searchSessionId": record.search_session_id,
+        "status": status,
+        "sources": sources,
+        "unverifiedLeads": unverified_leads,
+        "verifiedFindings": verified_findings,
+        "evidenceGaps": evidence_gaps,
+        "trustSummary": _guided_trust_summary(sources, evidence_gaps),
+        "coverage": coverage,
+        "failureSummary": failure_summary,
+        "resultMeaning": payload.get("resultMeaning")
+        or _guided_result_meaning(
+            status=status,
+            verified_findings=verified_findings,
+            evidence_gaps=evidence_gaps,
+            coverage=coverage,
+            failure_summary=failure_summary,
+        ),
+        "nextActions": payload.get("nextActions")
+        or _guided_next_actions(
+            search_session_id=record.search_session_id,
+            status=status,
+        ),
+    }
+
+
+def _guided_follow_up_introspection_facets(question: str) -> set[str]:
+    text = question.lower()
+    facets: set[str] = set()
+    if any(
+        marker in text
+        for marker in (
+            "provider",
+            "providers",
+            "coverage",
+            "searched",
+            "search mode",
+            "completeness",
+            "attempted",
+            "succeeded",
+            "failed",
+            "zero results",
+            "zero-result",
+            "zero result",
+        )
+    ):
+        facets.add("coverage")
+    if any(
+        marker in text
+        for marker in (
+            "evidence gap",
+            "evidence gaps",
+            "what prevented",
+            "blocking gap",
+            "missing evidence",
+            "what was missing",
+            "why abstained",
+            "why partial",
+            "why incomplete",
+            "prevented a grounded",
+            "prevented grounded",
+        )
+    ):
+        facets.add("evidence_gaps")
+    if any(
+        marker in text
+        for marker in (
+            "fallback",
+            "what failed",
+            "failure",
+            "still worked",
+            "degraded",
+        )
+    ):
+        facets.add("failure_summary")
+    if any(
+        marker in text
+        for marker in (
+            "verified finding",
+            "verified findings",
+            "strongest verified",
+            "strongest finding",
+            "main finding",
+            "best finding",
+            "top finding",
+            "trusted finding",
+        )
+    ):
+        facets.add("verified_findings")
+    if any(
+        marker in text
+        for marker in (
+            "trust summary",
+            "on-topic",
+            "off-topic",
+            "weak match",
+            "how many verified",
+            "how many on-topic",
+            "how many sources",
+            "trust state",
+        )
+    ):
+        facets.add("trust_summary")
+    if any(
+        marker in text
+        for marker in (
+            "what does this result mean",
+            "result meaning",
+            "what status",
+            "why was this result",
+        )
+    ):
+        facets.add("result_meaning")
+    if not facets and any(
+        marker in text
+        for marker in (
+            "which sources",
+            "what sources",
+            "which source",
+            "which documents",
+            "what documents",
+            "what records",
+        )
+    ):
+        facets.add("source_overview")
+    return facets
+
+
+def _answer_follow_up_from_session_state(
+    *,
+    question: str,
+    session_state: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if session_state is None:
+        return None
+    facets = _guided_follow_up_introspection_facets(question)
+    if not facets:
+        return None
+    answer_parts: list[str] = []
+    coverage = cast(dict[str, Any] | None, session_state.get("coverage")) or {}
+    failure_summary = cast(dict[str, Any] | None, session_state.get("failureSummary")) or {}
+    evidence_gaps = list(session_state.get("evidenceGaps") or [])
+    verified_findings = [
+        finding for finding in session_state.get("verifiedFindings") or [] if isinstance(finding, dict)
+    ]
+    sources = [source for source in session_state.get("sources") or [] if isinstance(source, dict)]
+    trust_summary = cast(dict[str, Any] | None, session_state.get("trustSummary")) or {}
+
+    if "coverage" in facets:
+        attempted = list(coverage.get("providersAttempted") or [])
+        succeeded = list(coverage.get("providersSucceeded") or [])
+        failed = list(coverage.get("providersFailed") or [])
+        zero_results = list(coverage.get("providersZeroResults") or [])
+        likely_completeness = str(coverage.get("likelyCompleteness") or "unknown")
+        sentences: list[str] = []
+        if attempted:
+            sentences.append(f"Providers searched were {', '.join(attempted)}.")
+        else:
+            sentences.append("No provider-attempt summary was saved for this session.")
+        if failed:
+            sentences.append(f"Failed providers: {', '.join(failed)}.")
+        else:
+            sentences.append("No provider failures were recorded.")
+        if zero_results:
+            sentences.append(f"Zero-result providers: {', '.join(zero_results)}.")
+        if succeeded:
+            sentences.append(f"Successful providers: {', '.join(succeeded)}.")
+        if coverage.get("searchMode"):
+            sentences.append(f"Search mode was {coverage['searchMode']}.")
+        sentences.append(f"Likely completeness was {likely_completeness}.")
+        answer_parts.append(" ".join(sentences))
+
+    if "evidence_gaps" in facets:
+        if evidence_gaps:
+            if "specific" in question.lower() or len(evidence_gaps) == 1:
+                answer_parts.append(f"The main evidence gap was: {evidence_gaps[0]}")
+            else:
+                answer_parts.append("Key evidence gaps were: " + "; ".join(evidence_gaps[:3]) + ".")
+        else:
+            answer_parts.append("No explicit evidence gaps were recorded in the saved session.")
+
+    if "failure_summary" in facets:
+        outcome = str(failure_summary.get("outcome") or "no_failure")
+        what_failed = str(failure_summary.get("whatFailed") or "").strip()
+        what_still_worked = str(failure_summary.get("whatStillWorked") or "").strip()
+        completeness_impact = str(failure_summary.get("completenessImpact") or "").strip()
+        fallback_attempted = bool(failure_summary.get("fallbackAttempted"))
+        summary_sentences = [f"Failure outcome was {outcome}."]
+        if what_failed:
+            summary_sentences.append(what_failed)
+        if what_still_worked:
+            summary_sentences.append(what_still_worked)
+        if fallback_attempted:
+            fallback_mode = str(failure_summary.get("fallbackMode") or "fallback")
+            summary_sentences.append(f"Fallback was attempted via {fallback_mode}.")
+        if completeness_impact:
+            summary_sentences.append(completeness_impact)
+        answer_parts.append(" ".join(summary_sentences))
+
+    if "verified_findings" in facets:
+        if verified_findings:
+            strongest_finding = str(verified_findings[0].get("claim") or "").strip()
+            if strongest_finding:
+                answer_parts.append(f"The strongest verified finding in the saved session was: {strongest_finding}.")
+            if len(verified_findings) > 1:
+                remaining_findings = [
+                    str(finding.get("claim") or "").strip()
+                    for finding in verified_findings[1:3]
+                    if str(finding.get("claim") or "").strip()
+                ]
+                if remaining_findings:
+                    answer_parts.append("Other verified findings included: " + "; ".join(remaining_findings) + ".")
+        else:
+            answer_parts.append("No verified findings were recorded in the saved session.")
+
+    if "trust_summary" in facets:
+        answer_parts.append(
+            "Trust summary: "
+            f"{int(trust_summary.get('verifiedSourceCount') or 0)} verified source(s), "
+            f"{int(trust_summary.get('onTopicSourceCount') or 0)} on-topic, "
+            f"{int(trust_summary.get('weakMatchCount') or 0)} weak match, and "
+            f"{int(trust_summary.get('offTopicCount') or 0)} off-topic."
+        )
+
+    if "result_meaning" in facets:
+        result_meaning = str(session_state.get("resultMeaning") or "").strip()
+        if result_meaning:
+            answer_parts.append(result_meaning)
+
+    if "source_overview" in facets:
+        if sources:
+            source_titles = [
+                str(source.get("title") or source.get("sourceId") or "").strip()
+                for source in sources[:3]
+                if str(source.get("title") or source.get("sourceId") or "").strip()
+            ]
+            if source_titles:
+                answer_parts.append("Saved sources included: " + "; ".join(source_titles) + ".")
+        else:
+            unverified_leads = [lead for lead in session_state.get("unverifiedLeads") or [] if isinstance(lead, dict)]
+            lead_titles = [
+                str(lead.get("title") or lead.get("sourceId") or "").strip()
+                for lead in unverified_leads[:3]
+                if str(lead.get("title") or lead.get("sourceId") or "").strip()
+            ]
+            if lead_titles:
+                answer_parts.append("Saved source leads included: " + "; ".join(lead_titles) + ".")
+            else:
+                answer_parts.append("No saved sources were available for this session.")
+
+    if not answer_parts:
+        return None
+
+    return {
+        "searchSessionId": session_state["searchSessionId"],
+        "answerStatus": "answered",
+        "answer": " ".join(answer_parts),
+        "evidence": [],
+        "unsupportedAsks": [],
+        "followUpQuestions": [],
+        "verifiedFindings": session_state["verifiedFindings"],
+        "sources": session_state["sources"],
+        "unverifiedLeads": session_state["unverifiedLeads"],
+        "evidenceGaps": session_state["evidenceGaps"],
+        "trustSummary": session_state["trustSummary"],
+        "coverage": session_state["coverage"],
+        "failureSummary": session_state["failureSummary"],
+        "resultMeaning": session_state["resultMeaning"],
+        "nextActions": session_state["nextActions"],
+    }
+
+
 async def dispatch_tool(
     name: str,
     arguments: dict[str, Any],
@@ -1601,6 +1957,16 @@ async def dispatch_tool(
 
     if name == "follow_up_research":
         follow_up_args = cast(FollowUpResearchArgs, TOOL_INPUT_MODELS[name].model_validate(arguments))
+        session_state = _guided_session_state(
+            workspace_registry=workspace_registry,
+            search_session_id=follow_up_args.search_session_id,
+        )
+        session_answer = _answer_follow_up_from_session_state(
+            question=follow_up_args.question,
+            session_state=session_state,
+        )
+        if session_answer is not None:
+            return session_answer
         if agentic_runtime is None:
             evidence_gaps = [follow_up_args.question]
             failure_summary = _guided_failure_summary(
@@ -1671,7 +2037,7 @@ async def dispatch_tool(
             sources=sources,
             evidence_gaps=evidence_gaps,
         )
-        return {
+        response = {
             "searchSessionId": follow_up_args.search_session_id,
             "answerStatus": answer_status,
             "answer": ask.get("answer"),
@@ -1697,6 +2063,13 @@ async def dispatch_tool(
                 status=guided_status,
             ),
         }
+        session_answer = _answer_follow_up_from_session_state(
+            question=follow_up_args.question,
+            session_state=session_state,
+        )
+        if answer_status != "answered" and session_answer is not None:
+            return session_answer
+        return response
 
     if name == "inspect_source":
         inspect_args = cast(InspectSourceArgs, TOOL_INPUT_MODELS[name].model_validate(arguments))
@@ -2746,7 +3119,7 @@ async def dispatch_tool(
             raise
         raw_citations = raw.get("citations") or []
         raw_links = raw.get("links") or []
-        response = CitationFormatsResponse(
+        citation_response = CitationFormatsResponse(
             result_id=validated_cf.result_id,
             citations=[
                 CitationFormat(
@@ -2768,7 +3141,7 @@ async def dispatch_tool(
         return _finalize_tool_result(
             name,
             arguments,
-            dump_jsonable(response),
+            dump_jsonable(citation_response),
             workspace_registry=workspace_registry,
         )
 

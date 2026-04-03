@@ -63,7 +63,7 @@ Use `PAPER_CHASER_TOOL_PROFILE` to choose the advertised surface:
 | Profile | Default | Exposed surface | Intended user |
 | --- | --- | --- | --- |
 | `guided` | yes | `research`, `follow_up_research`, `resolve_reference`, `inspect_source`, `get_runtime_status` | Low-context users and agents |
-| `expert` | no | Guided tools plus raw/provider-specific families (`search_papers*`, smart graph tools, regulatory direct tools, full diagnostics) | Power users and operator workflows |
+| `expert` | no | Guided tools plus raw/provider-specific families (`search_papers*`, smart graph tools, regulatory direct tools, full diagnostics), subject to enabled features and disabled-tool visibility | Power users and operator workflows |
 
 Practical default: `PAPER_CHASER_TOOL_PROFILE=guided` with
 `PAPER_CHASER_HIDE_DISABLED_TOOLS=true`.
@@ -258,7 +258,7 @@ below are expert-path controls.
 
 | Area | Default | Main variables | Notes |
 | --- | --- | --- | --- |
-| Tool profile | `guided` | `PAPER_CHASER_TOOL_PROFILE` | `guided` exposes the 5 low-context tools; `expert` exposes the full raw/provider-specific surface |
+| Tool profile | `guided` | `PAPER_CHASER_TOOL_PROFILE` | `guided` exposes the 5 low-context tools; `expert` exposes the broader raw/provider-specific surface, subject to enabled features and `PAPER_CHASER_HIDE_DISABLED_TOOLS` |
 | Search broker | `semantic_scholar,arxiv,core,serpapi_google_scholar` | `PAPER_CHASER_ENABLE_SEMANTIC_SCHOLAR`, `PAPER_CHASER_ENABLE_ARXIV`, `PAPER_CHASER_ENABLE_CORE`, `PAPER_CHASER_ENABLE_SERPAPI`, `PAPER_CHASER_PROVIDER_ORDER` | SerpApi is opt-in and paid; CORE is off by default |
 | OpenAlex tool family | enabled | `PAPER_CHASER_ENABLE_OPENALEX`, `OPENALEX_API_KEY`, `OPENALEX_MAILTO` | Explicit tool family, not a default broker hop |
 | ScholarAPI tool family | disabled | `PAPER_CHASER_ENABLE_SCHOLARAPI`, `SCHOLARAPI_API_KEY` | Explicit discovery, monitoring, full-text, and PDF family; also available as an opt-in broker target via `preferredProvider` or `providerOrder`. ScholarAPI-sourced paper results now include a separate `contentAccess` block for access/full-text metadata. |
