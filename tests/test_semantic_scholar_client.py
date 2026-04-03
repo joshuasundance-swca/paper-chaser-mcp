@@ -1798,6 +1798,20 @@ async def test_search_snippets_degrades_provider_400_to_empty_payload(
     assert "search_papers_match/search_papers" in result["message"]
 
 
+def test_normalize_paper_id_handles_doi_and_semantic_scholar_urls() -> None:
+    sc = server.SemanticScholarClient()
+
+    assert sc._normalize_paper_id("10.1038/nrn3241") == "DOI:10.1038/nrn3241"
+    assert sc._normalize_paper_id("https://doi.org/10.1038/nrn3241") == "DOI:10.1038/nrn3241"
+    assert (
+        sc._normalize_paper_id(
+            "https://www.semanticscholar.org/paper/Attention-Is-All-You-Need/204e3073870fae3d05bcbc2f6a8e263d9b72e776"
+        )
+        == "204e3073870fae3d05bcbc2f6a8e263d9b72e776"
+    )
+    assert sc._normalize_paper_id("https://example.com/paper/123") == "URL:https://example.com/paper/123"
+
+
 @pytest.mark.asyncio
 async def test_search_snippets_degrades_provider_429_without_backoff_retry(
     monkeypatch: pytest.MonkeyPatch,

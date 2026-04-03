@@ -60,6 +60,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         provider_registry: ProviderDiagnosticsRegistry | None = None,
     ) -> None:
         super().__init__(config)
+        self._configured_provider = config.provider
         self._provider_name = "openai"
         self.planner_model_name = config.planner_model
         self.synthesis_model_name = config.synthesis_model

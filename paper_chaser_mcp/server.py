@@ -346,7 +346,7 @@ def _build_signature(model: Any) -> tuple[Signature, dict[str, Any]]:
         parameters.append(
             Parameter(
                 parameter_name,
-                Parameter.POSITIONAL_OR_KEYWORD,
+                Parameter.KEYWORD_ONLY,
                 annotation=model_field.annotation,
                 default=_parameter_default(model_field),
             )
@@ -355,7 +355,7 @@ def _build_signature(model: Any) -> tuple[Signature, dict[str, Any]]:
     parameters.append(
         Parameter(
             "ctx",
-            Parameter.POSITIONAL_OR_KEYWORD,
+            Parameter.KEYWORD_ONLY,
             annotation=Context,
             default=None,
         )

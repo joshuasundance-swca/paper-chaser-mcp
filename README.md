@@ -45,14 +45,18 @@ be hard to misuse and explicit about trust.
 
 - **Default research entrypoint**: `research` handles discovery, known-item
   recovery, citation repair, and regulatory routing in one trust-graded path.
-- **Grounded follow-up**: `follow_up_research` uses `searchSessionId` and can
-  abstain when evidence is weak or unsupported.
+- **Grounded follow-up**: `follow_up_research` answers against one saved
+  `searchSessionId`; if you omit it, the server only infers a session when the
+  choice is unique.
 - **Reference-first recovery**: `resolve_reference` handles DOI/arXiv/URL,
-  citation fragments, and regulatory-style references.
+  citation fragments, and regulatory-style references, and exact DOI/arXiv/
+  paper-URL inputs resolve as exact anchors rather than falling through to fuzzy repair.
 - **Source auditability**: `inspect_source` exposes one `sourceId` with
-  provenance, trust state, and direct-read next steps.
+  provenance, trust state, and direct-read next steps; omitted `searchSessionId`
+  is only accepted when one compatible saved session exists.
 - **Runtime truth**: `get_runtime_status` surfaces active profile/transport and
-  provider-state warnings without requiring low-level diagnostics.
+  provider-state warnings without requiring low-level diagnostics. `configuredSmartProvider`
+  is the configured smart bundle; `activeSmartProvider` is the latest effective execution path.
 - **Expert depth remains available**: raw/smart/provider-specific tools still
   exist for operator workflows under the expert profile.
 
@@ -133,11 +137,14 @@ follow_up_research(searchSessionId="...", question="What evaluation tradeoffs sh
 → inspect answerStatus
 → if answered: use answer + evidence
 → if abstained/insufficient_evidence: use nextActions and inspect_source
+→ if you omit searchSessionId and multiple saved sessions exist: provide it explicitly
 ```
 
 ### 3. Resolve references before broad search when possible
 
 ```text
+resolve_reference(reference="10.1038/nrn3241")
+→ exact DOI/arXiv/paper URL should resolve directly when supported
 resolve_reference(reference="Rockstrom et al planetary boundaries 2009 Nature 461 472")
 → inspect status and bestMatch/alternatives
 → if resolved: run research with the resolved anchor
@@ -148,6 +155,7 @@ resolve_reference(reference="Rockstrom et al planetary boundaries 2009 Nature 46
 ```text
 inspect_source(searchSessionId="...", sourceId="...")
 → inspect verificationStatus, topicalRelevance, canonicalUrl, directReadRecommendations
+→ if searchSessionId is omitted and inference is ambiguous, rerun with an explicit saved session id
 ```
 
 ### 5. Handle abstention and clarification explicitly

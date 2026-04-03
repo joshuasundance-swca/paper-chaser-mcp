@@ -28,8 +28,10 @@ environments even though the server still supports those tools in expert mode.
 - Keep `PAPER_CHASER_TOOL_PROFILE=guided` (or omit it).
 - Update clients to start from `research`.
 - Reuse `searchSessionId` with `follow_up_research`.
+- If `searchSessionId` is omitted, guided follow-up and source inspection infer it only when one compatible saved session exists.
 - Use `inspect_source` for provenance and direct-read follow-through.
 - Use `resolve_reference` for citation/identifier normalization.
+- Expect exact DOI, arXiv, and supported paper URLs to resolve before fuzzy citation repair.
 - Treat `abstained` and `needs_disambiguation` as intended safe outcomes.
 
 ### 2) Opt Into Expert Surface
@@ -54,6 +56,7 @@ environments even though the server still supports those tools in expert mode.
   - `effectiveProfile`
   - `configuredSmartProvider`
   - `activeSmartProvider`
+  - where `activeSmartProvider` means the latest effective execution path, including deterministic fallback
   - internally consistent active/disabled provider sets.
 
 ## Release-Readiness Checks

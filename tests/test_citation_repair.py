@@ -6,7 +6,10 @@ from paper_chaser_mcp import server
 from paper_chaser_mcp.agentic import WorkspaceRegistry
 from paper_chaser_mcp.citation_repair import (
     RankedCitationCandidate,
+    _classify_resolution_confidence,
     _filtered_alternative_candidates,
+    _normalize_identifier_for_openalex,
+    _normalize_identifier_for_semantic_scholar,
     parse_citation,
     resolve_citation,
 )
@@ -416,3 +419,104 @@ async def test_resolve_citation_regulatory_input_redirects_to_regulatory_tools_w
     assert payload["inferredFields"]["likelyOutputType"] == "regulatory_primary_source"
     assert "federal register" in payload["message"].lower()
     assert semantic.calls == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_citation_bare_doi_identifier_resolution_is_high_confidence() -> None:
+    semantic = RecordingSemanticClient()
+
+    payload = await resolve_citation(
+        citation="10.1038/nrn3241",
+        max_candidates=3,
+        client=semantic,
+        enable_core=False,
+        enable_semantic_scholar=True,
+        enable_openalex=False,
+        enable_arxiv=False,
+        enable_serpapi=False,
+        core_client=None,
+        openalex_client=None,
+        arxiv_client=None,
+        serpapi_client=None,
+    )
+
+    assert payload["bestMatch"]["paper"]["paperId"] == "DOI:10.1038/nrn3241"
+    assert payload["resolutionConfidence"] == "high"
+    assert semantic.calls[0] == ("get_paper_details", {"paper_id": "DOI:10.1038/nrn3241", "fields": None})
+
+
+@pytest.mark.asyncio
+async def test_resolve_citation_semantic_scholar_url_resolution_is_high_confidence() -> None:
+    semantic = RecordingSemanticClient()
+    paper_url = (
+        "https://www.semanticscholar.org/paper/Attention-Is-All-You-Need/204e3073870fae3d05bcbc2f6a8e263d9b72e776"
+    )
+
+    payload = await resolve_citation(
+        citation=paper_url,
+        max_candidates=3,
+        client=semantic,
+        enable_core=False,
+        enable_semantic_scholar=True,
+        enable_openalex=False,
+        enable_arxiv=False,
+        enable_serpapi=False,
+        core_client=None,
+        openalex_client=None,
+        arxiv_client=None,
+        serpapi_client=None,
+    )
+
+    assert payload["bestMatch"]["paper"]["paperId"] == "204e3073870fae3d05bcbc2f6a8e263d9b72e776"
+    assert payload["resolutionConfidence"] == "high"
+    assert semantic.calls[0] == (
+        "get_paper_details",
+        {"paper_id": "204e3073870fae3d05bcbc2f6a8e263d9b72e776", "fields": None},
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_citation_arxiv_identifier_resolution_is_high_confidence() -> None:
+    semantic = RecordingSemanticClient()
+
+    payload = await resolve_citation(
+        citation="arXiv:1706.03762",
+        max_candidates=3,
+        client=semantic,
+        enable_core=False,
+        enable_semantic_scholar=True,
+        enable_openalex=False,
+        enable_arxiv=False,
+        enable_serpapi=False,
+        core_client=None,
+        openalex_client=None,
+        arxiv_client=None,
+        serpapi_client=None,
+    )
+
+    assert payload["bestMatch"]["paper"]["paperId"] == "ARXIV:1706.03762"
+    assert payload["resolutionConfidence"] == "high"
+    assert semantic.calls[0] == ("get_paper_details", {"paper_id": "ARXIV:1706.03762", "fields": None})
+
+
+def test_classify_resolution_confidence_identifier_match_remains_high() -> None:
+    assert (
+        _classify_resolution_confidence(
+            best_score=0.61,
+            runner_up_score=0.0,
+            matched_fields=["identifier"],
+            conflicting_fields=["year", "author"],
+            resolution_strategy="identifier",
+        )
+        == "high"
+    )
+
+
+def test_identifier_normalizers_cover_openalex_and_generic_url_branches() -> None:
+    assert _normalize_identifier_for_openalex("doi:10.1038/nrn3241", "doi") == "10.1038/nrn3241"
+    assert _normalize_identifier_for_openalex("https://openalex.org/W12345", "url") == "W12345"
+    assert _normalize_identifier_for_openalex("https://example.org/paper", "url") is None
+    assert (
+        _normalize_identifier_for_semantic_scholar("https://example.org/paper", "url")
+        == "URL:https://example.org/paper"
+    )

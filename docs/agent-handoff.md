@@ -27,12 +27,14 @@ next steps without re-discovering project state.
   appear as verified findings or timeline events.
 - Runtime reporting is now **internally truthful**. `get_runtime_status` and
   expert diagnostics should agree on `effectiveProfile`, smart-provider state,
-  and active/disabled provider sets.
+  and active/disabled provider sets. `configuredSmartProvider` is the configured
+  smart bundle; `activeSmartProvider` is the latest effective execution path,
+  including deterministic fallback when smart execution degrades.
 - The current checked-in package version is `0.2.1` in both `pyproject.toml`
   and `server.json`.
 - The current coverage-gated validation baseline after the latest release-readiness pass is:
   `python -m pytest --cov=paper_chaser_mcp --cov-report=term-missing --cov-fail-under=85`
-  => `630 passed`, total coverage `85.00%`.
+  => `655 passed`, total coverage `85.09%`.
 
 ## Start Here
 
@@ -43,6 +45,9 @@ Read these in order before making behavior or guidance changes:
 3. `docs/guided-reset-migration-note.md`
 4. `.github/copilot-instructions.md`
 5. This file: `docs/agent-handoff.md`
+
+If you are changing guided recovery, input normalization, or result-state metadata,
+also read `docs/guided-smart-robustness.md`.
 
 For release work, also read `docs/release-publishing-plan.md`.
 
@@ -66,8 +71,8 @@ gh aw compile test-paper-chaser --dir .github/workflows
 - `research`: default entry point for discovery, literature review, known-item
   recovery, citation repair, and regulatory routing.
 - `follow_up_research`: one grounded follow-up over a saved `searchSessionId`.
-- `resolve_reference`: DOI/arXiv/URL/citation/reference cleanup.
-- `inspect_source`: per-source provenance and trust inspection.
+- `resolve_reference`: DOI/arXiv/URL/citation/reference cleanup with exact identifier normalization before fuzzy recovery.
+- `inspect_source`: per-source provenance and trust inspection; omitted `searchSessionId` only works when one compatible saved session exists.
 - `get_runtime_status`: profile/provider/runtime sanity check.
 
 ### Expert profile

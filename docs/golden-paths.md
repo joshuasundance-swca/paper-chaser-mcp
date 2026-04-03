@@ -67,6 +67,7 @@ research(query="retrieval-augmented generation for coding agents", limit=5)
 1. Use `follow_up_research` with `searchSessionId` from `research`.
 2. Gate on `answerStatus` before trusting the answer body.
 3. If not answered, follow `nextActions` and inspect source-level evidence.
+4. If `searchSessionId` is omitted, expect inference only when exactly one compatible saved session exists.
 
 **Example**
 
@@ -89,6 +90,7 @@ follow_up_research(searchSessionId="...", question="What evaluation tradeoffs sh
    `resolved`, `multiple_candidates`, `no_match`, `regulatory_primary_source`.
 3. Use `bestMatch`/`alternatives` and `nextActions` to decide whether to pivot
    back into `research` with a stronger anchor.
+4. Exact DOI, arXiv, and supported paper URLs should resolve as direct anchors before fuzzy recovery.
 
 ### 4. Source-level audit (`inspect_source`)
 
@@ -96,6 +98,7 @@ follow_up_research(searchSessionId="...", question="What evaluation tradeoffs sh
    outputs.
 2. Review provenance and trust state before citing.
 3. Follow direct-read recommendations for primary sources.
+4. If `searchSessionId` is omitted and more than one compatible session exists, provide it explicitly instead of expecting newest-session rebinding.
 
 **Success signals**
 
@@ -108,6 +111,7 @@ follow_up_research(searchSessionId="...", question="What evaluation tradeoffs sh
 2. Check `runtimeSummary.effectiveProfile`, transport, smart provider status,
    provider visibility, and warnings.
 3. Use this before troubleshooting with expert diagnostics.
+4. Interpret `configuredSmartProvider` as the configured bundle and `activeSmartProvider` as the latest effective execution path, including deterministic fallback.
 
 ## Regulatory-specific guided behavior
 

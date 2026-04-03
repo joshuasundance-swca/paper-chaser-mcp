@@ -5,6 +5,7 @@ import re
 import time
 from difflib import SequenceMatcher
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 from ...citation_repair import build_match_metadata
 from ...constants import (
@@ -59,6 +60,8 @@ _ARXIV_URL_PATTERN = re.compile(
     r"https?://(?:www\.)?arxiv\.org/(?:abs|pdf)/([^\s/?#]+)",
     re.IGNORECASE,
 )
+_DOI_URL_PATTERN = re.compile(r"https?://(?:dx\.)?doi\.org/(10\.\d{4,9}/[^\s?#]+)", re.IGNORECASE)
+_BARE_DOI_PATTERN = re.compile(r"^10\.\d{4,9}/[-._;()/:A-Za-z0-9]+$", re.IGNORECASE)
 
 
 class SemanticScholarClient:
@@ -241,7 +244,10 @@ class SemanticScholarClient:
         2. Bare arXiv IDs (new-style ``YYMM.NNNNN`` or old-style
            ``category/NNNNNNN``) → ``ARXIV:<id>``
         3. ``https://arxiv.org/abs/<id>`` (or ``/pdf/``) → ``ARXIV:<id>``
-        4. Everything else is returned unchanged.
+        4. Bare DOIs and DOI URLs are normalized to ``DOI:<id>``.
+        5. Semantic Scholar paper URLs are reduced to their trailing paper id.
+        6. Other HTTP(S) URLs are normalized to ``URL:<url>``.
+        7. Everything else is returned unchanged.
         """
         stripped = paper_id.strip()
         # 1. Normalize case of arXiv: prefix
@@ -254,6 +260,25 @@ class SemanticScholarClient:
         url_match = _ARXIV_URL_PATTERN.match(stripped)
         if url_match:
             return "ARXIV:" + url_match.group(1)
+        # 4. Normalize DOI variants.
+        if re.match(r"^doi:", stripped, re.IGNORECASE):
+            return "DOI:" + stripped[len("doi:") :]
+        doi_url_match = _DOI_URL_PATTERN.match(stripped)
+        if doi_url_match:
+            return "DOI:" + doi_url_match.group(1)
+        if _BARE_DOI_PATTERN.match(stripped):
+            return "DOI:" + stripped
+        # 5. Semantic Scholar paper URLs end with a portable paper id.
+        parsed = urlparse(stripped)
+        if parsed.scheme in {"http", "https"} and parsed.netloc.lower().endswith("semanticscholar.org"):
+            path_parts = [part for part in parsed.path.split("/") if part]
+            if path_parts:
+                candidate = path_parts[-1]
+                if re.fullmatch(r"[A-Fa-f0-9]{40}", candidate):
+                    return candidate
+        # 6. Generic URLs should use the Semantic Scholar URL: prefix.
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            return f"URL:{stripped}"
         return stripped
 
     @staticmethod

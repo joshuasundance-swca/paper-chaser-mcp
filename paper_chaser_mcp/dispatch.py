@@ -1,12 +1,13 @@
 """Dispatch helpers for MCP tool routing."""
 
+import logging
 import re
 import time
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from typing import Any, Callable, cast
 
-from .agentic.planner import detect_regulatory_intent, query_facets, query_terms
+from .agentic.planner import detect_regulatory_intent, looks_like_exact_title, query_facets, query_terms
 from .citation_repair import looks_like_citation_query, looks_like_paper_identifier, parse_citation, resolve_citation
 from .clients.scholarapi import (
     ScholarApiError,
@@ -75,6 +76,8 @@ SCHOLARAPI_LIST_RETRIEVAL_NOTE = (
     "For topical search use search_papers_scholarapi, and pass pagination.nextCursor back exactly as "
     "returned to continue the same stream."
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _provider_error_text(exc: Exception) -> str:
@@ -850,6 +853,7 @@ def _guided_source_id(candidate: dict[str, Any], *, fallback_prefix: str, index:
 def _guided_source_record_from_structured_source(source: dict[str, Any], *, index: int) -> dict[str, Any]:
     return {
         "sourceId": _guided_source_id(source, fallback_prefix="source", index=index),
+        "sourceAlias": f"source-{index}",
         "title": source.get("title"),
         "provider": source.get("provider"),
         "sourceType": source.get("sourceType") or "unknown",
@@ -881,6 +885,7 @@ def _guided_source_record_from_paper(query: str, paper: dict[str, Any], *, index
     confidence = paper.get("confidence") or ("high" if topical_relevance == "on_topic" else "medium")
     return {
         "sourceId": _guided_source_id(paper, fallback_prefix="paper", index=index),
+        "sourceAlias": f"source-{index}",
         "title": paper.get("title"),
         "provider": paper.get("source"),
         "sourceType": source_type,
@@ -938,6 +943,622 @@ def _guided_unverified_leads_from_sources(sources: list[dict[str, Any]]) -> list
             seen.add(source_id)
         leads.append(source)
     return leads[:6]
+
+
+_GUIDED_LITERATURE_TERMS = {
+    "article",
+    "articles",
+    "citation",
+    "citations",
+    "doi",
+    "evidence",
+    "journal",
+    "journals",
+    "literature",
+    "meta-analysis",
+    "paper",
+    "papers",
+    "peer-reviewed",
+    "review",
+    "reviews",
+    "scholarly",
+    "science",
+    "scientific",
+    "study",
+    "studies",
+    "systematic review",
+}
+
+
+_GUIDED_QUERY_PREFIX_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"^\s*(?:please\s+|kindly\s+)?(?:help\s+me\s+)?(?:find|search(?:\s+for)?|look\s+up|research|summarize|show)\s+"
+        r"(?:papers?|literature|studies|evidence|sources?|information)\s+(?:about|on|for)\s+",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*(?:please\s+|kindly\s+)?(?:help\s+me\s+)?(?:find|search(?:\s+for)?|look\s+up|research|summarize|show)\s+",
+        re.IGNORECASE,
+    ),
+)
+
+_GUIDED_CFR_SECTION_RE = re.compile(
+    r"\b(?P<title>\d{1,2})\s*c\.?\s*f\.?\s*r\.?\s*(?P<part>\d{1,4})\s*(?:[.\-:/]\s*|\s+)(?P<section>\d{1,4})\b",
+    re.IGNORECASE,
+)
+_GUIDED_CFR_PART_RE = re.compile(
+    r"\b(?P<title>\d{1,2})\s*c\.?\s*f\.?\s*r\.?\s*part\s*(?P<part>\d{1,4})\b",
+    re.IGNORECASE,
+)
+_GUIDED_FR_CITATION_RE = re.compile(
+    r"\b(?P<volume>\d+)\s*f\.?\s*r\.?\s*(?P<page>\d+)\b",
+    re.IGNORECASE,
+)
+_GUIDED_YEAR_RANGE_RE = re.compile(r"\b(?P<start>(?:19|20)\d{2})\s*[-:/]\s*(?P<end>(?:19|20)\d{2})\b")
+_GUIDED_YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
+
+
+def _guided_normalize_whitespace(value: Any) -> str:
+    return " ".join(str(value or "").strip().split())
+
+
+def _guided_strip_research_prefix(query: str) -> str:
+    stripped = query
+    for pattern in _GUIDED_QUERY_PREFIX_PATTERNS:
+        candidate = pattern.sub("", stripped, count=1).strip()
+        if candidate and candidate != stripped:
+            return candidate
+    return stripped
+
+
+def _guided_normalize_citation_surface(text: str) -> str:
+    normalized = text
+    normalized = _GUIDED_CFR_SECTION_RE.sub(r"\g<title> CFR \g<part>.\g<section>", normalized)
+    normalized = _GUIDED_CFR_PART_RE.sub(r"\g<title> CFR Part \g<part>", normalized)
+    normalized = _GUIDED_FR_CITATION_RE.sub(r"\g<volume> FR \g<page>", normalized)
+    return normalized
+
+
+def _guided_normalize_year_hint(value: Any) -> str | None:
+    text = _guided_normalize_whitespace(value)
+    if not text:
+        return None
+    range_match = _GUIDED_YEAR_RANGE_RE.search(text)
+    if range_match:
+        start = range_match.group("start")
+        end = range_match.group("end")
+        return f"{start}:{end}" if start <= end else f"{end}:{start}"
+    years = _GUIDED_YEAR_RE.findall(text)
+    if len(years) >= 2:
+        start, end = years[0], years[1]
+        return f"{start}:{end}" if start <= end else f"{end}:{start}"
+    if years:
+        return years[0]
+    return text
+
+
+def _guided_note_repair(
+    repairs: list[dict[str, str]],
+    *,
+    field: str,
+    original: Any,
+    normalized: Any,
+    reason: str,
+) -> None:
+    if original == normalized:
+        return
+    repairs.append(
+        {
+            "field": field,
+            "from": str(original if original is not None else ""),
+            "to": str(normalized if normalized is not None else ""),
+            "reason": reason,
+        }
+    )
+
+
+def _guided_session_exists(
+    *,
+    workspace_registry: Any,
+    search_session_id: str | None,
+) -> bool:
+    if workspace_registry is None:
+        return False
+    normalized_id = _guided_normalize_whitespace(search_session_id)
+    if not normalized_id:
+        return False
+    try:
+        workspace_registry.get(normalized_id)
+    except Exception:
+        return False
+    return True
+
+
+def _guided_active_session_ids(workspace_registry: Any) -> list[str]:
+    if workspace_registry is None:
+        return []
+    records = getattr(workspace_registry, "_records", None)
+    if not isinstance(records, dict):
+        return []
+    active: list[tuple[float, str]] = []
+    now = time.time()
+    for session_id, record in records.items():
+        if not isinstance(session_id, str) or not session_id.strip():
+            continue
+        if record is None:
+            continue
+        is_expired = getattr(record, "is_expired", None)
+        expired = False
+        if callable(is_expired):
+            try:
+                expired = bool(is_expired(now))
+            except Exception as exc:
+                logger.debug("Failed to evaluate session expiration for %s: %s", session_id, exc)
+                expired = True
+        if expired:
+            continue
+        created_at = float(getattr(record, "created_at", 0.0) or 0.0)
+        active.append((created_at, session_id))
+    active.sort(key=lambda item: item[0], reverse=True)
+    return [session_id for _, session_id in active]
+
+
+_GUIDED_RECOVERABLE_SESSION_TOOLS = {"research", "search_papers_smart"}
+
+
+def _guided_candidate_records(
+    workspace_registry: Any,
+    *,
+    require_sources: bool = False,
+) -> list[Any]:
+    if workspace_registry is None:
+        return []
+    active_records = getattr(workspace_registry, "active_records", None)
+    records: list[Any] = []
+    if callable(active_records):
+        try:
+            records = list(active_records(source_tools=_GUIDED_RECOVERABLE_SESSION_TOOLS))
+        except Exception as exc:
+            logger.debug("Failed to read active workspace records: %s", exc)
+            records = []
+    if not records:
+        for session_id in _guided_active_session_ids(workspace_registry):
+            record = None
+            try:
+                record = workspace_registry.get(session_id)
+            except Exception as exc:
+                logger.debug("Failed to load workspace record %s: %s", session_id, exc)
+            if str(getattr(record, "source_tool", "") or "") not in _GUIDED_RECOVERABLE_SESSION_TOOLS:
+                continue
+            records.append(record)
+    if require_sources:
+        records = [record for record in records if _guided_record_source_candidates(record)]
+    return records
+
+
+def _guided_latest_compatible_session_id(
+    workspace_registry: Any,
+    *,
+    require_sources: bool = False,
+) -> str | None:
+    records = _guided_candidate_records(workspace_registry, require_sources=require_sources)
+    if not records:
+        return None
+    return str(getattr(records[0], "search_session_id", "") or "") or None
+
+
+def _guided_unique_compatible_session_id(
+    workspace_registry: Any,
+    *,
+    require_sources: bool = False,
+) -> str | None:
+    records = _guided_candidate_records(workspace_registry, require_sources=require_sources)
+    if len(records) != 1:
+        return None
+    return str(getattr(records[0], "search_session_id", "") or "") or None
+
+
+def _guided_resolve_session_id_for_source(
+    workspace_registry: Any,
+    source_id: str | None,
+) -> tuple[str | None, str | None]:
+    normalized_source_id = _guided_normalize_whitespace(source_id)
+    if not normalized_source_id:
+        return _guided_unique_compatible_session_id(workspace_registry, require_sources=True), None
+
+    matched_records: list[tuple[str | None, str | None]] = []
+    for record in _guided_candidate_records(workspace_registry, require_sources=True):
+        resolved, match_type = _find_record_source_with_resolution(
+            workspace_registry=workspace_registry,
+            search_session_id=str(getattr(record, "search_session_id", "") or ""),
+            source_id=normalized_source_id,
+        )
+        if resolved is not None:
+            matched_records.append((str(getattr(record, "search_session_id", "") or "") or None, match_type))
+    if len(matched_records) == 1:
+        return matched_records[0]
+    return _guided_unique_compatible_session_id(workspace_registry, require_sources=True), None
+
+
+def _guided_infer_single_session_id(workspace_registry: Any) -> str | None:
+    return _guided_unique_compatible_session_id(workspace_registry)
+
+
+def _guided_normalize_research_arguments(arguments: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    normalized_args = dict(arguments)
+    repairs: list[dict[str, str]] = []
+    warnings: list[str] = []
+
+    raw_query = _guided_normalize_whitespace(arguments.get("query"))
+    normalized_query = _guided_normalize_citation_surface(_guided_strip_research_prefix(raw_query))
+    if not normalized_query:
+        raw_focus = _guided_normalize_whitespace(arguments.get("focus"))
+        if raw_focus:
+            normalized_query = _guided_normalize_citation_surface(raw_focus)
+            warnings.append("query was empty; reused normalized focus as the research query.")
+    normalized_args["query"] = normalized_query or raw_query
+    _guided_note_repair(
+        repairs,
+        field="query",
+        original=arguments.get("query"),
+        normalized=normalized_args["query"],
+        reason="query_normalization",
+    )
+
+    normalized_focus = _guided_normalize_citation_surface(_guided_normalize_whitespace(arguments.get("focus")))
+    normalized_args["focus"] = normalized_focus or None
+    _guided_note_repair(
+        repairs,
+        field="focus",
+        original=arguments.get("focus"),
+        normalized=normalized_args["focus"],
+        reason="focus_normalization",
+    )
+
+    normalized_venue = _guided_normalize_whitespace(arguments.get("venue")) or None
+    normalized_args["venue"] = normalized_venue
+    _guided_note_repair(
+        repairs,
+        field="venue",
+        original=arguments.get("venue"),
+        normalized=normalized_venue,
+        reason="venue_normalization",
+    )
+
+    normalized_year = _guided_normalize_year_hint(arguments.get("year"))
+    normalized_args["year"] = normalized_year
+    _guided_note_repair(
+        repairs,
+        field="year",
+        original=arguments.get("year"),
+        normalized=normalized_year,
+        reason="year_normalization",
+    )
+
+    normalization = {
+        "normalizedQuery": normalized_args.get("query"),
+        "normalizedFocus": normalized_args.get("focus"),
+        "normalizedVenue": normalized_args.get("venue"),
+        "normalizedYear": normalized_args.get("year"),
+        "repairs": repairs,
+        "warnings": warnings,
+    }
+    return normalized_args, normalization
+
+
+def _guided_normalize_follow_up_arguments(
+    arguments: dict[str, Any],
+    *,
+    workspace_registry: Any,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    normalized_args = dict(arguments)
+    repairs: list[dict[str, str]] = []
+    warnings: list[str] = []
+
+    raw_search_session_id = next(
+        (
+            arguments.get(key)
+            for key in (
+                "searchSessionId",
+                "search_session_id",
+                "sessionId",
+                "session_id",
+                "session",
+            )
+            if arguments.get(key) is not None
+        ),
+        None,
+    )
+    normalized_search_session_id = _guided_normalize_whitespace(raw_search_session_id)
+    if normalized_search_session_id and not _guided_session_exists(
+        workspace_registry=workspace_registry,
+        search_session_id=normalized_search_session_id,
+    ):
+        inferred_id = _guided_infer_single_session_id(workspace_registry)
+        if inferred_id is not None:
+            warnings.append(
+                "searchSessionId "
+                f"'{normalized_search_session_id}' was unavailable; using active session '{inferred_id}'."
+            )
+            normalized_search_session_id = inferred_id
+    if not normalized_search_session_id:
+        inferred_id = _guided_infer_single_session_id(workspace_registry)
+        if inferred_id is not None:
+            normalized_search_session_id = inferred_id
+            warnings.append(f"searchSessionId was missing; inferred active session '{inferred_id}'.")
+        elif len(_guided_candidate_records(workspace_registry)) > 1:
+            warnings.append(
+                "searchSessionId was missing and multiple active sessions exist; provide an explicit searchSessionId."
+            )
+    normalized_args["searchSessionId"] = normalized_search_session_id
+    _guided_note_repair(
+        repairs,
+        field="searchSessionId",
+        original=raw_search_session_id,
+        normalized=normalized_search_session_id,
+        reason="session_id_normalization",
+    )
+
+    raw_question = next(
+        (arguments.get(key) for key in ("question", "prompt", "query") if arguments.get(key) is not None),
+        None,
+    )
+    normalized_question = _guided_normalize_whitespace(raw_question)
+    normalized_args["question"] = normalized_question
+    _guided_note_repair(
+        repairs,
+        field="question",
+        original=raw_question,
+        normalized=normalized_question,
+        reason="question_normalization",
+    )
+    if not normalized_question:
+        warnings.append("question was empty after normalization; follow-up quality may be limited.")
+
+    normalization = {
+        "normalizedSearchSessionId": normalized_args.get("searchSessionId"),
+        "normalizedQuestion": normalized_args.get("question"),
+        "repairs": repairs,
+        "warnings": warnings,
+    }
+    return normalized_args, normalization
+
+
+def _guided_normalize_inspect_arguments(
+    arguments: dict[str, Any],
+    *,
+    workspace_registry: Any,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    normalized_args = dict(arguments)
+    repairs: list[dict[str, str]] = []
+    warnings: list[str] = []
+
+    raw_search_session_id = next(
+        (
+            arguments.get(key)
+            for key in (
+                "searchSessionId",
+                "search_session_id",
+                "sessionId",
+                "session_id",
+                "session",
+            )
+            if arguments.get(key) is not None
+        ),
+        None,
+    )
+    normalized_search_session_id = _guided_normalize_whitespace(raw_search_session_id)
+    if normalized_search_session_id and not _guided_session_exists(
+        workspace_registry=workspace_registry,
+        search_session_id=normalized_search_session_id,
+    ):
+        inferred_id = _guided_infer_single_session_id(workspace_registry)
+        if inferred_id is not None:
+            warnings.append(
+                "searchSessionId "
+                f"'{normalized_search_session_id}' was unavailable; using active session '{inferred_id}'."
+            )
+            normalized_search_session_id = inferred_id
+    if not normalized_search_session_id:
+        inferred_id = _guided_infer_single_session_id(workspace_registry)
+        if inferred_id is not None:
+            normalized_search_session_id = inferred_id
+            warnings.append(f"searchSessionId was missing; inferred active session '{inferred_id}'.")
+        elif len(_guided_candidate_records(workspace_registry)) > 1:
+            warnings.append(
+                "searchSessionId was missing and multiple active sessions exist; provide an explicit searchSessionId."
+            )
+    normalized_args["searchSessionId"] = normalized_search_session_id
+    _guided_note_repair(
+        repairs,
+        field="searchSessionId",
+        original=raw_search_session_id,
+        normalized=normalized_search_session_id,
+        reason="session_id_normalization",
+    )
+
+    raw_source_id = next(
+        (
+            arguments.get(key)
+            for key in ("sourceId", "source_id", "source", "sourceRef", "id")
+            if arguments.get(key) is not None
+        ),
+        None,
+    )
+    normalized_source_id = _guided_normalize_whitespace(raw_source_id)
+    if not normalized_search_session_id:
+        inferred_session_id, _ = _guided_resolve_session_id_for_source(workspace_registry, normalized_source_id)
+        if inferred_session_id is not None:
+            normalized_search_session_id = inferred_session_id
+            normalized_args["searchSessionId"] = normalized_search_session_id
+            warnings.append(
+                f"searchSessionId was missing; inferred source-bearing session '{normalized_search_session_id}'."
+            )
+    if not normalized_source_id and normalized_search_session_id and workspace_registry is not None:
+        record = None
+        try:
+            record = workspace_registry.get(normalized_search_session_id)
+        except Exception as exc:
+            logger.debug(
+                "Failed to load workspace record %s while inferring sourceId: %s",
+                normalized_search_session_id,
+                exc,
+            )
+        if record is not None:
+            candidates = _guided_record_source_candidates(record)
+            if len(candidates) == 1:
+                normalized_source_id = _guided_normalize_whitespace(candidates[0].get("sourceId"))
+                warnings.append(f"sourceId was missing; inferred the only inspectable source '{normalized_source_id}'.")
+    normalized_args["sourceId"] = normalized_source_id
+    _guided_note_repair(
+        repairs,
+        field="sourceId",
+        original=raw_source_id,
+        normalized=normalized_source_id,
+        reason="source_id_normalization",
+    )
+    if not normalized_source_id:
+        warnings.append("sourceId was empty after normalization; source inspection may fail.")
+
+    normalization = {
+        "normalizedSearchSessionId": normalized_args.get("searchSessionId"),
+        "normalizedSourceId": normalized_args.get("sourceId"),
+        "repairs": repairs,
+        "warnings": warnings,
+    }
+    return normalized_args, normalization
+
+
+def _guided_normalization_payload(normalization: dict[str, Any]) -> dict[str, Any] | None:
+    repairs = [repair for repair in normalization.get("repairs") or [] if isinstance(repair, dict)]
+    warnings = [warning for warning in normalization.get("warnings") or [] if isinstance(warning, str) and warning]
+    if not repairs and not warnings:
+        return None
+    payload = dict(normalization)
+    payload["repairs"] = repairs
+    payload["warnings"] = warnings
+    return payload
+
+
+def _guided_is_known_item_query(query: str) -> bool:
+    return looks_like_paper_identifier(query) or looks_like_citation_query(query) or looks_like_exact_title(query)
+
+
+def _guided_mentions_literature(query: str, focus: str | None = None) -> bool:
+    normalized = " ".join(part for part in [query, focus or ""] if part).lower()
+    if not normalized:
+        return False
+    if any(term in normalized for term in _GUIDED_LITERATURE_TERMS):
+        return True
+    return bool(re.search(r"\b(?:doi|systematic review|meta-analysis|peer-reviewed|scientific reports?)\b", normalized))
+
+
+def _guided_is_mixed_intent_query(query: str, focus: str | None = None) -> bool:
+    return detect_regulatory_intent(query, focus) and _guided_mentions_literature(query, focus)
+
+
+def _guided_dedupe_source_records(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for source in sources:
+        key = (
+            str(source.get("sourceId") or "").strip(),
+            str(source.get("canonicalUrl") or "").strip(),
+            str(source.get("title") or "").strip().lower(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(source)
+    return deduped
+
+
+def _guided_merge_coverage_summaries(*coverages: dict[str, Any] | None) -> dict[str, Any] | None:
+    usable = [coverage for coverage in coverages if isinstance(coverage, dict)]
+    if not usable:
+        return None
+
+    def _merge_list(field: str) -> list[Any]:
+        merged: list[Any] = []
+        seen_values: set[str] = set()
+        for coverage in usable:
+            for item in coverage.get(field) or []:
+                marker = repr(item)
+                if marker in seen_values:
+                    continue
+                seen_values.add(marker)
+                merged.append(item)
+        return merged
+
+    likely_completeness = "none"
+    for candidate in ("complete", "partial", "unknown", "incomplete", "none"):
+        if any(str(coverage.get("likelyCompleteness") or "") == candidate for coverage in usable):
+            likely_completeness = candidate
+            break
+
+    merged: dict[str, Any] = {
+        "providersAttempted": _merge_list("providersAttempted"),
+        "providersSucceeded": _merge_list("providersSucceeded"),
+        "providersFailed": _merge_list("providersFailed"),
+        "providersZeroResults": _merge_list("providersZeroResults"),
+        "likelyCompleteness": likely_completeness,
+        "searchMode": "guided_hybrid_research",
+        "retrievalNotes": _merge_list("retrievalNotes"),
+    }
+    primary_document_coverage = usable[0].get("primaryDocumentCoverage")
+    for coverage in usable:
+        if coverage.get("primaryDocumentCoverage"):
+            primary_document_coverage = coverage.get("primaryDocumentCoverage")
+            break
+    if primary_document_coverage is not None:
+        merged["primaryDocumentCoverage"] = primary_document_coverage
+    merged["summaryLine"] = (
+        f"{len(merged['providersAttempted'])} provider(s) searched across blended literature and regulatory passes, "
+        f"{len(merged['providersFailed'])} failed, {len(merged['providersZeroResults'])} returned zero results, "
+        f"likely completeness: {likely_completeness}."
+    )
+    return merged
+
+
+def _guided_merge_failure_summaries(*summaries: dict[str, Any] | None) -> dict[str, Any] | None:
+    usable = [summary for summary in summaries if isinstance(summary, dict)]
+    if not usable:
+        return None
+    if len(usable) == 1:
+        return dict(usable[0])
+    what_failed = (
+        "; ".join(
+            str(summary.get("whatFailed") or "").strip()
+            for summary in usable
+            if str(summary.get("whatFailed") or "").strip()
+        )
+        or None
+    )
+    what_still_worked_parts = [
+        str(summary.get("whatStillWorked") or "").strip()
+        for summary in usable
+        if str(summary.get("whatStillWorked") or "").strip()
+    ]
+    completeness_parts = [
+        str(summary.get("completenessImpact") or "").strip()
+        for summary in usable
+        if str(summary.get("completenessImpact") or "").strip()
+    ]
+    return {
+        "outcome": "fallback_success" if any(summary.get("fallbackAttempted") for summary in usable) else "no_failure",
+        "whatFailed": what_failed,
+        "whatStillWorked": " ".join(dict.fromkeys(what_still_worked_parts)) or None,
+        "fallbackAttempted": any(bool(summary.get("fallbackAttempted")) for summary in usable),
+        "fallbackMode": "guided_hybrid_research",
+        "primaryPathFailureReason": "; ".join(
+            str(summary.get("primaryPathFailureReason") or "").strip()
+            for summary in usable
+            if str(summary.get("primaryPathFailureReason") or "").strip()
+        )
+        or None,
+        "completenessImpact": " ".join(dict.fromkeys(completeness_parts)) or None,
+        "recommendedNextAction": "review_partial_results",
+    }
 
 
 def _guided_open_access_route(source: dict[str, Any]) -> str:
@@ -1095,10 +1716,16 @@ def _guided_result_meaning(
     evidence_gaps: list[str],
     coverage: dict[str, Any] | None,
     failure_summary: dict[str, Any],
+    source_count: int = 0,
 ) -> str:
     if verified_findings:
         return f"This result contains {len(verified_findings)} verified finding(s) grounded in the returned sources."
     if status == "partial":
+        if source_count <= 0:
+            return (
+                "This result is currently metadata-only and did not include inspectable sources. "
+                "Use follow_up_research or rerun research with a tighter anchor."
+            )
         return "This result found some relevant evidence, but the trust or coverage state is still incomplete."
     if status == "needs_disambiguation":
         return "This result needs a stronger anchor before the server can produce a grounded answer."
@@ -1115,6 +1742,7 @@ def _guided_research_status(
     intent: str,
     sources: list[dict[str, Any]],
     findings: list[dict[str, Any]],
+    unverified_leads_count: int,
     coverage_summary: dict[str, Any] | None,
     failure_summary: dict[str, Any] | None,
     clarification: dict[str, Any] | None,
@@ -1138,15 +1766,88 @@ def _guided_research_status(
                 return "partial" if failure_summary is not None else "succeeded"
             if primary_sources:
                 return "partial"
+            if unverified_leads_count > 0:
+                return "partial"
             return "abstained"
         if primary_sources:
             return "partial" if failure_summary is not None else "succeeded"
+        if unverified_leads_count > 0:
+            return "partial"
         return "needs_disambiguation" if sources else "abstained"
     if len(findings) >= 2:
         return "partial" if failure_summary is not None else "succeeded"
     if sources:
         return "partial"
+    if unverified_leads_count > 0:
+        return "partial"
     return "abstained"
+
+
+def _guided_machine_failure_payload(
+    *,
+    search_session_id: str | None,
+    error: Exception,
+    normalization: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    evidence_gaps = ["Smart runtime returned an invalid or unstructured result payload, so guided output was degraded."]
+    failure_summary = _guided_failure_summary(
+        failure_summary={
+            "outcome": "total_failure",
+            "whatFailed": "smart_runtime_structural_failure",
+            "whatStillWorked": "The guided wrapper recovered and returned a machine-readable failure state.",
+            "fallbackAttempted": False,
+            "fallbackMode": None,
+            "primaryPathFailureReason": str(type(error).__name__),
+            "completenessImpact": evidence_gaps[0],
+            "recommendedNextAction": "research",
+        },
+        status="partial",
+        sources=[],
+        evidence_gaps=evidence_gaps,
+    )
+    payload: dict[str, Any] = {
+        "intent": "discovery",
+        "status": "partial",
+        "searchSessionId": search_session_id,
+        "summary": "Smart retrieval failed structurally; the server returned a safe machine-readable failure state.",
+        "verifiedFindings": [],
+        "sources": [],
+        "unverifiedLeads": [],
+        "evidenceGaps": evidence_gaps,
+        "trustSummary": _guided_trust_summary([], evidence_gaps),
+        "coverage": None,
+        "failureSummary": failure_summary,
+        "resultMeaning": _guided_result_meaning(
+            status="partial",
+            verified_findings=[],
+            evidence_gaps=evidence_gaps,
+            coverage=None,
+            failure_summary=failure_summary,
+            source_count=0,
+        ),
+        "nextActions": _guided_next_actions(
+            search_session_id=search_session_id,
+            status="partial",
+            has_sources=False,
+        ),
+        "resultState": _guided_result_state(
+            status="partial",
+            sources=[],
+            evidence_gaps=evidence_gaps,
+            search_session_id=search_session_id,
+        ),
+        "machineFailure": {
+            "category": "smart_runtime_structural_failure",
+            "errorType": type(error).__name__,
+            "error": str(error),
+            "retryable": True,
+            "bestNextInternalAction": "research",
+        },
+    }
+    normalization_payload = _guided_normalization_payload(normalization or {})
+    if normalization_payload is not None:
+        payload["inputNormalization"] = normalization_payload
+    return payload
 
 
 def _guided_summary(intent: str, status: str, findings: list[dict[str, Any]], sources: list[dict[str, Any]]) -> str:
@@ -1167,12 +1868,14 @@ def _guided_next_actions(
     *,
     search_session_id: str | None,
     status: str,
+    has_sources: bool,
 ) -> list[str]:
     actions: list[str] = []
-    if search_session_id:
+    if search_session_id and has_sources:
         actions.append(
             f"Use inspect_source with searchSessionId='{search_session_id}' and one sourceId to inspect evidence."
         )
+    if search_session_id:
         actions.append(
             f"Use follow_up_research with searchSessionId='{search_session_id}' to ask one grounded follow-up question."
         )
@@ -1186,39 +1889,207 @@ def _guided_next_actions(
     return actions[:4]
 
 
+def _guided_missing_evidence_type(
+    *,
+    status: str,
+    evidence_gaps: list[str],
+    sources: list[dict[str, Any]],
+) -> str:
+    if status in {"succeeded", "answered"}:
+        return "none"
+    joined_gaps = " ".join(str(gap).lower() for gap in evidence_gaps)
+    if "off-topic" in joined_gaps:
+        return "off_topic_only"
+    if any(marker in joined_gaps for marker in ("clarif", "anchor", "disambiguation")):
+        return "anchor_missing"
+    if any(marker in joined_gaps for marker in ("provider", "timeout", "failed", "error")):
+        return "provider_gap"
+    if not sources:
+        return "no_sources"
+    return "coverage_gap"
+
+
+def _guided_best_next_internal_action(
+    *,
+    status: str,
+    has_sources: bool,
+    search_session_id: str | None,
+) -> str:
+    if has_sources and search_session_id:
+        return "inspect_source"
+    if search_session_id:
+        return "follow_up_research"
+    if status in {"abstained", "needs_disambiguation", "failed"}:
+        return "research"
+    return "research"
+
+
+def _guided_result_state(
+    *,
+    status: str,
+    sources: list[dict[str, Any]],
+    evidence_gaps: list[str],
+    search_session_id: str | None,
+) -> dict[str, Any]:
+    has_sources = bool(sources)
+    normalized_status = str(status or "").strip() or "unknown"
+    if normalized_status in {"succeeded", "answered"} and has_sources:
+        groundedness = "grounded"
+    elif normalized_status == "answered":
+        groundedness = "partial"
+    elif normalized_status in {"partial", "insufficient_evidence"}:
+        groundedness = "partial"
+    elif normalized_status in {"abstained", "needs_disambiguation", "failed"}:
+        groundedness = "insufficient_evidence"
+    else:
+        groundedness = "unknown"
+    return {
+        "status": normalized_status,
+        "groundedness": groundedness,
+        "hasInspectableSources": has_sources,
+        "canAnswerFollowUp": bool(search_session_id),
+        "bestNextInternalAction": _guided_best_next_internal_action(
+            status=normalized_status,
+            has_sources=has_sources,
+            search_session_id=search_session_id,
+        ),
+        "missingEvidenceType": _guided_missing_evidence_type(
+            status=normalized_status,
+            evidence_gaps=evidence_gaps,
+            sources=sources,
+        ),
+    }
+
+
+def _guided_record_source_candidates(record: Any) -> list[dict[str, Any]]:
+    payload = record.payload if isinstance(record.payload, dict) else {}
+    explicit_sources = [source for source in payload.get("sources") or [] if isinstance(source, dict)]
+    if explicit_sources:
+        return _guided_dedupe_source_records(explicit_sources)
+
+    structured_sources = [
+        _guided_source_record_from_structured_source(source, index=index)
+        for index, source in enumerate(payload.get("structuredSources") or [], start=1)
+        if isinstance(source, dict)
+    ]
+    if structured_sources:
+        return _guided_dedupe_source_records(structured_sources)
+
+    query = str(record.query or payload.get("query") or "")
+    paper_sources = [
+        _guided_source_record_from_paper(query, paper, index=index)
+        for index, paper in enumerate(getattr(record, "papers", []) or [], start=1)
+        if isinstance(paper, dict)
+    ]
+    return _guided_dedupe_source_records(paper_sources)
+
+
+def _find_record_source_with_resolution(
+    *,
+    workspace_registry: Any,
+    search_session_id: str | None,
+    source_id: str,
+) -> tuple[dict[str, Any] | None, str]:
+    if workspace_registry is None:
+        return None, "workspace_unavailable"
+    normalized_search_session_id = _guided_normalize_whitespace(search_session_id)
+    if not normalized_search_session_id:
+        return None, "missing_session_id"
+    try:
+        record = workspace_registry.get(normalized_search_session_id)
+    except Exception:
+        return None, "session_not_found"
+
+    normalized_source_id = _guided_normalize_whitespace(source_id)
+    if not normalized_source_id:
+        return None, "empty_source_id"
+
+    direct = _find_record_source(
+        workspace_registry=workspace_registry,
+        search_session_id=normalized_search_session_id,
+        source_id=normalized_source_id,
+    )
+    if direct is not None:
+        return direct, "exact_id"
+
+    sources = _guided_record_source_candidates(record)
+    if not sources:
+        return None, "no_session_sources"
+
+    index_match = re.fullmatch(r"(?:source|src|lead|paper)?\s*[-_#]?\s*(\d{1,3})", normalized_source_id, re.IGNORECASE)
+    if index_match:
+        index = int(index_match.group(1))
+        if 1 <= index <= len(sources):
+            return sources[index - 1], "index_alias"
+
+    lowered_source_id = normalized_source_id.lower()
+    for source in sources:
+        for candidate in (
+            source.get("sourceId"),
+            source.get("citationText"),
+            source.get("canonicalUrl"),
+            source.get("retrievedUrl"),
+            source.get("title"),
+        ):
+            normalized_candidate = _guided_normalize_whitespace(candidate).lower()
+            if normalized_candidate and normalized_candidate == lowered_source_id:
+                return source, "casefold_exact"
+
+    partial_matches = [
+        source
+        for source in sources
+        if lowered_source_id in _guided_normalize_whitespace(source.get("title")).lower()
+        or lowered_source_id in _guided_normalize_whitespace(source.get("canonicalUrl")).lower()
+        or lowered_source_id in _guided_normalize_whitespace(source.get("citationText")).lower()
+    ]
+    if len(partial_matches) == 1:
+        return partial_matches[0], "unique_partial_match"
+
+    return None, "unresolved"
+
+
 def _find_record_source(
     *,
     workspace_registry: Any,
-    search_session_id: str,
+    search_session_id: str | None,
     source_id: str,
 ) -> dict[str, Any] | None:
     if workspace_registry is None:
         return None
-    record = workspace_registry.get(search_session_id)
+    normalized_search_session_id = _guided_normalize_whitespace(search_session_id)
+    if not normalized_search_session_id:
+        return None
+    record = workspace_registry.get(normalized_search_session_id)
     payload = record.payload if isinstance(record.payload, dict) else {}
+    normalized_source_id = _guided_normalize_whitespace(source_id)
+    if not normalized_source_id:
+        return None
     for source in payload.get("sources") or []:
-        if isinstance(source, dict) and str(source.get("sourceId") or "").strip() == source_id:
+        if isinstance(source, dict) and normalized_source_id in {
+            _guided_normalize_whitespace(source.get("sourceId")),
+            _guided_normalize_whitespace(source.get("sourceAlias")),
+        }:
             return source
     for source in payload.get("structuredSources") or []:
         if not isinstance(source, dict):
             continue
         candidate_ids = {
-            str(source.get("sourceId") or "").strip(),
-            str(source.get("citationText") or "").strip(),
-            str(source.get("canonicalUrl") or "").strip(),
+            _guided_normalize_whitespace(source.get("sourceId")),
+            _guided_normalize_whitespace(source.get("citationText")),
+            _guided_normalize_whitespace(source.get("canonicalUrl")),
         }
-        if source_id in candidate_ids:
+        if normalized_source_id in candidate_ids:
             return _guided_source_record_from_structured_source(source, index=1)
     for index, paper in enumerate(record.papers, start=1):
         if not isinstance(paper, dict):
             continue
         candidate_ids = {
-            str(paper.get("paperId") or "").strip(),
-            str(paper.get("sourceId") or "").strip(),
-            str(paper.get("canonicalId") or "").strip(),
-            str(paper.get("recommendedExpansionId") or "").strip(),
+            _guided_normalize_whitespace(paper.get("paperId")),
+            _guided_normalize_whitespace(paper.get("sourceId")),
+            _guided_normalize_whitespace(paper.get("canonicalId")),
+            _guided_normalize_whitespace(paper.get("recommendedExpansionId")),
         }
-        if source_id in candidate_ids:
+        if normalized_source_id in candidate_ids:
             query = str(record.query or payload.get("query") or "")
             return _guided_source_record_from_paper(query, paper, index=index)
     return None
@@ -1289,12 +2160,15 @@ def _guided_session_findings(payload: dict[str, Any], sources: list[dict[str, An
 def _guided_session_state(
     *,
     workspace_registry: Any,
-    search_session_id: str,
+    search_session_id: str | None,
 ) -> dict[str, Any] | None:
     if workspace_registry is None:
         return None
+    normalized_search_session_id = _guided_normalize_whitespace(search_session_id)
+    if not normalized_search_session_id:
+        return None
     try:
-        record = workspace_registry.get(search_session_id)
+        record = workspace_registry.get(normalized_search_session_id)
     except Exception:
         return None
     payload = record.payload if isinstance(record.payload, dict) else {}
@@ -1346,11 +2220,20 @@ def _guided_session_state(
             evidence_gaps=evidence_gaps,
             coverage=coverage,
             failure_summary=failure_summary,
+            source_count=len(sources),
         ),
         "nextActions": payload.get("nextActions")
         or _guided_next_actions(
             search_session_id=record.search_session_id,
             status=status,
+            has_sources=bool(sources),
+        ),
+        "resultState": payload.get("resultState")
+        or _guided_result_state(
+            status=status,
+            sources=sources,
+            evidence_gaps=evidence_gaps,
+            search_session_id=record.search_session_id,
         ),
     }
 
@@ -1454,7 +2337,96 @@ def _guided_follow_up_introspection_facets(question: str) -> set[str]:
         )
     ):
         facets.add("source_overview")
+    if re.search(r"\bsource(?:\s*id)?\b", text):
+        facets.add("specific_source")
     return facets
+
+
+def _guided_extract_source_reference_from_question(question: str) -> str | None:
+    normalized_question = _guided_normalize_whitespace(question)
+    if not normalized_question:
+        return None
+    patterns = (
+        re.compile(r"\bsource(?:\s*id)?\s*[:=]?\s*['\"]?(?P<id>[A-Za-z0-9._:/#-]{2,})['\"]?", re.IGNORECASE),
+        re.compile(r"\binspect\s+source\s+['\"]?(?P<id>[A-Za-z0-9._:/#-]{2,})['\"]?", re.IGNORECASE),
+    )
+    for pattern in patterns:
+        match = pattern.search(normalized_question)
+        if match:
+            candidate = _guided_normalize_whitespace(match.group("id"))
+            if candidate:
+                return candidate
+    return None
+
+
+def _guided_is_usable_answer_text(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    return bool(re.search(r"[A-Za-z0-9]", text))
+
+
+def _guided_select_follow_up_source(question: str, sources: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not sources:
+        return None
+    if len(sources) == 1:
+        return sources[0]
+
+    normalized_question = _guided_normalize_whitespace(question).lower()
+    for source in sources:
+        title = _guided_normalize_whitespace(source.get("title")).lower()
+        if title and title in normalized_question:
+            return source
+
+    source_reference = _guided_extract_source_reference_from_question(question)
+    if source_reference:
+        lowered_reference = source_reference.lower()
+        for source in sources:
+            if lowered_reference == _guided_normalize_whitespace(source.get("sourceId")).lower():
+                return source
+            if lowered_reference == _guided_normalize_whitespace(source.get("sourceAlias")).lower():
+                return source
+    return None
+
+
+def _guided_source_metadata_answers(question: str, sources: list[dict[str, Any]]) -> list[str]:
+    source = _guided_select_follow_up_source(question, sources)
+    if source is None:
+        return []
+
+    normalized_question = _guided_normalize_whitespace(question).lower()
+    raw_citation = source.get("citation")
+    citation: dict[str, Any] = cast(dict[str, Any], raw_citation) if isinstance(raw_citation, dict) else {}
+    answers: list[str] = []
+
+    if any(marker in normalized_question for marker in ("author", "authors", "who wrote", "written by")):
+        raw_authors = citation.get("authors")
+        authors: list[Any] = raw_authors if isinstance(raw_authors, list) else []
+        author_names = [str(author).strip() for author in authors if str(author).strip()]
+        if author_names:
+            answers.append("Authors listed for this source: " + ", ".join(author_names) + ".")
+
+    if any(marker in normalized_question for marker in ("venue", "journal", "publisher", "published in")):
+        venue = str(citation.get("journalOrPublisher") or "").strip()
+        if venue:
+            answers.append(f"Venue listed for this source: {venue}.")
+
+    if any(marker in normalized_question for marker in ("doi", "identifier")):
+        doi = str(citation.get("doi") or "").strip()
+        if doi:
+            answers.append(f"DOI listed for this source: {doi}.")
+
+    if any(marker in normalized_question for marker in ("year", "publication year", "published")):
+        year = str(citation.get("year") or source.get("date") or "").strip()
+        if year:
+            answers.append(f"Publication year listed for this source: {year}.")
+
+    if any(marker in normalized_question for marker in ("title", "which paper", "which source", "what paper")):
+        title = str(source.get("title") or source.get("sourceId") or "").strip()
+        if title:
+            answers.append(f"Matched source title: {title}.")
+
+    return answers
 
 
 def _answer_follow_up_from_session_state(
@@ -1463,9 +2435,6 @@ def _answer_follow_up_from_session_state(
     session_state: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
     if session_state is None:
-        return None
-    facets = _guided_follow_up_introspection_facets(question)
-    if not facets:
         return None
     answer_parts: list[str] = []
     coverage = cast(dict[str, Any] | None, session_state.get("coverage")) or {}
@@ -1476,6 +2445,12 @@ def _answer_follow_up_from_session_state(
     ]
     sources = [source for source in session_state.get("sources") or [] if isinstance(source, dict)]
     trust_summary = cast(dict[str, Any] | None, session_state.get("trustSummary")) or {}
+    metadata_answers = _guided_source_metadata_answers(question, sources)
+    facets = _guided_follow_up_introspection_facets(question)
+    if not facets and not metadata_answers:
+        return None
+
+    answer_parts.extend(metadata_answers)
 
     if "coverage" in facets:
         attempted = list(coverage.get("providersAttempted") or [])
@@ -1579,6 +2554,40 @@ def _answer_follow_up_from_session_state(
             else:
                 answer_parts.append("No saved sources were available for this session.")
 
+    if "specific_source" in facets:
+        source_reference = _guided_extract_source_reference_from_question(question)
+        if source_reference:
+            source = None
+            match_type = "unresolved"
+            lower_reference = source_reference.lower()
+            session_leads = [lead for lead in session_state.get("unverifiedLeads") or [] if isinstance(lead, dict)]
+            source_matches = [
+                candidate
+                for candidate in sources + session_leads
+                if (
+                    lower_reference == _guided_normalize_whitespace(candidate.get("sourceId")).lower()
+                    or lower_reference in _guided_normalize_whitespace(candidate.get("title")).lower()
+                    or lower_reference in _guided_normalize_whitespace(candidate.get("canonicalUrl")).lower()
+                )
+            ]
+            if len(source_matches) == 1:
+                source = source_matches[0]
+                match_type = "session_local_match"
+            if source is not None:
+                source_title = str(source.get("title") or source.get("sourceId") or "requested source")
+                source_provider = str(source.get("provider") or "unknown provider")
+                source_relevance = str(source.get("topicalRelevance") or "unknown relevance")
+                answer_parts.append(
+                    f"Source {source_title} ({source_provider}) was matched via {match_type} "
+                    f"with relevance {source_relevance}."
+                )
+            else:
+                answer_parts.append(
+                    f"No saved source matched '{source_reference}' in this session. "
+                    "Use inspect_source with an exact sourceId for direct inspection."
+                )
+
+    answer_parts = [part.strip() for part in answer_parts if _guided_is_usable_answer_text(part)]
     if not answer_parts:
         return None
 
@@ -1598,6 +2607,13 @@ def _answer_follow_up_from_session_state(
         "failureSummary": session_state["failureSummary"],
         "resultMeaning": session_state["resultMeaning"],
         "nextActions": session_state["nextActions"],
+        "resultState": session_state.get("resultState")
+        or _guided_result_state(
+            status="answered",
+            sources=sources,
+            evidence_gaps=evidence_gaps,
+            search_session_id=str(session_state.get("searchSessionId") or ""),
+        ),
     }
 
 
@@ -1732,6 +2748,7 @@ async def dispatch_tool(
         raw = await _dispatch_internal("resolve_citation", {"citation": resolve_args.reference})
         best_match = raw.get("bestMatch")
         alternatives = list(raw.get("alternatives") or [])
+        resolution_confidence = str(raw.get("resolutionConfidence") or "low")
         resolution_type = "title_fragment"
         if parsed.looks_like_regulatory:
             resolution_type = "regulatory_reference"
@@ -1743,11 +2760,7 @@ async def dispatch_tool(
         if parsed.looks_like_regulatory and best_match is None:
             status = "regulatory_primary_source"
         elif best_match is not None:
-            status = (
-                "resolved"
-                if str(raw.get("resolutionConfidence") or "low") == "high" or not alternatives
-                else "multiple_candidates"
-            )
+            status = "resolved" if resolution_confidence in {"high", "medium"} else "multiple_candidates"
         elif alternatives:
             status = "multiple_candidates"
         next_actions: list[str] = []
@@ -1772,17 +2785,21 @@ async def dispatch_tool(
             "status": status,
             "bestMatch": best_match,
             "alternatives": alternatives,
+            "resolutionConfidence": resolution_confidence,
             "nextActions": next_actions,
             "searchSessionId": raw.get("searchSessionId"),
         }
 
     if name == "research":
-        research_args = cast(ResearchArgs, TOOL_INPUT_MODELS[name].model_validate(arguments))
+        normalized_research_arguments, research_normalization = _guided_normalize_research_arguments(arguments)
+        research_args = cast(ResearchArgs, TOOL_INPUT_MODELS[name].model_validate(normalized_research_arguments))
         intent = "discovery"
-        if detect_regulatory_intent(research_args.query, research_args.focus):
-            intent = "regulatory"
-        elif looks_like_paper_identifier(research_args.query) or looks_like_citation_query(research_args.query):
+        if _guided_is_known_item_query(research_args.query):
             intent = "known_item"
+        elif _guided_is_mixed_intent_query(research_args.query, research_args.focus):
+            intent = "mixed"
+        elif detect_regulatory_intent(research_args.query, research_args.focus):
+            intent = "regulatory"
 
         if intent == "known_item":
             resolved = await _dispatch_internal("resolve_reference", {"reference": research_args.query})
@@ -1824,78 +2841,163 @@ async def dispatch_tool(
                     evidence_gaps=evidence_gaps,
                     coverage=None,
                     failure_summary=failure_summary,
+                    source_count=len(sources),
                 ),
                 "nextActions": _guided_next_actions(
                     search_session_id=cast(str | None, resolved.get("searchSessionId")),
                     status=status,
+                    has_sources=bool(sources),
                 ),
                 "clarification": None,
+                "resultState": _guided_result_state(
+                    status=status,
+                    sources=sources,
+                    evidence_gaps=evidence_gaps,
+                    search_session_id=cast(str | None, resolved.get("searchSessionId")),
+                ),
+                "inputNormalization": _guided_normalization_payload(research_normalization),
             }
 
         if agentic_runtime is not None:
-            smart = await _dispatch_internal(
-                "search_papers_smart",
-                {
-                    "query": research_args.query,
-                    "limit": research_args.limit,
-                    "year": research_args.year,
-                    "venue": research_args.venue,
-                    "focus": research_args.focus,
-                    "latencyProfile": research_args.latency_profile,
-                    "providerBudget": {"allowPaidProviders": False},
-                },
+            smart_request = {
+                "query": research_args.query,
+                "limit": research_args.limit,
+                "year": research_args.year,
+                "venue": research_args.venue,
+                "focus": research_args.focus,
+                "latencyProfile": research_args.latency_profile,
+                "providerBudget": {"allowPaidProviders": False},
+            }
+            smart_runs: list[dict[str, Any]] = []
+            try:
+                if intent == "mixed":
+                    smart_runs.append(
+                        await _dispatch_internal(
+                            "search_papers_smart",
+                            {
+                                **smart_request,
+                                "mode": "regulatory",
+                            },
+                        )
+                    )
+                    smart_runs.append(
+                        await _dispatch_internal(
+                            "search_papers_smart",
+                            {
+                                **smart_request,
+                                "mode": "review",
+                            },
+                        )
+                    )
+                else:
+                    smart_runs.append(
+                        await _dispatch_internal(
+                            "search_papers_smart",
+                            {
+                                **smart_request,
+                                "mode": "regulatory" if intent == "regulatory" else "auto",
+                            },
+                        )
+                    )
+                if any(not isinstance(smart, dict) for smart in smart_runs):
+                    raise ValueError("search_papers_smart returned a non-object payload.")
+            except Exception as error:
+                return _guided_machine_failure_payload(
+                    search_session_id=None,
+                    error=error,
+                    normalization=research_normalization,
+                )
+
+            sources = _guided_dedupe_source_records(
+                [
+                    _guided_source_record_from_structured_source(source, index=index)
+                    for smart in smart_runs
+                    for index, source in enumerate(smart.get("structuredSources") or [], start=1)
+                    if isinstance(source, dict)
+                ]
             )
-            sources = [
-                _guided_source_record_from_structured_source(source, index=index)
-                for index, source in enumerate(smart.get("structuredSources") or [], start=1)
-                if isinstance(source, dict)
-            ]
             verified_findings = _guided_findings_from_sources(sources)
-            evidence_gaps = list(smart.get("evidenceGaps") or [])
-            unverified_leads = [
-                _guided_source_record_from_structured_source(source, index=index)
-                for index, source in enumerate(smart.get("candidateLeads") or [], start=1)
-                if isinstance(source, dict)
-            ] or _guided_unverified_leads_from_sources(sources)
+            evidence_gaps = list(
+                dict.fromkeys(
+                    str(gap).strip()
+                    for smart in smart_runs
+                    for gap in (smart.get("evidenceGaps") or [])
+                    if str(gap).strip()
+                )
+            )
+            unverified_leads = _guided_dedupe_source_records(
+                [
+                    _guided_source_record_from_structured_source(source, index=index)
+                    for smart in smart_runs
+                    for index, source in enumerate(smart.get("candidateLeads") or [], start=1)
+                    if isinstance(source, dict)
+                ]
+            ) or _guided_unverified_leads_from_sources(sources)
+            merged_coverage = _guided_merge_coverage_summaries(
+                *(cast(dict[str, Any] | None, smart.get("coverageSummary")) for smart in smart_runs)
+            )
+            merged_failure_summary = _guided_merge_failure_summaries(
+                *(cast(dict[str, Any] | None, smart.get("failureSummary")) for smart in smart_runs)
+            )
+            derived_intent = (
+                "mixed" if intent == "mixed" else str(smart_runs[0].get("strategyMetadata", {}).get("intent") or intent)
+            )
+            status_intent = (
+                "regulatory"
+                if derived_intent == "mixed" and any(source.get("isPrimarySource") for source in sources)
+                else derived_intent
+            )
             status = _guided_research_status(
-                intent=str(smart.get("strategyMetadata", {}).get("intent") or intent),
+                intent=status_intent,
                 sources=sources,
                 findings=verified_findings,
-                coverage_summary=cast(dict[str, Any] | None, smart.get("coverageSummary")),
-                failure_summary=cast(dict[str, Any] | None, smart.get("failureSummary")),
-                clarification=cast(dict[str, Any] | None, smart.get("clarification")),
+                unverified_leads_count=len(unverified_leads),
+                coverage_summary=merged_coverage,
+                failure_summary=merged_failure_summary,
+                clarification=cast(dict[str, Any] | None, smart_runs[0].get("clarification")),
             )
             failure_summary = _guided_failure_summary(
-                failure_summary=cast(dict[str, Any] | None, smart.get("failureSummary")),
+                failure_summary=merged_failure_summary,
                 status=status,
                 sources=sources,
                 evidence_gaps=evidence_gaps,
             )
+            primary_smart = smart_runs[0]
+            search_session_id = cast(str | None, primary_smart.get("searchSessionId"))
             return {
-                "intent": str(smart.get("strategyMetadata", {}).get("intent") or intent),
+                "intent": derived_intent,
                 "status": status,
-                "searchSessionId": smart.get("searchSessionId"),
-                "summary": _guided_summary(intent, status, verified_findings, sources),
+                "searchSessionId": search_session_id,
+                "summary": _guided_summary(derived_intent, status, verified_findings, sources),
                 "verifiedFindings": verified_findings,
                 "sources": sources,
                 "unverifiedLeads": unverified_leads,
                 "evidenceGaps": evidence_gaps,
                 "trustSummary": _guided_trust_summary(sources, evidence_gaps),
-                "coverage": smart.get("coverageSummary"),
+                "coverage": merged_coverage,
                 "failureSummary": failure_summary,
                 "resultMeaning": _guided_result_meaning(
                     status=status,
                     verified_findings=verified_findings,
                     evidence_gaps=evidence_gaps,
-                    coverage=cast(dict[str, Any] | None, smart.get("coverageSummary")),
+                    coverage=merged_coverage,
                     failure_summary=failure_summary,
+                    source_count=len(sources),
                 ),
                 "nextActions": _guided_next_actions(
-                    search_session_id=cast(str | None, smart.get("searchSessionId")),
+                    search_session_id=search_session_id,
                     status=status,
+                    has_sources=bool(sources),
                 ),
-                "clarification": smart.get("clarification"),
-                "regulatoryTimeline": smart.get("regulatoryTimeline"),
+                "clarification": primary_smart.get("clarification"),
+                "regulatoryTimeline": primary_smart.get("regulatoryTimeline"),
+                "resultState": _guided_result_state(
+                    status=status,
+                    sources=sources,
+                    evidence_gaps=evidence_gaps,
+                    search_session_id=search_session_id,
+                ),
+                "inputNormalization": _guided_normalization_payload(research_normalization),
             }
 
         raw = await _dispatch_internal(
@@ -1919,6 +3021,7 @@ async def dispatch_tool(
             intent=intent,
             sources=sources,
             findings=verified_findings,
+            unverified_leads_count=len(unverified_leads),
             coverage_summary=cast(dict[str, Any] | None, raw.get("coverageSummary")),
             failure_summary=cast(dict[str, Any] | None, raw.get("failureSummary")),
             clarification=None,
@@ -1947,16 +3050,32 @@ async def dispatch_tool(
                 evidence_gaps=evidence_gaps,
                 coverage=cast(dict[str, Any] | None, raw.get("coverageSummary")),
                 failure_summary=failure_summary,
+                source_count=len(sources),
             ),
             "nextActions": _guided_next_actions(
                 search_session_id=cast(str | None, raw.get("searchSessionId")),
                 status=status,
+                has_sources=bool(sources),
             ),
             "clarification": None,
+            "resultState": _guided_result_state(
+                status=status,
+                sources=sources,
+                evidence_gaps=evidence_gaps,
+                search_session_id=cast(str | None, raw.get("searchSessionId")),
+            ),
+            "inputNormalization": _guided_normalization_payload(research_normalization),
         }
 
     if name == "follow_up_research":
-        follow_up_args = cast(FollowUpResearchArgs, TOOL_INPUT_MODELS[name].model_validate(arguments))
+        normalized_follow_up_arguments, follow_up_normalization = _guided_normalize_follow_up_arguments(
+            arguments,
+            workspace_registry=workspace_registry,
+        )
+        follow_up_args = cast(
+            FollowUpResearchArgs,
+            TOOL_INPUT_MODELS[name].model_validate(normalized_follow_up_arguments),
+        )
         session_state = _guided_session_state(
             workspace_registry=workspace_registry,
             search_session_id=follow_up_args.search_session_id,
@@ -1966,7 +3085,61 @@ async def dispatch_tool(
             session_state=session_state,
         )
         if session_answer is not None:
+            session_answer["inputNormalization"] = _guided_normalization_payload(follow_up_normalization)
             return session_answer
+        if not follow_up_args.search_session_id:
+            evidence_gaps = ["A unique saved search session could not be identified for this follow-up question."]
+            failure_summary = _guided_failure_summary(
+                failure_summary={
+                    "outcome": "needs_clarification",
+                    "whatFailed": "follow_up_session_inference",
+                    "whatStillWorked": (
+                        "The server preserved a safe failure state instead of binding to the wrong session."
+                    ),
+                    "fallbackAttempted": False,
+                    "fallbackMode": None,
+                    "primaryPathFailureReason": "ambiguous_or_missing_search_session",
+                    "completenessImpact": evidence_gaps[0],
+                    "recommendedNextAction": "research",
+                },
+                status="partial",
+                sources=[],
+                evidence_gaps=evidence_gaps,
+            )
+            return {
+                "searchSessionId": None,
+                "answerStatus": "insufficient_evidence",
+                "answer": None,
+                "evidence": [],
+                "unsupportedAsks": [follow_up_args.question],
+                "followUpQuestions": [],
+                "sources": [],
+                "unverifiedLeads": [],
+                "verifiedFindings": [],
+                "evidenceGaps": evidence_gaps,
+                "trustSummary": _guided_trust_summary([], evidence_gaps),
+                "coverage": None,
+                "failureSummary": failure_summary,
+                "resultMeaning": _guided_result_meaning(
+                    status="partial",
+                    verified_findings=[],
+                    evidence_gaps=evidence_gaps,
+                    coverage=None,
+                    failure_summary=failure_summary,
+                    source_count=0,
+                ),
+                "nextActions": [
+                    "Provide an explicit searchSessionId from a prior research result.",
+                    "Run research again if you need a fresh grounded session to follow up on.",
+                ],
+                "resultState": _guided_result_state(
+                    status="partial",
+                    sources=[],
+                    evidence_gaps=evidence_gaps,
+                    search_session_id=None,
+                ),
+                "inputNormalization": _guided_normalization_payload(follow_up_normalization),
+            }
         if agentic_runtime is None:
             evidence_gaps = [follow_up_args.question]
             failure_summary = _guided_failure_summary(
@@ -2004,19 +3177,69 @@ async def dispatch_tool(
                     evidence_gaps=evidence_gaps,
                     coverage=None,
                     failure_summary=failure_summary,
+                    source_count=0,
                 ),
                 "nextActions": _guided_next_actions(
                     search_session_id=follow_up_args.search_session_id,
                     status="partial",
+                    has_sources=False,
                 ),
+                "resultState": _guided_result_state(
+                    status="partial",
+                    sources=[],
+                    evidence_gaps=evidence_gaps,
+                    search_session_id=follow_up_args.search_session_id,
+                ),
+                "inputNormalization": _guided_normalization_payload(follow_up_normalization),
             }
-        ask = await _dispatch_internal(
-            "ask_result_set",
-            {
+        try:
+            ask = await _dispatch_internal(
+                "ask_result_set",
+                {
+                    "searchSessionId": follow_up_args.search_session_id,
+                    "question": follow_up_args.question,
+                },
+            )
+            if not isinstance(ask, dict):
+                raise ValueError("ask_result_set returned a non-object payload.")
+        except Exception as error:
+            machine_failure = _guided_machine_failure_payload(
+                search_session_id=follow_up_args.search_session_id,
+                error=error,
+                normalization=follow_up_normalization,
+            )
+            return {
                 "searchSessionId": follow_up_args.search_session_id,
-                "question": follow_up_args.question,
-            },
-        )
+                "answerStatus": "insufficient_evidence",
+                "answer": None,
+                "evidence": [],
+                "unsupportedAsks": [follow_up_args.question],
+                "followUpQuestions": [],
+                "verifiedFindings": [],
+                "sources": [],
+                "unverifiedLeads": [],
+                "evidenceGaps": machine_failure.get("evidenceGaps") or [],
+                "trustSummary": machine_failure.get("trustSummary") or _guided_trust_summary([], []),
+                "coverage": machine_failure.get("coverage"),
+                "failureSummary": machine_failure.get("failureSummary"),
+                "resultMeaning": machine_failure.get("resultMeaning"),
+                "nextActions": machine_failure.get("nextActions")
+                or _guided_next_actions(
+                    search_session_id=follow_up_args.search_session_id,
+                    status="partial",
+                    has_sources=False,
+                ),
+                "resultState": machine_failure.get("resultState")
+                or _guided_result_state(
+                    status="partial",
+                    sources=[],
+                    evidence_gaps=list(machine_failure.get("evidenceGaps") or []),
+                    search_session_id=follow_up_args.search_session_id,
+                ),
+                "machineFailure": machine_failure.get("machineFailure"),
+                "inputNormalization": machine_failure.get("inputNormalization")
+                or _guided_normalization_payload(follow_up_normalization),
+            }
         sources = [
             _guided_source_record_from_structured_source(source, index=index)
             for index, source in enumerate(ask.get("structuredSources") or [], start=1)
@@ -2057,31 +3280,83 @@ async def dispatch_tool(
                 evidence_gaps=evidence_gaps,
                 coverage=cast(dict[str, Any] | None, ask.get("coverageSummary")),
                 failure_summary=failure_summary,
+                source_count=len(sources),
             ),
             "nextActions": _guided_next_actions(
                 search_session_id=follow_up_args.search_session_id,
                 status=guided_status,
+                has_sources=bool(sources),
             ),
+            "resultState": _guided_result_state(
+                status=guided_status,
+                sources=sources,
+                evidence_gaps=evidence_gaps,
+                search_session_id=follow_up_args.search_session_id,
+            ),
+            "inputNormalization": _guided_normalization_payload(follow_up_normalization),
         }
         session_answer = _answer_follow_up_from_session_state(
             question=follow_up_args.question,
             session_state=session_state,
         )
+        if answer_status == "answered" and not _guided_is_usable_answer_text(ask.get("answer")):
+            if session_answer is not None:
+                session_answer["inputNormalization"] = _guided_normalization_payload(follow_up_normalization)
+                return session_answer
+            response["answerStatus"] = "insufficient_evidence"
+            response["answer"] = None
+            response["resultMeaning"] = _guided_result_meaning(
+                status="partial",
+                verified_findings=verified_findings,
+                evidence_gaps=evidence_gaps,
+                coverage=cast(dict[str, Any] | None, ask.get("coverageSummary")),
+                failure_summary=failure_summary,
+                source_count=len(sources),
+            )
+            response["resultState"] = _guided_result_state(
+                status="partial",
+                sources=sources,
+                evidence_gaps=evidence_gaps,
+                search_session_id=follow_up_args.search_session_id,
+            )
+            return response
         if answer_status != "answered" and session_answer is not None:
+            session_answer["inputNormalization"] = _guided_normalization_payload(follow_up_normalization)
             return session_answer
         return response
 
     if name == "inspect_source":
-        inspect_args = cast(InspectSourceArgs, TOOL_INPUT_MODELS[name].model_validate(arguments))
-        source = _find_record_source(
+        normalized_inspect_arguments, inspect_normalization = _guided_normalize_inspect_arguments(
+            arguments,
+            workspace_registry=workspace_registry,
+        )
+        inspect_args = cast(InspectSourceArgs, TOOL_INPUT_MODELS[name].model_validate(normalized_inspect_arguments))
+        if not inspect_args.search_session_id:
+            raise ValueError(
+                "inspect_source could not infer a unique searchSessionId. Provide an explicit searchSessionId from a "
+                "prior research result."
+            )
+        source, match_type = _find_record_source_with_resolution(
             workspace_registry=workspace_registry,
             search_session_id=inspect_args.search_session_id,
             source_id=inspect_args.source_id,
         )
         if source is None:
+            available_ids: list[str] = []
+            if workspace_registry is not None and inspect_args.search_session_id:
+                try:
+                    record = workspace_registry.get(inspect_args.search_session_id)
+                    available_ids = [
+                        str(candidate.get("sourceId") or "").strip()
+                        for candidate in _guided_record_source_candidates(record)
+                        if str(candidate.get("sourceId") or "").strip()
+                    ][:8]
+                except Exception:
+                    available_ids = []
+            suggestions = f" Available sourceId values: {', '.join(available_ids)}." if available_ids else ""
             raise ValueError(
                 f"Could not find sourceId {inspect_args.source_id!r} in searchSessionId "
-                f"{inspect_args.search_session_id!r}."
+                f"{inspect_args.search_session_id!r}.{suggestions}"
             )
         return {
             "searchSessionId": inspect_args.search_session_id,
@@ -2090,7 +3365,20 @@ async def dispatch_tool(
             "nextActions": _guided_next_actions(
                 search_session_id=inspect_args.search_session_id,
                 status="succeeded",
+                has_sources=True,
             ),
+            "sourceResolution": {
+                "requestedSourceId": inspect_args.source_id,
+                "resolvedSourceId": source.get("sourceId"),
+                "matchType": match_type,
+            },
+            "resultState": _guided_result_state(
+                status="succeeded",
+                sources=[source],
+                evidence_gaps=[],
+                search_session_id=inspect_args.search_session_id,
+            ),
+            "inputNormalization": _guided_normalization_payload(inspect_normalization),
         }
 
     if name == "search_papers_smart":

@@ -64,6 +64,7 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
         structured_output_method: str | None = None,
     ) -> None:
         super().__init__(config)
+        self._configured_provider = config.provider
         self._provider_name = provider_name
         self._api_key = api_key
         self._provider_registry = provider_registry

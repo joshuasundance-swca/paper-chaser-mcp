@@ -46,8 +46,10 @@ from .models import (
     EvidenceItem,
     GraphEdge,
     GraphNode,
+    IntentLabel,
     LandscapeResponse,
     LandscapeTheme,
+    PlannerDecision,
     ResearchGraphResponse,
     ScoreBreakdown,
     SearchStrategyMetadata,
@@ -60,6 +62,7 @@ from .planner import (
     classify_query,
     combine_variants,
     dedupe_variants,
+    detect_literature_intent,
     grounded_expansion_candidates,
     query_facets,
     query_terms,
@@ -428,6 +431,7 @@ class AgenticRuntime:
             request_outcomes=provider_outcomes,
             request_id=request_id,
         )
+        normalization_warnings, repaired_inputs = _normalization_metadata(query, normalized_query)
         _finish_stage("planning", planning_started)
         await self._emit_smart_search_status(
             ctx=ctx,
@@ -445,7 +449,7 @@ class AgenticRuntime:
             return await self._search_known_item(
                 query=normalized_query,
                 limit=limit,
-                planner_intent=planner.intent,
+                planner=planner,
                 provider_plan=planner.provider_plan or None,
                 provider_budget=budget_state,
                 search_session_id=search_session_id,
@@ -454,20 +458,130 @@ class AgenticRuntime:
                 include_enrichment=include_enrichment,
                 provider_outcomes=provider_outcomes,
                 stage_timings_ms=stage_timings_ms,
+                normalization_warnings=normalization_warnings,
+                repaired_inputs=repaired_inputs,
                 ctx=ctx,
             )
         if planner.intent == "regulatory":
-            return await self._search_regulatory(
+            regulatory_result = await self._search_regulatory(
                 query=normalized_query,
                 limit=limit,
                 planner_intent=planner.intent,
+                planner=planner,
                 search_session_id=search_session_id,
                 latency_profile=latency_profile,
                 request_id=request_id,
                 provider_outcomes=provider_outcomes,
                 stage_timings_ms=stage_timings_ms,
+                normalization_warnings=normalization_warnings,
+                repaired_inputs=repaired_inputs,
                 ctx=ctx,
             )
+            if regulatory_result.get("structuredSources"):
+                return regulatory_result
+
+            recovered_anchor, _ = await self._resolve_known_item(normalized_query)
+            if recovered_anchor is not None:
+                await self._emit_smart_search_status(
+                    ctx=ctx,
+                    request_id=request_id,
+                    progress=22,
+                    message="Recovering from empty regulatory route",
+                    detail=(
+                        "Regulatory retrieval returned no on-topic sources; retrying the same query as a "
+                        "semantic known-item recovery."
+                    ),
+                )
+                recovered = await self._search_known_item(
+                    query=normalized_query,
+                    limit=limit,
+                    planner=planner.model_copy(
+                        update={
+                            "intent": "known_item",
+                            "intent_source": "fallback_recovery",
+                            "intent_confidence": "medium",
+                        }
+                    ),
+                    provider_plan=planner.provider_plan or None,
+                    provider_budget=budget_state,
+                    search_session_id=search_session_id,
+                    latency_profile=latency_profile,
+                    request_id=request_id,
+                    include_enrichment=include_enrichment,
+                    provider_outcomes=provider_outcomes,
+                    stage_timings_ms=stage_timings_ms,
+                    normalization_warnings=normalization_warnings,
+                    repaired_inputs=repaired_inputs,
+                    ctx=ctx,
+                )
+                strategy_metadata = recovered.get("strategyMetadata") if isinstance(recovered, dict) else None
+                if isinstance(strategy_metadata, dict):
+                    warnings = list(strategy_metadata.get("driftWarnings") or [])
+                    warnings.append(
+                        "Regulatory routing returned no on-topic sources, so the server retried "
+                        "with semantic known-item recovery."
+                    )
+                    strategy_metadata["intent"] = "known_item"
+                    strategy_metadata["intentSource"] = "fallback_recovery"
+                    strategy_metadata["intentConfidence"] = "medium"
+                    strategy_metadata["recoveryAttempted"] = True
+                    strategy_metadata["recoveryPath"] = ["regulatory", "known_item"]
+                    strategy_metadata["recoveryReason"] = "Regulatory retrieval returned no on-topic sources."
+                    strategy_metadata["anchoredSubject"] = (
+                        recovered.get("results", [{}])[0].get("paper", {}).get("title") or normalized_query
+                    )
+                    strategy_metadata["bestNextInternalAction"] = "get_paper_details"
+                    strategy_metadata["driftWarnings"] = list(dict.fromkeys(warnings))
+                return recovered
+
+            if not detect_literature_intent(query, focus):
+                strategy_metadata = (
+                    regulatory_result.get("strategyMetadata") if isinstance(regulatory_result, dict) else None
+                )
+                if isinstance(strategy_metadata, dict):
+                    strategy_metadata["stoppedRecoveryBecause"] = (
+                        "No adjacent literature intent was detected after the regulatory route returned empty."
+                    )
+                return regulatory_result
+
+            await self._emit_smart_search_status(
+                ctx=ctx,
+                request_id=request_id,
+                progress=22,
+                message="Recovering from empty regulatory route",
+                detail=(
+                    "Regulatory retrieval returned no on-topic sources; retrying "
+                    f"'{_truncate_text(normalized_query, limit=96)}' "
+                    "as a literature review."
+                ),
+            )
+            recovered = await self.search_papers_smart(
+                query=query,
+                limit=limit,
+                search_session_id=search_session_id,
+                mode="review",
+                year=year,
+                venue=venue,
+                focus=focus,
+                latency_profile=latency_profile,
+                provider_budget=provider_budget,
+                include_enrichment=include_enrichment,
+                ctx=ctx,
+            )
+            strategy_metadata = recovered.get("strategyMetadata") if isinstance(recovered, dict) else None
+            if isinstance(strategy_metadata, dict):
+                warnings = list(strategy_metadata.get("driftWarnings") or [])
+                warnings.append(
+                    "Regulatory routing returned no on-topic sources, so the server "
+                    "retried with a literature-oriented recovery path."
+                )
+                strategy_metadata["driftWarnings"] = list(dict.fromkeys(warnings))
+                strategy_metadata["intentSource"] = "fallback_recovery"
+                strategy_metadata["intentConfidence"] = "medium"
+                strategy_metadata["recoveryAttempted"] = True
+                strategy_metadata["recoveryPath"] = ["regulatory", "review"]
+                strategy_metadata["recoveryReason"] = "Regulatory retrieval returned no on-topic sources."
+            return recovered
 
         await self._emit_smart_search_status(
             ctx=ctx,
@@ -814,6 +928,12 @@ class AgenticRuntime:
         )
         strategy_metadata = SearchStrategyMetadata(
             intent=planner.intent,
+            intentSource=planner.intent_source,
+            intentConfidence=planner.intent_confidence,
+            intentCandidates=planner.intent_candidates,
+            secondaryIntents=planner.secondary_intents,
+            routingConfidence=planner.routing_confidence,
+            intentRationale=planner.intent_rationale,
             latencyProfile=latency_profile,
             normalizedQuery=normalized_query,
             queryVariantsTried=[candidate.variant for candidate in variants],
@@ -830,6 +950,14 @@ class AgenticRuntime:
             providerBudgetApplied=budget_state.to_dict() if budget_state else {},
             providerOutcomes=provider_outcomes,
             stageTimingsMs=stage_timings_ms,
+            recoveryAttempted=False,
+            recoveryPath=[planner.intent],
+            anchorType="query_concepts",
+            anchorStrength=planner.routing_confidence,
+            anchoredSubject=(planner.candidate_concepts[0] if planner.candidate_concepts else normalized_query),
+            normalizationWarnings=normalization_warnings,
+            repairedInputs=repaired_inputs,
+            bestNextInternalAction=("ask_result_set" if filtered_ranked else "search_papers_smart"),
             **provider_selection,
         )
 
@@ -914,6 +1042,13 @@ class AgenticRuntime:
                 provider_outcomes=provider_outcomes,
                 fallback_attempted=bool(provider_fallback_warnings or rejected_speculative),
             ),
+            resultStatus=("succeeded" if smart_hits else "partial"),
+            hasInspectableSources=_has_inspectable_sources(source_records),
+            bestNextInternalAction=_best_next_internal_action(
+                intent=planner.intent,
+                has_sources=bool(source_records),
+                result_status=("succeeded" if smart_hits else "partial"),
+            ),
         )
         if provider_fallback_warnings:
             response.agent_hints.warnings.extend(provider_fallback_warnings)
@@ -941,7 +1076,7 @@ class AgenticRuntime:
             dump_jsonable(response),
             record.search_session_id,
         )
-        final_response_dict = dump_jsonable(response)
+        final_response_dict = self._workspace_registry.attach_source_aliases(dump_jsonable(response))
         record.payload = final_response_dict
         record.metadata["strategyMetadata"] = final_response_dict["strategyMetadata"]
         if self._config.enable_trace_log:
@@ -1683,12 +1818,15 @@ class AgenticRuntime:
         *,
         query: str,
         limit: int,
-        planner_intent: str,
+        planner_intent: IntentLabel,
+        planner: PlannerDecision,
         search_session_id: str | None,
         latency_profile: LatencyProfile,
         request_id: str,
         provider_outcomes: list[dict[str, Any]],
         stage_timings_ms: dict[str, int],
+        normalization_warnings: list[str],
+        repaired_inputs: dict[str, Any],
         ctx: Context | None,
     ) -> dict[str, Any]:
         attempted: list[str] = []
@@ -1934,6 +2072,72 @@ class AgenticRuntime:
                     }
                 )
 
+        if (
+            self._enable_govinfo_cfr
+            and self._govinfo_client is not None
+            and not govinfo_matched
+            and not federal_register_matched
+        ):
+            if "govinfo" not in attempted:
+                attempted.append("govinfo")
+            started = time.perf_counter()
+            try:
+                govinfo_search = await self._govinfo_client.search_federal_register_documents(
+                    query=fr_query,
+                    limit=min(max(limit, 5), 10),
+                )
+                stage_timings_ms["regulatoryGovInfoSearch"] = int((time.perf_counter() - started) * 1000)
+                documents = list(govinfo_search.get("data") or [])
+                if documents:
+                    succeeded.append("govinfo")
+                    for document in documents[:limit]:
+                        if not isinstance(document, dict):
+                            continue
+                        if not _regulatory_document_matches_subject(
+                            document,
+                            subject_terms=anchored_subject_terms,
+                            cfr_citation=cfr_citation,
+                        ):
+                            continue
+                        structured_sources.append(
+                            _source_record_from_regulatory_document(
+                                document,
+                                provider="govinfo",
+                                topical_relevance="on_topic",
+                            )
+                        )
+                        govinfo_matched = True
+                        timeline_events.append(
+                            RegulatoryTimelineEvent(
+                                eventType="rulemaking_history",
+                                eventDate=document.get("publicationDate"),
+                                title=str(document.get("title") or document.get("citation") or "GovInfo document"),
+                                citation=str(document.get("citation") or document.get("documentNumber") or "") or None,
+                                canonicalUrl=document.get("sourceUrl"),
+                                provider="govinfo",
+                                verificationStatus=cast(
+                                    VerificationStatus,
+                                    document.get("verificationStatus") or "verified_metadata",
+                                ),
+                                note=str(
+                                    document.get("note") or "GovInfo Federal Register primary-source recovery hit."
+                                ),
+                            )
+                        )
+                else:
+                    zero_results.append("govinfo")
+            except Exception as exc:
+                stage_timings_ms["regulatoryGovInfoSearch"] = int((time.perf_counter() - started) * 1000)
+                failed.append("govinfo")
+                provider_outcomes.append(
+                    {
+                        "provider": "govinfo",
+                        "endpoint": "search_federal_register_documents",
+                        "statusBucket": "provider_error",
+                        "error": str(exc),
+                    }
+                )
+
         structured_sources = _dedupe_structured_sources(structured_sources)
         timeline_events = sorted(timeline_events, key=lambda event: str(event.event_date or "9999-99-99"))
         if not timeline_events:
@@ -2003,8 +2207,31 @@ class AgenticRuntime:
                 ),
                 recommendedNextAction="review_partial_results",
             )
+        result_status = (
+            "succeeded"
+            if structured_sources and current_text_satisfied and failure_summary is None
+            else ("partial" if structured_sources else "abstained")
+        )
+        anchor_type = (
+            "cfr_citation"
+            if cfr_request
+            else (
+                "ecos_species"
+                if species_hit is not None
+                else ("regulatory_subject_terms" if anchored_subject_terms else None)
+            )
+        )
+        anchor_strength: Literal["high", "medium", "low"] | None = (
+            "high" if cfr_request or species_hit is not None else ("medium" if anchored_subject_terms else None)
+        )
         strategy_metadata = SearchStrategyMetadata(
             intent=planner_intent,
+            intentSource=planner.intent_source,
+            intentConfidence=planner.intent_confidence,
+            intentCandidates=planner.intent_candidates,
+            secondaryIntents=planner.secondary_intents,
+            routingConfidence=planner.routing_confidence,
+            intentRationale=planner.intent_rationale,
             latencyProfile=latency_profile,
             normalizedQuery=query,
             queryVariantsTried=[query],
@@ -2018,6 +2245,18 @@ class AgenticRuntime:
             providerBudgetApplied={},
             providerOutcomes=provider_outcomes,
             stageTimingsMs=stage_timings_ms,
+            recoveryAttempted=False,
+            recoveryPath=[planner_intent],
+            anchorType=anchor_type,
+            anchorStrength=anchor_strength,
+            anchoredSubject=subject or query,
+            normalizationWarnings=normalization_warnings,
+            repairedInputs=repaired_inputs,
+            bestNextInternalAction=_best_next_internal_action(
+                intent=planner_intent,
+                has_sources=bool(structured_sources),
+                result_status=result_status,
+            ),
             **provider_selection,
         )
         response = SmartSearchResponse(
@@ -2060,6 +2299,13 @@ class AgenticRuntime:
                 events=timeline_events,
                 evidenceGaps=evidence_gaps,
             ),
+            resultStatus=result_status,
+            hasInspectableSources=_has_inspectable_sources(structured_sources),
+            bestNextInternalAction=_best_next_internal_action(
+                intent=planner_intent,
+                has_sources=bool(structured_sources),
+                result_status=result_status,
+            ),
         )
         record = await self._workspace_registry.asave_result_set(
             source_tool="search_papers_smart",
@@ -2074,7 +2320,7 @@ class AgenticRuntime:
             dump_jsonable(response),
             record.search_session_id,
         )
-        final_response_dict = dump_jsonable(response)
+        final_response_dict = self._workspace_registry.attach_source_aliases(dump_jsonable(response))
         record.payload = final_response_dict
         record.metadata["strategyMetadata"] = final_response_dict["strategyMetadata"]
         await self._emit_smart_search_status(
@@ -2091,7 +2337,7 @@ class AgenticRuntime:
         *,
         query: str,
         limit: int,
-        planner_intent: str,
+        planner: PlannerDecision,
         provider_plan: list[str] | None,
         provider_budget: ProviderBudgetState | None,
         search_session_id: str | None,
@@ -2100,6 +2346,8 @@ class AgenticRuntime:
         include_enrichment: bool,
         provider_outcomes: list[dict[str, Any]],
         stage_timings_ms: dict[str, int],
+        normalization_warnings: list[str],
+        repaired_inputs: dict[str, Any],
         ctx: Context | None,
     ) -> dict[str, Any]:
         await self._emit_smart_search_status(
@@ -2126,7 +2374,7 @@ class AgenticRuntime:
             return await self._fallback_known_item_search(
                 query=query,
                 limit=limit,
-                planner_intent=planner_intent,
+                planner=planner,
                 provider_plan=provider_plan,
                 provider_budget=provider_budget,
                 search_session_id=search_session_id,
@@ -2135,6 +2383,8 @@ class AgenticRuntime:
                 include_enrichment=include_enrichment,
                 provider_outcomes=provider_outcomes,
                 stage_timings_ms=stage_timings_ms,
+                normalization_warnings=normalization_warnings,
+                repaired_inputs=repaired_inputs,
                 ctx=ctx,
             )
         if include_enrichment and self._enrichment_service is not None:
@@ -2183,7 +2433,13 @@ class AgenticRuntime:
             provider_outcomes=provider_outcomes,
         )
         strategy_metadata = SearchStrategyMetadata(
-            intent=planner_intent,
+            intent=planner.intent,
+            intentSource=planner.intent_source,
+            intentConfidence=planner.intent_confidence,
+            intentCandidates=planner.intent_candidates,
+            secondaryIntents=planner.secondary_intents,
+            routingConfidence=planner.routing_confidence,
+            intentRationale=planner.intent_rationale,
             latencyProfile=latency_profile,
             normalizedQuery=query,
             queryVariantsTried=[query],
@@ -2196,14 +2452,20 @@ class AgenticRuntime:
             driftWarnings=(
                 []
                 if resolution_strategy == "citation_resolution"
-                else [
-                    "Known-item fallback used title-style recovery; verify the anchor before treating it as canonical."
-                ]
+                else [_known_item_recovery_warning(resolution_strategy)]
             )
             + provider_fallback_warnings,
             providerBudgetApplied=(provider_budget.to_dict() if provider_budget else {}),
             providerOutcomes=provider_outcomes,
             stageTimingsMs=stage_timings_ms,
+            recoveryAttempted=planner.intent_source == "fallback_recovery",
+            recoveryPath=[planner.intent],
+            anchorType=resolution_strategy,
+            anchorStrength=_anchor_strength_for_resolution(resolution_strategy),
+            anchoredSubject=str(known_item.get("title") or query),
+            normalizationWarnings=normalization_warnings,
+            repairedInputs=repaired_inputs,
+            bestNextInternalAction="get_paper_details",
             **provider_selection,
         )
         response = SmartSearchResponse(
@@ -2218,6 +2480,9 @@ class AgenticRuntime:
                 {"paperId": known_item.get("paperId")},
             ),
             resourceUris=[],
+            resultStatus="succeeded",
+            hasInspectableSources=True,
+            bestNextInternalAction="get_paper_details",
         )
         if provider_fallback_warnings:
             response.agent_hints.warnings.extend(provider_fallback_warnings)
@@ -2244,7 +2509,7 @@ class AgenticRuntime:
             {"results": [{"paper": known_item}]},
             record.search_session_id,
         )
-        final_response_dict = dump_jsonable(response)
+        final_response_dict = self._workspace_registry.attach_source_aliases(dump_jsonable(response))
         record.payload = final_response_dict
         record.metadata["strategyMetadata"] = final_response_dict["strategyMetadata"]
         await self._emit_smart_search_status(
@@ -2322,7 +2587,7 @@ class AgenticRuntime:
         *,
         query: str,
         limit: int,
-        planner_intent: str,
+        planner: PlannerDecision,
         provider_plan: list[str] | None,
         provider_budget: ProviderBudgetState | None,
         search_session_id: str | None,
@@ -2331,6 +2596,8 @@ class AgenticRuntime:
         include_enrichment: bool,
         provider_outcomes: list[dict[str, Any]],
         stage_timings_ms: dict[str, int],
+        normalization_warnings: list[str],
+        repaired_inputs: dict[str, Any],
         ctx: Context | None,
     ) -> dict[str, Any]:
         profile_settings = self._config.latency_profile_settings(latency_profile)
@@ -2339,7 +2606,7 @@ class AgenticRuntime:
         batch = await retrieve_variant(
             variant=query,
             variant_source="from_input",
-            intent=planner_intent,
+            intent=planner.intent,
             year=None,
             venue=None,
             enable_core=self._enable_core,
@@ -2411,7 +2678,13 @@ class AgenticRuntime:
             provider_outcomes=provider_outcomes,
         )
         strategy_metadata = SearchStrategyMetadata(
-            intent=planner_intent,
+            intent=planner.intent,
+            intentSource=planner.intent_source,
+            intentConfidence=planner.intent_confidence,
+            intentCandidates=planner.intent_candidates,
+            secondaryIntents=planner.secondary_intents,
+            routingConfidence=planner.routing_confidence,
+            intentRationale=planner.intent_rationale,
             latencyProfile=latency_profile,
             normalizedQuery=query,
             queryVariantsTried=[query],
@@ -2429,6 +2702,15 @@ class AgenticRuntime:
             providerBudgetApplied=(provider_budget.to_dict() if provider_budget else {}),
             providerOutcomes=provider_outcomes,
             stageTimingsMs=stage_timings_ms,
+            recoveryAttempted=True,
+            recoveryPath=["known_item", "discovery"],
+            recoveryReason="No exact known-item anchor was confirmed.",
+            anchorType="candidate_set",
+            anchorStrength="low",
+            anchoredSubject=query,
+            normalizationWarnings=normalization_warnings,
+            repairedInputs=repaired_inputs,
+            bestNextInternalAction=("ask_result_set" if smart_hits else "search_papers_smart"),
             **provider_selection,
         )
         response = SmartSearchResponse(
@@ -2445,6 +2727,13 @@ class AgenticRuntime:
                 {"brokerMetadata": {"resultQuality": "low_relevance" if not smart_hits else "unknown"}},
             ),
             resourceUris=[],
+            resultStatus=("partial" if smart_hits else "abstained"),
+            hasInspectableSources=bool(smart_hits),
+            bestNextInternalAction=_best_next_internal_action(
+                intent=planner.intent,
+                has_sources=bool(smart_hits),
+                result_status=("partial" if smart_hits else "abstained"),
+            ),
         )
         if provider_fallback_warnings:
             response.agent_hints.warnings.extend(provider_fallback_warnings)
@@ -2461,7 +2750,7 @@ class AgenticRuntime:
             {"results": [{"paper": hit.paper.model_dump(by_alias=True)} for hit in smart_hits]},
             record.search_session_id,
         )
-        final_response_dict = dump_jsonable(response)
+        final_response_dict = self._workspace_registry.attach_source_aliases(dump_jsonable(response))
         record.payload = final_response_dict
         record.metadata["strategyMetadata"] = final_response_dict["strategyMetadata"]
         await self._emit_smart_search_status(
@@ -2722,7 +3011,11 @@ def _source_record_from_regulatory_document(
             else "Federal Register primary-source discovery hit"
         )
     elif provider == "govinfo":
-        note = "Authoritative CFR text"
+        note = str(
+            document.get("note")
+            or ("Authoritative CFR text" if document.get("markdown") else "GovInfo primary-source discovery hit")
+        )
+    has_full_text = bool(document.get("markdown") or document.get("contentSource"))
     return StructuredSourceRecord(
         sourceId=source_id,
         title=title,
@@ -2732,21 +3025,15 @@ def _source_record_from_regulatory_document(
             document.get("verificationStatus")
             or ("verified_primary_source" if provider == "govinfo" else "verified_metadata")
         ),
-        accessStatus=(
-            "full_text_verified" if provider == "govinfo" or document.get("markdown") else "access_unverified"
-        ),
+        accessStatus=("full_text_verified" if has_full_text else "access_unverified"),
         confidence="high" if provider == "govinfo" else "medium",
         topicalRelevance=topical_relevance,
         isPrimarySource=True,
         canonicalUrl=canonical_url,
         retrievedUrl=canonical_url,
-        fullTextObserved=bool(document.get("markdown") or provider == "govinfo"),
+        fullTextObserved=has_full_text,
         abstractObserved=False,
-        openAccessRoute=(
-            "non_oa_or_unconfirmed"
-            if (provider == "govinfo" or document.get("markdown") or canonical_url)
-            else "unknown"
-        ),
+        openAccessRoute=("non_oa_or_unconfirmed" if (has_full_text or canonical_url) else "unknown"),
         citationText=citation,
         citation=_citation_record_from_regulatory_document(
             document,
@@ -3344,6 +3631,59 @@ def _known_item_title_similarity(query: str, title: str) -> float:
     title_tokens = {token for token in normalized_title.split() if len(token) >= 3 and not token.isdigit()}
     overlap = len(query_tokens & title_tokens) / len(query_tokens) if query_tokens else 0.0
     return max(SequenceMatcher(None, normalized_query, normalized_title).ratio(), overlap)
+
+
+def _normalization_metadata(raw_query: str, normalized_query: str) -> tuple[list[str], dict[str, Any]]:
+    raw_text = str(raw_query or "")
+    normalized_text = str(normalized_query or "")
+    if raw_text == normalized_text:
+        return [], {}
+    return (
+        ["The server normalized the incoming query before routing it."],
+        {
+            "query": {
+                "from": raw_text,
+                "to": normalized_text,
+            }
+        },
+    )
+
+
+def _anchor_strength_for_resolution(resolution_strategy: str) -> Literal["high", "medium", "low"]:
+    if resolution_strategy == "citation_resolution":
+        return "high"
+    if resolution_strategy in {"semantic_title_match", "openalex_autocomplete"}:
+        return "medium"
+    return "low"
+
+
+def _known_item_recovery_warning(resolution_strategy: str) -> str:
+    if resolution_strategy == "semantic_title_match":
+        return "Known-item recovery used a semantic title match; verify the anchor before treating it as canonical."
+    if resolution_strategy == "openalex_autocomplete":
+        return "Known-item recovery used OpenAlex autocomplete; verify the anchor before treating it as canonical."
+    if resolution_strategy == "openalex_search":
+        return "Known-item recovery used OpenAlex search; verify the anchor before treating it as canonical."
+    return "Known-item fallback used title-style recovery; verify the anchor before treating it as canonical."
+
+
+def _has_inspectable_sources(records: list[StructuredSourceRecord]) -> bool:
+    return any(
+        bool(record.canonical_url or record.retrieved_url or record.full_text_observed or record.abstract_observed)
+        for record in records
+    )
+
+
+def _best_next_internal_action(*, intent: str, has_sources: bool, result_status: str) -> str:
+    if intent == "known_item":
+        return "get_paper_details"
+    if intent == "regulatory":
+        return "inspect_source" if has_sources else "search_papers_smart"
+    if has_sources:
+        return "ask_result_set"
+    if result_status == "partial":
+        return "search_papers_smart"
+    return "resolve_reference"
 
 
 def _top_terms_for_cluster(papers: list[dict[str, Any]]) -> list[str]:

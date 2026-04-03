@@ -216,6 +216,42 @@ class GovInfoClient:
             payload["historical"] = True
         return await self._request_json("POST", "/search", json_payload=payload)
 
+    async def search_federal_register_documents(self, *, query: str, limit: int = 10) -> dict[str, Any]:
+        if not self.api_key:
+            raise ValueError("search_federal_register_documents requires GOVINFO_API_KEY.")
+
+        normalized_query = " ".join(query.strip().split())
+        if not normalized_query:
+            return {"total": 0, "data": []}
+
+        search = await self._govinfo_search(f"collection:(FR) and {normalized_query}", historical=True)
+        results = search.get("results") or []
+        if not isinstance(results, list):
+            return {"total": 0, "data": []}
+
+        data: list[dict[str, Any]] = []
+        for result in results[:limit]:
+            if not isinstance(result, dict):
+                continue
+            granule_id = str(result.get("granuleId") or "").strip()
+            package_id = str(result.get("packageId") or "").strip()
+            citation = str(result.get("citation") or result.get("frcitation") or "").strip() or None
+            data.append(
+                {
+                    "title": str(result.get("title") or "").strip() or None,
+                    "documentNumber": granule_id or None,
+                    "citation": citation,
+                    "publicationDate": str(result.get("dateIssued") or "").strip() or None,
+                    "sourceUrl": str(result.get("packageLink") or result.get("granuleLink") or "").strip() or None,
+                    "govInfoPackageId": package_id or None,
+                    "govInfoGranuleId": granule_id or None,
+                    "verificationStatus": "verified_metadata",
+                    "note": "GovInfo Federal Register primary-source recovery hit.",
+                }
+            )
+
+        return {"total": len(data), "data": data}
+
     async def _resolve_fr_from_citation(self, citation: str) -> tuple[str | None, str | None, dict[str, Any] | None]:
         search = await self._govinfo_search(f'collection:(FR) and frcitation:"{citation}"')
         results = search.get("results") or []
