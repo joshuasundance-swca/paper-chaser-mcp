@@ -102,7 +102,7 @@ class SearchStrategyMetadata(ApiModel):
         alias="intentRationale",
     )
     latency_profile: Literal["fast", "balanced", "deep"] = Field(
-        default="balanced",
+        default="deep",
         alias="latencyProfile",
     )
     normalized_query: str = Field(

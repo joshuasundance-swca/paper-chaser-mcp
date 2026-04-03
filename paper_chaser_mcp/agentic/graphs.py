@@ -394,7 +394,7 @@ class AgenticRuntime:
         year: str | None = None,
         venue: str | None = None,
         focus: str | None = None,
-        latency_profile: LatencyProfile = "balanced",
+        latency_profile: LatencyProfile = "deep",
         provider_budget: dict[str, Any] | None = None,
         include_enrichment: bool = False,
         ctx: Context | None = None,
@@ -1111,7 +1111,7 @@ class AgenticRuntime:
         question: str,
         top_k: int,
         answer_mode: str,
-        latency_profile: LatencyProfile = "balanced",
+        latency_profile: LatencyProfile = "deep",
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         """Answer grounded follow-up questions against a saved result set."""
@@ -1293,7 +1293,7 @@ class AgenticRuntime:
         *,
         search_session_id: str,
         max_themes: int,
-        latency_profile: LatencyProfile = "balanced",
+        latency_profile: LatencyProfile = "deep",
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         """Cluster a saved result set into themes, gaps, and disagreements."""
@@ -1438,7 +1438,7 @@ class AgenticRuntime:
         direction: str,
         hops: int,
         per_seed_limit: int,
-        latency_profile: LatencyProfile = "balanced",
+        latency_profile: LatencyProfile = "deep",
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         """Expand citation/reference/author relationships into a compact graph."""

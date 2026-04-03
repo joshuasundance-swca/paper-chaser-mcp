@@ -68,7 +68,7 @@ def provider_limits(
     intent: str,
     widened: bool = False,
     is_expansion: bool = False,
-    latency_profile: LatencyProfile = "balanced",
+    latency_profile: LatencyProfile = "deep",
 ) -> dict[str, int]:
     """Return conservative first-pass fetch sizes for each provider."""
 
@@ -167,7 +167,7 @@ async def retrieve_variant(
     widened: bool = False,
     is_expansion: bool = False,
     allow_serpapi: bool = True,
-    latency_profile: LatencyProfile = "balanced",
+    latency_profile: LatencyProfile = "deep",
     provider_registry: ProviderDiagnosticsRegistry | None = None,
     provider_budget: ProviderBudgetState | None = None,
     request_outcomes: list[dict[str, Any]] | None = None,

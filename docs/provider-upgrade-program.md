@@ -78,9 +78,9 @@ The runtime policy is intentionally conservative:
 
 | Profile | Intent | Behavior |
 | --- | --- | --- |
-| `fast` | interactive debugging and quick answers | prefers deterministic or narrow-path behavior, skips broadening and expensive fanout |
-| `balanced` | default production behavior | keeps the existing smart workflow feel while respecting the new runtime controls |
-| `deep` | explicit research mode | allows controlled multi-provider fanout, including recommendation enrichment and guarded SerpApi usage |
+| `fast` | smoke tests and debugging | uses the narrowest and cheapest smart path; not recommended for normal user-facing research |
+| `balanced` | lower-latency expert fallback | keeps the smart workflow responsive while accepting a narrower pass than the quality-first default |
+| `deep` | default quality-first expert behavior | allows the broadest controlled multi-provider fanout, including recommendation enrichment and guarded SerpApi usage |
 
 `search_papers_smart` also accepts `providerBudget`, which lets advanced clients
 cap provider fanout explicitly instead of relying on default routing only.
@@ -102,7 +102,7 @@ New explicit tools added by the upgrade:
 Backward compatibility rules:
 
 - existing tool names stay intact
-- `balanced` remains the default smart latency profile
+- `deep` is now the default smart latency profile for expert smart tools
 - new parameters are optional
 - provider diagnostics are additive and do not change existing response shapes
 
@@ -167,8 +167,8 @@ Backward compatibility rules:
   API integration
 - Risks: extra latency and cost when overused, plus dependency on upstream model
   availability
-- Operational posture: use `fast` for smoke tests, `balanced` by default, and
-  `deep` only when broader fanout is intentional
+- Operational posture: use `fast` for smoke tests, choose `balanced` only when
+  lower latency matters, and keep `deep` as the normal quality-first default
 - Decision: ship with direct Responses support and fallback behavior
 
 ### Hugging Face
@@ -227,7 +227,7 @@ The upgrade is considered healthy when these conditions hold:
 
 - no duplicate launches in steady state
 - direct-tool p95 stays at or below 10 seconds on the benchmark corpus
-- `balanced` smart-tool p95 stays at or below 20 seconds on the benchmark corpus
+- `deep` smart-tool p95 stays at or below 20 seconds on the benchmark corpus
 - guided/default-profile workflows succeed in low-context usage without needing
   expert-only tool selection knowledge
 - safe abstention beats plausible-but-unsupported synthesis for weak or

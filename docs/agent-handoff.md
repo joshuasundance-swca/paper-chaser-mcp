@@ -21,6 +21,13 @@ next steps without re-discovering project state.
 - Guided follow-up is now **abstention-safe**. `follow_up_research` returns
   `answerStatus=answered|abstained|insufficient_evidence` and should not emit
   answer-shaped filler when evidence is weak.
+- Guided execution policy is now **server-owned and quality-first**. Guided
+  `research` ignores client `latencyProfile`, uses the configured guided
+  defaults from `settings.py`, and can run one bounded review escalation when
+  the first pass is too weak.
+- Guided ambiguity handling is now **structured**. Guided wrappers surface
+  `executionProvenance`, `sessionResolution`, `sourceResolution`, and
+  `abstentionDetails` so clients can recover without reading exception text.
 - Regulatory routing is now **subject-anchored**. `research` should either
   build a trustworthy primary-source trail or return
   `needs_disambiguation` / `abstained`; unrelated wildlife notices should not
@@ -69,10 +76,13 @@ gh aw compile test-paper-chaser --dir .github/workflows
 ### Guided profile
 
 - `research`: default entry point for discovery, literature review, known-item
-  recovery, citation repair, and regulatory routing.
+  recovery, citation repair, and regulatory routing. Includes
+  `executionProvenance` for the applied guided policy.
 - `follow_up_research`: one grounded follow-up over a saved `searchSessionId`.
+  Also surfaces `sessionResolution` on ambiguity and `abstentionDetails` when
+  evidence is insufficient.
 - `resolve_reference`: DOI/arXiv/URL/citation/reference cleanup with exact identifier normalization before fuzzy recovery.
-- `inspect_source`: per-source provenance and trust inspection; omitted `searchSessionId` only works when one compatible saved session exists.
+- `inspect_source`: per-source provenance and trust inspection; omitted `searchSessionId` only works when one compatible saved session exists, and ambiguity now returns structured `sessionResolution` / `sourceResolution` payloads.
 - `get_runtime_status`: profile/provider/runtime sanity check.
 
 ### Expert profile

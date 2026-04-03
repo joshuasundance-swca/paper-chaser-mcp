@@ -1,6 +1,66 @@
 import pytest
 
 
+def test_failure_summary_accepts_needs_clarification_outcome() -> None:
+    from paper_chaser_mcp.models import FailureSummary
+
+    summary = FailureSummary.model_validate(
+        {
+            "outcome": "needs_clarification",
+            "whatFailed": "follow_up_session_inference",
+            "recommendedNextAction": "research",
+        }
+    )
+
+    assert summary.outcome == "needs_clarification"
+    assert summary.recommended_next_action == "research"
+
+
+def test_guided_metadata_models_serialize_aliases() -> None:
+    from paper_chaser_mcp.models import GuidedExecutionProvenance, InputNormalization, SessionResolution
+
+    normalization = InputNormalization.model_validate(
+        {
+            "normalizedQuery": "rag for coding agents",
+            "repairs": [{"field": "query", "from": " RAG ", "to": "rag", "reason": "query_normalization"}],
+            "warnings": ["trimmed whitespace"],
+        }
+    ).model_dump(by_alias=True, exclude_none=True)
+    session_resolution = SessionResolution.model_validate(
+        {
+            "requestedSearchSessionId": None,
+            "resolvedSearchSessionId": None,
+            "resolutionMode": "ambiguous",
+            "warnings": ["multiple active sessions exist"],
+            "candidates": [
+                {
+                    "searchSessionId": "ssn-1",
+                    "sourceTool": "research",
+                    "query": "rag",
+                    "ageSeconds": 12,
+                    "sourceCount": 2,
+                }
+            ],
+        }
+    ).model_dump(by_alias=True, exclude_none=True)
+    provenance = GuidedExecutionProvenance.model_validate(
+        {
+            "executionMode": "guided_research",
+            "serverPolicyApplied": "quality_first",
+            "latencyProfileApplied": "deep",
+            "passesRun": 2,
+            "passModes": ["auto", "review"],
+        }
+    ).model_dump(by_alias=True, exclude_none=True)
+
+    assert normalization["normalizedQuery"] == "rag for coding agents"
+    assert normalization["repairs"][0]["from"] == " RAG "
+    assert session_resolution["resolutionMode"] == "ambiguous"
+    assert session_resolution["candidates"][0]["searchSessionId"] == "ssn-1"
+    assert provenance["latencyProfileApplied"] == "deep"
+    assert provenance["passModes"] == ["auto", "review"]
+
+
 def test_batch_get_papers_rejects_oversized_list() -> None:
     """batch_get_papers must raise a validation error for lists > 500."""
     from pydantic import ValidationError

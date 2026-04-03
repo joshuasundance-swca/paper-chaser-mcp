@@ -37,6 +37,12 @@ from paper_chaser_mcp.agentic.retrieval import (
     retrieve_variant,
 )
 from paper_chaser_mcp.enrichment import PaperEnrichmentService
+from paper_chaser_mcp.models.tools import (
+    AskResultSetArgs,
+    ExpandResearchGraphArgs,
+    MapResearchLandscapeArgs,
+    SmartSearchPapersArgs,
+)
 from paper_chaser_mcp.provider_runtime import (
     ProviderDiagnosticsRegistry,
     ProviderPolicy,
@@ -3035,6 +3041,13 @@ def test_balanced_profile_reduces_expansion_breadth() -> None:
     assert config.max_grounded_variants == 2
     assert config.max_total_variants == 4
     assert config.candidate_pool_size == 50
+
+
+def test_expert_smart_args_default_to_deep_latency_profile() -> None:
+    assert SmartSearchPapersArgs(query="quality defaults").latency_profile == "deep"
+    assert AskResultSetArgs(searchSessionId="ssn-1", question="What matters most?").latency_profile == "deep"
+    assert MapResearchLandscapeArgs(searchSessionId="ssn-1").latency_profile == "deep"
+    assert ExpandResearchGraphArgs(seedPaperIds=["paper-1"]).latency_profile == "deep"
 
 
 def test_provider_limits_reduce_expansion_fetch_sizes_for_balanced_review() -> None:

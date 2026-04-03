@@ -32,11 +32,12 @@ gh aw compile test-paper-chaser --dir .github/workflows
 ## Default operating rules
 
 1. Start with guided tools.
-2. Reuse `searchSessionId`; do not restart discovery unless needed.
-3. Treat `abstained`, `insufficient_evidence`, and `needs_disambiguation` as
+2. Let guided `research` use its server-owned quality-first policy; low-context clients should not need to choose `fast`, `balanced`, or `deep` for normal use.
+3. Reuse `searchSessionId`; do not restart discovery unless needed.
+4. Treat `abstained`, `insufficient_evidence`, and `needs_disambiguation` as
    successful safety behavior.
-4. Inspect `sources` and `trustSummary` before presenting claims as settled.
-5. Escalate to expert tools only when there is a concrete control need.
+5. Inspect `sources` and `trustSummary` before presenting claims as settled.
+6. Escalate to expert tools only when there is a concrete control need.
 
 ## Guided golden paths
 
@@ -45,7 +46,8 @@ gh aw compile test-paper-chaser --dir .github/workflows
 1. Start with `research` for discovery, literature review, known-item recovery,
    citation repair, and regulatory history asks.
 2. Inspect `status`, `verifiedFindings`, `sources`, `unverifiedLeads`,
-   `evidenceGaps`, `trustSummary`, `coverage`, `failureSummary`, and `nextActions`.
+  `evidenceGaps`, `trustSummary`, `coverage`, `failureSummary`,
+  `executionProvenance`, and `nextActions`.
 3. Save `searchSessionId` for follow-up steps.
 
 **Example**
@@ -178,6 +180,10 @@ search_species_ecos(...) / list_species_documents_ecos(...)
 3. Replace first-pass `resolve_citation`/`search_papers_match` with
    `resolve_reference`.
 4. Keep old tools for expert-only workflows with explicit profile selection.
+5. Treat guided `executionProvenance`, `sessionResolution`, and
+  `sourceResolution` as part of the public default contract.
+6. Do not send `latencyProfile` to guided `research`; the server owns that
+  policy and currently defaults to a deep-backed quality-first path.
 
 ## Future work
 

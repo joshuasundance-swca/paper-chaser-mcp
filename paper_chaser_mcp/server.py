@@ -66,52 +66,70 @@ logger = logging.getLogger("paper-chaser-mcp")
 SERVER_INSTRUCTIONS = """
 Decision tree for tool selection:
 
-1. CONCEPT-LEVEL DISCOVERY / REVIEW → search_papers_smart
+1. DEFAULT GUIDED RESEARCH → research
+    (default low-context entry point for discovery, literature review,
+    citation repair, known-item recovery, and regulatory or species-history
+    questions; guided research uses a server-owned quality-first policy and now
+    returns executionProvenance plus trust-graded sections such as
+    verifiedFindings/sources/unverifiedLeads/evidenceGaps)
+2. GUIDED FOLLOW-UP → follow_up_research
+    (one grounded follow-up over a saved searchSessionId; returns answerStatus,
+    nextActions, executionProvenance, and sessionResolution when session reuse is
+    ambiguous)
+3. GUIDED REFERENCE NORMALIZATION → resolve_reference
+    (normalize DOI/arXiv/URL/citation/reference inputs before broader discovery)
+4. GUIDED SOURCE AUDIT → inspect_source
+    (per-source provenance, trust, and direct-read recommendations; ambiguity now
+    returns structured sessionResolution/sourceResolution instead of raw errors)
+5. RUNTIME / PROFILE SANITY CHECK → get_runtime_status
+    (surfaces effective profile, smart-provider state, guidedPolicy, guided
+    latency defaults, and runtime warnings)
+6. EXPERT CONCEPT-LEVEL DISCOVERY / REVIEW → search_papers_smart
     (returns searchSessionId, strategyMetadata, trust-graded sections such as
     verifiedFindings/likelyUnverified/evidenceGaps/structuredSources, plus
-    resourceUris and agentHints;
-   use latencyProfile=fast for smoke tests, balanced for default work, and deep
-   for controlled multi-provider expansion)
-2. QUICK RAW DISCOVERY → search_papers
-   (brokered, single page, returns brokerMetadata plus agentHints/resourceUris)
-3. EXHAUSTIVE / MULTI-PAGE → search_papers_bulk
+    resourceUris and agentHints; use latencyProfile=deep for highest-quality
+    expert work, balanced when lower latency matters, and fast only for smoke
+    tests or debugging)
+7. QUICK RAW DISCOVERY → search_papers
+    (brokered, single page, returns brokerMetadata plus agentHints/resourceUris)
+8. EXHAUSTIVE / MULTI-PAGE → search_papers_bulk
    (cursor-paginated, up to 1 000 returned/call; read retrievalNote because
    default bulk ordering is not relevance-ranked)
-4. CITATION REPAIR / ALMOST-RIGHT REFERENCES → resolve_citation
-5. KNOWN ITEM (messy title) → search_papers_match
+9. EXPERT CITATION REPAIR / ALMOST-RIGHT REFERENCES → resolve_citation
+10. EXPERT KNOWN ITEM (messy title) → search_papers_match
    (takes only a query string — the title text — not separate author/year/venue
    fields; use resolve_citation for multi-field bibliographic references)
-6. KNOWN ITEM (DOI / arXiv / URL) → get_paper_details
-7. PAPER ENRICHMENT / OA CHECK → get_paper_metadata_crossref,
+11. EXPERT KNOWN ITEM (DOI / arXiv / URL) → get_paper_details
+12. PAPER ENRICHMENT / OA CHECK → get_paper_metadata_crossref,
    get_paper_open_access_unpaywall, or enrich_paper after you already have a
    concrete paper, DOI, or DOI-bearing identifier
-8. GROUNDED FOLLOW-UP → ask_result_set or map_research_landscape using searchSessionId
-9. CITATION EXPANSION → get_paper_citations (cited-by) or get_paper_references (refs)
-10. AUTHOR PIVOT → search_authors → get_author_info → get_author_papers
-11. PHRASE / QUOTE RECOVERY → search_snippets (last resort)
-12. OPENALEX-SPECIFIC PATHS → use the *_openalex tools when you explicitly need
+13. EXPERT GROUNDED FOLLOW-UP → ask_result_set or map_research_landscape using searchSessionId
+14. CITATION EXPANSION → get_paper_citations (cited-by) or get_paper_references (refs)
+15. AUTHOR PIVOT → search_authors → get_author_info → get_author_papers
+16. PHRASE / QUOTE RECOVERY → search_snippets (last resort)
+17. OPENALEX-SPECIFIC PATHS → use the *_openalex tools when you explicitly need
    OpenAlex-native DOI/ID lookup, OpenAlex cursor paging, author pivots, or
    source/institution/topic pivots via search_entities_openalex and
    search_papers_openalex_by_entity
-13. SCHOLARAPI FULL-TEXT PATHS → use search_papers_scholarapi,
+18. SCHOLARAPI FULL-TEXT PATHS → use search_papers_scholarapi,
     list_papers_scholarapi, get_paper_text_scholarapi,
     get_paper_texts_scholarapi, or get_paper_pdf_scholarapi when the workflow
     explicitly needs ScholarAPI-ranked discovery, indexed-at monitoring,
     accessible full text, or binary PDF retrieval
-14. SERPAPI RECOVERY PATHS → use search_papers_serpapi_cited_by,
+19. SERPAPI RECOVERY PATHS → use search_papers_serpapi_cited_by,
    search_papers_serpapi_versions, get_author_profile_serpapi,
    get_author_articles_serpapi, or get_serpapi_account_status only when
    PAPER_CHASER_ENABLE_SERPAPI=true and the workflow justifies paid recall recovery
-15. ECOS SPECIES DOSSIERS → search_species_ecos → get_species_profile_ecos →
+20. ECOS SPECIES DOSSIERS → search_species_ecos → get_species_profile_ecos →
    list_species_documents_ecos → get_document_text_ecos for species pages,
    regulatory documents, and recovery PDFs from the U.S. Fish and Wildlife
    Service ECOS system
-16. REGULATORY PRIMARY SOURCES → search_federal_register for discovery,
+21. REGULATORY PRIMARY SOURCES → search_federal_register for discovery,
     get_federal_register_document for one notice or rule, and get_cfr_text for
     authoritative CFR part/section text. NOTE: Biological opinions, Section 7
     consultation records, and incidental take permits live in ECOS, not the
     Federal Register — use the ECOS species dossier chain for those.
-17. PROVIDER HEALTH / DEBUGGING → get_provider_diagnostics
+22. PROVIDER HEALTH / DEBUGGING → get_provider_diagnostics
 
 After search_papers: read brokerMetadata.nextStepHint for the recommended next move.
 After search_papers_smart: reuse searchSessionId for ask_result_set,
@@ -178,6 +196,7 @@ Default guided workflow:
 1. RESEARCH -> research
    Use this for topic discovery, literature review, known-item recovery, citation repair,
    and regulatory or species-history requests when you want one trust-graded answer.
+    The server applies a server-owned quality-first policy for this guided path.
 2. FOLLOW UP -> follow_up_research
    Reuse searchSessionId from research to ask one grounded question. The tool abstains
    when the saved evidence is too weak or off-topic.
@@ -198,6 +217,8 @@ AGENT_WORKFLOW_GUIDE = """
 
 - Start with `research` for topic discovery, literature review, known-item recovery,
   citation repair, and regulatory or species-history requests.
+- Treat guided `research` as server-managed quality-first behavior rather than a
+    place to choose fast/balanced/deep execution modes.
 - Save the returned `searchSessionId`. It is the anchor for `follow_up_research`
   and `inspect_source`.
 - Use `follow_up_research` for one grounded question over the saved evidence.
@@ -228,6 +249,8 @@ AGENT_WORKFLOW_GUIDE = """
 
 - Use the expert surface only when you truly need raw provider control,
   pagination semantics, or provider-native payloads.
+- For expert smart tools, deep is the default quality-first mode; balanced is a
+    lower-latency alternative, and fast is reserved for smoke tests.
 - Expert discovery tools include `search_papers`, `search_papers_bulk`,
   `search_papers_smart`, `map_research_landscape`, and `expand_research_graph`.
 - Expert primary-source tools include `search_federal_register`,
@@ -437,6 +460,12 @@ async def _execute_tool(
         hide_disabled_tools=settings.hide_disabled_tools,
         session_ttl_seconds=settings.session_ttl_seconds,
         embeddings_enabled=not settings.disable_embeddings,
+        guided_research_latency_profile=settings.guided_research_latency_profile,
+        guided_follow_up_latency_profile=settings.guided_follow_up_latency_profile,
+        guided_allow_paid_providers=settings.guided_allow_paid_providers,
+        guided_escalation_enabled=settings.guided_escalation_enabled,
+        guided_escalation_max_passes=settings.guided_escalation_max_passes,
+        guided_escalation_allow_paid_providers=settings.guided_escalation_allow_paid_providers,
         ctx=ctx,
     )
 

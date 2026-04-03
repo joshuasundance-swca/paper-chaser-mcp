@@ -110,6 +110,7 @@ Review checklist:
 6. Release notes and presentation are acceptable for external users.
 7. The package visibility state on GHCR is what you intend.
 8. The guided-default messaging in README, packaging metadata, and workflow docs still matches the shipped product surface.
+9. Embeddings posture is still intentional: `PAPER_CHASER_DISABLE_EMBEDDINGS=true` remains the release default unless a separate scoped change explicitly revalidates embedding behavior.
 
 ### Phase 5: Promote Discoverability
 
@@ -163,6 +164,11 @@ gh aw compile test-paper-chaser --dir .github/workflows
 ```
 
 and commit the updated `.github/workflows/test-paper-chaser.lock.yml`.
+
+If the release keeps the current guided-policy scope, do not treat disabled
+embeddings as release drift. They remain off by default because embedding
+behavior is still unreliable in this codebase and improving it is not part of
+this release track.
 
 ## Local Workflow-Lint Parity
 

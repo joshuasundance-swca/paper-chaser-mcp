@@ -81,7 +81,6 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "year",
         "venue",
         "focus",
-        "latencyProfile",
     }
     assert tool_map["follow_up_research"].inputSchema["required"] == ["question"]
     assert set(tool_map["follow_up_research"].inputSchema["properties"]) == {
@@ -106,6 +105,55 @@ async def test_list_tools_returns_expected_public_contract() -> None:
     assert set(resolve_tags["fastmcp"]["tags"]) == {"guided", "reference-resolution"}
     assert set(inspect_tags["fastmcp"]["tags"]) == {"guided", "source-inspection"}
     assert set(runtime_tags["fastmcp"]["tags"]) == {"guided", "runtime-status"}
+
+
+@pytest.mark.asyncio
+async def test_guided_research_uses_server_owned_deep_profile_and_ignores_client_latency_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_calls: list[dict[str, Any]] = []
+
+    class _FakeRuntime:
+        async def search_papers_smart(self, **kwargs: Any) -> dict[str, Any]:
+            captured_calls.append(kwargs)
+            return {
+                "searchSessionId": "ssn-guided-quality-default",
+                "strategyMetadata": {"intent": "review", "latencyProfile": kwargs.get("latencyProfile")},
+                "structuredSources": [
+                    {
+                        "sourceId": "paper-1",
+                        "title": "Quality-first guided retrieval",
+                        "provider": "semantic_scholar",
+                        "sourceType": "scholarly_article",
+                        "verificationStatus": "verified_metadata",
+                        "accessStatus": "abstract_only",
+                        "topicalRelevance": "on_topic",
+                        "confidence": "high",
+                        "isPrimarySource": False,
+                    }
+                ],
+                "candidateLeads": [],
+                "evidenceGaps": [],
+                "coverageSummary": {"searchMode": "literature_review"},
+                "failureSummary": None,
+                "clarification": None,
+            }
+
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(
+        await server.call_tool(
+            "research",
+            {
+                "query": "quality-first guided retrieval defaults",
+                "latencyProfile": "fast",
+            },
+        )
+    )
+
+    assert captured_calls
+    assert (captured_calls[0].get("latencyProfile") or captured_calls[0].get("latency_profile")) == "deep"
+    assert payload["status"] in {"succeeded", "partial"}
 
 
 @pytest.mark.asyncio
@@ -1432,7 +1480,266 @@ async def test_get_runtime_status_surfaces_configured_and_active_smart_provider(
 
     assert payload["runtimeSummary"]["configuredSmartProvider"] == "azure-openai"
     assert payload["runtimeSummary"]["activeSmartProvider"] == "deterministic"
+    assert payload["runtimeSummary"]["guidedPolicy"] == "quality_first"
+    assert payload["runtimeSummary"]["guidedResearchLatencyProfile"] == server.settings.guided_research_latency_profile
+    assert payload["runtimeSummary"]["guidedFollowUpLatencyProfile"] == server.settings.guided_follow_up_latency_profile
+    assert payload["runtimeSummary"]["guidedAllowPaidProviders"] is server.settings.guided_allow_paid_providers
     assert payload["providers"]
+
+
+@pytest.mark.asyncio
+async def test_guided_research_escalates_once_when_initial_pass_is_too_weak(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRuntime:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        async def search_papers_smart(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                return {
+                    "searchSessionId": "ssn-weak-pass",
+                    "strategyMetadata": {
+                        "intent": "review",
+                        "configuredSmartProvider": "openai",
+                        "activeSmartProvider": "deterministic",
+                        "providerBudgetApplied": {"allowPaidProviders": True},
+                    },
+                    "structuredSources": [],
+                    "candidateLeads": [],
+                    "evidenceGaps": ["Initial pass did not recover trustworthy on-topic sources."],
+                    "coverageSummary": {
+                        "providersAttempted": ["semantic_scholar"],
+                        "providersSucceeded": [],
+                        "providersFailed": [],
+                        "providersZeroResults": ["semantic_scholar"],
+                        "likelyCompleteness": "unknown",
+                        "searchMode": "literature_review",
+                    },
+                    "failureSummary": None,
+                    "clarification": None,
+                }
+            return {
+                "searchSessionId": "ssn-weak-pass",
+                "strategyMetadata": {
+                    "intent": "review",
+                    "configuredSmartProvider": "openai",
+                    "activeSmartProvider": "deterministic",
+                    "providerBudgetApplied": {"allowPaidProviders": True},
+                },
+                "structuredSources": [
+                    {
+                        "sourceId": "paper-1",
+                        "title": "Grounded review paper one",
+                        "provider": "semantic_scholar",
+                        "sourceType": "scholarly_article",
+                        "verificationStatus": "verified_metadata",
+                        "accessStatus": "abstract_only",
+                        "topicalRelevance": "on_topic",
+                        "confidence": "high",
+                        "isPrimarySource": False,
+                    },
+                    {
+                        "sourceId": "paper-2",
+                        "title": "Grounded review paper two",
+                        "provider": "openalex",
+                        "sourceType": "scholarly_article",
+                        "verificationStatus": "verified_metadata",
+                        "accessStatus": "abstract_only",
+                        "topicalRelevance": "on_topic",
+                        "confidence": "high",
+                        "isPrimarySource": False,
+                    },
+                ],
+                "candidateLeads": [],
+                "evidenceGaps": [],
+                "coverageSummary": {
+                    "providersAttempted": ["semantic_scholar", "openalex"],
+                    "providersSucceeded": ["semantic_scholar", "openalex"],
+                    "providersFailed": [],
+                    "providersZeroResults": [],
+                    "likelyCompleteness": "likely_complete",
+                    "searchMode": "literature_review",
+                },
+                "failureSummary": None,
+                "clarification": None,
+            }
+
+    runtime = _FakeRuntime()
+    monkeypatch.setattr(server, "agentic_runtime", runtime)
+
+    payload = _payload(await server.call_tool("research", {"query": "multimodal transformer alignment methods"}))
+
+    assert [call["mode"] for call in runtime.calls] == ["auto", "review"]
+    assert payload["executionProvenance"]["escalationAttempted"] is True
+    assert payload["executionProvenance"]["passesRun"] == 2
+    assert payload["executionProvenance"]["passModes"] == ["auto", "review"]
+    assert payload["executionProvenance"]["latencyProfileApplied"] == server.settings.guided_research_latency_profile
+    assert payload["status"] in {"succeeded", "partial"}
+
+
+@pytest.mark.asyncio
+async def test_follow_up_research_without_session_returns_session_candidates_and_policy_metadata() -> None:
+    isolated_registry = type(server.workspace_registry)()
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-a",
+        query="Attention Is All You Need",
+        payload={"sources": [{"sourceId": "paper-a", "title": "Attention is All you Need"}]},
+    )
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-b",
+        query="RAG",
+        payload={"sources": [{"sourceId": "paper-b", "title": "RAG Overview"}]},
+    )
+
+    original_registry = server.workspace_registry
+    server.workspace_registry = isolated_registry
+    try:
+        payload = _payload(await server.call_tool("follow_up_research", {"question": "Who wrote it?"}))
+    finally:
+        server.workspace_registry = original_registry
+
+    assert payload["answerStatus"] == "insufficient_evidence"
+    assert payload["sessionResolution"]["resolutionMode"] == "ambiguous"
+    assert len(payload["sessionResolution"]["candidates"]) == 2
+    assert payload["executionProvenance"]["latencyProfileApplied"] == server.settings.guided_follow_up_latency_profile
+    assert payload["abstentionDetails"]["category"] == "no_sources"
+
+
+@pytest.mark.asyncio
+async def test_follow_up_research_passes_server_owned_latency_profile_to_ask_result_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    isolated_registry = type(server.workspace_registry)()
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-follow-up",
+        query="Attention Is All You Need",
+        payload={"sources": [{"sourceId": "paper-a", "title": "Attention is All you Need"}]},
+    )
+
+    class _FakeRuntime:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        async def ask_result_set(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(kwargs)
+            return {
+                "answerStatus": "answered",
+                "answer": "The saved result set supports a grounded answer.",
+                "evidence": [],
+                "unsupportedAsks": [],
+                "followUpQuestions": [],
+                "structuredSources": [
+                    {
+                        "sourceId": "paper-a",
+                        "title": "Attention is All you Need",
+                        "provider": "semantic_scholar",
+                        "sourceType": "scholarly_article",
+                        "verificationStatus": "verified_metadata",
+                        "accessStatus": "abstract_only",
+                        "topicalRelevance": "on_topic",
+                        "confidence": "high",
+                        "isPrimarySource": False,
+                    }
+                ],
+                "candidateLeads": [],
+                "evidenceGaps": [],
+                "coverageSummary": {
+                    "providersAttempted": ["semantic_scholar"],
+                    "providersSucceeded": ["semantic_scholar"],
+                    "providersFailed": [],
+                    "providersZeroResults": [],
+                    "likelyCompleteness": "likely_complete",
+                    "searchMode": "grounded_follow_up",
+                },
+                "failureSummary": None,
+            }
+
+    runtime = _FakeRuntime()
+    monkeypatch.setattr(server, "agentic_runtime", runtime)
+    original_registry = server.workspace_registry
+    server.workspace_registry = isolated_registry
+    try:
+        payload = _payload(
+            await server.call_tool(
+                "follow_up_research",
+                {"searchSessionId": "ssn-follow-up", "question": "What does the saved session support?"},
+            )
+        )
+    finally:
+        server.workspace_registry = original_registry
+
+    assert runtime.calls
+    assert runtime.calls[0]["latency_profile"] == server.settings.guided_follow_up_latency_profile
+    assert payload["executionProvenance"]["latencyProfileApplied"] == server.settings.guided_follow_up_latency_profile
+    assert payload["answerStatus"] == "answered"
+
+
+@pytest.mark.asyncio
+async def test_inspect_source_returns_structured_disambiguation_when_session_is_ambiguous() -> None:
+    isolated_registry = type(server.workspace_registry)()
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-left",
+        query="Attention Is All You Need",
+        payload={"sources": [{"sourceId": "paper-shared", "title": "Attention is All you Need"}]},
+    )
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-right",
+        query="RAG",
+        payload={"sources": [{"sourceId": "paper-shared", "title": "RAG Overview"}]},
+    )
+
+    original_registry = server.workspace_registry
+    server.workspace_registry = isolated_registry
+    try:
+        payload = _payload(await server.call_tool("inspect_source", {"sourceId": "paper-shared"}))
+    finally:
+        server.workspace_registry = original_registry
+
+    assert payload["searchSessionId"] is None
+    assert payload["source"] is None
+    assert payload["sessionResolution"]["resolutionMode"] == "ambiguous"
+    assert payload["sourceResolution"]["matchType"] == "missing_session_id"
+    assert payload["resultState"]["status"] == "needs_disambiguation"
+
+
+@pytest.mark.asyncio
+async def test_inspect_source_returns_available_source_ids_when_source_is_unresolved() -> None:
+    isolated_registry = type(server.workspace_registry)()
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-source-list",
+        query="Attention Is All You Need",
+        payload={
+            "sources": [
+                {"sourceId": "paper-a", "title": "Attention is All you Need"},
+                {"sourceId": "paper-b", "title": "The Annotated Transformer"},
+            ]
+        },
+    )
+
+    original_registry = server.workspace_registry
+    server.workspace_registry = isolated_registry
+    try:
+        payload = _payload(
+            await server.call_tool(
+                "inspect_source",
+                {"searchSessionId": "ssn-source-list", "sourceId": "missing-source"},
+            )
+        )
+    finally:
+        server.workspace_registry = original_registry
+
+    assert payload["source"] is None
+    assert payload["sourceResolution"]["matchType"] == "unresolved"
+    assert set(payload["sourceResolution"]["availableSourceIds"]) == {"paper-a", "paper-b"}
+    assert payload["resultState"]["status"] == "needs_disambiguation"
 
 
 @pytest.mark.asyncio
@@ -1561,7 +1868,16 @@ async def test_guided_wrappers_surface_unverified_leads(monkeypatch: pytest.Monk
                 "failureSummary": None,
             }
 
+    isolated_registry = type(server.workspace_registry)()
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-guided-1",
+        query="regulatory history of california condor",
+        payload={"searchSessionId": "ssn-guided-1", "sources": []},
+    )
+
     monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+    monkeypatch.setattr(server, "workspace_registry", isolated_registry)
 
     research = _payload(await server.call_tool("research", {"query": "regulatory history of california condor"}))
     follow_up = _payload(
@@ -1877,6 +2193,8 @@ async def test_follow_up_research_answers_from_saved_session_metadata_when_regul
     assert payload["coverage"]["searchMode"] == "regulatory_primary_source"
     assert payload["evidenceGaps"][0].startswith("No primary-source regulatory timeline")
     assert payload["unverifiedLeads"][0]["sourceId"] == "2026-05678"
+    assert payload["resultState"]["status"] == "answered"
+    assert payload["executionProvenance"]["executionMode"] == "session_introspection"
 
 
 @pytest.mark.asyncio
@@ -2111,13 +2429,18 @@ async def test_inspect_source_requires_explicit_session_when_multiple_are_active
         payload={"sources": [{"sourceId": "paper-b", "title": "RAG Overview"}]},
     )
 
-    with pytest.raises(ValueError, match="could not infer a unique searchSessionId"):
+    payload = _payload(
         await server.call_tool(
             "inspect_source",
             {
                 "sourceId": "source-1",
             },
         )
+    )
+
+    assert payload["searchSessionId"] is None
+    assert payload["sessionResolution"]["resolutionMode"] == "ambiguous"
+    assert payload["resultState"]["status"] == "needs_disambiguation"
 
 
 @pytest.mark.asyncio

@@ -44,10 +44,14 @@ Paper Chaser MCP is now guided-first: the default public surface is designed to
 be hard to misuse and explicit about trust.
 
 - **Default research entrypoint**: `research` handles discovery, known-item
-  recovery, citation repair, and regulatory routing in one trust-graded path.
+  recovery, citation repair, and regulatory routing in one trust-graded path,
+  with a server-owned quality-first policy for guided use.
 - **Grounded follow-up**: `follow_up_research` answers against one saved
   `searchSessionId`; if you omit it, the server only infers a session when the
   choice is unique.
+- **Decision metadata**: guided responses surface `executionProvenance`, and
+  ambiguous follow-up or source-inspection flows return structured
+  `sessionResolution` / `sourceResolution` payloads instead of opaque errors.
 - **Reference-first recovery**: `resolve_reference` handles DOI/arXiv/URL,
   citation fragments, and regulatory-style references, and exact DOI/arXiv/
   paper-URL inputs resolve as exact anchors rather than falling through to fuzzy repair.
@@ -176,6 +180,14 @@ PAPER_CHASER_TOOL_PROFILE=expert
 → search_federal_register / get_federal_register_document / get_cfr_text for direct regulatory primary-source control
 ```
 
+For expert smart tools, `deep` is the default quality-first mode. Use
+`balanced` only when lower latency matters enough to justify a narrower pass,
+and reserve `fast` for smoke tests or debugging.
+
+Guided `research` no longer accepts a public `latencyProfile` knob. The server
+owns that policy and currently applies a deep-backed quality-first path with
+one bounded review escalation when the first pass is too weak.
+
 ## Agent response contract
 
 Treat these as the main guided contracts:
@@ -188,6 +200,10 @@ Treat these as the main guided contracts:
 | `unverifiedLeads` | `research`, `follow_up_research`, expert smart tools | Review weak, filtered, or off-topic leads without promoting them into verified evidence |
 | `evidenceGaps` | `research`, `follow_up_research` | Treat as explicit limits on the current answer, not hidden caveats |
 | `trustSummary` | `research`, `follow_up_research` | Check on-topic vs weak/off-topic counts before relying on synthesis |
+| `executionProvenance` | guided tools | Inspect which server policy, latency defaults, and fallback path produced the result |
+| `sessionResolution` | `follow_up_research`, `inspect_source` | Use when a session was inferred, repaired, missing, or ambiguous |
+| `sourceResolution` | `inspect_source` | Use when the requested source id was matched, unresolved, or needs a retry with available ids |
+| `abstentionDetails` | guided tools on weak evidence | Treat as the actionable reason and recovery hint for abstention or insufficient evidence |
 | `nextActions` | guided tools | Treat as server-preferred recovery path on weak evidence |
 | `clarification` | `research` | Ask the user only when a bounded clarification request is provided |
 | `answerStatus` | `follow_up_research` | `answered`, `abstained`, `insufficient_evidence` |
@@ -211,6 +227,12 @@ If you previously used the smart/raw-first surface directly:
    as your first known-item recovery step.
 4. Keep expert tools for explicit operator workflows by setting
    `PAPER_CHASER_TOOL_PROFILE=expert`.
+5. Do not send `latencyProfile` to guided `research`; the server now owns that
+  policy internally.
+6. For expert smart tools, `deep` is now the default. Choose `balanced`
+  explicitly when you want the lower-latency fallback.
+7. Expect guided wrappers to surface `executionProvenance`, `sessionResolution`,
+  `sourceResolution`, and `abstentionDetails`.
 
 For the detailed breaking-change note, see [Guided Reset Migration Note](docs/guided-reset-migration-note.md).
 
@@ -267,13 +289,14 @@ below are expert-path controls.
 | Area | Default | Main variables | Notes |
 | --- | --- | --- | --- |
 | Tool profile | `guided` | `PAPER_CHASER_TOOL_PROFILE` | `guided` exposes the 5 low-context tools; `expert` exposes the broader raw/provider-specific surface, subject to enabled features and `PAPER_CHASER_HIDE_DISABLED_TOOLS` |
+| Guided policy | quality-first | `PAPER_CHASER_GUIDED_RESEARCH_LATENCY_PROFILE`, `PAPER_CHASER_GUIDED_FOLLOW_UP_LATENCY_PROFILE`, `PAPER_CHASER_GUIDED_ALLOW_PAID_PROVIDERS`, `PAPER_CHASER_GUIDED_ESCALATION_ENABLED`, `PAPER_CHASER_GUIDED_ESCALATION_MAX_PASSES`, `PAPER_CHASER_GUIDED_ESCALATION_ALLOW_PAID_PROVIDERS` | Guided `research` / `follow_up_research` use these server-owned defaults instead of honoring client `latencyProfile` knobs |
 | Search broker | `semantic_scholar,arxiv,core,serpapi_google_scholar` | `PAPER_CHASER_ENABLE_SEMANTIC_SCHOLAR`, `PAPER_CHASER_ENABLE_ARXIV`, `PAPER_CHASER_ENABLE_CORE`, `PAPER_CHASER_ENABLE_SERPAPI`, `PAPER_CHASER_PROVIDER_ORDER` | SerpApi is opt-in and paid; CORE is off by default |
 | OpenAlex tool family | enabled | `PAPER_CHASER_ENABLE_OPENALEX`, `OPENALEX_API_KEY`, `OPENALEX_MAILTO` | Explicit tool family, not a default broker hop |
 | ScholarAPI tool family | disabled | `PAPER_CHASER_ENABLE_SCHOLARAPI`, `SCHOLARAPI_API_KEY` | Explicit discovery, monitoring, full-text, and PDF family; also available as an opt-in broker target via `preferredProvider` or `providerOrder`. ScholarAPI-sourced paper results now include a separate `contentAccess` block for access/full-text metadata. |
 | Enrichment | enabled | `PAPER_CHASER_ENABLE_CROSSREF`, `CROSSREF_MAILTO`, `CROSSREF_TIMEOUT_SECONDS`, `PAPER_CHASER_ENABLE_UNPAYWALL`, `UNPAYWALL_EMAIL`, `UNPAYWALL_TIMEOUT_SECONDS`, `PAPER_CHASER_ENABLE_OPENALEX` | Used after you already have a paper or DOI |
 | ECOS | enabled | `PAPER_CHASER_ENABLE_ECOS`, `ECOS_BASE_URL`, `ECOS_TIMEOUT_SECONDS`, document timeout and size vars, TLS vars | Species and document workflows |
 | Federal Register / GovInfo | enabled | `PAPER_CHASER_ENABLE_FEDERAL_REGISTER`, `PAPER_CHASER_ENABLE_GOVINFO_CFR`, `GOVINFO_API_KEY`, GovInfo timeout and size vars | Federal Register search is keyless; authoritative CFR retrieval uses GovInfo |
-| Smart layer | disabled | `OPENAI_API_KEY`, `HUGGINGFACE_API_KEY`, `HUGGINGFACE_BASE_URL`, `NVIDIA_API_KEY`, `NVIDIA_NIM_BASE_URL`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `MISTRAL_API_KEY`, `PAPER_CHASER_ENABLE_AGENTIC`, model and index vars | Additive only; supports `openai`, `azure-openai`, `anthropic`, `nvidia`, `google`, `mistral`, `huggingface`, and `deterministic`. OpenAI ships with checked-in model defaults, Anthropic, NVIDIA, Google, and Mistral auto-swap to provider defaults when those OpenAI defaults are left untouched, and Azure OpenAI can override both roles with deployment names. Hugging Face is documented as an OpenAI-compatible chat router configured with `HUGGINGFACE_BASE_URL`; it remains chat-only in this repo and does not enable embeddings. `NVIDIA_NIM_BASE_URL` is optional for self-hosted NIMs; leave it empty for hosted NVIDIA API Catalog access. Embeddings remain disabled by default. When ScholarAPI is enabled, smart discovery can also route through it and cap it via `providerBudget.maxScholarApiCalls`. |
+| Smart layer | disabled | `OPENAI_API_KEY`, `HUGGINGFACE_API_KEY`, `HUGGINGFACE_BASE_URL`, `NVIDIA_API_KEY`, `NVIDIA_NIM_BASE_URL`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `MISTRAL_API_KEY`, `PAPER_CHASER_ENABLE_AGENTIC`, model and index vars | Additive only; supports `openai`, `azure-openai`, `anthropic`, `nvidia`, `google`, `mistral`, `huggingface`, and `deterministic`. OpenAI ships with checked-in model defaults, Anthropic, NVIDIA, Google, and Mistral auto-swap to provider defaults when those OpenAI defaults are left untouched, and Azure OpenAI can override both roles with deployment names. Hugging Face is documented as an OpenAI-compatible chat router configured with `HUGGINGFACE_BASE_URL`; it remains chat-only in this repo and does not enable embeddings. `NVIDIA_NIM_BASE_URL` is optional for self-hosted NIMs; leave it empty for hosted NVIDIA API Catalog access. Embeddings remain disabled by default because they have been unreliable in this codebase, and improving them is out of scope for the current release. When ScholarAPI is enabled, smart discovery can also route through it and cap it via `providerBudget.maxScholarApiCalls`. |
 | Hide disabled tools | guided default `true`, expert default `false` | `PAPER_CHASER_HIDE_DISABLED_TOOLS` | Guided mode keeps this on to reduce dead-end tool picks; expert mode usually leaves it off for operator visibility |
 
 ### Smart-layer model defaults
@@ -291,7 +314,7 @@ These are the effective planner/synthesis defaults when you enable `PAPER_CHASER
 | `huggingface` | `moonshotai/Kimi-K2.5` | `moonshotai/Kimi-K2.5` | Runtime swaps to these provider defaults only when planner/synthesis are still set to the checked-in OpenAI defaults; requests are sent to `HUGGINGFACE_BASE_URL` and the path remains chat-only |
 | `deterministic` | n/a | n/a | No external LLM calls; model selection metadata is reported as deterministic instead |
 
-`PAPER_CHASER_EMBEDDING_MODEL` defaults to `text-embedding-3-large`, but embeddings stay off until you set `PAPER_CHASER_DISABLE_EMBEDDINGS=false`. In the current provider surface, embeddings are only used by providers that explicitly support them, which means the documented Hugging Face path remains chat-only even though it uses an OpenAI-compatible router.
+`PAPER_CHASER_EMBEDDING_MODEL` defaults to `text-embedding-3-large`, but embeddings stay off until you set `PAPER_CHASER_DISABLE_EMBEDDINGS=false`. They remain off by default because embeddings have been unreliable in this codebase and improving them is outside the scope of the current guided-policy release. In the current provider surface, embeddings are only used by providers that explicitly support them, which means the documented Hugging Face path remains chat-only even though it uses an OpenAI-compatible router.
 
 Recommended baseline: enable Semantic Scholar, OpenAlex, Crossref, and Unpaywall for general scholarly workflows; enable ScholarAPI when you want explicit full-text or PDF retrieval; keep SerpApi opt-in because it is a paid recall-recovery path.
 
@@ -472,7 +495,7 @@ control.
 
 | Tool | Description |
 | --- | --- |
-| `search_papers_smart` | Concept-level discovery with query expansion, multi-provider fusion, reranking, reusable `searchSessionId`, and trust-graded sections (`verifiedFindings`, `likelyUnverified`, `evidenceGaps`, `structuredSources`, `coverageSummary`, `failureSummary`). In `auto` mode it can also route clearly regulatory asks into a primary-source timeline. Supports `mode`, `latencyProfile` (`fast`/`balanced`/`deep`), and optional `providerBudget`. |
+| `search_papers_smart` | Concept-level discovery with query expansion, multi-provider fusion, reranking, reusable `searchSessionId`, and trust-graded sections (`verifiedFindings`, `likelyUnverified`, `evidenceGaps`, `structuredSources`, `coverageSummary`, `failureSummary`). In `auto` mode it can also route clearly regulatory asks into a primary-source timeline. `latencyProfile` defaults to `deep` for highest-quality expert work; use `balanced` for lower latency and reserve `fast` for smoke tests. Optional `providerBudget` remains available for advanced clients. |
 | `ask_result_set` | Grounded QA, claim checks, and comparisons over a saved `searchSessionId`. |
 | `map_research_landscape` | Cluster a saved result set into themes, gaps, disagreements, and next-search suggestions. |
 | `expand_research_graph` | Expand paper anchors or a saved session into a citation/reference/author graph with frontier ranking. |

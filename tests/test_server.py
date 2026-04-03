@@ -364,7 +364,11 @@ def test_server_instructions_surface_continuation_and_schema_cues() -> None:
     instructions = server.SERVER_INSTRUCTIONS
     normalized_instructions = " ".join(instructions.split())
 
-    assert "CONCEPT-LEVEL DISCOVERY / REVIEW" in instructions
+    assert "DEFAULT GUIDED RESEARCH" in instructions
+    assert "follow_up_research" in instructions
+    assert "resolve_reference" in instructions
+    assert "inspect_source" in instructions
+    assert "guidedPolicy" in instructions
     assert "search_papers_smart" in instructions
     assert "resolve_citation" in instructions
     assert "ask_result_set" in instructions
