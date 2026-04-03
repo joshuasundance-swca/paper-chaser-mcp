@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from ..citation_repair import looks_like_citation_query
 from .config import AgenticConfig
-from .models import ExpansionCandidate, PlannerDecision
+from .models import ExpansionCandidate, IntentCandidate, IntentLabel, PlannerDecision
 from .providers import COMMON_QUERY_WORDS, ModelProviderBundle
 
 DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:A-Za-z0-9]+", re.IGNORECASE)
@@ -57,6 +57,22 @@ QUERY_FACET_TOKEN_ALLOWLIST = {
     "tool",
     "tools",
 }
+LITERATURE_QUERY_TERMS = {
+    "article",
+    "citation",
+    "doi",
+    "evidence",
+    "journal",
+    "literature",
+    "meta-analysis",
+    "paper",
+    "peer-reviewed",
+    "review",
+    "scholarly",
+    "scientific",
+    "study",
+    "systematic review",
+}
 TITLE_STOPWORDS = {
     "a",
     "an",
@@ -74,17 +90,45 @@ TITLE_STOPWORDS = {
     "to",
     "with",
 }
+QUERYISH_TITLE_BLOCKERS = {
+    "compare",
+    "effects",
+    "evidence",
+    "history",
+    "include",
+    "listing",
+    "regulatory",
+    "review",
+    "status",
+    "studies",
+    "study",
+    "survey",
+    "systematic",
+    "what",
+}
+STRONG_REGULATORY_TITLE_BLOCKERS = {
+    "critical habitat",
+    "ecos",
+    "esa",
+    "federal register",
+    "final rule",
+    "listing status",
+    "regulatory history",
+    "rulemaking",
+}
 REGULATORY_QUERY_TERMS = {
     "biological opinion",
     "cfr",
     "code of federal regulations",
     "critical habitat",
     "ecos",
-    "endangered",
+    "esa",
+    "final rule",
     "federal register",
     "five-year review",
     "five year review",
     "incidental take",
+    "listing status",
     "listing history",
     "proposed rule",
     "recovery plan",
@@ -93,7 +137,6 @@ REGULATORY_QUERY_TERMS = {
     "rulemaking",
     "section 7",
     "species dossier",
-    "threatened",
 }
 
 VARIANT_DEDUPE_STOPWORDS = (
@@ -169,15 +212,26 @@ def looks_like_exact_title(query: str) -> bool:
     normalized = normalize_query(query)
     if not normalized or normalized.endswith("?"):
         return False
+    lowered = normalized.lower()
+    if any(marker in lowered for marker in STRONG_REGULATORY_TITLE_BLOCKERS):
+        return False
+    if re.search(r"\b\d+\s*(?:cfr|f\.?\s*r\.?)\b", lowered):
+        return False
+    if any(phrase in lowered for phrase in ("what does", "what is", "what are", "include representative")):
+        return False
     stripped = normalized.strip("\"'")
     words = re.findall(r"[A-Za-z][A-Za-z0-9'/-]*", stripped)
-    if not 2 <= len(words) <= 14:
+    if not 2 <= len(words) <= 24:
         return False
     significant_words = [word for word in words if len(word) > 2 and word.lower() not in TITLE_STOPWORDS]
     if len(significant_words) < 2:
         return False
+    if sum(word.lower() in QUERYISH_TITLE_BLOCKERS for word in significant_words) >= 3:
+        return False
     title_like_words = [word for word in significant_words if word[:1].isupper() or word.isupper() or "-" in word]
-    return len(title_like_words) >= max(2, int(len(significant_words) * 0.6))
+    if len(title_like_words) >= max(2, int(len(significant_words) * 0.45)):
+        return True
+    return bool(re.search(r"\([A-Z][A-Za-z]+(?:\s+[a-z][A-Za-z-]+)+\)", stripped)) and len(significant_words) >= 6
 
 
 def detect_regulatory_intent(query: str, focus: str | None = None) -> bool:
@@ -188,6 +242,21 @@ def detect_regulatory_intent(query: str, focus: str | None = None) -> bool:
         return False
     if any(term in normalized for term in REGULATORY_QUERY_TERMS):
         return True
+    if re.search(r"\b(?:endangered|threatened)\b", normalized) and any(
+        marker in normalized
+        for marker in {
+            "cfr",
+            "critical habitat",
+            "esa",
+            "federal register",
+            "final rule",
+            "listing",
+            "recovery plan",
+            "rulemaking",
+            "species status",
+        }
+    ):
+        return True
     if re.search(r"\b\d+\s*(?:cfr|f\.?\s*r\.?)\b", normalized):
         return True
     if "species" in normalized and any(
@@ -195,6 +264,107 @@ def detect_regulatory_intent(query: str, focus: str | None = None) -> bool:
     ):
         return True
     return False
+
+
+def detect_literature_intent(query: str, focus: str | None = None) -> bool:
+    """Return True when the ask explicitly signals literature or scholarly retrieval."""
+
+    normalized = normalize_query(" ".join(part for part in [query, focus or ""] if part)).lower()
+    if not normalized:
+        return False
+    if any(term in normalized for term in LITERATURE_QUERY_TERMS):
+        return True
+    return bool(re.search(r"\b(?:doi|peer-reviewed|systematic review|meta-analysis|scientific reports?)\b", normalized))
+
+
+def _source_for_intent_candidate(
+    intent_source: Literal["explicit", "planner", "heuristic_override", "hybrid_agreement", "fallback_recovery"],
+) -> Literal["explicit", "planner", "heuristic", "hybrid", "fallback"]:
+    mapping: dict[
+        Literal["explicit", "planner", "heuristic_override", "hybrid_agreement", "fallback_recovery"],
+        Literal["explicit", "planner", "heuristic", "hybrid", "fallback"],
+    ] = {
+        "explicit": "explicit",
+        "planner": "planner",
+        "heuristic_override": "heuristic",
+        "hybrid_agreement": "hybrid",
+        "fallback_recovery": "fallback",
+    }
+    return mapping[intent_source]
+
+
+def _confidence_rank(confidence: Literal["high", "medium", "low"]) -> int:
+    return {"high": 3, "medium": 2, "low": 1}[confidence]
+
+
+def _upsert_intent_candidate(
+    *,
+    candidates: list[IntentCandidate],
+    intent: IntentLabel,
+    confidence: Literal["high", "medium", "low"],
+    source: Literal["explicit", "planner", "heuristic", "hybrid", "fallback"],
+    rationale: str,
+) -> None:
+    for index, existing in enumerate(candidates):
+        if existing.intent != intent:
+            continue
+        merged_confidence = (
+            confidence if _confidence_rank(confidence) >= _confidence_rank(existing.confidence) else existing.confidence
+        )
+        merged_source = existing.source
+        if _confidence_rank(confidence) >= _confidence_rank(existing.confidence):
+            merged_source = source
+        merged_rationale = existing.rationale
+        if rationale and rationale not in merged_rationale:
+            merged_rationale = f"{merged_rationale} {rationale}".strip() if merged_rationale else rationale
+        candidates[index] = existing.model_copy(
+            update={
+                "confidence": merged_confidence,
+                "source": merged_source,
+                "rationale": merged_rationale,
+            }
+        )
+        return
+    candidates.append(
+        IntentCandidate(
+            intent=intent,
+            confidence=confidence,
+            source=source,
+            rationale=rationale,
+        )
+    )
+
+
+def _sort_intent_candidates(
+    candidates: list[IntentCandidate],
+    *,
+    preferred_intent: IntentLabel,
+) -> list[IntentCandidate]:
+    return sorted(
+        candidates,
+        key=lambda candidate: (
+            candidate.intent != preferred_intent,
+            -_confidence_rank(candidate.confidence),
+            candidate.intent,
+        ),
+    )
+
+
+def _strong_known_item_signal(normalized_query: str) -> bool:
+    return bool(
+        DOI_RE.search(normalized_query) or ARXIV_RE.search(normalized_query) or looks_like_url(normalized_query)
+    )
+
+
+def _strong_regulatory_signal(normalized_query: str, focus: str | None = None) -> bool:
+    combined = normalize_query(" ".join(part for part in [normalized_query, focus or ""] if part)).lower()
+    if re.search(r"\b\d+\s*(?:f\.?\s*r\.?)\s*\d+\b", combined):
+        return True
+    if re.search(r"\bfederal register\b", combined) and re.search(r"\b\d+\b", combined):
+        return True
+    if re.search(r"\b\d+\s*(?:cfr|f\.?\s*r\.?)\b", combined):
+        return True
+    return bool(re.search(r"\b\d{4}-\d{4,6}\b", combined))
 
 
 async def classify_query(
@@ -219,24 +389,147 @@ async def classify_query(
         request_outcomes=request_outcomes,
         request_id=request_id,
     )
+    planner.intent_source = "planner"
+    planner.intent_confidence = "medium"
+    intent_candidates = list(planner.intent_candidates)
+    _upsert_intent_candidate(
+        candidates=intent_candidates,
+        intent=planner.intent,
+        confidence=planner.intent_confidence,
+        source="planner",
+        rationale="Model planner selected this intent as the best initial route.",
+    )
     if mode != "auto":
         planner.intent = cast(
             Literal["discovery", "review", "known_item", "author", "citation", "regulatory"],
             mode,
         )
+        planner.intent_source = "explicit"
+        planner.intent_confidence = "high"
+        planner.intent_rationale = "Intent was set explicitly by the caller."
         if mode == "review":
             planner.follow_up_mode = "claim_check"
+        _upsert_intent_candidate(
+            candidates=intent_candidates,
+            intent=cast(IntentLabel, planner.intent),
+            confidence="high",
+            source="explicit",
+            rationale="Explicit mode parameter from the caller.",
+        )
     else:
-        if detect_regulatory_intent(normalized, focus):
-            planner.intent = "regulatory"
-        elif (
-            DOI_RE.search(normalized)
-            or ARXIV_RE.search(normalized)
-            or looks_like_url(normalized)
-            or looks_like_exact_title(query)
-            or looks_like_citation_query(normalized)
-        ):
-            planner.intent = "known_item"
+        citation_like_signal = looks_like_citation_query(normalized)
+        title_like_signal = looks_like_exact_title(query)
+        literature_signal = detect_literature_intent(normalized, focus)
+        strong_known_item_signal = _strong_known_item_signal(normalized)
+        strong_regulatory_signal = _strong_regulatory_signal(normalized, focus)
+        regulatory_signal = detect_regulatory_intent(normalized, focus)
+        if strong_known_item_signal:
+            _upsert_intent_candidate(
+                candidates=intent_candidates,
+                intent="known_item",
+                confidence="high",
+                source="heuristic",
+                rationale="Strong known-item signal (DOI, arXiv, or URL) was detected.",
+            )
+        elif citation_like_signal:
+            _upsert_intent_candidate(
+                candidates=intent_candidates,
+                intent="known_item",
+                confidence="medium",
+                source="heuristic",
+                rationale="Citation-like wording suggests a known-item anchor.",
+            )
+        elif title_like_signal:
+            _upsert_intent_candidate(
+                candidates=intent_candidates,
+                intent="known_item",
+                confidence="low",
+                source="heuristic",
+                rationale="Title-like phrasing suggests a possible known-item lookup.",
+            )
+
+        if strong_regulatory_signal:
+            _upsert_intent_candidate(
+                candidates=intent_candidates,
+                intent="regulatory",
+                confidence="high",
+                source="heuristic",
+                rationale="Explicit regulatory citation or rulemaking marker was detected.",
+            )
+        elif regulatory_signal:
+            _upsert_intent_candidate(
+                candidates=intent_candidates,
+                intent="regulatory",
+                confidence="low",
+                source="heuristic",
+                rationale="Regulatory phrasing is present but not strongly anchored.",
+            )
+        if literature_signal:
+            _upsert_intent_candidate(
+                candidates=intent_candidates,
+                intent="review",
+                confidence="low",
+                source="heuristic",
+                rationale="Literature/review language suggests synthesis intent.",
+            )
+
+        heuristic_override: IntentLabel | None = None
+        heuristic_override_confidence: Literal["high", "medium", "low"] = "medium"
+        heuristic_rationale = ""
+        known_item_override = strong_known_item_signal or (
+            (citation_like_signal or title_like_signal) and not strong_regulatory_signal
+        )
+        if known_item_override:
+            heuristic_override = "known_item"
+            heuristic_override_confidence = "high" if strong_known_item_signal else "medium"
+            heuristic_rationale = (
+                "Strong known-item signal overrode planner routing."
+                if strong_known_item_signal
+                else "Known-item guardrails (citation/title pattern) overrode planner routing."
+            )
+        elif regulatory_signal:
+            heuristic_override = "regulatory"
+            heuristic_override_confidence = "high" if strong_regulatory_signal else "medium"
+            heuristic_rationale = (
+                "Strong regulatory signal overrode planner routing."
+                if strong_regulatory_signal
+                else "Regulatory guardrails overrode planner routing."
+            )
+
+        if heuristic_override is not None:
+            if planner.intent == heuristic_override:
+                planner.intent_source = "hybrid_agreement"
+                planner.intent_confidence = "high"
+                planner.intent_rationale = "Planner intent matched strong deterministic guardrail signals."
+            else:
+                planner.intent = heuristic_override
+                planner.intent_source = "heuristic_override"
+                planner.intent_confidence = heuristic_override_confidence
+                planner.intent_rationale = heuristic_rationale
+        elif planner.intent_rationale.strip() == "":
+            planner.intent_rationale = "Planner intent selected without a strong deterministic override."
+
+    _upsert_intent_candidate(
+        candidates=intent_candidates,
+        intent=cast(IntentLabel, planner.intent),
+        confidence=planner.intent_confidence,
+        source=_source_for_intent_candidate(planner.intent_source),
+        rationale=planner.intent_rationale or "Final routed intent after planner and guardrail reconciliation.",
+    )
+    sorted_candidates = _sort_intent_candidates(intent_candidates, preferred_intent=cast(IntentLabel, planner.intent))
+    planner.intent_candidates = sorted_candidates[:4]
+    planner.secondary_intents = [
+        candidate.intent for candidate in planner.intent_candidates if candidate.intent != planner.intent
+    ][:3]
+    primary_candidate = next(
+        (candidate for candidate in planner.intent_candidates if candidate.intent == planner.intent),
+        None,
+    )
+    planner.routing_confidence = (
+        primary_candidate.confidence if primary_candidate is not None else planner.intent_confidence
+    )
+    if not planner.intent_rationale:
+        planner.intent_rationale = "Intent routed from planner defaults."
     merged_concepts = list(planner.candidate_concepts)
     merged_concepts.extend(query_facets(normalized))
     if focus:

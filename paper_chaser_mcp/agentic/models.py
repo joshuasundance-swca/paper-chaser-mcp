@@ -9,6 +9,15 @@ from pydantic import Field
 from ..models.common import ApiModel, CitationRecord, CoverageSummary, FailureSummary, OpenAccessRoute, Paper
 from ..models.regulations import RegulatoryTimeline
 
+IntentLabel = Literal[
+    "discovery",
+    "review",
+    "known_item",
+    "author",
+    "citation",
+    "regulatory",
+]
+
 
 class AgentHints(ApiModel):
     """Agent-facing next-step cues included on read-tool responses."""
@@ -52,10 +61,46 @@ class StructuredToolError(ApiModel):
     )
 
 
+class IntentCandidate(ApiModel):
+    """One plausible intent considered during planning."""
+
+    intent: IntentLabel
+    confidence: Literal["high", "medium", "low"] = "low"
+    source: Literal["explicit", "planner", "heuristic", "hybrid", "fallback"] = "planner"
+    rationale: str = ""
+
+
 class SearchStrategyMetadata(ApiModel):
     """Transparent search-planning metadata surfaced to external agents."""
 
-    intent: str = "discovery"
+    intent: IntentLabel = "discovery"
+    intent_source: Literal[
+        "explicit",
+        "planner",
+        "heuristic_override",
+        "hybrid_agreement",
+        "fallback_recovery",
+    ] = Field(default="planner", alias="intentSource")
+    intent_confidence: Literal["high", "medium", "low"] = Field(
+        default="medium",
+        alias="intentConfidence",
+    )
+    intent_candidates: list[IntentCandidate] = Field(
+        default_factory=list,
+        alias="intentCandidates",
+    )
+    secondary_intents: list[IntentLabel] = Field(
+        default_factory=list,
+        alias="secondaryIntents",
+    )
+    routing_confidence: Literal["high", "medium", "low"] = Field(
+        default="medium",
+        alias="routingConfidence",
+    )
+    intent_rationale: str = Field(
+        default="",
+        alias="intentRationale",
+    )
     latency_profile: Literal["fast", "balanced", "deep"] = Field(
         default="balanced",
         alias="latencyProfile",
@@ -120,6 +165,42 @@ class SearchStrategyMetadata(ApiModel):
         default_factory=list,
         alias="driftWarnings",
     )
+    recovery_attempted: bool = Field(
+        default=False,
+        alias="recoveryAttempted",
+    )
+    recovery_path: list[str] = Field(
+        default_factory=list,
+        alias="recoveryPath",
+    )
+    recovery_reason: str | None = Field(
+        default=None,
+        alias="recoveryReason",
+    )
+    stopped_recovery_because: str | None = Field(
+        default=None,
+        alias="stoppedRecoveryBecause",
+    )
+    anchor_type: str | None = Field(
+        default=None,
+        alias="anchorType",
+    )
+    anchor_strength: Literal["high", "medium", "low"] | None = Field(
+        default=None,
+        alias="anchorStrength",
+    )
+    anchored_subject: str | None = Field(
+        default=None,
+        alias="anchoredSubject",
+    )
+    normalization_warnings: list[str] = Field(
+        default_factory=list,
+        alias="normalizationWarnings",
+    )
+    repaired_inputs: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="repairedInputs",
+    )
     provider_budget_applied: dict[str, Any] = Field(
         default_factory=dict,
         alias="providerBudgetApplied",
@@ -132,12 +213,17 @@ class SearchStrategyMetadata(ApiModel):
         default_factory=dict,
         alias="stageTimingsMs",
     )
+    best_next_internal_action: str | None = Field(
+        default=None,
+        alias="bestNextInternalAction",
+    )
 
 
 class StructuredSourceRecord(ApiModel):
     """Trust-graded source record for smart responses."""
 
     source_id: str | None = Field(default=None, alias="sourceId")
+    source_alias: str | None = Field(default=None, alias="sourceAlias")
     title: str | None = None
     provider: str | None = None
     source_type: str | None = Field(default=None, alias="sourceType")
@@ -259,6 +345,9 @@ class SmartSearchResponse(ApiModel):
     failure_summary: FailureSummary | None = Field(default=None, alias="failureSummary")
     regulatory_timeline: RegulatoryTimeline | None = Field(default=None, alias="regulatoryTimeline")
     clarification: Clarification | None = None
+    result_status: str = Field(default="succeeded", alias="resultStatus")
+    has_inspectable_sources: bool = Field(default=False, alias="hasInspectableSources")
+    best_next_internal_action: str = Field(default="follow_up_research", alias="bestNextInternalAction")
 
 
 class EvidenceItem(ApiModel):
@@ -387,14 +476,34 @@ class ResearchGraphResponse(ApiModel):
 class PlannerDecision(ApiModel):
     """Planner output for smart search orchestration."""
 
-    intent: Literal[
-        "discovery",
-        "review",
-        "known_item",
-        "author",
-        "citation",
-        "regulatory",
-    ] = "discovery"
+    intent: IntentLabel = "discovery"
+    intent_source: Literal[
+        "explicit",
+        "planner",
+        "heuristic_override",
+        "hybrid_agreement",
+        "fallback_recovery",
+    ] = Field(default="planner", alias="intentSource")
+    intent_confidence: Literal["high", "medium", "low"] = Field(
+        default="medium",
+        alias="intentConfidence",
+    )
+    intent_candidates: list[IntentCandidate] = Field(
+        default_factory=list,
+        alias="intentCandidates",
+    )
+    secondary_intents: list[IntentLabel] = Field(
+        default_factory=list,
+        alias="secondaryIntents",
+    )
+    routing_confidence: Literal["high", "medium", "low"] = Field(
+        default="medium",
+        alias="routingConfidence",
+    )
+    intent_rationale: str = Field(
+        default="",
+        alias="intentRationale",
+    )
     constraints: dict[str, str] = Field(default_factory=dict)
     seed_identifiers: list[str] = Field(
         default_factory=list,

@@ -101,6 +101,54 @@ GENERIC_TITLE_WORDS = {
 logger = logging.getLogger("paper-chaser-mcp.citation-repair")
 
 
+def _normalize_identifier_for_semantic_scholar(identifier: str, identifier_type: str | None) -> str:
+    normalized = normalize_citation_text(identifier)
+    if not normalized:
+        return normalized
+    lowered = normalized.lower()
+    if identifier_type == "doi" or DOI_RE.fullmatch(normalized):
+        if lowered.startswith("doi:"):
+            return f"DOI:{normalized[4:].strip()}"
+        doi_match = DOI_RE.search(normalized)
+        if doi_match:
+            return f"DOI:{doi_match.group(0)}"
+    if identifier_type == "arxiv" or ARXIV_RE.fullmatch(normalized):
+        if lowered.startswith("arxiv:"):
+            return f"ARXIV:{normalized[6:].strip()}"
+        return f"ARXIV:{normalized}"
+    if identifier_type == "url" and looks_like_url(normalized):
+        parsed = urlparse(normalized)
+        if parsed.netloc.lower().endswith("semanticscholar.org"):
+            path_parts = [part for part in parsed.path.split("/") if part]
+            if path_parts:
+                candidate = path_parts[-1]
+                if re.fullmatch(r"[A-Fa-f0-9]{40}", candidate):
+                    return candidate
+        return f"URL:{normalized}"
+    return normalized
+
+
+def _normalize_identifier_for_openalex(identifier: str, identifier_type: str | None) -> str | None:
+    normalized = normalize_citation_text(identifier)
+    if not normalized:
+        return None
+    lowered = normalized.lower()
+    if identifier_type == "doi" or DOI_RE.fullmatch(normalized):
+        if lowered.startswith("doi:"):
+            normalized = normalized[4:].strip()
+        elif lowered.startswith("https://doi.org/"):
+            normalized = normalized[16:]
+        elif lowered.startswith("http://doi.org/"):
+            normalized = normalized[15:]
+        doi_match = DOI_RE.search(normalized)
+        return doi_match.group(0) if doi_match else None
+    if lowered.startswith("https://openalex.org/w") or lowered.startswith("http://openalex.org/w"):
+        return normalized.rstrip("/").rsplit("/", 1)[-1]
+    if re.fullmatch(r"W\d+", normalized, re.IGNORECASE):
+        return normalized
+    return None
+
+
 @dataclass(slots=True)
 class ParsedCitation:
     """Deterministic features extracted from a citation-like query."""
@@ -705,21 +753,25 @@ async def _resolve_identifier_candidate(
 ) -> RankedCitationCandidate | None:
     if not parsed.identifier:
         return None
+    semantic_identifier = _normalize_identifier_for_semantic_scholar(parsed.identifier, parsed.identifier_type)
+    openalex_identifier = _normalize_identifier_for_openalex(parsed.identifier, parsed.identifier_type)
     last_error: Exception | None = None
     for strategy, resolver in (
         (
             "identifier",
             lambda: client.get_paper_details(
-                paper_id=parsed.identifier,
+                paper_id=semantic_identifier,
                 fields=None,
             ),
         ),
         (
             "identifier_openalex",
-            lambda: openalex_client.get_paper_details(paper_id=parsed.identifier),
+            lambda: openalex_client.get_paper_details(paper_id=openalex_identifier),
         ),
     ):
         if strategy == "identifier_openalex" and not enable_openalex:
+            continue
+        if strategy == "identifier_openalex" and not openalex_identifier:
             continue
         try:
             paper = dump_jsonable(await resolver())
@@ -1019,7 +1071,7 @@ def _rank_candidate(
         except (TypeError, ValueError):
             year_delta = None
     venue_overlap = _venue_overlap(parsed, paper)
-    identifier_hit = _identifier_hit(parsed, paper)
+    identifier_hit = resolution_strategy.startswith("identifier") or _identifier_hit(parsed, paper)
     snippet_alignment = _snippet_alignment(parsed, paper, snippet_text=snippet_text)
     source_confidence = _source_confidence(resolution_strategy)
     upstream_confidence = str(paper.get("matchConfidence") or "").lower()

@@ -251,6 +251,32 @@ class WorkspaceRegistry:
             raise ExpiredSearchSessionError(f"searchSessionId {search_session_id!r} has expired.")
         return record
 
+    def latest(self, *, source_tool: str | None = None) -> SearchSessionRecord | None:
+        """Return the newest active record, optionally filtered by *source_tool*."""
+        self._cleanup()
+        candidates = [
+            record for record in self._records.values() if source_tool is None or record.source_tool == source_tool
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda record: record.created_at)
+
+    def attach_source_aliases(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Return a payload copy with stable per-session source aliases attached."""
+        return self._attach_source_aliases(payload)
+
+    def active_records(
+        self,
+        *,
+        source_tools: set[str] | None = None,
+    ) -> list[SearchSessionRecord]:
+        """Return active records ordered from newest to oldest."""
+        self._cleanup()
+        records = list(self._records.values())
+        if source_tools is not None:
+            records = [record for record in records if record.source_tool in source_tools]
+        return sorted(records, key=lambda record: record.created_at, reverse=True)
+
     def search_papers(
         self,
         search_session_id: str,
@@ -408,17 +434,21 @@ class WorkspaceRegistry:
         metadata: dict[str, Any] | None,
         search_session_id: str | None,
     ) -> SearchSessionRecord:
-        papers = self._extract_papers(payload)
-        authors = self._extract_authors(payload)
+        normalized_payload = self._attach_source_aliases(payload)
+        papers = self._extract_papers(normalized_payload)
+        authors = self._extract_authors(normalized_payload)
         created_at = _now()
+        record_metadata = dict(metadata or {})
+        if alias_map := normalized_payload.get("sessionSourceAliases"):
+            record_metadata["sessionSourceAliases"] = alias_map
         record = SearchSessionRecord(
             search_session_id=search_session_id or self._new_search_session_id(),
             source_tool=source_tool,
             created_at=created_at,
             expires_at=created_at + self._ttl_seconds,
-            payload=payload,
+            payload=normalized_payload,
             query=query,
-            metadata=dict(metadata or {}),
+            metadata=record_metadata,
             papers=papers,
             authors=authors,
             indexed_papers=[
@@ -434,6 +464,38 @@ class WorkspaceRegistry:
         if self._index_backend == "faiss" and record.indexed_papers:
             record.vector_store_status = "pending"
         return record
+
+    @staticmethod
+    def _attach_source_aliases(payload: dict[str, Any]) -> dict[str, Any]:
+        normalized_payload = dict(payload)
+        alias_map: dict[str, str] = {}
+        alias_index = 1
+        for key in ("sources", "structuredSources", "candidateLeads"):
+            entries = normalized_payload.get(key)
+            if not isinstance(entries, list):
+                continue
+            updated_entries: list[Any] = []
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    updated_entries.append(entry)
+                    continue
+                source_id = str(entry.get("sourceId") or "").strip()
+                if not source_id:
+                    updated_entries.append(entry)
+                    continue
+                alias = alias_map.get(source_id)
+                if alias is None:
+                    alias = f"src_{alias_index}"
+                    alias_map[source_id] = alias
+                    alias_index += 1
+                updated_entry = dict(entry)
+                if not updated_entry.get("sourceAlias"):
+                    updated_entry["sourceAlias"] = alias
+                updated_entries.append(updated_entry)
+            normalized_payload[key] = updated_entries
+        if alias_map:
+            normalized_payload["sessionSourceAliases"] = alias_map
+        return normalized_payload
 
     def _store_record(self, record: SearchSessionRecord) -> None:
         existing = self._records.get(record.search_session_id)

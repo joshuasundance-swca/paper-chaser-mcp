@@ -174,9 +174,14 @@ class ResearchArgs(ToolArgsModel):
 
 
 class FollowUpResearchArgs(ToolArgsModel):
-    search_session_id: str = Field(
+    search_session_id: str | None = Field(
+        default=None,
         alias="searchSessionId",
-        description="searchSessionId returned by the guided research tool.",
+        description=(
+            "Optional searchSessionId returned by the guided research tool. "
+            "When omitted, the server will reuse the most recent compatible saved session only if that choice is "
+            "unambiguous."
+        ),
     )
     question: str = Field(description="Grounded follow-up question about the saved research result set.")
 
@@ -186,13 +191,18 @@ class ResolveReferenceArgs(ToolArgsModel):
 
 
 class InspectSourceArgs(ToolArgsModel):
-    search_session_id: str = Field(
+    search_session_id: str | None = Field(
+        default=None,
         alias="searchSessionId",
-        description="searchSessionId returned by the guided research tool.",
+        description=(
+            "Optional searchSessionId returned by the guided research tool. "
+            "When omitted, the server will reuse the most recent compatible saved session only if that choice is "
+            "unambiguous."
+        ),
     )
     source_id: str = Field(
         alias="sourceId",
-        description="Canonical sourceId returned in the guided research sources list.",
+        description="Canonical sourceId or session-local source alias returned in the guided research sources list.",
     )
 
 

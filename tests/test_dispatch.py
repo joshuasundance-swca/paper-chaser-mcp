@@ -1,9 +1,12 @@
+from typing import Any
+
 import pytest
 
 import paper_chaser_mcp
 import paper_chaser_mcp.__main__ as server_main
 import paper_chaser_mcp.cli as cli
 import paper_chaser_mcp.clients.serpapi.client as serpapi_client_module
+import paper_chaser_mcp.dispatch as dispatch_module
 from paper_chaser_mcp import server
 from paper_chaser_mcp.clients.serpapi import SerpApiScholarClient
 from paper_chaser_mcp.enrichment import PaperEnrichmentService
@@ -80,14 +83,14 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "focus",
         "latencyProfile",
     }
-    assert tool_map["follow_up_research"].inputSchema["required"] == ["searchSessionId", "question"]
+    assert tool_map["follow_up_research"].inputSchema["required"] == ["question"]
     assert set(tool_map["follow_up_research"].inputSchema["properties"]) == {
         "searchSessionId",
         "question",
     }
     assert tool_map["resolve_reference"].inputSchema["required"] == ["reference"]
     assert set(tool_map["resolve_reference"].inputSchema["properties"]) == {"reference"}
-    assert tool_map["inspect_source"].inputSchema["required"] == ["searchSessionId", "sourceId"]
+    assert tool_map["inspect_source"].inputSchema["required"] == ["sourceId"]
     assert set(tool_map["inspect_source"].inputSchema["properties"]) == {
         "searchSessionId",
         "sourceId",
@@ -1267,6 +1270,226 @@ async def test_provider_diagnostics_runtime_summary_warns_on_hidden_tools_and_tl
     assert any("tls verification is disabled" in warning.lower() for warning in warnings)
 
 
+def test_guided_normalize_follow_up_arguments_warns_on_ambiguous_session_and_empty_question() -> None:
+    isolated_registry = type(server.workspace_registry)()
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-a",
+        query="Attention Is All You Need",
+        payload={"sources": [{"sourceId": "paper-a", "title": "Attention is All you Need"}]},
+    )
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-b",
+        query="RAG",
+        payload={"sources": [{"sourceId": "paper-b", "title": "RAG Overview"}]},
+    )
+
+    normalized, meta = dispatch_module._guided_normalize_follow_up_arguments(
+        {"query": "   "},
+        workspace_registry=isolated_registry,
+    )
+
+    assert not normalized["searchSessionId"]
+    assert normalized["question"] == ""
+    assert any("multiple active sessions exist" in warning.lower() for warning in meta["warnings"])
+    assert any("question was empty" in warning.lower() for warning in meta["warnings"])
+
+
+def test_guided_normalize_inspect_arguments_repairs_invalid_session_and_missing_source() -> None:
+    isolated_registry = type(server.workspace_registry)()
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-only-source",
+        query="Attention Is All You Need",
+        payload={"sources": [{"sourceId": "paper-a", "title": "Attention is All you Need"}]},
+    )
+
+    normalized, meta = dispatch_module._guided_normalize_inspect_arguments(
+        {"searchSessionId": "missing-session", "sourceId": "   "},
+        workspace_registry=isolated_registry,
+    )
+
+    assert normalized["searchSessionId"] == "ssn-only-source"
+    assert normalized["sourceId"] == "paper-a"
+    assert any("using active session" in warning.lower() for warning in meta["warnings"])
+    assert any("inferred the only inspectable source" in warning.lower() for warning in meta["warnings"])
+
+
+def test_guided_normalize_follow_up_arguments_repairs_invalid_session_to_unique_active_session() -> None:
+    isolated_registry = type(server.workspace_registry)()
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-only-follow-up",
+        query="Attention Is All You Need",
+        payload={"sources": [{"sourceId": "paper-a", "title": "Attention is All you Need"}]},
+    )
+
+    normalized, meta = dispatch_module._guided_normalize_follow_up_arguments(
+        {"searchSessionId": "missing-session", "question": "Who wrote it?"},
+        workspace_registry=isolated_registry,
+    )
+
+    assert normalized["searchSessionId"] == "ssn-only-follow-up"
+    assert any("was unavailable; using active session" in warning.lower() for warning in meta["warnings"])
+
+
+def test_guided_normalize_inspect_arguments_infers_source_bearing_session_from_source_id() -> None:
+    isolated_registry = type(server.workspace_registry)()
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-source-bearing",
+        query="Attention Is All You Need",
+        payload={"sources": [{"sourceId": "paper-a", "title": "Attention is All you Need"}]},
+    )
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-other",
+        query="RAG",
+        payload={"sources": [{"sourceId": "paper-b", "title": "RAG Overview"}]},
+    )
+
+    normalized, meta = dispatch_module._guided_normalize_inspect_arguments(
+        {"sourceId": "paper-a"},
+        workspace_registry=isolated_registry,
+    )
+
+    assert normalized["searchSessionId"] == "ssn-source-bearing"
+    assert normalized["sourceId"] == "paper-a"
+    assert any("inferred source-bearing session" in warning.lower() for warning in meta["warnings"])
+
+
+def test_guided_source_metadata_answers_support_alias_and_multiple_fields() -> None:
+    sources: list[dict[str, Any]] = [
+        {
+            "sourceId": "paper-a",
+            "sourceAlias": "source-1",
+            "title": "Attention is All you Need",
+            "date": "2017",
+            "citation": {
+                "authors": ["Ashish Vaswani", "Noam Shazeer"],
+                "journalOrPublisher": "Neural Information Processing Systems",
+                "doi": "10.5555/3295222.3295349",
+                "year": "2017",
+            },
+        },
+        {
+            "sourceId": "paper-b",
+            "sourceAlias": "source-2",
+            "title": "RAG Overview",
+        },
+    ]
+
+    answers = dispatch_module._guided_source_metadata_answers(
+        "For sourceId source-1, who wrote it, what venue, DOI, year, and title are listed?",
+        sources,
+    )
+
+    joined = " ".join(answers)
+    assert "Ashish Vaswani" in joined
+    assert "Neural Information Processing Systems" in joined
+    assert "10.5555/3295222.3295349" in joined
+    assert "2017" in joined
+    assert "Attention is All you Need" in joined
+
+
+@pytest.mark.asyncio
+async def test_get_runtime_status_surfaces_configured_and_active_smart_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeBundle:
+        def selection_metadata(self) -> dict[str, object]:
+            return {
+                "configuredSmartProvider": "azure-openai",
+                "activeSmartProvider": "deterministic",
+                "plannerModel": "azure-openai:gpt-4o-mini",
+                "plannerModelSource": "deterministic",
+                "synthesisModel": "azure-openai:gpt-4o-mini",
+                "synthesisModelSource": "deterministic",
+            }
+
+    class _FakeRuntime:
+        _provider_bundle = _FakeBundle()
+
+        @staticmethod
+        def smart_provider_diagnostics() -> tuple[dict[str, bool], list[str]]:
+            return (
+                {
+                    "openai": False,
+                    "azure-openai": True,
+                    "anthropic": False,
+                    "nvidia": False,
+                    "google": False,
+                    "mistral": False,
+                    "huggingface": False,
+                },
+                ["azure-openai", "openai", "anthropic", "nvidia", "google", "mistral", "huggingface"],
+            )
+
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(await server.call_tool("get_runtime_status", {}))
+
+    assert payload["runtimeSummary"]["configuredSmartProvider"] == "azure-openai"
+    assert payload["runtimeSummary"]["activeSmartProvider"] == "deterministic"
+    assert payload["providers"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_reference_exact_identifier_reports_resolved_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    semantic = RecordingSemanticClient()
+    monkeypatch.setattr(server, "client", semantic)
+    monkeypatch.setattr(server, "enable_semantic_scholar", True)
+    monkeypatch.setattr(server, "enable_openalex", False)
+
+    payload = _payload(await server.call_tool("resolve_reference", {"reference": "10.1038/nrn3241"}))
+
+    assert payload["status"] == "resolved"
+    assert payload["resolutionType"] == "paper_identifier"
+    assert payload["resolutionConfidence"] == "high"
+    assert payload["bestMatch"]["paper"]["paperId"] == "DOI:10.1038/nrn3241"
+
+
+@pytest.mark.asyncio
+async def test_resolve_reference_arxiv_identifier_reports_resolved_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    semantic = RecordingSemanticClient()
+    monkeypatch.setattr(server, "client", semantic)
+    monkeypatch.setattr(server, "enable_semantic_scholar", True)
+    monkeypatch.setattr(server, "enable_openalex", False)
+
+    payload = _payload(await server.call_tool("resolve_reference", {"reference": "arXiv:1706.03762"}))
+
+    assert payload["status"] == "resolved"
+    assert payload["resolutionType"] == "paper_identifier"
+    assert payload["resolutionConfidence"] == "high"
+    assert payload["bestMatch"]["paper"]["paperId"] == "ARXIV:1706.03762"
+
+
+@pytest.mark.asyncio
+async def test_resolve_reference_semantic_scholar_url_reports_resolved_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    semantic = RecordingSemanticClient()
+    monkeypatch.setattr(server, "client", semantic)
+    monkeypatch.setattr(server, "enable_semantic_scholar", True)
+    monkeypatch.setattr(server, "enable_openalex", False)
+
+    payload = _payload(
+        await server.call_tool(
+            "resolve_reference",
+            {
+                "reference": (
+                    "https://www.semanticscholar.org/paper/Attention-Is-All-You-Need/"
+                    "204e3073870fae3d05bcbc2f6a8e263d9b72e776"
+                )
+            },
+        )
+    )
+
+    assert payload["status"] == "resolved"
+    assert payload["resolutionType"] == "paper_identifier"
+    assert payload["resolutionConfidence"] == "high"
+    assert payload["bestMatch"]["paper"]["paperId"] == "204e3073870fae3d05bcbc2f6a8e263d9b72e776"
+
+
 @pytest.mark.asyncio
 async def test_guided_wrappers_surface_unverified_leads(monkeypatch: pytest.MonkeyPatch) -> None:
     class _FakeRuntime:
@@ -1362,6 +1585,147 @@ async def test_guided_wrappers_surface_unverified_leads(monkeypatch: pytest.Monk
     assert follow_up["unverifiedLeads"][0]["sourceId"] == "lead-1"
     assert follow_up["unverifiedLeads"][0]["topicalRelevance"] == "off_topic"
     assert "failureSummary" in follow_up
+
+
+@pytest.mark.asyncio
+async def test_guided_research_blends_regulatory_and_literature_runs(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeRuntime:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def search_papers_smart(self, **kwargs: object) -> dict[str, object]:
+            mode = str(kwargs.get("mode") or "auto")
+            self.calls.append(mode)
+            if mode == "regulatory":
+                return {
+                    "searchSessionId": "ssn-mixed-guided",
+                    "strategyMetadata": {"intent": "regulatory"},
+                    "structuredSources": [
+                        {
+                            "sourceId": "nleb-fr",
+                            "title": "Endangered Species Status for the Northern Long-Eared Bat",
+                            "provider": "federal_register",
+                            "sourceType": "primary_regulatory",
+                            "verificationStatus": "verified_metadata",
+                            "accessStatus": "full_text_verified",
+                            "topicalRelevance": "on_topic",
+                            "confidence": "high",
+                            "isPrimarySource": True,
+                        }
+                    ],
+                    "candidateLeads": [],
+                    "evidenceGaps": [],
+                    "coverageSummary": {
+                        "providersAttempted": ["ecos", "federal_register"],
+                        "providersSucceeded": ["federal_register"],
+                        "providersFailed": [],
+                        "providersZeroResults": ["ecos"],
+                        "likelyCompleteness": "partial",
+                        "searchMode": "regulatory_primary_source",
+                    },
+                    "failureSummary": None,
+                    "clarification": None,
+                    "regulatoryTimeline": {"events": [{"title": "NLEB rule"}]},
+                }
+            if mode == "review":
+                return {
+                    "searchSessionId": "ssn-mixed-guided",
+                    "strategyMetadata": {"intent": "review"},
+                    "structuredSources": [
+                        {
+                            "sourceId": "nleb-paper",
+                            "title": "Recent peer-reviewed review of northern long-eared bat conservation",
+                            "provider": "semantic_scholar",
+                            "sourceType": "scholarly_article",
+                            "verificationStatus": "verified_metadata",
+                            "accessStatus": "abstract_only",
+                            "topicalRelevance": "on_topic",
+                            "confidence": "medium",
+                            "isPrimarySource": False,
+                        }
+                    ],
+                    "candidateLeads": [],
+                    "evidenceGaps": ["Literature coverage may still be incomplete."],
+                    "coverageSummary": {
+                        "providersAttempted": ["semantic_scholar", "openalex"],
+                        "providersSucceeded": ["semantic_scholar"],
+                        "providersFailed": [],
+                        "providersZeroResults": ["openalex"],
+                        "likelyCompleteness": "partial",
+                        "searchMode": "smart_literature_review",
+                    },
+                    "failureSummary": None,
+                    "clarification": None,
+                }
+            raise AssertionError(f"Unexpected mode: {mode}")
+
+    runtime = _FakeRuntime()
+    monkeypatch.setattr(server, "agentic_runtime", runtime)
+
+    payload = _payload(
+        await server.call_tool(
+            "research",
+            {
+                "query": (
+                    "Summarize recent peer-reviewed literature and regulatory history for the northern "
+                    "long-eared bat under the ESA."
+                )
+            },
+        )
+    )
+
+    assert runtime.calls == ["regulatory", "review"]
+    assert payload["intent"] == "mixed"
+    assert payload["coverage"]["searchMode"] == "guided_hybrid_research"
+    assert len(payload["sources"]) == 2
+    assert any(source["sourceId"] == "nleb-fr" for source in payload["sources"])
+    assert any(source["sourceId"] == "nleb-paper" for source in payload["sources"])
+    assert any("inspect_source" in action for action in payload["nextActions"])
+    assert payload["regulatoryTimeline"]["events"][0]["title"] == "NLEB rule"
+
+
+@pytest.mark.asyncio
+async def test_guided_research_abstained_without_sources_omits_inspect_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeRuntime:
+        async def search_papers_smart(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            return {
+                "searchSessionId": "ssn-no-sources",
+                "strategyMetadata": {"intent": "regulatory"},
+                "structuredSources": [],
+                "candidateLeads": [],
+                "evidenceGaps": [
+                    (
+                        "No primary-source regulatory timeline could be reconstructed from the currently "
+                        "enabled regulatory providers."
+                    )
+                ],
+                "coverageSummary": {
+                    "providersAttempted": ["ecos", "federal_register"],
+                    "providersSucceeded": [],
+                    "providersFailed": [],
+                    "providersZeroResults": ["ecos", "federal_register"],
+                    "likelyCompleteness": "unknown",
+                    "searchMode": "regulatory_primary_source",
+                },
+                "failureSummary": None,
+                "clarification": None,
+                "regulatoryTimeline": {"events": []},
+            }
+
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(
+        await server.call_tool(
+            "research",
+            {"query": "Northern long-eared bat ESA listing status and Federal Register history"},
+        )
+    )
+
+    assert payload["status"] == "abstained"
+    assert payload["sources"] == []
+    assert not any("inspect_source" in action for action in payload["nextActions"])
+    assert any("follow_up_research" in action for action in payload["nextActions"])
 
 
 @pytest.mark.asyncio
@@ -1598,6 +1962,165 @@ async def test_follow_up_research_uses_saved_unverified_leads_for_source_overvie
 
 
 @pytest.mark.asyncio
+async def test_follow_up_research_infers_single_active_session_when_search_session_id_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRuntime:
+        async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
+            raise AssertionError(f"ask_result_set should not run for inferred session introspection: {kwargs!r}")
+
+    isolated_registry = type(server.workspace_registry)()
+    monkeypatch.setattr(server, "workspace_registry", isolated_registry)
+
+    record = isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-inferred-follow-up",
+        query="Tool-using agents for literature review",
+        payload={
+            "searchSessionId": "ssn-inferred-follow-up",
+            "structuredSources": [
+                {
+                    "sourceId": "paper-1",
+                    "title": "Tool-Using Agents for Literature Review",
+                    "provider": "semantic_scholar",
+                    "sourceType": "scholarly_article",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "abstract_only",
+                    "topicalRelevance": "on_topic",
+                    "confidence": "high",
+                    "canonicalUrl": "https://example.org/paper-1",
+                }
+            ],
+            "coverageSummary": {"searchMode": "smart_literature_review"},
+        },
+    )
+    assert record.search_session_id == "ssn-inferred-follow-up"
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(
+        await server.call_tool(
+            "follow_up_research",
+            {
+                "question": "Which sources were found in this session?",
+            },
+        )
+    )
+
+    assert payload["searchSessionId"] == "ssn-inferred-follow-up"
+    assert payload["answerStatus"] == "answered"
+    assert payload["inputNormalization"]["warnings"]
+    assert "inferred active session" in payload["inputNormalization"]["warnings"][0].lower()
+
+
+@pytest.mark.asyncio
+async def test_inspect_source_accepts_index_alias_without_search_session_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    isolated_registry = type(server.workspace_registry)()
+    monkeypatch.setattr(server, "workspace_registry", isolated_registry)
+
+    record = isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-inspect-alias",
+        query="California condor regulatory history",
+        payload={
+            "searchSessionId": "ssn-inspect-alias",
+            "structuredSources": [
+                {
+                    "sourceId": "condor-fr",
+                    "title": "Critical Habitat Revision for California Condor",
+                    "provider": "federal_register",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "full_text_verified",
+                    "topicalRelevance": "on_topic",
+                    "confidence": "high",
+                    "canonicalUrl": "https://example.org/condor-fr",
+                }
+            ],
+        },
+    )
+    assert record.search_session_id == "ssn-inspect-alias"
+
+    payload = _payload(
+        await server.call_tool(
+            "inspect_source",
+            {
+                "sourceId": "source-1",
+            },
+        )
+    )
+
+    assert payload["searchSessionId"] == "ssn-inspect-alias"
+    assert payload["source"]["sourceId"] == "condor-fr"
+    assert payload["sourceResolution"]["matchType"] == "index_alias"
+
+
+@pytest.mark.asyncio
+async def test_follow_up_research_requires_explicit_session_when_multiple_are_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    isolated_registry = type(server.workspace_registry)()
+    monkeypatch.setattr(server, "workspace_registry", isolated_registry)
+
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-follow-up-a",
+        query="Attention Is All You Need",
+        payload={"sources": [{"sourceId": "paper-a", "title": "Attention is All you Need"}]},
+    )
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-follow-up-b",
+        query="Retrieval-Augmented Generation",
+        payload={"sources": [{"sourceId": "paper-b", "title": "RAG Overview"}]},
+    )
+
+    payload = _payload(
+        await server.call_tool(
+            "follow_up_research",
+            {
+                "question": "What venue is listed for this paper?",
+            },
+        )
+    )
+
+    assert payload["answerStatus"] == "insufficient_evidence"
+    assert payload["searchSessionId"] is None
+    assert "unique saved search session" in payload["evidenceGaps"][0].lower()
+    assert "multiple active sessions exist" in payload["inputNormalization"]["warnings"][0].lower()
+
+
+@pytest.mark.asyncio
+async def test_inspect_source_requires_explicit_session_when_multiple_are_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    isolated_registry = type(server.workspace_registry)()
+    monkeypatch.setattr(server, "workspace_registry", isolated_registry)
+
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-inspect-a",
+        query="Attention Is All You Need",
+        payload={"sources": [{"sourceId": "paper-a", "title": "Attention is All you Need"}]},
+    )
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-inspect-b",
+        query="Retrieval-Augmented Generation",
+        payload={"sources": [{"sourceId": "paper-b", "title": "RAG Overview"}]},
+    )
+
+    with pytest.raises(ValueError, match="could not infer a unique searchSessionId"):
+        await server.call_tool(
+            "inspect_source",
+            {
+                "sourceId": "source-1",
+            },
+        )
+
+
+@pytest.mark.asyncio
 async def test_follow_up_research_answers_from_saved_session_metadata_when_partial_session_has_verified_findings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1706,6 +2229,147 @@ async def test_follow_up_research_answers_from_saved_session_metadata_when_parti
     ) in payload["answer"]
     assert payload["failureSummary"]["primaryPathFailureReason"] == "core"
     assert payload["verifiedFindings"][0]["claim"] == "Ragas: Automated Evaluation of Retrieval Augmented Generation"
+
+
+@pytest.mark.asyncio
+async def test_follow_up_research_answers_authors_and_venue_from_saved_source_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRuntime:
+        async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
+            raise AssertionError(f"ask_result_set should not run for source metadata introspection: {kwargs!r}")
+
+    isolated_registry = type(server.workspace_registry)()
+    monkeypatch.setattr(server, "workspace_registry", isolated_registry)
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-follow-up-source-metadata",
+        query="Attention Is All You Need",
+        payload={
+            "searchSessionId": "ssn-follow-up-source-metadata",
+            "sources": [
+                {
+                    "sourceId": "attention-paper",
+                    "title": "Attention is All you Need",
+                    "provider": "semantic_scholar",
+                    "sourceType": "scholarly_article",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "access_unverified",
+                    "topicalRelevance": "on_topic",
+                    "confidence": "high",
+                    "citation": {
+                        "authors": ["Ashish Vaswani", "Noam Shazeer", "Niki Parmar"],
+                        "year": "2017",
+                        "title": "Attention is All you Need",
+                        "journalOrPublisher": "Neural Information Processing Systems",
+                        "doi": None,
+                        "url": "https://www.semanticscholar.org/paper/204e3073870fae3d05bcbc2f6a8e263d9b72e776",
+                        "sourceType": "scholarly_article",
+                        "confidence": "medium",
+                    },
+                    "date": "2017-06-12",
+                }
+            ],
+        },
+    )
+
+    payload = _payload(
+        await server.call_tool(
+            "follow_up_research",
+            {
+                "searchSessionId": "ssn-follow-up-source-metadata",
+                "question": "Who are the authors and what venue is listed for this paper?",
+            },
+        )
+    )
+
+    assert payload["answerStatus"] == "answered"
+    assert "Ashish Vaswani" in payload["answer"]
+    assert "Neural Information Processing Systems" in payload["answer"]
+
+
+@pytest.mark.asyncio
+async def test_follow_up_research_recovers_when_agentic_answer_is_blank(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRuntime:
+        async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
+            return {
+                "answerStatus": "answered",
+                "answer": " : ",
+                "structuredSources": [
+                    {
+                        "sourceId": "attention-paper",
+                        "title": "Attention is All you Need",
+                        "provider": "semantic_scholar",
+                        "sourceType": "scholarly_article",
+                        "verificationStatus": "verified_metadata",
+                        "accessStatus": "access_unverified",
+                        "topicalRelevance": "on_topic",
+                        "confidence": "high",
+                        "citation": {
+                            "authors": ["Ashish Vaswani", "Noam Shazeer"],
+                            "year": "2017",
+                            "title": "Attention is All you Need",
+                            "journalOrPublisher": "Neural Information Processing Systems",
+                        },
+                    }
+                ],
+                "candidateLeads": [],
+                "evidence": [],
+                "unsupportedAsks": [],
+                "followUpQuestions": [],
+                "evidenceGaps": [],
+                "coverageSummary": None,
+                "failureSummary": None,
+            }
+
+    isolated_registry = type(server.workspace_registry)()
+    monkeypatch.setattr(server, "workspace_registry", isolated_registry)
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-follow-up-blank-agentic-answer",
+        query="Attention Is All You Need",
+        payload={
+            "searchSessionId": "ssn-follow-up-blank-agentic-answer",
+            "sources": [
+                {
+                    "sourceId": "attention-paper",
+                    "title": "Attention is All you Need",
+                    "provider": "semantic_scholar",
+                    "sourceType": "scholarly_article",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "access_unverified",
+                    "topicalRelevance": "on_topic",
+                    "confidence": "high",
+                    "citation": {
+                        "authors": ["Ashish Vaswani", "Noam Shazeer"],
+                        "year": "2017",
+                        "title": "Attention is All you Need",
+                        "journalOrPublisher": "Neural Information Processing Systems",
+                    },
+                }
+            ],
+        },
+    )
+
+    payload = _payload(
+        await server.call_tool(
+            "follow_up_research",
+            {
+                "searchSessionId": "ssn-follow-up-blank-agentic-answer",
+                "question": "What venue is listed for this paper?",
+            },
+        )
+    )
+
+    assert payload["answerStatus"] == "answered"
+    assert payload["answer"] != " : "
+    assert "Neural Information Processing Systems" in payload["answer"]
 
 
 @pytest.mark.asyncio

@@ -425,8 +425,15 @@ async def test_search_papers_smart_routes_regulatory_queries_to_primary_sources(
 
     assert payload["results"] == []
     assert payload["strategyMetadata"]["intent"] == "regulatory"
+    assert payload["strategyMetadata"]["anchorType"] == "cfr_citation"
+    assert payload["strategyMetadata"]["anchorStrength"] == "high"
+    assert payload["strategyMetadata"]["anchoredSubject"]
+    assert payload["strategyMetadata"]["bestNextInternalAction"] == "inspect_source"
     assert payload["structuredSources"]
+    assert any(source.get("sourceAlias") for source in payload["structuredSources"])
     assert payload["verifiedFindings"]
+    assert payload["resultStatus"] == "succeeded"
+    assert payload["hasInspectableSources"] is True
     assert payload["coverageSummary"]["searchMode"] == "regulatory_primary_source"
     assert payload["coverageSummary"]["primaryDocumentCoverage"]["currentTextRequested"] is True
     assert payload["coverageSummary"]["primaryDocumentCoverage"]["currentTextSatisfied"] is True
@@ -667,6 +674,138 @@ async def test_search_papers_smart_regulatory_marks_history_only_when_current_cf
     assert primary_document["historyOnly"] is True
     assert any("Current codified CFR text was not verified from GovInfo" in gap for gap in payload["evidenceGaps"])
     assert payload["failureSummary"]["outcome"] == "fallback_success"
+
+
+@pytest.mark.asyncio
+async def test_search_papers_smart_regulatory_uses_govinfo_federal_register_fallback() -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+
+    class EmptyEcosClient:
+        async def search_species(self, *, query: str, limit: int = 10, match_mode: str = "auto") -> dict[str, Any]:
+            del query, limit, match_mode
+            return {"data": []}
+
+    class EmptyFederalRegisterClient:
+        async def search_documents(self, *, query: str, limit: int = 10, **kwargs: Any) -> dict[str, Any]:
+            del query, limit, kwargs
+            return {"total": 0, "data": []}
+
+    class GovInfoSearchClient:
+        async def search_federal_register_documents(self, *, query: str, limit: int = 10) -> dict[str, Any]:
+            del limit
+            assert "northern long-eared bat" in query.lower()
+            return {
+                "total": 1,
+                "data": [
+                    {
+                        "title": "Endangered Species Status for the Northern Long-Eared Bat",
+                        "documentNumber": "2022-25998",
+                        "citation": "87 FR 73488",
+                        "publicationDate": "2022-11-30",
+                        "sourceUrl": "https://www.govinfo.gov/app/details/FR-2022-11-30/2022-25998",
+                        "verificationStatus": "verified_metadata",
+                        "note": "GovInfo Federal Register primary-source recovery hit.",
+                    }
+                ],
+            }
+
+    _, runtime = _deterministic_runtime(
+        semantic=semantic,
+        openalex=openalex,
+        ecos=EmptyEcosClient(),
+        federal_register=EmptyFederalRegisterClient(),
+        govinfo=GovInfoSearchClient(),
+        enable_ecos=True,
+        enable_federal_register=True,
+        enable_govinfo_cfr=True,
+    )
+
+    payload = await runtime.search_papers_smart(
+        query="Northern long-eared bat ESA listing status and final rule history",
+        limit=5,
+    )
+
+    assert payload["strategyMetadata"]["intent"] == "regulatory"
+    assert payload["strategyMetadata"]["intentSource"] == "heuristic_override"
+    assert payload["strategyMetadata"]["intentConfidence"] == "medium"
+    assert payload["strategyMetadata"]["anchorType"] == "regulatory_subject_terms"
+    assert payload["strategyMetadata"]["recoveryAttempted"] is False
+    assert "govinfo" in payload["coverageSummary"]["providersAttempted"]
+    assert "govinfo" in payload["coverageSummary"]["providersSucceeded"]
+    assert any(source["provider"] == "govinfo" for source in payload["structuredSources"])
+    assert any(source.get("sourceAlias") for source in payload["structuredSources"])
+    assert payload["verifiedFindings"]
+
+
+@pytest.mark.asyncio
+async def test_search_papers_smart_recovers_known_item_when_forced_regulatory_mode_returns_nothing() -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    exact_title = (
+        "Ecosystem experiment reveals benefits of natural and simulated beaver dams to a threatened "
+        "population of steelhead (Oncorhynchus mykiss)"
+    )
+
+    async def semantic_match(**kwargs: Any) -> dict[str, Any]:
+        semantic.calls.append(("search_papers_match", dict(kwargs)))
+        return {
+            "paperId": "1539acae748ff423bf4ebd2da0d95933e94f59ee",
+            "title": exact_title,
+            "year": 2016,
+            "authors": [{"name": "N. Bouwes"}],
+            "venue": "Scientific Reports",
+            "source": "semantic_scholar",
+            "matchStrategy": "semantic_title_match",
+        }
+
+    semantic.search_papers_match = semantic_match  # type: ignore[method-assign]
+
+    class EmptyEcosClient:
+        async def search_species(self, *, query: str, limit: int = 10, match_mode: str = "auto") -> dict[str, Any]:
+            del query, limit, match_mode
+            return {"data": []}
+
+    class EmptyFederalRegisterClient:
+        async def search_documents(self, *, query: str, limit: int = 10, **kwargs: Any) -> dict[str, Any]:
+            del query, limit, kwargs
+            return {"total": 0, "data": []}
+
+    class EmptyGovInfoClient:
+        async def search_federal_register_documents(self, *, query: str, limit: int = 10) -> dict[str, Any]:
+            del query, limit
+            return {"total": 0, "data": []}
+
+    _, runtime = _deterministic_runtime(
+        semantic=semantic,
+        openalex=openalex,
+        ecos=EmptyEcosClient(),
+        federal_register=EmptyFederalRegisterClient(),
+        govinfo=EmptyGovInfoClient(),
+        enable_ecos=True,
+        enable_federal_register=True,
+        enable_govinfo_cfr=True,
+    )
+
+    payload = await runtime.search_papers_smart(
+        query=exact_title,
+        limit=5,
+        mode="regulatory",
+    )
+
+    assert payload["strategyMetadata"]["intent"] == "known_item"
+    assert payload["strategyMetadata"]["intentSource"] == "fallback_recovery"
+    assert payload["strategyMetadata"]["recoveryAttempted"] is True
+    assert payload["strategyMetadata"]["recoveryPath"] == ["regulatory", "known_item"]
+    assert payload["strategyMetadata"]["recoveryReason"] == "Regulatory retrieval returned no on-topic sources."
+    assert payload["strategyMetadata"]["bestNextInternalAction"] == "get_paper_details"
+    assert payload["results"][0]["paper"]["title"] == exact_title
+    assert payload["resultStatus"] == "succeeded"
+    assert payload["hasInspectableSources"] is True
+    assert any(
+        "retried with semantic known-item recovery" in warning.lower()
+        for warning in payload["strategyMetadata"]["driftWarnings"]
+    )
 
 
 @pytest.mark.asyncio
