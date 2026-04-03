@@ -35,7 +35,9 @@ The release process should:
 2. Use `v*` git tags to trigger publish workflows, for example `v<next-version>`.
 3. Do not move or overwrite release tags after publication.
 4. If a tagged release needs correction, cut a new version rather than rewriting the previous tag.
-5. Do not introduce prerelease tags (`-rc.1`, `-beta.1`, etc.) until the version contract, tests, and workflows are explicitly updated to support them end to end.
+5. Prerelease tags (`-rc.1`, `-beta.1`, etc.) are supported by the current release workflows, but they should remain an explicit choice rather than the default release path.
+6. If you intentionally cut a prerelease, keep the same exact prerelease identifier in `pyproject.toml`, `server.json`, and the git tag, for example `0.2.2rc1` in Python metadata paired with `v0.2.2-rc.1` only after verifying the packaging and registry surfaces you intend to ship can represent that version consistently.
+7. Treat prerelease publishing as a narrower promotion path: GHCR should not receive the `latest` tag for prerelease builds, and release notes should make the prerelease status explicit.
 
 ## Release Phases
 
@@ -101,7 +103,7 @@ as broadly public.
 Review checklist:
 
 1. GHCR image exists at `ghcr.io/joshuasundance-swca/paper-chaser-mcp:<next-version>`.
-2. GHCR tags look correct: exact version, major/minor tags, and `latest` when appropriate.
+2. GHCR tags look correct: exact version, major/minor tags, and `latest` only for non-prerelease releases.
 3. OCI labels and MCP metadata match `server.json`.
 4. The draft GitHub Release contains the wheel, sdist, and `SHA256SUMS`.
 5. The wheel and sdist names match the version contract.

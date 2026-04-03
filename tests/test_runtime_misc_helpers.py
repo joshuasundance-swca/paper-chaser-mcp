@@ -67,6 +67,51 @@ def test_runtime_logs_remote_http_configuration_and_runs_app() -> None:
     ]
 
 
+def test_runtime_logs_missing_serpapi_and_scholarapi_keys_without_remote_binding_warning() -> None:
+    app = _RecordingApp()
+    logger = _RecordingLogger()
+    settings = AppSettings.from_env(
+        {
+            "PAPER_CHASER_ENABLE_SERPAPI": "true",
+            "PAPER_CHASER_ENABLE_SCHOLARAPI": "true",
+            "PAPER_CHASER_TRANSPORT": "streamable-http",
+            "PAPER_CHASER_HTTP_HOST": "127.0.0.1",
+        }
+    )
+
+    run_server(app=app, logger=logger, settings=settings)
+
+    assert any(
+        "SerpApi Google Scholar is enabled but SERPAPI_API_KEY is not set" in item for item in logger.warning_messages
+    )
+    assert any("ScholarAPI is enabled but SCHOLARAPI_API_KEY is not set" in item for item in logger.warning_messages)
+    assert not any("Binding HTTP transport to" in item for item in logger.warning_messages)
+    assert app.calls == [
+        {
+            "transport": "streamable-http",
+            "host": "127.0.0.1",
+            "port": 8000,
+            "path": "/mcp",
+        }
+    ]
+
+
+def test_runtime_logs_scholarapi_enabled_with_key() -> None:
+    app = _RecordingApp()
+    logger = _RecordingLogger()
+    settings = AppSettings.from_env(
+        {
+            "PAPER_CHASER_ENABLE_SCHOLARAPI": "true",
+            "SCHOLARAPI_API_KEY": "scholar-key",
+        }
+    )
+
+    run_server(app=app, logger=logger, settings=settings)
+
+    assert any("ScholarAPI enabled with API key" in item for item in logger.info_messages)
+    assert app.calls == [{"transport": "stdio"}]
+
+
 def test_deployment_runner_helpers_and_main_entrypoint(monkeypatch) -> None:
     recorded: list[tuple[str, str, int]] = []
 

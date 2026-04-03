@@ -129,6 +129,59 @@ def test_resolve_smoke_test_health_url_requires_outputs_when_explicit_missing() 
         raise AssertionError("Expected missing outputs to raise ValueError.")
 
 
+def test_resolve_smoke_test_health_url_rejects_missing_host() -> None:
+    try:
+        resolve_smoke_test_health_url("https:///healthz", {})
+    except ValueError as error:
+        assert "include a host" in str(error)
+    else:
+        raise AssertionError("Expected missing host to raise ValueError.")
+
+
+def test_resolve_smoke_test_health_url_ignores_non_mapping_outputs_and_blank_values() -> None:
+    try:
+        resolve_smoke_test_health_url(
+            None,
+            {
+                "properties": {
+                    "outputs": {
+                        "containerAppHealthUrl": {"value": "   "},
+                        "containerAppFqdn": "aca-dev.internal",
+                    }
+                }
+            },
+        )
+    except ValueError as error:
+        assert "Unable to resolve smoke test health URL" in str(error)
+    else:
+        raise AssertionError("Expected invalid outputs to raise ValueError.")
+
+
+def test_resolve_smoke_test_health_url_handles_non_mapping_properties() -> None:
+    try:
+        resolve_smoke_test_health_url(None, {"properties": "not-a-mapping"})
+    except ValueError as error:
+        assert "Unable to resolve smoke test health URL" in str(error)
+    else:
+        raise AssertionError("Expected non-mapping properties to raise ValueError.")
+
+
+def test_resolve_smoke_test_health_url_falls_back_from_non_string_health_output_to_fqdn() -> None:
+    url = resolve_smoke_test_health_url(
+        None,
+        {
+            "properties": {
+                "outputs": {
+                    "containerAppHealthUrl": {"value": 123},
+                    "containerAppFqdn": {"value": "aca-dev.internal"},
+                }
+            }
+        },
+    )
+
+    assert url == "https://aca-dev.internal/healthz"
+
+
 def test_resolve_bind_host_uses_http_host_env() -> None:
     assert resolve_bind_host({"PAPER_CHASER_HTTP_HOST": "0.0.0.0"}) == "0.0.0.0"
 

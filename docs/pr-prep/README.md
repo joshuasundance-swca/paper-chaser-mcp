@@ -6,17 +6,17 @@ This folder is the branch-local PR prep bundle for the current Paper Chaser chan
 
 - `pr-description-draft.md`: long-form PR narrative with motivations, architecture, risks, and reviewer guidance
 - `pr-body.md`: shorter PR body ready to paste into GitHub
-- `commit-list.txt`: branch commits relative to `master`
-- `changed-files.txt`: substantive changed-file list relative to `master`
-- `diff-stat.txt`: substantive diffstat relative to `master`
-- `full.diff`: substantive full patch relative to `master`
+- `commit-list.txt`: branch commits relative to the chosen base branch
+- `changed-files.txt`: substantive changed-file list relative to the chosen base branch
+- `diff-stat.txt`: substantive diffstat relative to the chosen base branch
+- `full.diff`: substantive full patch relative to the chosen base branch
 - `docs-and-packaging.diff`: docs/workflow/packaging slice of the diff
 - `public-contract-and-runtime.diff`: public-contract/server/runtime slice of the diff
 - `behavior-and-tests.diff`: behavior/tests slice of the diff
 
 ## Snapshot rules
 
-The diff artifacts in this folder are generated against the current working tree relative to `master`, but they intentionally exclude `docs/pr-prep/**` from the comparison.
+The diff artifacts in this folder are generated against the current working tree relative to the chosen base branch, but they intentionally exclude `docs/pr-prep/**` from the comparison.
 
 That exclusion is deliberate: otherwise the prep artifacts would recursively count and diff themselves, which makes file counts and patch size misleading for the actual PR.
 

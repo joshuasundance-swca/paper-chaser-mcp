@@ -30,9 +30,9 @@ next steps without re-discovering project state.
   and active/disabled provider sets.
 - The current checked-in package version is `0.2.1` in both `pyproject.toml`
   and `server.json`.
-- The current validation baseline after the guided reset and doc alignment is:
-  `pytest -q` => `592 passed, 2 skipped`.
-  The two skips are optional-dependency paths (`openai` and `faiss`).
+- The current coverage-gated validation baseline after the latest release-readiness pass is:
+  `python -m pytest --cov=paper_chaser_mcp --cov-report=term-missing --cov-fail-under=85`
+  => `630 passed`, total coverage `85.00%`.
 
 ## Start Here
 

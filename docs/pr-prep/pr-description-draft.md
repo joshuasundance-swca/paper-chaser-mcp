@@ -1,12 +1,12 @@
 # Guided-First Contract Reset, Trust Gating, and Regulatory Routing
 
 > Branch-scoped PR prep material. This file is intended to describe the delta
-> from `master` for the current branch and is not meant to replace the durable
+> from the chosen base branch for the current branch and is not meant to replace the durable
 > product documentation in `README.md` and `docs/`.
 
 ## Summary
 
-This branch is a large product-level reset of the Paper Chaser MCP surface rather than a narrow feature increment. Compared with `master`, it moves the project from a broad smart/raw-first default toward a guided-first public contract that is intentionally smaller, safer, and easier for low-context agents to use correctly.
+This branch is a large product-level reset of the Paper Chaser MCP surface rather than a narrow feature increment. Compared with the chosen base branch, it moves the project from a broad smart/raw-first default toward a guided-first public contract that is intentionally smaller, safer, and easier for low-context agents to use correctly.
 
 At a high level, this branch:
 
@@ -16,7 +16,7 @@ At a high level, this branch:
 - adds a dedicated regulatory investigation path that prefers primary sources over paper-shaped synthesis
 - realigns docs, packaging manifests, prompts, workflow harnesses, and tests around that contract
 
-Substantive diff against `master` at the time of this draft
+Substantive diff against the chosen base branch at the time of this draft
 (excluding `docs/pr-prep` support artifacts to avoid recursive noise):
 
 - 47 files changed
