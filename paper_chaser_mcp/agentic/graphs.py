@@ -2158,14 +2158,12 @@ class AgenticRuntime:
                             _source_record_from_regulatory_document(
                                 {
                                     "title": (
-                                        f"ECOS species profile: "
-                                        f"{
-                                            (
-                                                species_hit.get('commonName')
-                                                or species_hit.get('scientificName')
-                                                or 'Species'
-                                            )
-                                        }"
+                                        "ECOS species profile: "
+                                        + str(
+                                            species_hit.get("commonName")
+                                            or species_hit.get("scientificName")
+                                            or "Species"
+                                        )
                                     ),
                                     "url": species_hit.get("profileUrl"),
                                     "speciesId": species_hit.get("speciesId"),
