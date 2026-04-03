@@ -252,6 +252,10 @@ def _coverage_summary(
         likelyCompleteness=likely_completeness,
         searchMode="brokered_single_page",
         retrievalNotes=retrieval_notes,
+        summaryLine=(
+            f"{len(attempted)} provider(s) searched, {len(failed)} failed, "
+            f"{len(zero_results)} returned zero results, likely completeness: {likely_completeness}."
+        ),
     )
 
 
@@ -267,15 +271,19 @@ def _failure_summary(
     fallback_attempted = len([attempt for attempt in attempts if attempt.status != "skipped"]) > 1
     if result_status == "provider_failed":
         return FailureSummary(
+            outcome="total_failure",
             whatFailed="All attempted providers failed upstream before the broker could return results.",
             whatStillWorked="The broker recorded provider-level failure details for retry and debugging.",
             fallbackAttempted=fallback_attempted,
+            fallbackMode="broker_fallback",
+            primaryPathFailureReason=", ".join(failed),
             completenessImpact=(
                 "Coverage is incomplete because the search did not receive a successful provider response."
             ),
             recommendedNextAction="retry_or_pivot",
         )
     return FailureSummary(
+        outcome="fallback_success",
         whatFailed=("One or more providers failed during broker fallback: " + ", ".join(failed) + "."),
         whatStillWorked=(
             f"{provider_used} still returned results, so the search produced a usable but partial orientation set."
@@ -283,6 +291,8 @@ def _failure_summary(
             else "No provider returned results."
         ),
         fallbackAttempted=fallback_attempted,
+        fallbackMode="broker_fallback",
+        primaryPathFailureReason=", ".join(failed),
         completenessImpact=(
             "Coverage may be partial because failed providers could have contributed additional results."
         ),

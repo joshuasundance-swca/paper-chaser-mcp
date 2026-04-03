@@ -145,7 +145,42 @@ AccessStatus = Literal[
     "access_unverified",
     "mirror_only",
 ]
+OpenAccessRoute = Literal[
+    "canonical_open_access",
+    "repository_open_access",
+    "mirror_only",
+    "non_oa_or_unconfirmed",
+    "unknown",
+]
 LikelyCompleteness = Literal["likely_complete", "partial", "unknown", "incomplete"]
+FailureOutcome = Literal["total_failure", "partial_success", "fallback_success", "no_failure"]
+
+
+class CitationRecord(ApiModel):
+    """Export-ready citation metadata shared across guided source payloads."""
+
+    authors: list[str] = Field(default_factory=list)
+    year: str | None = None
+    title: str | None = None
+    journal_or_publisher: str | None = Field(default=None, alias="journalOrPublisher")
+    doi: str | None = None
+    url: str | None = None
+    source_type: SourceType | None = Field(default=None, alias="sourceType")
+    confidence: Literal["high", "medium", "low"] | None = None
+
+
+class PrimaryDocumentCoverage(ApiModel):
+    """Regulatory primary-document retrieval coverage for current-text workflows."""
+
+    current_text_requested: bool = Field(default=False, alias="currentTextRequested")
+    govinfo_attempted: bool = Field(default=False, alias="govinfoAttempted")
+    govinfo_matched: bool = Field(default=False, alias="govinfoMatched")
+    cfr_attempted: bool = Field(default=False, alias="cfrAttempted")
+    cfr_matched: bool = Field(default=False, alias="cfrMatched")
+    federal_register_attempted: bool = Field(default=False, alias="federalRegisterAttempted")
+    federal_register_matched: bool = Field(default=False, alias="federalRegisterMatched")
+    history_only: bool = Field(default=False, alias="historyOnly")
+    current_text_satisfied: bool = Field(default=False, alias="currentTextSatisfied")
 
 
 class CoverageSummary(ApiModel):
@@ -162,14 +197,22 @@ class CoverageSummary(ApiModel):
     likely_completeness: LikelyCompleteness = Field(default="unknown", alias="likelyCompleteness")
     search_mode: str | None = Field(default=None, alias="searchMode")
     retrieval_notes: list[str] = Field(default_factory=list, alias="retrievalNotes")
+    summary_line: str | None = Field(default=None, alias="summaryLine")
+    primary_document_coverage: PrimaryDocumentCoverage | None = Field(
+        default=None,
+        alias="primaryDocumentCoverage",
+    )
 
 
 class FailureSummary(ApiModel):
     """Compact, user-facing explanation of degraded or failed retrieval."""
 
+    outcome: FailureOutcome | None = None
     what_failed: str | None = Field(default=None, alias="whatFailed")
     what_still_worked: str | None = Field(default=None, alias="whatStillWorked")
     fallback_attempted: bool = Field(default=False, alias="fallbackAttempted")
+    fallback_mode: str | None = Field(default=None, alias="fallbackMode")
+    primary_path_failure_reason: str | None = Field(default=None, alias="primaryPathFailureReason")
     completeness_impact: str | None = Field(default=None, alias="completenessImpact")
     recommended_next_action: str | None = Field(default=None, alias="recommendedNextAction")
 
@@ -277,6 +320,7 @@ class Paper(ApiModel):
     is_primary_source: bool | None = Field(default=None, alias="isPrimarySource")
     full_text_observed: bool | None = Field(default=None, alias="fullTextObserved")
     abstract_observed: bool | None = Field(default=None, alias="abstractObserved")
+    open_access_route: OpenAccessRoute | None = Field(default=None, alias="openAccessRoute")
 
 
 class BrokerMetadata(BaseModel):

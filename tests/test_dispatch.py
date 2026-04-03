@@ -1250,7 +1250,25 @@ async def test_provider_diagnostics_runtime_summary_warns_on_narrow_provider_ord
 
 
 @pytest.mark.asyncio
-async def test_guided_wrappers_surface_candidate_leads(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_provider_diagnostics_runtime_summary_warns_on_hidden_tools_and_tls_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import types
+
+    monkeypatch.setattr(server, "hide_disabled_tools", True)
+    monkeypatch.setattr(server, "ecos_client", server.ecos_client or types.SimpleNamespace())
+    monkeypatch.setattr(server.ecos_client, "verify_tls", False, raising=False)
+
+    diagnostics = _payload(await server.call_tool("get_provider_diagnostics", {}))
+    warnings = diagnostics["runtimeSummary"]["warnings"]
+
+    assert any("hidden" in warning.lower() for warning in warnings)
+    assert any("guided profile is active" in warning.lower() for warning in warnings)
+    assert any("tls verification is disabled" in warning.lower() for warning in warnings)
+
+
+@pytest.mark.asyncio
+async def test_guided_wrappers_surface_unverified_leads(monkeypatch: pytest.MonkeyPatch) -> None:
     class _FakeRuntime:
         async def search_papers_smart(self, **kwargs: object) -> dict[str, object]:
             del kwargs
@@ -1333,10 +1351,73 @@ async def test_guided_wrappers_surface_candidate_leads(monkeypatch: pytest.Monke
         )
     )
 
-    assert research["candidateLeads"][0]["sourceId"] == "polar-bear-fr"
-    assert research["candidateLeads"][0]["topicalRelevance"] == "off_topic"
-    assert follow_up["candidateLeads"][0]["sourceId"] == "lead-1"
-    assert follow_up["candidateLeads"][0]["topicalRelevance"] == "off_topic"
+    assert research["unverifiedLeads"][0]["sourceId"] == "polar-bear-fr"
+    assert research["unverifiedLeads"][0]["topicalRelevance"] == "off_topic"
+    assert research["verifiedFindings"]
+    assert "failureSummary" in research
+    assert "resultMeaning" in research
+    assert "candidateLeads" not in research
+    assert "findings" not in research
+    assert "failure" not in research
+    assert follow_up["unverifiedLeads"][0]["sourceId"] == "lead-1"
+    assert follow_up["unverifiedLeads"][0]["topicalRelevance"] == "off_topic"
+    assert "failureSummary" in follow_up
+
+
+@pytest.mark.asyncio
+async def test_inspect_source_surfaces_guided_v2_source_fields() -> None:
+    record = server.workspace_registry.save_result_set(
+        source_tool="research",
+        search_session_id="ssn-guided-inspect",
+        query="test query",
+        payload={
+            "structuredSources": [
+                {
+                    "sourceId": "src-1",
+                    "title": "Habitat Connectivity for Listed Species",
+                    "provider": "arxiv",
+                    "sourceType": "repository_record",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "abstract_only",
+                    "topicalRelevance": "on_topic",
+                    "confidence": "medium",
+                    "isPrimarySource": False,
+                    "canonicalUrl": "https://arxiv.org/abs/2401.12345",
+                    "retrievedUrl": "https://arxiv.org/abs/2401.12345",
+                    "fullTextObserved": False,
+                    "abstractObserved": True,
+                    "openAccessRoute": "repository_open_access",
+                    "citationText": "arXiv:2401.12345",
+                    "citation": {
+                        "authors": ["Ada Lovelace"],
+                        "year": "2024",
+                        "title": "Habitat Connectivity for Listed Species",
+                        "journalOrPublisher": "arXiv",
+                        "doi": None,
+                        "url": "https://arxiv.org/abs/2401.12345",
+                        "sourceType": "repository_record",
+                        "confidence": "medium",
+                    },
+                }
+            ]
+        },
+    )
+    assert record.search_session_id == "ssn-guided-inspect"
+
+    payload = _payload(
+        await server.call_tool(
+            "inspect_source",
+            {"searchSessionId": "ssn-guided-inspect", "sourceId": "src-1"},
+        )
+    )
+
+    source = payload["source"]
+    assert source["fullTextObserved"] is False
+    assert source["abstractObserved"] is True
+    assert source["openAccessRoute"] == "repository_open_access"
+    assert source["citationText"] == "arXiv:2401.12345"
+    assert source["citation"]["authors"] == ["Ada Lovelace"]
+    assert all("get_paper_" not in item for item in payload["directReadRecommendations"])
 
 
 @pytest.mark.asyncio

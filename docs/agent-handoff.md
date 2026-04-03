@@ -17,7 +17,7 @@ next steps without re-discovering project state.
   primary-source tools.
 - Guided responses are now **trust-gated**, not just trust-labeled. Verified
   findings must be on-topic and backed by verified evidence. Weak, filtered, or
-  off-topic items belong in `candidateLeads`, not `findings`.
+  off-topic items belong in `unverifiedLeads`, not `verifiedFindings`.
 - Guided follow-up is now **abstention-safe**. `follow_up_research` returns
   `answerStatus=answered|abstained|insufficient_evidence` and should not emit
   answer-shaped filler when evidence is weak.
@@ -93,7 +93,7 @@ Use only when there is a concrete control need.
 - `paper_chaser_mcp/dispatch.py`
   Main tool routing layer, including the guided wrappers and runtime-status view.
 - `paper_chaser_mcp/agentic/models.py`
-  Smart/guided response models, including trust buckets and `candidateLeads`.
+  Smart/guided response models, including trust buckets and `unverifiedLeads`.
 - `paper_chaser_mcp/agentic/graphs.py`
   Smart orchestration, trust gating, regulatory routing, and abstention logic.
 - `paper_chaser_mcp/server.py`
@@ -146,7 +146,7 @@ pytest tests/test_agentic_workflow.py -q
   `resolve_reference`, `inspect_source`, and `get_runtime_status`.
 - Trust gating that treats topical drift as a first-class failure mode rather
   than a cosmetic label.
-- `candidateLeads` as the audit bucket for weak, filtered, or off-topic items.
+- `unverifiedLeads` as the audit bucket for weak, filtered, or off-topic items.
 - Safer regulatory routing that keeps unrelated Federal Register items out of
   verified findings and timeline events.
 - Runtime-summary fixes so the top-level summary and per-provider rows describe
@@ -161,7 +161,7 @@ pytest tests/test_agentic_workflow.py -q
 1. Threshold tuning for `on_topic` vs `weak_match` still needs real-world
    iteration. The current behavior intentionally prefers safe abstention over
    plausible garbage.
-2. `candidateLeads` is useful, but the product can still get better at
+2. `unverifiedLeads` is useful, but the product can still get better at
    summarizing why a lead was excluded without making users inspect raw source
    records.
 3. The expert smart surface remains powerful but broad. Keep it out of default
@@ -177,7 +177,7 @@ pytest tests/test_agentic_workflow.py -q
 
 1. Keep collecting real guided queries and tune trust thresholds, clarification
    prompts, and abstention language from that evidence.
-2. Improve `candidateLeads` ergonomics so users can see why something was
+2. Improve `unverifiedLeads` ergonomics so users can see why something was
    excluded without mistaking it for verified support.
 3. Continue tightening the expert smart surface until landscape/graph tools
    consistently meet the same trust bar as guided outputs.
@@ -195,7 +195,7 @@ Use this prompt for the next coding agent if you want a clean continuation:
 Read README.md, docs/golden-paths.md, docs/guided-reset-migration-note.md,
 .github/copilot-instructions.md, and docs/agent-handoff.md. Treat the guided
 profile as the public contract of record and the expert profile as an explicit
-fallback. Preserve safe abstention, candidateLeads separation, and runtime
+fallback. Preserve safe abstention, unverifiedLeads separation, and runtime
 truth. If you edit .github/workflows/test-paper-chaser.md, also update
 .github/workflows/test-paper-chaser.lock.yml with:
 gh aw compile test-paper-chaser --dir .github/workflows

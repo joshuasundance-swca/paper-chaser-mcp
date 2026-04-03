@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import Field
 
-from ..models.common import ApiModel, CoverageSummary, FailureSummary, Paper
+from ..models.common import ApiModel, CitationRecord, CoverageSummary, FailureSummary, OpenAccessRoute, Paper
 from ..models.regulations import RegulatoryTimeline
 
 
@@ -153,7 +153,9 @@ class StructuredSourceRecord(ApiModel):
     retrieved_url: str | None = Field(default=None, alias="retrievedUrl")
     full_text_observed: bool | None = Field(default=None, alias="fullTextObserved")
     abstract_observed: bool | None = Field(default=None, alias="abstractObserved")
-    citation: str | None = None
+    open_access_route: OpenAccessRoute | None = Field(default=None, alias="openAccessRoute")
+    citation_text: str | None = Field(default=None, alias="citationText")
+    citation: CitationRecord | None = None
     date: str | None = None
     note: str | None = None
 

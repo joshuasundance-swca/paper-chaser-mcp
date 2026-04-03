@@ -428,6 +428,8 @@ async def test_search_papers_smart_routes_regulatory_queries_to_primary_sources(
     assert payload["structuredSources"]
     assert payload["verifiedFindings"]
     assert payload["coverageSummary"]["searchMode"] == "regulatory_primary_source"
+    assert payload["coverageSummary"]["primaryDocumentCoverage"]["currentTextRequested"] is True
+    assert payload["coverageSummary"]["primaryDocumentCoverage"]["currentTextSatisfied"] is True
     assert payload["regulatoryTimeline"]["events"]
     assert any(source["provider"] == "govinfo" for source in payload["structuredSources"])
     assert any(source["provider"] == "ecos" for source in payload["structuredSources"])
@@ -571,6 +573,100 @@ async def test_search_papers_smart_regulatory_filters_unanchored_federal_registe
     assert "Designation of Critical Habitat for Polar Bear" in candidate_titles
     assert "Wood Stork Recovery Notice" in candidate_titles
     assert all(lead["topicalRelevance"] == "off_topic" for lead in payload["candidateLeads"])
+
+
+@pytest.mark.asyncio
+async def test_search_papers_smart_regulatory_marks_history_only_when_current_cfr_text_is_unresolved() -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+
+    class FakeEcosClient:
+        async def search_species(self, *, query: str, limit: int = 10, match_mode: str = "auto") -> dict[str, Any]:
+            del limit, match_mode
+            return {
+                "query": query,
+                "matchMode": "auto",
+                "total": 1,
+                "data": [
+                    {
+                        "speciesId": "sp-1",
+                        "commonName": "California condor",
+                        "scientificName": "Gymnogyps californianus",
+                        "profileUrl": "https://ecos.fws.gov/ecp/species/sp-1",
+                    }
+                ],
+            }
+
+        async def get_species_profile(self, *, species_id: str) -> dict[str, Any]:
+            assert species_id == "sp-1"
+            return {
+                "species": {"speciesId": "sp-1", "commonName": "California condor"},
+                "speciesEntities": [],
+            }
+
+        async def list_species_documents(
+            self, *, species_id: str, document_kinds: list[str] | None = None
+        ) -> dict[str, Any]:
+            del species_id, document_kinds
+            return {
+                "data": [
+                    {
+                        "documentKind": "federal_register",
+                        "title": "Endangered Status for California Condor",
+                        "url": "https://www.govinfo.gov/link/fr/32/4001",
+                        "documentDate": "1967-03-11",
+                        "frCitation": "32 FR 4001",
+                        "documentType": "Final Rule",
+                    }
+                ]
+            }
+
+    class FakeFederalRegisterClient:
+        async def search_documents(self, *, query: str, limit: int = 10, **kwargs: Any) -> dict[str, Any]:
+            del query, limit, kwargs
+            return {
+                "total": 1,
+                "data": [
+                    {
+                        "documentNumber": "2024-12345",
+                        "title": "Critical Habitat Revision for California Condor",
+                        "documentType": "RULE",
+                        "publicationDate": "2024-02-01",
+                        "citation": "89 FR 83510",
+                        "htmlUrl": "https://www.federalregister.gov/d/2024-12345",
+                        "cfrReferences": ["50 CFR 17.95"],
+                    }
+                ],
+            }
+
+    class FailingGovInfoClient:
+        async def get_cfr_text(self, **kwargs: Any) -> dict[str, Any]:
+            del kwargs
+            raise ValueError("No GovInfo CFR result matched 50 CFR 17.95.")
+
+    _, runtime = _deterministic_runtime(
+        semantic=semantic,
+        openalex=openalex,
+        ecos=FakeEcosClient(),
+        federal_register=FakeFederalRegisterClient(),
+        govinfo=FailingGovInfoClient(),
+        enable_ecos=True,
+        enable_federal_register=True,
+        enable_govinfo_cfr=True,
+    )
+
+    payload = await runtime.search_papers_smart(
+        query="What does 50 CFR 17.95 say about California condor critical habitat?",
+        limit=5,
+    )
+
+    primary_document = payload["coverageSummary"]["primaryDocumentCoverage"]
+    assert primary_document["currentTextRequested"] is True
+    assert primary_document["govinfoAttempted"] is True
+    assert primary_document["currentTextSatisfied"] is False
+    assert primary_document["historyOnly"] is True
+    assert any("Current codified CFR text was not verified from GovInfo" in gap for gap in payload["evidenceGaps"])
+    assert payload["failureSummary"]["outcome"] == "fallback_success"
 
 
 @pytest.mark.asyncio

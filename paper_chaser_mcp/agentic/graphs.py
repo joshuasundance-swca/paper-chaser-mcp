@@ -20,10 +20,13 @@ from ..enrichment import (
     attach_enrichments_to_paper_payload,
     hydrate_paper_for_enrichment,
 )
+from ..identifiers import resolve_doi_from_paper_payload
 from ..models import (
+    CitationRecord,
     CoverageSummary,
     FailureSummary,
     Paper,
+    PrimaryDocumentCoverage,
     RegulatoryTimeline,
     RegulatoryTimelineEvent,
     VerificationStatus,
@@ -1697,6 +1700,9 @@ class AgenticRuntime:
         timeline_events: list[RegulatoryTimelineEvent] = []
         candidate_leads: list[StructuredSourceRecord] = []
         subject: str | None = None
+        current_text_requested = _is_current_cfr_text_request(query)
+        govinfo_matched = False
+        federal_register_matched = False
 
         await self._emit_smart_search_status(
             ctx=ctx,
@@ -1717,6 +1723,7 @@ class AgenticRuntime:
                 cfr_payload = await self._govinfo_client.get_cfr_text(**cfr_request)
                 stage_timings_ms["regulatoryGovInfo"] = int((time.perf_counter() - started) * 1000)
                 succeeded.append("govinfo")
+                govinfo_matched = True
                 subject = str(cfr_payload.get("citation") or query)
                 structured_sources.append(
                     _source_record_from_regulatory_document(
@@ -1884,9 +1891,10 @@ class AgenticRuntime:
                                 topical_relevance="on_topic",
                             )
                         )
+                        federal_register_matched = True
                         timeline_events.append(
                             RegulatoryTimelineEvent(
-                                eventType=str(document.get("documentType") or "federal_register_document").lower(),
+                                eventType="rulemaking_history",
                                 eventDate=document.get("publicationDate"),
                                 title=str(
                                     document.get("title")
@@ -1903,9 +1911,12 @@ class AgenticRuntime:
                                     document.get("verificationStatus") or "verified_metadata",
                                 ),
                                 note=(
-                                    ", ".join(document.get("cfrReferences") or [])
+                                    (
+                                        "Rulemaking history/context from the Federal Register. "
+                                        + ", ".join(document.get("cfrReferences") or [])
+                                    )
                                     if isinstance(document.get("cfrReferences"), list) and document.get("cfrReferences")
-                                    else "Federal Register discovery hit."
+                                    else "Rulemaking history/context from the Federal Register."
                                 ),
                             )
                         )
@@ -1937,6 +1948,23 @@ class AgenticRuntime:
             )
         if species_hit is None and "ecos" in zero_results:
             evidence_gaps.append("No ECOS species dossier match was found for the query.")
+        current_text_satisfied = (not current_text_requested) or govinfo_matched
+        history_only = bool(current_text_requested and not current_text_satisfied and timeline_events)
+        if current_text_requested and not govinfo_matched:
+            evidence_gaps.append(
+                "Current codified CFR text was not verified from GovInfo, so the result is limited to history/context."
+            )
+        primary_document_coverage = PrimaryDocumentCoverage(
+            currentTextRequested=current_text_requested,
+            govinfoAttempted="govinfo" in attempted,
+            govinfoMatched=govinfo_matched,
+            cfrAttempted=bool(cfr_request and "govinfo" in attempted),
+            cfrMatched=bool(cfr_request and govinfo_matched),
+            federalRegisterAttempted="federal_register" in attempted,
+            federalRegisterMatched=federal_register_matched,
+            historyOnly=history_only,
+            currentTextSatisfied=current_text_satisfied,
+        )
 
         provider_selection = self._provider_bundle_for_profile(latency_profile).selection_metadata()
         coverage_summary = CoverageSummary(
@@ -1949,10 +1977,18 @@ class AgenticRuntime:
             retrievalNotes=[
                 "Regulatory mode prioritizes ECOS, Federal Register, and CFR primary sources before broader synthesis."
             ],
+            summaryLine=_coverage_summary_line(
+                attempted=attempted,
+                failed=failed,
+                zero_results=zero_results,
+                likely_completeness=("partial" if structured_sources else ("incomplete" if failed else "unknown")),
+            ),
+            primaryDocumentCoverage=primary_document_coverage,
         )
         failure_summary = None
         if failed:
             failure_summary = FailureSummary(
+                outcome="fallback_success" if structured_sources else "total_failure",
                 whatFailed="One or more regulatory providers failed during primary-source retrieval.",
                 whatStillWorked=(
                     "Other regulatory providers still returned evidence."
@@ -1960,6 +1996,8 @@ class AgenticRuntime:
                     else "No regulatory provider returned usable source records."
                 ),
                 fallbackAttempted=True,
+                fallbackMode="regulatory_primary_source",
+                primaryPathFailureReason=", ".join(sorted(failed)),
                 completenessImpact=(
                     "The regulatory history may be incomplete because at least one primary-source provider failed."
                 ),
@@ -2644,7 +2682,9 @@ def _source_record_from_paper(
         retrievedUrl=paper.retrieved_url,
         fullTextObserved=paper.full_text_observed,
         abstractObserved=paper.abstract_observed,
-        citation=str(paper.canonical_id or paper.paper_id or "") or None,
+        openAccessRoute=paper.open_access_route,
+        citationText=str(paper.canonical_id or paper.paper_id or "") or None,
+        citation=_citation_record_from_paper(paper),
         date=str(paper.publication_date or paper.year or "") or None,
         note=note,
     )
@@ -2702,7 +2742,18 @@ def _source_record_from_regulatory_document(
         retrievedUrl=canonical_url,
         fullTextObserved=bool(document.get("markdown") or provider == "govinfo"),
         abstractObserved=False,
-        citation=citation,
+        openAccessRoute=(
+            "non_oa_or_unconfirmed"
+            if (provider == "govinfo" or document.get("markdown") or canonical_url)
+            else "unknown"
+        ),
+        citationText=citation,
+        citation=_citation_record_from_regulatory_document(
+            document,
+            provider=provider,
+            citation_text=citation,
+            canonical_url=str(canonical_url or "") or None,
+        ),
         date=str(date or "") or None,
         note=note,
     )
@@ -2715,8 +2766,8 @@ def _verified_findings_from_source_records(records: list[StructuredSourceRecord]
             continue
         if record.topical_relevance != "on_topic":
             continue
-        title = record.title or record.citation or "Verified source"
-        suffix = f" ({record.citation})" if record.citation and record.citation not in title else ""
+        title = record.title or record.citation_text or "Verified source"
+        suffix = f" ({record.citation_text})" if record.citation_text and record.citation_text not in title else ""
         note = f": {record.note}" if record.note else ""
         findings.append(f"{title}{suffix}{note}")
     return findings[:6]
@@ -2730,7 +2781,7 @@ def _likely_unverified_from_source_records(records: list[StructuredSourceRecord]
             and record.topical_relevance == "on_topic"
         ):
             continue
-        title = record.title or record.citation or "Unverified source"
+        title = record.title or record.citation_text or "Unverified source"
         note = f": {record.note}" if record.note else ""
         leads.append(f"{title}{note}")
     return leads[:6]
@@ -2752,7 +2803,7 @@ def _dedupe_structured_sources(records: list[StructuredSourceRecord]) -> list[St
     deduped: list[StructuredSourceRecord] = []
     seen: set[tuple[str | None, str | None, str | None]] = set()
     for record in records:
-        key = (record.title, record.canonical_url, record.citation)
+        key = (record.title, record.canonical_url, record.citation_text)
         if key in seen:
             continue
         seen.add(key)
@@ -2801,6 +2852,12 @@ def _smart_coverage_summary(
         likelyCompleteness=("partial" if providers_used else ("incomplete" if failed else "unknown")),
         searchMode=search_mode,
         retrievalNotes=list(drift_warnings),
+        summaryLine=_coverage_summary_line(
+            attempted=attempted,
+            failed=failed,
+            zero_results=zero_results,
+            likely_completeness=("partial" if providers_used else ("incomplete" if failed else "unknown")),
+        ),
     )
 
 
@@ -2818,9 +2875,12 @@ def _smart_failure_summary(
         return None
     failed_providers = sorted({str(outcome.get("provider") or "unknown") for outcome in failures})
     return FailureSummary(
+        outcome="fallback_success",
         whatFailed="One or more smart-search providers or provider-side stages failed.",
         whatStillWorked="The smart workflow returned the strongest available partial result set.",
         fallbackAttempted=fallback_attempted,
+        fallbackMode="smart_provider_fallback",
+        primaryPathFailureReason=", ".join(failed_providers),
         completenessImpact=(
             "Coverage may be partial because these providers or stages failed: " + ", ".join(failed_providers) + "."
         ),
@@ -2841,6 +2901,91 @@ def _parse_cfr_request(query: str) -> dict[str, Any] | None:
         "part_number": int(match.group("part")),
         "section_number": match.group("section"),
     }
+
+
+def _is_current_cfr_text_request(query: str) -> bool:
+    lowered = query.lower()
+    if _parse_cfr_request(query) is None:
+        return False
+    markers = (
+        "current cfr",
+        "current text",
+        "codified text",
+        "cfr section",
+        "what does",
+        "what does the",
+        "text of",
+        "say about",
+        "under ",
+    )
+    return any(marker in lowered for marker in markers) or bool(re.search(r"\b\d+\s*cfr\s+\d+(?:\.\S+)?\b", lowered))
+
+
+def _year_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    match = re.search(r"\b(19|20)\d{2}\b", text)
+    return match.group(0) if match else text[:4]
+
+
+def _citation_record_from_paper(paper: Paper) -> CitationRecord | None:
+    doi, _ = resolve_doi_from_paper_payload(paper)
+    authors = [str(author.name).strip() for author in paper.authors if getattr(author, "name", None)]
+    journal_or_publisher = (
+        paper.enrichments.crossref.publisher if paper.enrichments and paper.enrichments.crossref else None
+    ) or paper.venue
+    url = paper.canonical_url or paper.retrieved_url or paper.url or paper.pdf_url
+    if not any([authors, paper.title, paper.year, journal_or_publisher, doi, url]):
+        return None
+    return CitationRecord(
+        authors=authors,
+        year=_year_text(paper.publication_date or paper.year),
+        title=paper.title,
+        journalOrPublisher=journal_or_publisher,
+        doi=doi,
+        url=url,
+        sourceType=paper.source_type,
+        confidence=cast(Any, paper.confidence),
+    )
+
+
+def _citation_record_from_regulatory_document(
+    document: dict[str, Any],
+    *,
+    provider: str,
+    citation_text: str | None,
+    canonical_url: str | None,
+) -> CitationRecord:
+    return CitationRecord(
+        authors=[],
+        year=_year_text(
+            document.get("documentDate") or document.get("publicationDate") or document.get("effectiveDate")
+        ),
+        title=str(document.get("title") or citation_text or "Regulatory source"),
+        journalOrPublisher=(
+            "GovInfo" if provider == "govinfo" else ("Federal Register" if provider == "federal_register" else "ECOS")
+        ),
+        doi=None,
+        url=canonical_url,
+        sourceType="primary_regulatory",
+        confidence=("high" if provider == "govinfo" else "medium"),
+    )
+
+
+def _coverage_summary_line(
+    *,
+    attempted: list[str],
+    failed: list[str],
+    zero_results: list[str],
+    likely_completeness: str,
+) -> str:
+    return (
+        f"{len(attempted)} provider(s) searched, {len(failed)} failed, "
+        f"{len(zero_results)} returned zero results, likely completeness: {likely_completeness}."
+    )
 
 
 def _classify_topical_relevance(

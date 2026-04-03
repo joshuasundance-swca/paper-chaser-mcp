@@ -44,15 +44,15 @@ gh aw compile test-paper-chaser --dir .github/workflows
 
 1. Start with `research` for discovery, literature review, known-item recovery,
    citation repair, and regulatory history asks.
-2. Inspect `status`, `findings`, `sources`, `trustSummary`, `coverage`,
-   `failure`, and `nextActions`.
+2. Inspect `status`, `verifiedFindings`, `sources`, `unverifiedLeads`,
+   `evidenceGaps`, `trustSummary`, `coverage`, `failureSummary`, and `nextActions`.
 3. Save `searchSessionId` for follow-up steps.
 
 **Example**
 
 ```text
 research(query="retrieval-augmented generation for coding agents", limit=5)
-→ inspect status/findings/sources/trustSummary
+→ inspect status/verifiedFindings/sources/trustSummary
 → save searchSessionId
 ```
 
@@ -88,7 +88,7 @@ follow_up_research(searchSessionId="...", question="What evaluation tradeoffs sh
 2. Treat `status` as the decision gate:
    `resolved`, `multiple_candidates`, `no_match`, `regulatory_primary_source`.
 3. Use `bestMatch`/`alternatives` and `nextActions` to decide whether to pivot
-   back into `research` or into direct expert primary-source tools.
+   back into `research` with a stronger anchor.
 
 ### 4. Source-level audit (`inspect_source`)
 

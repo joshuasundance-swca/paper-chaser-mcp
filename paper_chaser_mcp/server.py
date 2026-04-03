@@ -211,19 +211,20 @@ AGENT_WORKFLOW_GUIDE = """
 
 ## Guided output contract
 
-- `research` returns `intent`, `status`, `summary`, `findings`, `sources`,
-  `candidateLeads`, `trustSummary`, `coverage`, `failure`, `nextActions`, and `clarification`.
+- `research` returns `intent`, `status`, `summary`, `verifiedFindings`, `sources`,
+  `unverifiedLeads`, `evidenceGaps`, `trustSummary`, `coverage`, `failureSummary`,
+  `resultMeaning`, `nextActions`, and `clarification`.
 - `status` is one of `succeeded`, `partial`, `needs_disambiguation`,
   `abstained`, or `failed`.
-- Treat `findings` as the compact trust-graded claims list and `sources` as the
-  canonical source records for inspection and citation.
-- Treat `candidateLeads` as auditable but not yet trusted evidence. It is the
+- Treat `verifiedFindings` as the compact trust-graded claims list and `sources`
+  as the canonical source records for inspection and citation.
+- Treat `unverifiedLeads` as auditable but not yet trusted evidence. It is the
   place for weak, filtered, or off-topic leads that should not be promoted into
   verified findings.
 - If the tool abstains or asks for clarification, do not smooth that over with
   your own synthesis. Ask a narrower question or inspect the returned sources.
 
-## Expert fallback
+## Expert/operator-only fallback
 
 - Use the expert surface only when you truly need raw provider control,
   pagination semantics, or provider-native payloads.
@@ -780,7 +781,7 @@ def plan_paper_chaser_search(
         "citation-like string, use resolve_reference first. Reuse searchSessionId with "
         "follow_up_research for one grounded question and inspect_source for provenance. "
         "Treat abstentions and clarification requests as real outputs, not failures to hide. "
-        "Only fall back to the expert surface when you need provider-specific control, "
+        "Only fall back to the expert surface when the task explicitly requires provider-specific control, "
         "pagination, or provider-native payloads. On the expert surface, search_papers is "
         "the quick brokered path, search_papers_bulk is the exhaustive Semantic Scholar-style "
         "path, and search_papers_smart/map_research_landscape/expand_research_graph are the "
@@ -838,10 +839,11 @@ def triage_literature(
 ) -> str:
     return (
         f"Triage literature for '{topic}'. Goal: {goal}. Start with "
-        "research. Inspect status, findings, sources, trustSummary, coverage, failure, "
+        "research. Inspect status, verifiedFindings, sources, unverifiedLeads, evidenceGaps, "
+        "trustSummary, coverage, failureSummary, "
         "and clarification. Save the searchSessionId, then ask one grounded question with "
         "follow_up_research. If one hit becomes a strong anchor, use inspect_source for "
-        "provenance and only then pivot into expert enrichment or citation tools."
+        "provenance before treating it as settled."
     )
 
 
@@ -875,10 +877,10 @@ def refine_query(
 ) -> str:
     return (
         f"Refine the query '{query}'. Problem signal: {weakness}. "
-        "Try research first and inspect status, trustSummary, coverage, failure, and "
+        "Try research first and inspect status, trustSummary, coverage, failureSummary, and "
         "clarification. If the guided path abstains, add a concrete anchor such as a year, "
-        "venue, DOI, species name, agency, or title fragment. If you still need lower-level "
-        "control after that, fall back to expert search_papers or search_papers_smart."
+        "venue, DOI, species name, agency, or title fragment. Use get_runtime_status when behavior "
+        "differs across environments and you need the active runtime truth."
     )
 
 

@@ -23,6 +23,7 @@ An MCP server for academic research — search papers, chase citations, look up 
 - [Quick tool decision guide](#quick-tool-decision-guide)
 - [Core workflows](#core-workflows)
 - [Agent response contract](#agent-response-contract)
+- [Deferred export design](#deferred-export-design)
 - [Migration note](#migration-note)
 - [Installation](#installation)
 - [Configuration](#configuration)
@@ -121,7 +122,7 @@ If you want a local env template for shell runs or Docker Compose, copy `.env.ex
 
 ```text
 research(query="retrieval-augmented generation for coding agents", limit=5)
-→ inspect status, summary, findings, sources, trustSummary
+→ inspect status, summary, verifiedFindings, sources, trustSummary
 → save searchSessionId for follow-up or source inspection
 ```
 
@@ -174,15 +175,23 @@ Treat these as the main guided contracts:
 | Field or pattern | Where it appears | What to do with it |
 | --- | --- | --- |
 | `status` | `research` | `succeeded`, `partial`, `needs_disambiguation`, `abstained`, `failed` |
-| `findings` | `research` | Use as trust-graded claims only when they are present |
+| `verifiedFindings` | `research`, `follow_up_research` | Use as trust-graded claims only when they are present |
 | `sources` | `research`, `follow_up_research` | Canonical source records for inspection and citation |
-| `candidateLeads` | `research`, `follow_up_research`, expert smart tools | Review weak, filtered, or off-topic leads without promoting them into verified evidence |
+| `unverifiedLeads` | `research`, `follow_up_research`, expert smart tools | Review weak, filtered, or off-topic leads without promoting them into verified evidence |
+| `evidenceGaps` | `research`, `follow_up_research` | Treat as explicit limits on the current answer, not hidden caveats |
 | `trustSummary` | `research`, `follow_up_research` | Check on-topic vs weak/off-topic counts before relying on synthesis |
 | `nextActions` | guided tools | Treat as server-preferred recovery path on weak evidence |
 | `clarification` | `research` | Ask the user only when a bounded clarification request is provided |
 | `answerStatus` | `follow_up_research` | `answered`, `abstained`, `insufficient_evidence` |
 | `sourceId` | `sources[*]` | Pass to `inspect_source` for per-source provenance checks |
 | `runtimeSummary` | `get_runtime_status` and expert diagnostics | Confirm effective profile, smart provider state, and warnings |
+
+## Deferred export design
+
+Session export is intentionally deferred in this wave. The planned future shape is
+`export_search_session(searchSessionId, format)` with `format` in `ris`,
+`bibtex`, or `csv`, using the guided-v2 source/citation schema so export can land
+without another public-contract rewrite.
 
 ## Migration note
 

@@ -351,7 +351,8 @@ def test_github_copilot_instructions_align_with_repo_workflow_docs() -> None:
     assert "resolve_reference` for DOI/arXiv/URL/citation/reference cleanup" in instructions
     assert "search_papers_bulk` is not a generic" in instructions
     assert "PAPER_CHASER_TOOL_PROFILE=expert" in instructions
-    assert "candidateLeads" in instructions
+    assert "unverifiedLeads" in instructions
+    assert "verifiedFindings" in instructions
     assert "not a generic" in instructions
     assert "provider-specific tool contracts honest" in instructions
     assert "OpenAlex" in instructions
@@ -400,7 +401,7 @@ async def test_agent_workflow_resource_mentions_pivots_and_provider_contracts() 
     assert "searchSessionId" in guide_text
     assert "trustSummary" in guide_text
     assert "abstains" in guide_text or "abstain" in guide_text
-    assert "Expert fallback" in guide_text
+    assert "Expert/operator-only fallback" in guide_text
     assert "search_papers_smart" in guide_text
     assert "get_provider_diagnostics" in guide_text
     assert "pagination.nextCursor" in guide_text
@@ -427,7 +428,7 @@ async def test_plan_prompt_mentions_continuation_vs_pivot_and_schema_limits() ->
     assert "search_papers_smart" in prompt_text
     assert "searchSessionId" in prompt_text
     assert "search_papers_bulk" in prompt_text
-    assert "search_federal_register" in prompt_text
+    assert "For regulatory work, prefer the guided path first" in prompt_text
     assert "pagination.nextCursor as opaque" in prompt_text
     assert "Mode: smoke." in prompt_text
     assert "GitHub Copilot coding agent" in prompt_text

@@ -204,6 +204,22 @@ def _paper_access_status(paper: Paper, retrieved_url: str | None) -> str:
     return "access_unverified"
 
 
+def _paper_open_access_route(paper: Paper, canonical_url: str | None, retrieved_url: str | None) -> str:
+    enrichments = paper.enrichments
+    unpaywall = enrichments.unpaywall if enrichments is not None else None
+    if _is_mirror_url(retrieved_url):
+        return "mirror_only"
+    if unpaywall is not None and unpaywall.is_oa:
+        if canonical_url and canonical_url.startswith("https://doi.org/"):
+            return "canonical_open_access"
+        return "repository_open_access"
+    if paper.source in {"arxiv", "core", "openalex"} and (paper.pdf_url or paper.url):
+        return "repository_open_access"
+    if paper.access_status in {"full_text_verified", "oa_verified", "oa_uncertain", "abstract_only"}:
+        return "non_oa_or_unconfirmed"
+    return "unknown"
+
+
 def annotate_paper_trust_metadata(paper: Paper) -> Paper:
     """Attach first-pass trust metadata to normalized scholarly paper results."""
 
@@ -249,6 +265,8 @@ def annotate_paper_trust_metadata(paper: Paper) -> Paper:
             "abstract_observed": paper.abstract_observed
             if paper.abstract_observed is not None
             else bool(paper.abstract),
+            "open_access_route": paper.open_access_route
+            or _paper_open_access_route(paper, canonical_url, retrieved_url),
         }
     )
 

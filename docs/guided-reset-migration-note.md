@@ -43,7 +43,8 @@ environments even though the server still supports those tools in expert mode.
 
 - Guided `research` returns explicit trust and control fields:
   - `status`: `succeeded|partial|needs_disambiguation|abstained|failed`
-  - `findings`, `sources`, `trustSummary`, `nextActions`
+  - `verifiedFindings`, `sources`, `unverifiedLeads`, `evidenceGaps`,
+    `trustSummary`, `failureSummary`, `resultMeaning`, `nextActions`
 - Guided follow-up returns explicit answer gating:
   - `answerStatus`: `answered|abstained|insufficient_evidence`
   - `answer` is `null` when not safely answerable.

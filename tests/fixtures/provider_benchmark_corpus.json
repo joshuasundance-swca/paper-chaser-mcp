@@ -22,9 +22,12 @@
           "intent",
           "status",
           "summary",
-          "findings",
+          "verifiedFindings",
           "sources",
+          "unverifiedLeads",
+          "evidenceGaps",
           "trustSummary",
+          "failureSummary",
           "nextActions"
         ]
       }

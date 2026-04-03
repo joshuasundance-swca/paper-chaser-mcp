@@ -21,6 +21,7 @@ from .enrichment import (
     attach_enrichments_to_paper_payload,
     hydrate_paper_for_enrichment,
 )
+from .identifiers import resolve_doi_from_paper_payload
 from .models import TOOL_INPUT_MODELS, CitationFormatsResponse, RuntimeSummary, dump_jsonable
 from .models.common import CitationFormat, ExportLink
 from .models.tools import (
@@ -669,6 +670,7 @@ def _build_provider_diagnostics_snapshot(
     enable_ecos: bool,
     enable_federal_register: bool,
     enable_govinfo_cfr: bool,
+    ecos_client: Any,
     serpapi_client: Any,
     scholarapi_client: Any,
 ) -> dict[str, Any]:
@@ -722,9 +724,21 @@ def _build_provider_diagnostics_snapshot(
             "SCHOLARAPI is false, so ScholarAPI discovery and full-text paths "
             "are inactive."
         )
+    if hide_disabled_tools:
+        runtime_warnings.append(
+            "Disabled tools are hidden from list_tools output, which can make capability gaps harder to diagnose."
+        )
     if transport_mode == "stdio":
         runtime_warnings.append(
             "The current runtime is stdio, so HTTP deployment settings do not affect this invocation path."
+        )
+    if getattr(ecos_client, "verify_tls", True) is False:
+        runtime_warnings.append(
+            "ECOS TLS verification is disabled. This should only be a temporary troubleshooting state."
+        )
+    if tool_profile == "guided" and hide_disabled_tools:
+        runtime_warnings.append(
+            "Guided profile is active while expert tools are hidden, so escalation paths are intentionally unavailable."
         )
     if configured_smart_provider == "huggingface":
         runtime_warnings.append(
@@ -823,7 +837,7 @@ def _paper_topical_relevance(query: str, paper: dict[str, Any]) -> str:
 
 
 def _guided_source_id(candidate: dict[str, Any], *, fallback_prefix: str, index: int) -> str:
-    for key in ("sourceId", "paperId", "canonicalId", "recommendedExpansionId", "citation", "canonicalUrl", "url"):
+    for key in ("sourceId", "paperId", "canonicalId", "recommendedExpansionId", "citationText", "canonicalUrl", "url"):
         value = candidate.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
@@ -846,6 +860,11 @@ def _guided_source_record_from_structured_source(source: dict[str, Any], *, inde
         "isPrimarySource": bool(source.get("isPrimarySource")),
         "canonicalUrl": source.get("canonicalUrl"),
         "retrievedUrl": source.get("retrievedUrl"),
+        "fullTextObserved": bool(source.get("fullTextObserved")),
+        "abstractObserved": bool(source.get("abstractObserved")),
+        "openAccessRoute": _guided_open_access_route(source),
+        "citationText": source.get("citationText"),
+        "citation": _guided_citation_from_structured_source(source),
         "date": source.get("date"),
         "note": source.get("note"),
     }
@@ -872,6 +891,11 @@ def _guided_source_record_from_paper(query: str, paper: dict[str, Any], *, index
         "isPrimarySource": bool(paper.get("isPrimarySource")),
         "canonicalUrl": canonical_url,
         "retrievedUrl": paper.get("retrievedUrl") or canonical_url,
+        "fullTextObserved": bool(paper.get("fullTextObserved")),
+        "abstractObserved": bool(paper.get("abstractObserved")),
+        "openAccessRoute": _guided_open_access_route(paper),
+        "citationText": str(paper.get("canonicalId") or paper.get("paperId") or "") or None,
+        "citation": _guided_citation_from_paper(paper, canonical_url),
         "date": paper.get("publicationDate") or paper.get("year"),
         "note": paper.get("venue"),
     }
@@ -898,7 +922,7 @@ def _guided_findings_from_sources(sources: list[dict[str, Any]]) -> list[dict[st
     return findings
 
 
-def _guided_candidate_leads_from_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _guided_unverified_leads_from_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
     leads: list[dict[str, Any]] = []
     seen: set[str] = set()
     for source in sources:
@@ -916,6 +940,96 @@ def _guided_candidate_leads_from_sources(sources: list[dict[str, Any]]) -> list[
     return leads[:6]
 
 
+def _guided_open_access_route(source: dict[str, Any]) -> str:
+    explicit = str(source.get("openAccessRoute") or "").strip()
+    if explicit:
+        return explicit
+    source_type = str(source.get("sourceType") or "")
+    access_status = str(source.get("accessStatus") or "")
+    canonical_url = str(source.get("canonicalUrl") or "").strip().lower()
+    retrieved_url = str(source.get("retrievedUrl") or "").strip().lower()
+    provider = str(source.get("provider") or source.get("source") or "").strip().lower()
+    if "sci-hub" in retrieved_url:
+        return "mirror_only"
+    if access_status == "oa_verified" and canonical_url.startswith("https://doi.org/"):
+        return "canonical_open_access"
+    if provider in {"arxiv", "core", "openalex"} or source_type == "repository_record":
+        return "repository_open_access"
+    if access_status in {"full_text_verified", "oa_verified", "oa_uncertain", "abstract_only"}:
+        return "non_oa_or_unconfirmed"
+    return "unknown"
+
+
+def _guided_citation_from_structured_source(source: dict[str, Any]) -> dict[str, Any] | None:
+    citation = source.get("citation")
+    if isinstance(citation, dict):
+        return citation
+    citation_text = str(source.get("citationText") or source.get("citation") or "").strip() or None
+    title = str(source.get("title") or citation_text or "").strip() or None
+    url = str(source.get("canonicalUrl") or source.get("retrievedUrl") or "").strip() or None
+    year = _guided_year_text(source.get("date"))
+    if not any([title, url, year, citation_text]):
+        return None
+    return {
+        "authors": [],
+        "year": year,
+        "title": title,
+        "journalOrPublisher": _guided_journal_or_publisher(source),
+        "doi": None,
+        "url": url,
+        "sourceType": source.get("sourceType") or "unknown",
+        "confidence": source.get("confidence") or "medium",
+    }
+
+
+def _guided_citation_from_paper(paper: dict[str, Any], canonical_url: str | None) -> dict[str, Any] | None:
+    doi, _ = resolve_doi_from_paper_payload(paper)
+    authors = [
+        str(author.get("name") or "").strip()
+        for author in (paper.get("authors") or [])
+        if isinstance(author, dict) and str(author.get("name") or "").strip()
+    ]
+    year = _guided_year_text(paper.get("publicationDate") or paper.get("year"))
+    journal_or_publisher = _guided_journal_or_publisher(paper)
+    if not any([authors, year, paper.get("title"), journal_or_publisher, doi, canonical_url]):
+        return None
+    return {
+        "authors": authors,
+        "year": year,
+        "title": paper.get("title"),
+        "journalOrPublisher": journal_or_publisher,
+        "doi": doi,
+        "url": canonical_url,
+        "sourceType": paper.get("sourceType") or "unknown",
+        "confidence": paper.get("confidence") or "medium",
+    }
+
+
+def _guided_year_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    match = re.search(r"\b(19|20)\d{2}\b", text)
+    return match.group(0) if match else None
+
+
+def _guided_journal_or_publisher(payload: dict[str, Any]) -> str | None:
+    enrichments = payload.get("enrichments")
+    if isinstance(enrichments, dict):
+        crossref = enrichments.get("crossref")
+        if isinstance(crossref, dict):
+            publisher = str(crossref.get("publisher") or "").strip()
+            if publisher:
+                return publisher
+    venue = str(payload.get("venue") or "").strip()
+    if venue:
+        return venue
+    provider = str(payload.get("provider") or payload.get("source") or "").strip()
+    return provider or None
+
+
 def _guided_trust_summary(sources: list[dict[str, Any]], evidence_gaps: list[str]) -> dict[str, Any]:
     return {
         "verifiedSourceCount": sum(
@@ -930,11 +1044,78 @@ def _guided_trust_summary(sources: list[dict[str, Any]], evidence_gaps: list[str
     }
 
 
+def _guided_failure_summary(
+    *,
+    failure_summary: dict[str, Any] | None,
+    status: str,
+    sources: list[dict[str, Any]],
+    evidence_gaps: list[str],
+) -> dict[str, Any]:
+    if failure_summary is not None:
+        summary = dict(failure_summary)
+    else:
+        summary = {}
+    outcome = str(summary.get("outcome") or "").strip()
+    if not outcome:
+        if status == "abstained":
+            outcome = "no_failure"
+        elif summary.get("fallbackAttempted"):
+            outcome = "fallback_success"
+        else:
+            outcome = "no_failure"
+    recommended_next_action = summary.get("recommendedNextAction")
+    if not recommended_next_action:
+        recommended_next_action = "inspect_source" if sources else "research"
+    completeness_impact = summary.get("completenessImpact")
+    if not completeness_impact and evidence_gaps:
+        completeness_impact = evidence_gaps[0]
+    what_still_worked = summary.get("whatStillWorked")
+    if not what_still_worked:
+        what_still_worked = (
+            "The guided run still returned inspectable sources."
+            if sources
+            else "No provider failures were recorded, but the evidence was not strong enough to ground a result."
+        )
+    return {
+        "outcome": outcome,
+        "whatFailed": summary.get("whatFailed"),
+        "whatStillWorked": what_still_worked,
+        "fallbackAttempted": bool(summary.get("fallbackAttempted")),
+        "fallbackMode": summary.get("fallbackMode"),
+        "primaryPathFailureReason": summary.get("primaryPathFailureReason"),
+        "completenessImpact": completeness_impact,
+        "recommendedNextAction": recommended_next_action,
+    }
+
+
+def _guided_result_meaning(
+    *,
+    status: str,
+    verified_findings: list[dict[str, Any]],
+    evidence_gaps: list[str],
+    coverage: dict[str, Any] | None,
+    failure_summary: dict[str, Any],
+) -> str:
+    if verified_findings:
+        return f"This result contains {len(verified_findings)} verified finding(s) grounded in the returned sources."
+    if status == "partial":
+        return "This result found some relevant evidence, but the trust or coverage state is still incomplete."
+    if status == "needs_disambiguation":
+        return "This result needs a stronger anchor before the server can produce a grounded answer."
+    if status == "abstained":
+        return "This result did not find sufficiently trustworthy evidence to support a grounded answer."
+    if failure_summary.get("outcome") not in {None, "no_failure"}:
+        return "This result reflects degraded retrieval and should be treated as a partial recovery path."
+    summary_line = str((coverage or {}).get("summaryLine") or "").strip()
+    return summary_line or "This result should be reviewed source by source before relying on it."
+
+
 def _guided_research_status(
     *,
     intent: str,
     sources: list[dict[str, Any]],
     findings: list[dict[str, Any]],
+    coverage_summary: dict[str, Any] | None,
     failure_summary: dict[str, Any] | None,
     clarification: dict[str, Any] | None,
 ) -> str:
@@ -943,11 +1124,21 @@ def _guided_research_status(
     if intent == "known_item" and findings:
         return "succeeded"
     if intent == "regulatory":
+        primary_document_coverage = cast(
+            dict[str, Any] | None,
+            (coverage_summary or {}).get("primaryDocumentCoverage"),
+        )
         primary_sources = [
             source
             for source in sources
             if source.get("topicalRelevance") == "on_topic" and bool(source.get("isPrimarySource"))
         ]
+        if primary_document_coverage is not None and primary_document_coverage.get("currentTextRequested"):
+            if primary_document_coverage.get("currentTextSatisfied"):
+                return "partial" if failure_summary is not None else "succeeded"
+            if primary_sources:
+                return "partial"
+            return "abstained"
         if primary_sources:
             return "partial" if failure_summary is not None else "succeeded"
         return "needs_disambiguation" if sources else "abstained"
@@ -975,7 +1166,6 @@ def _guided_summary(intent: str, status: str, findings: list[dict[str, Any]], so
 def _guided_next_actions(
     *,
     search_session_id: str | None,
-    next_step_hint: str | None,
     status: str,
 ) -> list[str]:
     actions: list[str] = []
@@ -986,10 +1176,13 @@ def _guided_next_actions(
         actions.append(
             f"Use follow_up_research with searchSessionId='{search_session_id}' to ask one grounded follow-up question."
         )
-    if next_step_hint:
-        actions.append(str(next_step_hint))
     if status in {"abstained", "needs_disambiguation"}:
         actions.append("Narrow the request with a specific title, DOI, species name, agency, venue, or year range.")
+    if status == "partial":
+        actions.append("Refine the request to reduce evidence gaps before treating the result as settled.")
+    actions.append(
+        "Use get_runtime_status if behavior differs across environments and you need the active runtime truth."
+    )
     return actions[:4]
 
 
@@ -1011,7 +1204,7 @@ def _find_record_source(
             continue
         candidate_ids = {
             str(source.get("sourceId") or "").strip(),
-            str(source.get("citation") or "").strip(),
+            str(source.get("citationText") or "").strip(),
             str(source.get("canonicalUrl") or "").strip(),
         }
         if source_id in candidate_ids:
@@ -1031,22 +1224,24 @@ def _find_record_source(
     return None
 
 
-def _direct_read_recommendations(source: dict[str, Any]) -> list[str]:
+def _direct_read_recommendations(source: dict[str, Any], *, tool_profile: str) -> list[str]:
     recommendations: list[str] = []
     canonical_url = str(source.get("canonicalUrl") or source.get("retrievedUrl") or "").strip()
     if canonical_url:
         recommendations.append(f"Open the canonical source: {canonical_url}")
     provider = str(source.get("provider") or "")
-    if provider == "govinfo":
+    if tool_profile != "guided" and provider == "govinfo":
         recommendations.append("Use get_cfr_text for authoritative CFR follow-through.")
-    elif provider == "federal_register":
+    elif tool_profile != "guided" and provider == "federal_register":
         recommendations.append("Use get_federal_register_document to read the full Federal Register item.")
-    elif provider == "ecos":
+    elif tool_profile != "guided" and provider == "ecos":
         recommendations.append("Use get_document_text_ecos for the full ECOS document text when available.")
-    elif provider in {"semantic_scholar", "openalex", "arxiv", "core", "scholarapi"}:
+    elif tool_profile != "guided" and provider in {"semantic_scholar", "openalex", "arxiv", "core", "scholarapi"}:
         recommendations.append(
             "Use expert paper-detail tools if you need the full provider payload or citation expansion."
         )
+    if tool_profile == "guided":
+        recommendations.append("Use inspect_source to compare provenance and access signals before citing this source.")
     return recommendations[:3]
 
 
@@ -1163,6 +1358,7 @@ async def dispatch_tool(
             enable_ecos=enable_ecos,
             enable_federal_register=enable_federal_register,
             enable_govinfo_cfr=enable_govinfo_cfr,
+            ecos_client=ecos_client,
             serpapi_client=serpapi_client,
             scholarapi_client=scholarapi_client,
         )
@@ -1202,8 +1398,8 @@ async def dispatch_tool(
         if status == "regulatory_primary_source":
             next_actions = [
                 "Use research for a full trust-graded regulatory pass.",
-                "Use search_federal_register for notice or rule discovery when you need expert control.",
-                "Use get_cfr_text when the reference points at an exact CFR citation.",
+                "If the reference points to an exact CFR citation, keep that citation in the next research query.",
+                "Inspect returned sources before treating the regulatory text as current and settled.",
             ]
         elif status in {"resolved", "multiple_candidates"}:
             next_actions = [
@@ -1240,9 +1436,16 @@ async def dispatch_tool(
                 if isinstance(paper, dict)
                 else []
             )
-            findings = _guided_findings_from_sources(sources)
-            candidate_leads = _guided_candidate_leads_from_sources(sources)
+            verified_findings = _guided_findings_from_sources(sources)
+            unverified_leads = _guided_unverified_leads_from_sources(sources)
+            evidence_gaps: list[str] = []
             status = "succeeded" if paper is not None else ("partial" if resolved.get("alternatives") else "abstained")
+            failure_summary = _guided_failure_summary(
+                failure_summary=None,
+                status=status,
+                sources=sources,
+                evidence_gaps=evidence_gaps,
+            )
             return {
                 "intent": intent,
                 "status": status,
@@ -1252,13 +1455,24 @@ async def dispatch_tool(
                     if isinstance(paper, dict)
                     else "The reference could not be resolved confidently."
                 ),
-                "findings": findings,
+                "verifiedFindings": verified_findings,
                 "sources": sources,
-                "candidateLeads": candidate_leads,
-                "trustSummary": _guided_trust_summary(sources, []),
+                "unverifiedLeads": unverified_leads,
+                "evidenceGaps": evidence_gaps,
+                "trustSummary": _guided_trust_summary(sources, evidence_gaps),
                 "coverage": None,
-                "failure": None,
-                "nextActions": list(resolved.get("nextActions") or []),
+                "failureSummary": failure_summary,
+                "resultMeaning": _guided_result_meaning(
+                    status=status,
+                    verified_findings=verified_findings,
+                    evidence_gaps=evidence_gaps,
+                    coverage=None,
+                    failure_summary=failure_summary,
+                ),
+                "nextActions": _guided_next_actions(
+                    search_session_id=cast(str | None, resolved.get("searchSessionId")),
+                    status=status,
+                ),
                 "clarification": None,
             }
 
@@ -1280,33 +1494,48 @@ async def dispatch_tool(
                 for index, source in enumerate(smart.get("structuredSources") or [], start=1)
                 if isinstance(source, dict)
             ]
-            findings = _guided_findings_from_sources(sources)
-            candidate_leads = [
+            verified_findings = _guided_findings_from_sources(sources)
+            evidence_gaps = list(smart.get("evidenceGaps") or [])
+            unverified_leads = [
                 _guided_source_record_from_structured_source(source, index=index)
                 for index, source in enumerate(smart.get("candidateLeads") or [], start=1)
                 if isinstance(source, dict)
-            ] or _guided_candidate_leads_from_sources(sources)
+            ] or _guided_unverified_leads_from_sources(sources)
             status = _guided_research_status(
                 intent=str(smart.get("strategyMetadata", {}).get("intent") or intent),
                 sources=sources,
-                findings=findings,
+                findings=verified_findings,
+                coverage_summary=cast(dict[str, Any] | None, smart.get("coverageSummary")),
                 failure_summary=cast(dict[str, Any] | None, smart.get("failureSummary")),
                 clarification=cast(dict[str, Any] | None, smart.get("clarification")),
+            )
+            failure_summary = _guided_failure_summary(
+                failure_summary=cast(dict[str, Any] | None, smart.get("failureSummary")),
+                status=status,
+                sources=sources,
+                evidence_gaps=evidence_gaps,
             )
             return {
                 "intent": str(smart.get("strategyMetadata", {}).get("intent") or intent),
                 "status": status,
                 "searchSessionId": smart.get("searchSessionId"),
-                "summary": _guided_summary(intent, status, findings, sources),
-                "findings": findings,
+                "summary": _guided_summary(intent, status, verified_findings, sources),
+                "verifiedFindings": verified_findings,
                 "sources": sources,
-                "candidateLeads": candidate_leads,
-                "trustSummary": _guided_trust_summary(sources, list(smart.get("evidenceGaps") or [])),
+                "unverifiedLeads": unverified_leads,
+                "evidenceGaps": evidence_gaps,
+                "trustSummary": _guided_trust_summary(sources, evidence_gaps),
                 "coverage": smart.get("coverageSummary"),
-                "failure": smart.get("failureSummary"),
+                "failureSummary": failure_summary,
+                "resultMeaning": _guided_result_meaning(
+                    status=status,
+                    verified_findings=verified_findings,
+                    evidence_gaps=evidence_gaps,
+                    coverage=cast(dict[str, Any] | None, smart.get("coverageSummary")),
+                    failure_summary=failure_summary,
+                ),
                 "nextActions": _guided_next_actions(
                     search_session_id=cast(str | None, smart.get("searchSessionId")),
-                    next_step_hint=cast(str | None, smart.get("nextStepHint")),
                     status=status,
                 ),
                 "clarification": smart.get("clarification"),
@@ -1327,29 +1556,44 @@ async def dispatch_tool(
             for index, paper in enumerate(raw.get("data") or [], start=1)
             if isinstance(paper, dict)
         ]
-        findings = _guided_findings_from_sources(sources)
-        candidate_leads = _guided_candidate_leads_from_sources(sources)
+        verified_findings = _guided_findings_from_sources(sources)
+        evidence_gaps = []
+        unverified_leads = _guided_unverified_leads_from_sources(sources)
         status = _guided_research_status(
             intent=intent,
             sources=sources,
-            findings=findings,
+            findings=verified_findings,
+            coverage_summary=cast(dict[str, Any] | None, raw.get("coverageSummary")),
             failure_summary=cast(dict[str, Any] | None, raw.get("failureSummary")),
             clarification=None,
+        )
+        failure_summary = _guided_failure_summary(
+            failure_summary=cast(dict[str, Any] | None, raw.get("failureSummary")),
+            status=status,
+            sources=sources,
+            evidence_gaps=evidence_gaps,
         )
         return {
             "intent": intent,
             "status": status,
             "searchSessionId": raw.get("searchSessionId"),
-            "summary": _guided_summary(intent, status, findings, sources),
-            "findings": findings,
+            "summary": _guided_summary(intent, status, verified_findings, sources),
+            "verifiedFindings": verified_findings,
             "sources": sources,
-            "candidateLeads": candidate_leads,
-            "trustSummary": _guided_trust_summary(sources, []),
+            "unverifiedLeads": unverified_leads,
+            "evidenceGaps": evidence_gaps,
+            "trustSummary": _guided_trust_summary(sources, evidence_gaps),
             "coverage": raw.get("coverageSummary"),
-            "failure": raw.get("failureSummary"),
+            "failureSummary": failure_summary,
+            "resultMeaning": _guided_result_meaning(
+                status=status,
+                verified_findings=verified_findings,
+                evidence_gaps=evidence_gaps,
+                coverage=cast(dict[str, Any] | None, raw.get("coverageSummary")),
+                failure_summary=failure_summary,
+            ),
             "nextActions": _guided_next_actions(
                 search_session_id=cast(str | None, raw.get("searchSessionId")),
-                next_step_hint=cast(str | None, raw.get("brokerMetadata", {}).get("nextStepHint")),
                 status=status,
             ),
             "clarification": None,
@@ -1358,6 +1602,22 @@ async def dispatch_tool(
     if name == "follow_up_research":
         follow_up_args = cast(FollowUpResearchArgs, TOOL_INPUT_MODELS[name].model_validate(arguments))
         if agentic_runtime is None:
+            evidence_gaps = [follow_up_args.question]
+            failure_summary = _guided_failure_summary(
+                failure_summary={
+                    "outcome": "total_failure",
+                    "whatFailed": "Grounded follow-up requires the smart runtime to be enabled.",
+                    "whatStillWorked": "The saved search session can still be inspected source by source.",
+                    "fallbackAttempted": False,
+                    "fallbackMode": None,
+                    "primaryPathFailureReason": "smart_runtime_unavailable",
+                    "completenessImpact": "No grounded synthesis was attempted.",
+                    "recommendedNextAction": "inspect_source",
+                },
+                status="partial",
+                sources=[],
+                evidence_gaps=evidence_gaps,
+            )
             return {
                 "searchSessionId": follow_up_args.search_session_id,
                 "answerStatus": "insufficient_evidence",
@@ -1366,20 +1626,23 @@ async def dispatch_tool(
                 "unsupportedAsks": [follow_up_args.question],
                 "followUpQuestions": [],
                 "sources": [],
-                "candidateLeads": [],
-                "trustSummary": _guided_trust_summary([], [follow_up_args.question]),
+                "unverifiedLeads": [],
+                "verifiedFindings": [],
+                "evidenceGaps": evidence_gaps,
+                "trustSummary": _guided_trust_summary([], evidence_gaps),
                 "coverage": None,
-                "failure": {
-                    "whatFailed": "Grounded follow-up requires the smart runtime to be enabled.",
-                    "whatStillWorked": "The saved search session can still be inspected source by source.",
-                    "fallbackAttempted": False,
-                    "completenessImpact": "No grounded synthesis was attempted.",
-                    "recommendedNextAction": "inspect_source",
-                },
-                "nextActions": [
-                    "Use inspect_source to inspect one source directly.",
-                    "Re-run research in an environment with the smart runtime enabled for grounded follow-up.",
-                ],
+                "failureSummary": failure_summary,
+                "resultMeaning": _guided_result_meaning(
+                    status="partial",
+                    verified_findings=[],
+                    evidence_gaps=evidence_gaps,
+                    coverage=None,
+                    failure_summary=failure_summary,
+                ),
+                "nextActions": _guided_next_actions(
+                    search_session_id=follow_up_args.search_session_id,
+                    status="partial",
+                ),
             }
         ask = await _dispatch_internal(
             "ask_result_set",
@@ -1393,12 +1656,21 @@ async def dispatch_tool(
             for index, source in enumerate(ask.get("structuredSources") or [], start=1)
             if isinstance(source, dict)
         ]
-        candidate_leads = [
+        evidence_gaps = list(ask.get("evidenceGaps") or [])
+        unverified_leads = [
             _guided_source_record_from_structured_source(source, index=index)
             for index, source in enumerate(ask.get("candidateLeads") or [], start=1)
             if isinstance(source, dict)
-        ] or _guided_candidate_leads_from_sources(sources)
+        ] or _guided_unverified_leads_from_sources(sources)
         answer_status = str(ask.get("answerStatus") or "answered")
+        guided_status = "partial" if answer_status == "insufficient_evidence" else answer_status
+        verified_findings = _guided_findings_from_sources(sources)
+        failure_summary = _guided_failure_summary(
+            failure_summary=cast(dict[str, Any] | None, ask.get("failureSummary")),
+            status=guided_status,
+            sources=sources,
+            evidence_gaps=evidence_gaps,
+        )
         return {
             "searchSessionId": follow_up_args.search_session_id,
             "answerStatus": answer_status,
@@ -1406,15 +1678,23 @@ async def dispatch_tool(
             "evidence": ask.get("evidence") or [],
             "unsupportedAsks": ask.get("unsupportedAsks") or [],
             "followUpQuestions": ask.get("followUpQuestions") or [],
+            "verifiedFindings": verified_findings,
             "sources": sources,
-            "candidateLeads": candidate_leads,
-            "trustSummary": _guided_trust_summary(sources, list(ask.get("evidenceGaps") or [])),
+            "unverifiedLeads": unverified_leads,
+            "evidenceGaps": evidence_gaps,
+            "trustSummary": _guided_trust_summary(sources, evidence_gaps),
             "coverage": ask.get("coverageSummary"),
-            "failure": ask.get("failureSummary"),
+            "failureSummary": failure_summary,
+            "resultMeaning": _guided_result_meaning(
+                status=guided_status,
+                verified_findings=verified_findings,
+                evidence_gaps=evidence_gaps,
+                coverage=cast(dict[str, Any] | None, ask.get("coverageSummary")),
+                failure_summary=failure_summary,
+            ),
             "nextActions": _guided_next_actions(
                 search_session_id=follow_up_args.search_session_id,
-                next_step_hint=None,
-                status=("partial" if answer_status == "insufficient_evidence" else answer_status),
+                status=guided_status,
             ),
         }
 
@@ -1433,10 +1713,9 @@ async def dispatch_tool(
         return {
             "searchSessionId": inspect_args.search_session_id,
             "source": source,
-            "directReadRecommendations": _direct_read_recommendations(source),
+            "directReadRecommendations": _direct_read_recommendations(source, tool_profile=tool_profile),
             "nextActions": _guided_next_actions(
                 search_session_id=inspect_args.search_session_id,
-                next_step_hint=None,
                 status="succeeded",
             ),
         }
@@ -1569,6 +1848,7 @@ async def dispatch_tool(
             enable_ecos=enable_ecos,
             enable_federal_register=enable_federal_register,
             enable_govinfo_cfr=enable_govinfo_cfr,
+            ecos_client=ecos_client,
             serpapi_client=serpapi_client,
             scholarapi_client=scholarapi_client,
         )
