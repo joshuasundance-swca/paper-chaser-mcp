@@ -7,11 +7,11 @@
     "url": "https://github.com/joshuasundance-swca/paper-chaser-mcp",
     "source": "github"
   },
-  "version": "0.2.1",
+  "version": "0.2.2",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/joshuasundance-swca/paper-chaser-mcp:0.2.1",
+      "identifier": "ghcr.io/joshuasundance-swca/paper-chaser-mcp:0.2.2",
       "transport": {
         "type": "stdio"
       }
