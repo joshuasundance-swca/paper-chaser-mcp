@@ -257,6 +257,10 @@ async def test_smart_search_and_follow_up_tools_work_with_deterministic_runtime(
     assert "resourceUris" in smart
     assert "agentHints" in smart
     assert smart["verifiedFindings"] or smart["likelyUnverified"]
+    assert smart["answerability"] == "limited"
+    assert smart["routingSummary"]["intent"] == "discovery"
+    assert smart["leads"]
+    assert smart["leads"] == smart["candidateLeads"]
     assert smart["structuredSources"]
     assert smart["coverageSummary"]["searchMode"] == "smart_literature_review"
 
@@ -586,6 +590,8 @@ async def test_search_papers_smart_regulatory_filters_unanchored_federal_registe
     assert "Designation of Critical Habitat for Polar Bear" in candidate_titles
     assert "Wood Stork Recovery Notice" in candidate_titles
     assert all(lead["topicalRelevance"] == "off_topic" for lead in payload["candidateLeads"])
+    assert all("leadReason" in lead for lead in payload["candidateLeads"])
+    assert all("whyNotVerified" in lead for lead in payload["candidateLeads"])
 
 
 @pytest.mark.asyncio
@@ -812,6 +818,284 @@ async def test_search_papers_smart_recovers_known_item_when_forced_regulatory_mo
         "retried with semantic known-item recovery" in warning.lower()
         for warning in payload["strategyMetadata"]["driftWarnings"]
     )
+
+
+@pytest.mark.asyncio
+async def test_search_papers_smart_regulatory_ecos_common_name_query_uses_species_anchor_variant() -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+
+    class CommonNameOnlyEcosClient:
+        async def search_species(self, *, query: str, limit: int = 10, match_mode: str = "auto") -> dict[str, Any]:
+            del limit, match_mode
+            if query.strip().lower() != "northern long-eared bat":
+                return {"query": query, "total": 0, "data": []}
+            return {
+                "query": query,
+                "total": 1,
+                "data": [
+                    {
+                        "speciesId": "sp-nleb",
+                        "commonName": "Northern long-eared bat",
+                        "scientificName": "Myotis septentrionalis",
+                        "profileUrl": "https://ecos.fws.gov/ecp/species/sp-nleb",
+                    }
+                ],
+            }
+
+        async def get_species_profile(self, *, species_id: str) -> dict[str, Any]:
+            assert species_id == "sp-nleb"
+            return {
+                "species": {
+                    "speciesId": "sp-nleb",
+                    "commonName": "Northern long-eared bat",
+                    "scientificName": "Myotis septentrionalis",
+                    "profileUrl": "https://ecos.fws.gov/ecp/species/sp-nleb",
+                },
+                "speciesEntities": [],
+            }
+
+        async def list_species_documents(
+            self, *, species_id: str, document_kinds: list[str] | None = None
+        ) -> dict[str, Any]:
+            del document_kinds
+            assert species_id == "sp-nleb"
+            return {
+                "speciesId": species_id,
+                "total": 1,
+                "data": [
+                    {
+                        "documentKind": "federal_register",
+                        "title": "Endangered Species Status for the Northern Long-Eared Bat",
+                        "url": "https://www.federalregister.gov/d/2022-25998",
+                        "documentDate": "2022-11-30",
+                        "frCitation": "87 FR 73488",
+                        "documentType": "Final Rule",
+                    }
+                ],
+            }
+
+    _, runtime = _deterministic_runtime(
+        semantic=semantic,
+        openalex=openalex,
+        ecos=CommonNameOnlyEcosClient(),
+        federal_register=None,
+        govinfo=None,
+        enable_ecos=True,
+        enable_federal_register=False,
+        enable_govinfo_cfr=False,
+    )
+
+    payload = await runtime.search_papers_smart(
+        query="northern long-eared bat ECOS species profile",
+        limit=5,
+    )
+
+    assert payload["strategyMetadata"]["intent"] == "regulatory"
+    assert payload["strategyMetadata"]["anchorType"] == "species_common_name"
+    assert payload["strategyMetadata"]["anchoredSubject"] == "Northern long-eared bat"
+    assert "No ECOS species dossier match was found for the query." not in payload["evidenceGaps"]
+    assert any(source["provider"] == "ecos" for source in payload["structuredSources"])
+
+
+@pytest.mark.asyncio
+async def test_search_papers_smart_regulatory_ecos_scientific_name_query_uses_species_anchor_variant() -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+
+    class ScientificNameOnlyEcosClient:
+        async def search_species(self, *, query: str, limit: int = 10, match_mode: str = "auto") -> dict[str, Any]:
+            del limit, match_mode
+            if query.strip() != "Myotis septentrionalis":
+                return {"query": query, "total": 0, "data": []}
+            return {
+                "query": query,
+                "total": 1,
+                "data": [
+                    {
+                        "speciesId": "sp-myotis",
+                        "commonName": "Northern long-eared bat",
+                        "scientificName": "Myotis septentrionalis",
+                        "profileUrl": "https://ecos.fws.gov/ecp/species/sp-myotis",
+                    }
+                ],
+            }
+
+        async def get_species_profile(self, *, species_id: str) -> dict[str, Any]:
+            assert species_id == "sp-myotis"
+            return {
+                "species": {
+                    "speciesId": "sp-myotis",
+                    "commonName": "Northern long-eared bat",
+                    "scientificName": "Myotis septentrionalis",
+                    "profileUrl": "https://ecos.fws.gov/ecp/species/sp-myotis",
+                },
+                "speciesEntities": [],
+            }
+
+        async def list_species_documents(
+            self, *, species_id: str, document_kinds: list[str] | None = None
+        ) -> dict[str, Any]:
+            del document_kinds
+            assert species_id == "sp-myotis"
+            return {"speciesId": species_id, "total": 0, "data": []}
+
+    _, runtime = _deterministic_runtime(
+        semantic=semantic,
+        openalex=openalex,
+        ecos=ScientificNameOnlyEcosClient(),
+        federal_register=None,
+        govinfo=None,
+        enable_ecos=True,
+        enable_federal_register=False,
+        enable_govinfo_cfr=False,
+    )
+
+    payload = await runtime.search_papers_smart(
+        query="Myotis septentrionalis endangered species profile ECOS",
+        limit=5,
+    )
+
+    assert payload["strategyMetadata"]["intent"] == "regulatory"
+    assert payload["strategyMetadata"]["anchorType"] == "species_scientific_name"
+    assert payload["strategyMetadata"]["anchoredSubject"] == "Northern long-eared bat"
+    assert "No ECOS species dossier match was found for the query." not in payload["evidenceGaps"]
+    assert any(source["provider"] == "ecos" for source in payload["structuredSources"])
+
+
+@pytest.mark.asyncio
+async def test_search_papers_smart_regulatory_cfr_current_text_demotes_history_to_leads() -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+
+    class FakeEcosClient:
+        async def search_species(self, *, query: str, limit: int = 10, match_mode: str = "auto") -> dict[str, Any]:
+            del query, limit, match_mode
+            return {"total": 0, "data": []}
+
+    class FakeFederalRegisterClient:
+        async def search_documents(self, *, query: str, limit: int = 10, **kwargs: Any) -> dict[str, Any]:
+            del query, limit, kwargs
+            return {
+                "total": 1,
+                "data": [
+                    {
+                        "documentNumber": "2024-12345",
+                        "title": "Critical Habitat Revision for California Condor",
+                        "documentType": "RULE",
+                        "publicationDate": "2024-02-01",
+                        "citation": "89 FR 83510",
+                        "htmlUrl": "https://www.federalregister.gov/d/2024-12345",
+                        "cfrReferences": ["50 CFR 17.95"],
+                    }
+                ],
+            }
+
+    class FakeGovInfoClient:
+        async def get_cfr_text(self, **kwargs: Any) -> dict[str, Any]:
+            assert kwargs["title_number"] == 50
+            assert kwargs["part_number"] == 17
+            return {
+                "titleNumber": 50,
+                "partNumber": 17,
+                "sectionNumber": "95",
+                "citation": "50 CFR 17.95",
+                "effectiveDate": "2024-02-01",
+                "sourceUrl": "https://www.govinfo.gov/app/details/CFR-2024-title50-vol1/CFR-2024-title50-vol1-sec17-95",
+                "markdown": "Authoritative CFR text",
+                "verificationStatus": "verified_primary_source",
+            }
+
+    _, runtime = _deterministic_runtime(
+        semantic=semantic,
+        openalex=openalex,
+        ecos=FakeEcosClient(),
+        federal_register=FakeFederalRegisterClient(),
+        govinfo=FakeGovInfoClient(),
+        enable_ecos=True,
+        enable_federal_register=True,
+        enable_govinfo_cfr=True,
+    )
+
+    payload = await runtime.search_papers_smart(
+        query="What does 50 CFR 17.95 say about California condor critical habitat?",
+        limit=5,
+    )
+
+    assert any(source["provider"] == "govinfo" for source in payload["structuredSources"])
+    assert not any(source["provider"] == "federal_register" for source in payload["structuredSources"])
+    assert any(lead["provider"] == "federal_register" for lead in payload["candidateLeads"])
+
+
+@pytest.mark.asyncio
+async def test_search_papers_smart_regulatory_agency_guidance_routes_authority_first_without_ecos() -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+
+    class FailingEcosClient:
+        async def search_species(self, *, query: str, limit: int = 10, match_mode: str = "auto") -> dict[str, Any]:
+            raise AssertionError(
+                f"ECOS should not be queried for FDA guidance title lookups: {query}, {limit}, {match_mode}"
+            )
+
+    class FakeFederalRegisterClient:
+        async def search_documents(self, *, query: str, limit: int = 10, **kwargs: Any) -> dict[str, Any]:
+            del limit, kwargs
+            assert "clinical decision support software guidance" in query.lower()
+            return {
+                "total": 1,
+                "data": [
+                    {
+                        "documentNumber": "2022-11111",
+                        "title": "Clinical Decision Support Software Guidance",
+                        "documentType": "NOTICE",
+                        "publicationDate": "2022-09-28",
+                        "citation": "87 FR 59000",
+                        "htmlUrl": "https://www.federalregister.gov/d/2022-11111",
+                    }
+                ],
+            }
+
+    class FakeGovInfoClient:
+        async def search_federal_register_documents(self, *, query: str, limit: int = 10) -> dict[str, Any]:
+            del limit
+            assert "clinical decision support software guidance" in query.lower()
+            return {
+                "total": 1,
+                "data": [
+                    {
+                        "title": "Clinical Decision Support Software Guidance for Industry and FDA Staff",
+                        "documentNumber": "2022-11111",
+                        "citation": "87 FR 59000",
+                        "publicationDate": "2022-09-28",
+                        "sourceUrl": "https://www.govinfo.gov/app/details/FR-2022-09-28/2022-11111",
+                        "verificationStatus": "verified_metadata",
+                        "note": "GovInfo regulatory guidance recovery hit.",
+                    }
+                ],
+            }
+
+    _, runtime = _deterministic_runtime(
+        semantic=semantic,
+        openalex=openalex,
+        ecos=FailingEcosClient(),
+        federal_register=FakeFederalRegisterClient(),
+        govinfo=FakeGovInfoClient(),
+        enable_ecos=True,
+        enable_federal_register=True,
+        enable_govinfo_cfr=True,
+    )
+
+    payload = await runtime.search_papers_smart(
+        query="Clinical Decision Support Software Guidance for Industry and Food and Drug Administration Staff",
+        limit=5,
+    )
+
+    assert payload["strategyMetadata"]["intent"] == "regulatory"
+    assert payload["strategyMetadata"]["anchorType"] == "agency_guidance_title"
+    assert "ecos" not in payload["coverageSummary"]["providersAttempted"]
+    assert "govinfo" in payload["coverageSummary"]["providersAttempted"]
+    assert any(source["provider"] == "govinfo" for source in payload["structuredSources"])
 
 
 @pytest.mark.asyncio
@@ -1077,6 +1361,9 @@ async def test_ask_result_set_runs_synthesis_and_scoring_concurrently(
 
     assert ask["answer"] == "Concurrent answer"
     assert ask["evidence"][0]["paper"]["paperId"] == "paper-1"
+    assert ask["evidence"][0]["evidenceId"] == "paper-1"
+    assert ask["answerability"] == "grounded"
+    assert ask["selectedEvidenceIds"] == ["paper-1"]
 
 
 @pytest.mark.asyncio
@@ -1260,6 +1547,8 @@ async def test_ask_result_set_abstains_when_question_is_unsupported() -> None:
     assert ask["candidateLeads"]
     assert ask["candidateLeads"][0]["sourceId"] == "paper-1"
     assert ask["candidateLeads"][0]["topicalRelevance"] == "off_topic"
+    assert ask["answerability"] == "limited"
+    assert ask["selectedEvidenceIds"] == []
     assert not any("Materials Design with OpenFOAM" in finding for finding in ask["verifiedFindings"])
 
 

@@ -441,6 +441,15 @@ class WorkspaceRegistry:
         record_metadata = dict(metadata or {})
         if alias_map := normalized_payload.get("sessionSourceAliases"):
             record_metadata["sessionSourceAliases"] = alias_map
+        for key in ("strategyMetadata", "routingSummary", "resultStatus", "answerability"):
+            value = normalized_payload.get(key)
+            if value not in (None, "", [], {}):
+                record_metadata.setdefault(key, value)
+        coverage_summary = normalized_payload.get("coverageSummary") or normalized_payload.get("coverage")
+        if isinstance(coverage_summary, dict) and coverage_summary:
+            record_metadata.setdefault("coverageSummary", coverage_summary)
+        if isinstance(normalized_payload.get("timeline"), dict):
+            record_metadata.setdefault("timeline", normalized_payload.get("timeline"))
         record = SearchSessionRecord(
             search_session_id=search_session_id or self._new_search_session_id(),
             source_tool=source_tool,
@@ -470,7 +479,7 @@ class WorkspaceRegistry:
         normalized_payload = dict(payload)
         alias_map: dict[str, str] = {}
         alias_index = 1
-        for key in ("sources", "structuredSources", "candidateLeads"):
+        for key in ("evidence", "leads", "sources", "structuredSources", "candidateLeads", "unverifiedLeads"):
             entries = normalized_payload.get(key)
             if not isinstance(entries, list):
                 continue
@@ -479,7 +488,7 @@ class WorkspaceRegistry:
                 if not isinstance(entry, dict):
                     updated_entries.append(entry)
                     continue
-                source_id = str(entry.get("sourceId") or "").strip()
+                source_id = str(entry.get("sourceId") or entry.get("evidenceId") or "").strip()
                 if not source_id:
                     updated_entries.append(entry)
                     continue

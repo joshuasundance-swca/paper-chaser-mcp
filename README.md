@@ -130,7 +130,7 @@ If you want a local env template for shell runs or Docker Compose, copy `.env.ex
 
 ```text
 research(query="retrieval-augmented generation for coding agents", limit=5)
-→ inspect status, summary, verifiedFindings, sources, trustSummary
+→ inspect resultStatus, answerability, summary, evidence, leads, routingSummary
 → save searchSessionId for follow-up or source inspection
 ```
 
@@ -157,14 +157,14 @@ resolve_reference(reference="Rockstrom et al planetary boundaries 2009 Nature 46
 ### 4. Inspect one source before citing it
 
 ```text
-inspect_source(searchSessionId="...", sourceId="...")
+inspect_source(searchSessionId="...", evidenceId="...")
 → inspect verificationStatus, topicalRelevance, canonicalUrl, directReadRecommendations
 → if searchSessionId is omitted and inference is ambiguous, rerun with an explicit saved session id
 ```
 
 ### 5. Handle abstention and clarification explicitly
 
-- If `research.status` is `abstained` or `needs_disambiguation`, do not invent
+- If `research.resultStatus` is `abstained` or `needs_disambiguation`, do not invent
   synthesis. Narrow with a concrete anchor: DOI, exact title, species name,
   agency, year, or venue.
 - If `follow_up_research.answerStatus` is `abstained` or
@@ -194,12 +194,13 @@ Treat these as the main guided contracts:
 
 | Field or pattern | Where it appears | What to do with it |
 | --- | --- | --- |
-| `status` | `research` | `succeeded`, `partial`, `needs_disambiguation`, `abstained`, `failed` |
-| `verifiedFindings` | `research`, `follow_up_research` | Use as trust-graded claims only when they are present |
-| `sources` | `research`, `follow_up_research` | Canonical source records for inspection and citation |
-| `unverifiedLeads` | `research`, `follow_up_research`, expert smart tools | Review weak, filtered, or off-topic leads without promoting them into verified evidence |
+| `resultStatus` | `research` | `succeeded`, `partial`, `needs_disambiguation`, `abstained`, `failed` |
+| `answerability` | `research`, `follow_up_research` | `grounded`, `limited`, `insufficient` |
+| `evidence` | `research`, `follow_up_research` | Canonical grounded source records for inspection and citation |
+| `leads` | `research`, `follow_up_research`, expert smart tools | Review weak, filtered, or off-topic leads without promoting them into grounded evidence |
 | `evidenceGaps` | `research`, `follow_up_research` | Treat as explicit limits on the current answer, not hidden caveats |
-| `trustSummary` | `research`, `follow_up_research` | Check on-topic vs weak/off-topic counts before relying on synthesis |
+| `routingSummary` | `research`, `follow_up_research` | Check intent, anchor, provider plan, and why the result is partial |
+| `coverageSummary` | `research`, `follow_up_research` | Check provider coverage and completeness before relying on synthesis |
 | `executionProvenance` | guided tools | Inspect which server policy, latency defaults, and fallback path produced the result |
 | `sessionResolution` | `follow_up_research`, `inspect_source` | Use when a session was inferred, repaired, missing, or ambiguous |
 | `sourceResolution` | `inspect_source` | Use when the requested source id was matched, unresolved, or needs a retry with available ids |
@@ -207,7 +208,7 @@ Treat these as the main guided contracts:
 | `nextActions` | guided tools | Treat as server-preferred recovery path on weak evidence |
 | `clarification` | `research` | Ask the user only when a bounded clarification request is provided |
 | `answerStatus` | `follow_up_research` | `answered`, `abstained`, `insufficient_evidence` |
-| `sourceId` | `sources[*]` | Pass to `inspect_source` for per-source provenance checks |
+| `evidenceId` | `evidence[*]` | Pass to `inspect_source` for per-source provenance checks |
 | `runtimeSummary` | `get_runtime_status` and expert diagnostics | Confirm effective profile, smart provider state, and warnings |
 
 ## Deferred export design
@@ -495,7 +496,7 @@ control.
 
 | Tool | Description |
 | --- | --- |
-| `search_papers_smart` | Concept-level discovery with query expansion, multi-provider fusion, reranking, reusable `searchSessionId`, and trust-graded sections (`verifiedFindings`, `likelyUnverified`, `evidenceGaps`, `structuredSources`, `coverageSummary`, `failureSummary`). In `auto` mode it can also route clearly regulatory asks into a primary-source timeline. `latencyProfile` defaults to `deep` for highest-quality expert work; use `balanced` for lower latency and reserve `fast` for smoke tests. Optional `providerBudget` remains available for advanced clients. |
+| `search_papers_smart` | Concept-level discovery with query expansion, multi-provider fusion, reranking, reusable `searchSessionId`, and an evidence-first expert contract (`resultStatus`, `answerability`, `routingSummary`, `evidence`, `leads`, `evidenceGaps`, `structuredSources`, `coverageSummary`, `failureSummary`). Legacy trust fields remain available as compatibility views. In `auto` mode it can also route clearly regulatory asks into a primary-source timeline. `latencyProfile` defaults to `deep` for highest-quality expert work; use `balanced` for lower latency and reserve `fast` for smoke tests. Optional `providerBudget` remains available for advanced clients. |
 | `ask_result_set` | Grounded QA, claim checks, and comparisons over a saved `searchSessionId`. |
 | `map_research_landscape` | Cluster a saved result set into themes, gaps, disagreements, and next-search suggestions. |
 | `expand_research_graph` | Expand paper anchors or a saved session into a citation/reference/author graph with frontier ranking. |

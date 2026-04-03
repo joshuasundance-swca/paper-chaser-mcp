@@ -221,8 +221,9 @@ important as functional pass/fail results.
 
 2. **Guided discovery** (all modes)
    - Call `research(query="graph neural networks", limit=5)`.
-   - Record `status`, `searchSessionId`, `summary`, `trustSummary`, the first
-  few `sources`, any `unverifiedLeads`, and `executionProvenance`.
+   - Record `resultStatus`, `answerability`, `searchSessionId`, `summary`,
+     `routingSummary`, `coverageSummary`, the first few `evidence`, any
+     `leads`, and `executionProvenance`.
    - Verify the response gives a clear next step through `nextActions` or
      `clarification`.
    - **UX check**: Could a low-context agent understand what to do next from the
@@ -238,8 +239,9 @@ important as functional pass/fail results.
      raw tools, or did it still require too much manual interpretation?
 
 4. **Source-level audit** (all modes)
-   - Call `inspect_source(searchSessionId=..., sourceId=...)` using one source
-     from the guided result.
+   - Call `inspect_source(searchSessionId=..., evidenceId=...)` using one source
+     from the guided result when possible. `sourceId` remains acceptable as a
+     compatibility fallback.
    - Record `verificationStatus`, `topicalRelevance`, `canonicalUrl`,
      `retrievedUrl`, `sourceResolution`, and any direct-read recommendations.
    - **UX check**: Is it obvious how to inspect one source before citing it, or
@@ -258,10 +260,12 @@ important as functional pass/fail results.
    - Call `research(query="regulatory history of California condor under 50 CFR 17.95", limit=5)`.
    - Confirm the response prefers trustworthy primary-source behavior or safe
      abstention.
+   - Confirm off-topic or weak material stays in `leads` rather than grounded
+     `evidence`.
    - Unrelated wildlife notices must not appear as verified findings or
      timeline events.
-   - If `unverifiedLeads` are present, verify they are clearly separated from
-     trusted findings.
+   - If compatibility `unverifiedLeads` are present, verify they stay aligned
+     with `leads` and remain clearly separated from grounded support.
    - **UX check**: Does the response make the regulatory confidence state
      obvious, or could a low-context user mistake unverified leads for verified
      evidence?

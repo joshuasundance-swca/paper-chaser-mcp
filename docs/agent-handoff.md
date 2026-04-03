@@ -15,9 +15,10 @@ next steps without re-discovering project state.
   `PAPER_CHASER_TOOL_PROFILE=expert`. That profile exposes the guided tools plus
   raw/provider-specific families, smart graph tools, and direct regulatory
   primary-source tools.
-- Guided responses are now **trust-gated**, not just trust-labeled. Verified
-  findings must be on-topic and backed by verified evidence. Weak, filtered, or
-  off-topic items belong in `unverifiedLeads`, not `verifiedFindings`.
+- Guided responses are now **trust-gated**, not just trust-labeled. Grounded
+  support belongs in `evidence`; weak, filtered, or off-topic items belong in
+  `leads`. Legacy `verifiedFindings` and `unverifiedLeads` are compatibility
+  views, not the primary contract.
 - Guided follow-up is now **abstention-safe**. `follow_up_research` returns
   `answerStatus=answered|abstained|insufficient_evidence` and should not emit
   answer-shaped filler when evidence is weak.
@@ -31,7 +32,7 @@ next steps without re-discovering project state.
 - Regulatory routing is now **subject-anchored**. `research` should either
   build a trustworthy primary-source trail or return
   `needs_disambiguation` / `abstained`; unrelated wildlife notices should not
-  appear as verified findings or timeline events.
+  appear in grounded `evidence` or timeline events.
 - Runtime reporting is now **internally truthful**. `get_runtime_status` and
   expert diagnostics should agree on `effectiveProfile`, smart-provider state,
   and active/disabled provider sets. `configuredSmartProvider` is the configured

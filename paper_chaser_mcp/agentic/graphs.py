@@ -157,20 +157,91 @@ _COMPARISON_FOCUS_STOPWORDS = _THEME_LABEL_STOPWORDS | {
 }
 _REGULATORY_SUBJECT_STOPWORDS = {
     "act",
+    "administration",
+    "agency",
+    "analysis",
+    "code",
+    "codified",
+    "current",
+    "decision",
     "critical",
+    "document",
+    "documents",
     "designation",
+    "drug",
     "endangered",
+    "fda",
     "federal",
+    "final",
+    "food",
+    "functions",
+    "guidance",
     "habitat",
     "history",
+    "industry",
+    "listed",
+    "listing",
     "notice",
+    "part",
+    "plants",
+    "profile",
+    "profiles",
     "recovery",
     "register",
     "regulatory",
+    "review",
     "rule",
+    "section",
+    "software",
     "species",
     "status",
+    "text",
+    "threatened",
+    "title",
     "under",
+    "wildlife",
+}
+_AGENCY_GUIDANCE_TERMS = {
+    "guidance",
+    "guideline",
+    "policy",
+    "staff",
+}
+_AGENCY_AUTHORITY_TERMS = {
+    "agency",
+    "cdc",
+    "cms",
+    "epa",
+    "fda",
+    "food and drug administration",
+    "hhs",
+    "nih",
+    "usda",
+}
+_SPECIES_QUERY_NOISE_TERMS = {
+    "about",
+    "critical",
+    "current",
+    "cfr",
+    "dossier",
+    "ecos",
+    "endangered",
+    "federal",
+    "final",
+    "history",
+    "listing",
+    "plants",
+    "profile",
+    "register",
+    "regulatory",
+    "rule",
+    "say",
+    "species",
+    "status",
+    "text",
+    "threatened",
+    "under",
+    "what",
     "wildlife",
 }
 _CFR_DOC_TYPE_GENERIC = {
@@ -1013,6 +1084,25 @@ class AgenticRuntime:
             )
             for hit in smart_hits
         ]
+        evidence_records = _evidence_from_source_records(source_records)
+        lead_records = _candidate_leads_from_source_records(source_records)
+        coverage_summary = _smart_coverage_summary(
+            providers_used=providers_used,
+            provider_outcomes=provider_outcomes,
+            search_mode="smart_literature_review",
+            drift_warnings=[*drift_warnings, *provider_fallback_warnings],
+        )
+        result_status = "succeeded" if smart_hits else "partial"
+        source_records = [
+            _source_record_from_paper(
+                hit.paper,
+                note=hit.why_matched,
+                topical_relevance=hit.topical_relevance,
+            )
+            for hit in smart_hits
+        ]
+        lead_records = _candidate_leads_from_source_records(source_records)
+        result_status = "partial" if smart_hits else "abstained"
         response = SmartSearchResponse(
             results=smart_hits,
             searchSessionId=search_session_id or "pending",
@@ -1029,25 +1119,34 @@ class AgenticRuntime:
             resourceUris=[],
             verifiedFindings=_verified_findings_from_source_records(source_records),
             likelyUnverified=_likely_unverified_from_source_records(source_records),
-            candidateLeads=_candidate_leads_from_source_records(source_records),
+            answerability=_answerability_from_source_records(
+                result_status=result_status,
+                evidence=evidence_records,
+                leads=lead_records,
+                evidence_gaps=list(strategy_metadata.drift_warnings),
+            ),
+            routingSummary=_routing_summary_from_strategy(
+                strategy_metadata=strategy_metadata,
+                coverage_summary=coverage_summary,
+                result_status=result_status,
+                evidence_gaps=list(strategy_metadata.drift_warnings),
+            ),
+            evidence=evidence_records,
+            leads=lead_records,
+            candidateLeads=lead_records,
             evidenceGaps=list(strategy_metadata.drift_warnings),
             structuredSources=source_records,
-            coverageSummary=_smart_coverage_summary(
-                providers_used=providers_used,
-                provider_outcomes=provider_outcomes,
-                search_mode="smart_literature_review",
-                drift_warnings=[*drift_warnings, *provider_fallback_warnings],
-            ),
+            coverageSummary=coverage_summary,
             failureSummary=_smart_failure_summary(
                 provider_outcomes=provider_outcomes,
                 fallback_attempted=bool(provider_fallback_warnings or rejected_speculative),
             ),
-            resultStatus=("succeeded" if smart_hits else "partial"),
+            resultStatus=result_status,
             hasInspectableSources=_has_inspectable_sources(source_records),
             bestNextInternalAction=_best_next_internal_action(
                 intent=planner.intent,
                 has_sources=bool(source_records),
-                result_status=("succeeded" if smart_hits else "partial"),
+                result_status=result_status,
             ),
         )
         if provider_fallback_warnings:
@@ -1146,7 +1245,7 @@ class AgenticRuntime:
             total=3,
             message="Retrieving evidence from the saved result set",
         )
-        evidence_papers = (
+        selected_papers = (
             await self._workspace_registry.asearch_papers(
                 search_session_id,
                 question,
@@ -1157,6 +1256,45 @@ class AgenticRuntime:
             )
             or record.papers[:top_k]
         )
+        evidence_sources = [
+            source
+            for key in ("evidence", "structuredSources", "sources")
+            for source in (record.payload.get(key) or [])
+            if isinstance(source, dict)
+        ]
+        source_by_id: dict[str, dict[str, Any]] = {}
+        source_by_title: dict[str, dict[str, Any]] = {}
+        for source in evidence_sources:
+            source_id = str(source.get("sourceId") or source.get("evidenceId") or "").strip()
+            if source_id and source_id not in source_by_id:
+                source_by_id[source_id] = source
+            title_key = str(source.get("title") or "").strip().lower()
+            if title_key and title_key not in source_by_title:
+                source_by_title[title_key] = source
+        evidence_papers: list[dict[str, Any]] = []
+        for paper in selected_papers:
+            enriched_paper = dict(paper)
+            source_record = (
+                source_by_id.get(str(paper.get("paperId") or "").strip())
+                or source_by_id.get(str(paper.get("sourceId") or "").strip())
+                or source_by_id.get(str(paper.get("canonicalId") or "").strip())
+                or source_by_title.get(str(paper.get("title") or "").strip().lower())
+            )
+            if source_record is not None:
+                field_map = {
+                    "sourceId": "sourceId",
+                    "sourceAlias": "sourceAlias",
+                    "provider": "source",
+                    "sourceType": "sourceType",
+                    "verificationStatus": "verificationStatus",
+                    "accessStatus": "accessStatus",
+                    "canonicalUrl": "canonicalUrl",
+                    "retrievedUrl": "retrievedUrl",
+                }
+                for source_field, paper_field in field_map.items():
+                    if source_record.get(source_field) and not enriched_paper.get(paper_field):
+                        enriched_paper[paper_field] = source_record.get(source_field)
+            evidence_papers.append(enriched_paper)
         evidence_texts = [_paper_text(paper) for paper in evidence_papers]
         synthesis, evidence_scores = await asyncio.gather(
             provider_bundle.aanswer_question(
@@ -1171,6 +1309,8 @@ class AgenticRuntime:
         )
         evidence = [
             EvidenceItem(
+                evidenceId=str(paper.get("sourceId") or paper.get("paperId") or paper.get("canonicalId") or "").strip()
+                or None,
                 paper=Paper.model_validate(paper),
                 excerpt=str(paper.get("abstract") or paper.get("title") or "")[:240],
                 whyRelevant=_why_matched(
@@ -1196,6 +1336,17 @@ class AgenticRuntime:
         unsupported_asks = list(synthesis.get("unsupportedAsks") or [])
         follow_up_questions = list(synthesis.get("followUpQuestions") or [])
         normalized_confidence = provider_bundle.normalize_confidence(synthesis.get("confidence"))
+        valid_evidence_ids = {
+            str(item.evidence_id or item.paper.paper_id or item.paper.canonical_id or "").strip()
+            for item in evidence
+            if str(item.evidence_id or item.paper.paper_id or item.paper.canonical_id or "").strip()
+        }
+        selected_evidence_ids = [
+            str(identifier).strip()
+            for identifier in synthesis.get("selectedEvidenceIds") or []
+            if str(identifier).strip() in valid_evidence_ids
+        ]
+        selected_lead_ids = [str(identifier).strip() for identifier in synthesis.get("selectedLeadIds") or []]
 
         source_records: list[StructuredSourceRecord] = []
         on_topic_evidence = 0
@@ -1229,6 +1380,24 @@ class AgenticRuntime:
         else:
             answer_status = "answered"
             answer_payload = answer_text
+        if answer_status == "answered" and not selected_evidence_ids and evidence and answer_text:
+            selected_evidence_ids = [
+                identifier
+                for identifier in (
+                    str(item.evidence_id or item.paper.paper_id or item.paper.canonical_id or "").strip()
+                    for item in evidence[: min(3, len(evidence))]
+                )
+                if identifier
+            ]
+        answerability = str(synthesis.get("answerability") or "limited")
+        if answerability not in {"grounded", "limited", "insufficient"}:
+            answerability = "limited"
+        if answer_status == "answered" and selected_evidence_ids:
+            answerability = "grounded"
+        elif answer_status == "insufficient_evidence":
+            answerability = "insufficient"
+        elif answer_status == "abstained" or not selected_evidence_ids:
+            answerability = "limited" if (evidence or unsupported_asks or follow_up_questions) else "insufficient"
         await self._emit_tool_progress(
             ctx=ctx,
             progress=2,
@@ -1250,6 +1419,9 @@ class AgenticRuntime:
             evidence=evidence,
             unsupportedAsks=unsupported_asks,
             followUpQuestions=follow_up_questions,
+            answerability=cast(Any, answerability),
+            selectedEvidenceIds=selected_evidence_ids,
+            selectedLeadIds=selected_lead_ids,
             confidence=normalized_confidence,
             searchSessionId=search_session_id,
             agentHints=build_agent_hints("ask_result_set", {}),
@@ -1839,6 +2011,8 @@ class AgenticRuntime:
         candidate_leads: list[StructuredSourceRecord] = []
         subject: str | None = None
         current_text_requested = _is_current_cfr_text_request(query)
+        history_requested = _query_requests_regulatory_history(query)
+        agency_guidance_mode = _is_agency_guidance_query(query)
         govinfo_matched = False
         federal_register_matched = False
 
@@ -1854,6 +2028,60 @@ class AgenticRuntime:
         cfr_citation = _format_cfr_citation(cfr_request)
         anchored_subject_terms: set[str] = set()
         filtered_document_count = 0
+        species_anchor_type: str | None = None
+
+        if agency_guidance_mode and self._enable_govinfo_cfr and self._govinfo_client is not None and not cfr_request:
+            attempted.append("govinfo")
+            started = time.perf_counter()
+            try:
+                govinfo_search = await self._govinfo_client.search_federal_register_documents(
+                    query=query,
+                    limit=min(max(limit, 5), 10),
+                )
+                stage_timings_ms["regulatoryGovInfoSearch"] = int((time.perf_counter() - started) * 1000)
+                documents = list(govinfo_search.get("data") or [])
+                if documents:
+                    succeeded.append("govinfo")
+                    for document in documents[:limit]:
+                        if not isinstance(document, dict):
+                            continue
+                        structured_sources.append(
+                            _source_record_from_regulatory_document(
+                                document,
+                                provider="govinfo",
+                                topical_relevance="on_topic",
+                            )
+                        )
+                        govinfo_matched = True
+                        subject = str(subject or document.get("title") or query)
+                        timeline_events.append(
+                            RegulatoryTimelineEvent(
+                                eventType="agency_guidance",
+                                eventDate=document.get("publicationDate"),
+                                title=str(document.get("title") or document.get("citation") or "GovInfo document"),
+                                citation=str(document.get("citation") or document.get("documentNumber") or "") or None,
+                                canonicalUrl=document.get("sourceUrl"),
+                                provider="govinfo",
+                                verificationStatus=cast(
+                                    VerificationStatus,
+                                    document.get("verificationStatus") or "verified_metadata",
+                                ),
+                                note=str(document.get("note") or "GovInfo guidance/title search hit."),
+                            )
+                        )
+                else:
+                    zero_results.append("govinfo")
+            except Exception as exc:
+                stage_timings_ms["regulatoryGovInfoSearch"] = int((time.perf_counter() - started) * 1000)
+                failed.append("govinfo")
+                provider_outcomes.append(
+                    {
+                        "provider": "govinfo",
+                        "endpoint": "search_federal_register_documents",
+                        "statusBucket": "provider_error",
+                        "error": str(exc),
+                    }
+                )
         if cfr_request and self._enable_govinfo_cfr and self._govinfo_client is not None:
             attempted.append("govinfo")
             started = time.perf_counter()
@@ -1898,15 +2126,21 @@ class AgenticRuntime:
                 )
 
         species_hit: dict[str, Any] | None = None
-        if self._enable_ecos and self._ecos_client is not None:
+        if self._enable_ecos and self._ecos_client is not None and not agency_guidance_mode:
             attempted.append("ecos")
             started = time.perf_counter()
             try:
-                species_search = await self._ecos_client.search_species(
-                    query=query,
-                    limit=min(limit, 5),
-                    match_mode="auto",
-                )
+                species_search: dict[str, Any] = {"data": []}
+                for species_query, inferred_anchor_type in _ecos_query_variants(query):
+                    species_search = await self._ecos_client.search_species(
+                        query=species_query,
+                        limit=min(limit, 5),
+                        match_mode="auto",
+                    )
+                    species_data = list(species_search.get("data") or [])
+                    if species_data:
+                        species_anchor_type = inferred_anchor_type
+                        break
                 stage_timings_ms["regulatoryEcosSearch"] = int((time.perf_counter() - started) * 1000)
                 species_data = list(species_search.get("data") or [])
                 if species_data:
@@ -1919,6 +2153,28 @@ class AgenticRuntime:
                         )
                         subject = str(
                             species_hit.get("commonName") or species_hit.get("scientificName") or subject or query
+                        )
+                        structured_sources.append(
+                            _source_record_from_regulatory_document(
+                                {
+                                    "title": (
+                                        f"ECOS species profile: "
+                                        f"{
+                                            (
+                                                species_hit.get('commonName')
+                                                or species_hit.get('scientificName')
+                                                or 'Species'
+                                            )
+                                        }"
+                                    ),
+                                    "url": species_hit.get("profileUrl"),
+                                    "speciesId": species_hit.get("speciesId"),
+                                    "documentType": "Species Profile",
+                                    "verificationStatus": "verified_metadata",
+                                },
+                                provider="ecos",
+                                topical_relevance="on_topic",
+                            )
                         )
                         profile = await self._ecos_client.get_species_profile(species_id=species_hit["speciesId"])
                         documents = await self._ecos_client.list_species_documents(species_id=species_hit["speciesId"])
@@ -2021,6 +2277,26 @@ class AgenticRuntime:
                                 }
                             )
                             candidate_leads.append(off_topic_lead)
+                            continue
+                        if cfr_request and govinfo_matched and current_text_requested and not history_requested:
+                            context_lead = _source_record_from_regulatory_document(
+                                document,
+                                provider="federal_register",
+                                topical_relevance="weak_match",
+                            )
+                            context_note = (
+                                "Demoted to background context because authoritative current CFR text was already "
+                                "retrieved from GovInfo."
+                            )
+                            existing_note = context_lead.note
+                            context_lead = context_lead.model_copy(
+                                update={
+                                    "note": (
+                                        f"{context_note} {existing_note}".strip() if existing_note else context_note
+                                    )
+                                }
+                            )
+                            candidate_leads.append(context_lead)
                             continue
                         structured_sources.append(
                             _source_record_from_regulatory_document(
@@ -2145,6 +2421,11 @@ class AgenticRuntime:
                 "No primary-source regulatory timeline could be reconstructed from the "
                 "currently enabled regulatory providers."
             )
+        if agency_guidance_mode and not structured_sources:
+            evidence_gaps.append(
+                "No authoritative agency guidance match was found from "
+                "GovInfo/Federal Register for the requested title."
+            )
         if filtered_document_count > 0:
             evidence_gaps.append(
                 f"Filtered {filtered_document_count} Federal Register hit(s) that did not match the anchored "
@@ -2213,16 +2494,22 @@ class AgenticRuntime:
             else ("partial" if structured_sources else "abstained")
         )
         anchor_type = (
-            "cfr_citation"
-            if cfr_request
+            "agency_guidance_title"
+            if agency_guidance_mode
             else (
-                "ecos_species"
-                if species_hit is not None
-                else ("regulatory_subject_terms" if anchored_subject_terms else None)
+                "cfr_citation"
+                if cfr_request
+                else (
+                    (species_anchor_type or "species_common_name")
+                    if species_hit is not None
+                    else ("regulatory_subject_terms" if anchored_subject_terms else None)
+                )
             )
         )
         anchor_strength: Literal["high", "medium", "low"] | None = (
-            "high" if cfr_request or species_hit is not None else ("medium" if anchored_subject_terms else None)
+            "high"
+            if cfr_request or species_hit is not None or agency_guidance_mode
+            else ("medium" if anchored_subject_terms else None)
         )
         strategy_metadata = SearchStrategyMetadata(
             intent=planner_intent,
@@ -2259,6 +2546,12 @@ class AgenticRuntime:
             ),
             **provider_selection,
         )
+        evidence_records = _evidence_from_source_records(structured_sources)
+        lead_records = _records_with_lead_reasons(
+            _dedupe_structured_sources([*candidate_leads, *_candidate_leads_from_source_records(structured_sources)])[
+                : max(limit, 6)
+            ]
+        )
         response = SmartSearchResponse(
             results=[],
             searchSessionId=search_session_id or "pending",
@@ -2286,9 +2579,21 @@ class AgenticRuntime:
             resourceUris=[],
             verifiedFindings=_verified_findings_from_source_records(structured_sources),
             likelyUnverified=_likely_unverified_from_source_records(structured_sources),
-            candidateLeads=_dedupe_structured_sources(
-                [*candidate_leads, *_candidate_leads_from_source_records(structured_sources)]
-            )[: max(limit, 6)],
+            answerability=_answerability_from_source_records(
+                result_status=result_status,
+                evidence=evidence_records,
+                leads=lead_records,
+                evidence_gaps=evidence_gaps,
+            ),
+            routingSummary=_routing_summary_from_strategy(
+                strategy_metadata=strategy_metadata,
+                coverage_summary=coverage_summary,
+                result_status=result_status,
+                evidence_gaps=evidence_gaps,
+            ),
+            evidence=evidence_records,
+            leads=lead_records,
+            candidateLeads=lead_records,
             evidenceGaps=evidence_gaps,
             structuredSources=structured_sources[: max(limit, len(structured_sources))],
             coverageSummary=coverage_summary,
@@ -2468,6 +2773,16 @@ class AgenticRuntime:
             bestNextInternalAction="get_paper_details",
             **provider_selection,
         )
+        source_records = [
+            _source_record_from_paper(
+                hit.paper,
+                note=hit.why_matched,
+                topical_relevance=hit.topical_relevance,
+            )
+            for hit in [hit][:limit]
+        ]
+        evidence_records = _evidence_from_source_records(source_records)
+        lead_records = _candidate_leads_from_source_records(source_records)
         response = SmartSearchResponse(
             results=[hit][:limit],
             searchSessionId=search_session_id or "pending",
@@ -2480,6 +2795,24 @@ class AgenticRuntime:
                 {"paperId": known_item.get("paperId")},
             ),
             resourceUris=[],
+            verifiedFindings=_verified_findings_from_source_records(source_records),
+            likelyUnverified=_likely_unverified_from_source_records(source_records),
+            answerability=_answerability_from_source_records(
+                result_status="succeeded",
+                evidence=evidence_records,
+                leads=lead_records,
+                evidence_gaps=[],
+            ),
+            routingSummary=_routing_summary_from_strategy(
+                strategy_metadata=strategy_metadata,
+                coverage_summary=None,
+                result_status="succeeded",
+                evidence_gaps=[],
+            ),
+            evidence=evidence_records,
+            leads=lead_records,
+            candidateLeads=lead_records,
+            structuredSources=source_records,
             resultStatus="succeeded",
             hasInspectableSources=True,
             bestNextInternalAction="get_paper_details",
@@ -2713,6 +3046,16 @@ class AgenticRuntime:
             bestNextInternalAction=("ask_result_set" if smart_hits else "search_papers_smart"),
             **provider_selection,
         )
+        source_records = [
+            _source_record_from_paper(
+                hit.paper,
+                note=hit.why_matched,
+                topical_relevance=hit.topical_relevance,
+            )
+            for hit in smart_hits
+        ]
+        lead_records = _candidate_leads_from_source_records(source_records)
+        result_status = "partial" if smart_hits else "abstained"
         response = SmartSearchResponse(
             results=smart_hits,
             searchSessionId=search_session_id or "pending",
@@ -2727,12 +3070,31 @@ class AgenticRuntime:
                 {"brokerMetadata": {"resultQuality": "low_relevance" if not smart_hits else "unknown"}},
             ),
             resourceUris=[],
-            resultStatus=("partial" if smart_hits else "abstained"),
+            verifiedFindings=_verified_findings_from_source_records(source_records),
+            likelyUnverified=_likely_unverified_from_source_records(source_records),
+            answerability=_answerability_from_source_records(
+                result_status=result_status,
+                evidence=[],
+                leads=lead_records,
+                evidence_gaps=list(strategy_metadata.drift_warnings),
+            ),
+            routingSummary=_routing_summary_from_strategy(
+                strategy_metadata=strategy_metadata,
+                coverage_summary=None,
+                result_status=result_status,
+                evidence_gaps=list(strategy_metadata.drift_warnings),
+            ),
+            evidence=[],
+            leads=lead_records,
+            candidateLeads=lead_records,
+            evidenceGaps=list(strategy_metadata.drift_warnings),
+            structuredSources=source_records,
+            resultStatus=result_status,
             hasInspectableSources=bool(smart_hits),
             bestNextInternalAction=_best_next_internal_action(
                 intent=planner.intent,
                 has_sources=bool(smart_hits),
-                result_status=("partial" if smart_hits else "abstained"),
+                result_status=result_status,
             ),
         )
         if provider_fallback_warnings:
@@ -3074,6 +3436,35 @@ def _likely_unverified_from_source_records(records: list[StructuredSourceRecord]
     return leads[:6]
 
 
+def _lead_reason_for_source_record(record: StructuredSourceRecord) -> str:
+    if record.topical_relevance == "off_topic":
+        return "Excluded from grounded evidence because it drifted off the anchored subject."
+    if record.verification_status not in {"verified_primary_source", "verified_metadata"}:
+        return "Retained as a lead because the source is not yet verified strongly enough to support a grounded answer."
+    return "Retained as a lead because it is related context, but not strong enough to ground the answer on its own."
+
+
+def _records_with_lead_reasons(records: list[StructuredSourceRecord]) -> list[StructuredSourceRecord]:
+    enriched: list[StructuredSourceRecord] = []
+    for record in records:
+        reason = _lead_reason_for_source_record(record)
+        why_not_verified = record.why_not_verified
+        if why_not_verified is None:
+            if record.verification_status not in {"verified_primary_source", "verified_metadata"}:
+                why_not_verified = f"Verification status was {record.verification_status or 'unverified'}."
+            elif record.topical_relevance and record.topical_relevance != "on_topic":
+                why_not_verified = f"Topical relevance was {record.topical_relevance}."
+        enriched.append(
+            record.model_copy(
+                update={
+                    "lead_reason": record.lead_reason or reason,
+                    "why_not_verified": why_not_verified,
+                }
+            )
+        )
+    return enriched
+
+
 def _candidate_leads_from_source_records(records: list[StructuredSourceRecord]) -> list[StructuredSourceRecord]:
     leads: list[StructuredSourceRecord] = []
     for record in records:
@@ -3083,7 +3474,61 @@ def _candidate_leads_from_source_records(records: list[StructuredSourceRecord]) 
         ):
             continue
         leads.append(record)
-    return _dedupe_structured_sources(leads)[:6]
+    return _records_with_lead_reasons(_dedupe_structured_sources(leads)[:6])
+
+
+def _evidence_from_source_records(records: list[StructuredSourceRecord]) -> list[StructuredSourceRecord]:
+    evidence: list[StructuredSourceRecord] = []
+    for record in records:
+        if record.verification_status not in {"verified_primary_source", "verified_metadata"}:
+            continue
+        if record.topical_relevance != "on_topic":
+            continue
+        evidence.append(record)
+    return _dedupe_structured_sources(evidence)[:6]
+
+
+def _answerability_from_source_records(
+    *,
+    result_status: str,
+    evidence: list[StructuredSourceRecord],
+    leads: list[StructuredSourceRecord],
+    evidence_gaps: list[str],
+) -> Literal["grounded", "limited", "insufficient"]:
+    if result_status == "succeeded" and evidence:
+        return "grounded"
+    if evidence or leads or evidence_gaps:
+        return "limited"
+    return "insufficient"
+
+
+def _routing_summary_from_strategy(
+    *,
+    strategy_metadata: SearchStrategyMetadata,
+    coverage_summary: CoverageSummary | None,
+    result_status: str,
+    evidence_gaps: list[str],
+) -> dict[str, Any]:
+    providers_attempted = list((coverage_summary.providers_attempted if coverage_summary else []) or [])
+    providers_succeeded = list((coverage_summary.providers_succeeded if coverage_summary else []) or [])
+    providers_failed = list((coverage_summary.providers_failed if coverage_summary else []) or [])
+    provider_plan = list(
+        cast(list[str] | None, getattr(strategy_metadata, "provider_plan", None))
+        or strategy_metadata.providers_used
+        or []
+    )
+    return {
+        "intent": strategy_metadata.intent,
+        "decisionConfidence": strategy_metadata.routing_confidence or strategy_metadata.intent_confidence,
+        "anchorType": strategy_metadata.anchor_type,
+        "anchorValue": strategy_metadata.anchored_subject,
+        "providerPlan": provider_plan,
+        "providersAttempted": providers_attempted,
+        "providersMatched": providers_succeeded,
+        "providersFailed": providers_failed,
+        "providersNotAttempted": [provider for provider in provider_plan if provider not in providers_attempted],
+        "whyPartial": (evidence_gaps[0] if (result_status != "succeeded" and evidence_gaps) else None),
+    }
 
 
 def _dedupe_structured_sources(records: list[StructuredSourceRecord]) -> list[StructuredSourceRecord]:
@@ -3172,6 +3617,84 @@ def _smart_failure_summary(
             "Coverage may be partial because these providers or stages failed: " + ", ".join(failed_providers) + "."
         ),
         recommendedNextAction="review_partial_results",
+    )
+
+
+def _is_agency_guidance_query(query: str) -> bool:
+    lowered = query.lower()
+    if not any(term in lowered for term in _AGENCY_GUIDANCE_TERMS):
+        return False
+    return any(term in lowered for term in _AGENCY_AUTHORITY_TERMS)
+
+
+def _extract_scientific_name_candidate(query: str) -> str | None:
+    match = re.search(r"\b([A-Z][a-z]{2,})\s+([a-z][a-z-]{2,})\b", query)
+    if not match:
+        return None
+    return f"{match.group(1)} {match.group(2)}"
+
+
+def _extract_common_name_candidate(query: str) -> str | None:
+    cleaned = re.sub(r"\b\d+\s*CFR\s*(?:Part\s*)?\d+(?:\.[\dA-Za-z-]+)?\b", " ", query, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\b\d{4}-\d{4,6}\b", " ", cleaned)
+    cleaned = re.sub(
+        r"\b(?:"
+        + "|".join(re.escape(term) for term in sorted(_SPECIES_QUERY_NOISE_TERMS, key=len, reverse=True))
+        + r")\b",
+        " ",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = " ".join(cleaned.split(" "))
+    cleaned = " ".join(part for part in cleaned.split() if part)
+    if not cleaned:
+        return None
+    token_count = len(re.findall(r"[A-Za-z][A-Za-z'-]{1,}", cleaned))
+    if token_count < 2:
+        return None
+    return cleaned
+
+
+def _ecos_query_variants(query: str) -> list[tuple[str, str]]:
+    variants: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def _add(candidate: str | None, anchor_type: str) -> None:
+        if not candidate:
+            return
+        normalized = " ".join(candidate.split())
+        if not normalized:
+            return
+        marker = normalized.lower()
+        if marker in seen:
+            return
+        seen.add(marker)
+        variants.append((normalized, anchor_type))
+
+    scientific_name = _extract_scientific_name_candidate(query)
+    _add(scientific_name, "species_scientific_name")
+    common_name = _extract_common_name_candidate(query)
+    if common_name and scientific_name and common_name.lower() == scientific_name.lower():
+        common_name = None
+    _add(common_name, "species_common_name")
+    _add(query, "regulatory_subject_terms")
+    return variants
+
+
+def _query_requests_regulatory_history(query: str) -> bool:
+    lowered = query.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "federal register",
+            "history",
+            "listing history",
+            "rulemaking",
+            "timeline",
+            "proposed rule",
+            "final rule",
+            "chronology",
+        )
     )
 
 
@@ -3407,6 +3930,8 @@ def _regulatory_document_matches_subject(
         if not cfr_match:
             cfr_match = cfr_expected_tokens.issubset(_cfr_tokens(str(document.get("citation") or "")))
 
+    if subject_match_required and cfr_expected_tokens:
+        return subject_match and cfr_match
     if subject_match_required:
         return subject_match
     if cfr_expected_tokens:

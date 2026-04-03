@@ -157,6 +157,94 @@ async def test_guided_research_uses_server_owned_deep_profile_and_ignores_client
 
 
 @pytest.mark.asyncio
+async def test_guided_research_surfaces_evidence_contract_and_routing_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRuntime:
+        async def search_papers_smart(self, **kwargs: Any) -> dict[str, Any]:
+            del kwargs
+            return {
+                "searchSessionId": "ssn-guided-evidence-contract",
+                "strategyMetadata": {
+                    "intent": "regulatory",
+                    "anchorType": "cfr_citation",
+                    "anchoredSubject": "Northern long-eared bat",
+                    "routingConfidence": "high",
+                    "providerPlan": ["govinfo", "federal_register", "ecos"],
+                    "providersUsed": ["govinfo", "federal_register"],
+                },
+                "structuredSources": [
+                    {
+                        "sourceId": "50 CFR 17.11",
+                        "title": "50 CFR 17.11 Endangered and threatened wildlife",
+                        "provider": "govinfo",
+                        "sourceType": "primary_regulatory",
+                        "verificationStatus": "verified_primary_source",
+                        "accessStatus": "full_text_verified",
+                        "topicalRelevance": "on_topic",
+                        "confidence": "high",
+                        "isPrimarySource": True,
+                        "canonicalUrl": "https://www.govinfo.gov/example/cfr",
+                        "citation": {
+                            "title": "50 CFR 17.11",
+                            "url": "https://www.govinfo.gov/example/cfr",
+                            "sourceType": "primary_regulatory",
+                        },
+                        "date": "2024-10-01",
+                    }
+                ],
+                "candidateLeads": [
+                    {
+                        "sourceId": "2024-99999",
+                        "title": "Unrelated Federal Register notice",
+                        "provider": "federal_register",
+                        "sourceType": "primary_regulatory",
+                        "verificationStatus": "verified_metadata",
+                        "accessStatus": "access_unverified",
+                        "topicalRelevance": "off_topic",
+                        "confidence": "medium",
+                        "isPrimarySource": True,
+                        "canonicalUrl": "https://www.federalregister.gov/example",
+                        "date": "2024-02-01",
+                        "note": "Filtered because it did not match the anchored subject.",
+                    }
+                ],
+                "evidenceGaps": ["ECOS did not return a species dossier match."],
+                "coverageSummary": {
+                    "providersAttempted": ["govinfo", "federal_register", "ecos"],
+                    "providersSucceeded": ["govinfo", "federal_register"],
+                    "providersZeroResults": ["ecos"],
+                    "searchMode": "regulatory_primary_source",
+                },
+                "failureSummary": None,
+                "clarification": None,
+                "resultStatus": "succeeded",
+            }
+
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(
+        await server.call_tool(
+            "research",
+            {"query": "50 CFR 17.11 northern long-eared bat current text"},
+        )
+    )
+
+    assert payload["resultStatus"] == "succeeded"
+    assert payload["answerability"] == "grounded"
+    assert payload["routingSummary"]["intent"] == "regulatory"
+    assert payload["routingSummary"]["anchorType"] == "cfr_citation"
+    assert payload["routingSummary"]["anchorValue"] == "Northern long-eared bat"
+    assert payload["routingSummary"]["providerPlan"] == ["govinfo", "federal_register", "ecos"]
+    assert payload["coverageSummary"]["searchMode"] == "regulatory_primary_source"
+    assert [item["evidenceId"] for item in payload["evidence"]] == ["50 CFR 17.11"]
+    assert payload["evidence"][0]["whyIncluded"]
+    assert payload["leads"][0]["evidenceId"] == "2024-99999"
+    assert payload["leads"][0]["whyNotVerified"]
+    assert not any(item["evidenceId"] == "2024-99999" for item in payload["evidence"])
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("tool_name", "arguments", "expected_call", "expected_payload"),
     [
@@ -2611,6 +2699,202 @@ async def test_follow_up_research_answers_authors_and_venue_from_saved_source_me
     assert payload["answerStatus"] == "answered"
     assert "Ashish Vaswani" in payload["answer"]
     assert "Neural Information Processing Systems" in payload["answer"]
+
+
+@pytest.mark.asyncio
+async def test_follow_up_research_does_not_treat_stopwords_as_source_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRuntime:
+        async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
+            raise AssertionError(f"ask_result_set should not run for session source overview: {kwargs!r}")
+
+    isolated_registry = type(server.workspace_registry)()
+    monkeypatch.setattr(server, "workspace_registry", isolated_registry)
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-follow-up-source-overview",
+        query="Northern long-eared bat ESA status",
+        payload={
+            "searchSessionId": "ssn-follow-up-source-overview",
+            "structuredSources": [
+                {
+                    "sourceId": "50 CFR 17.11",
+                    "title": "50 CFR 17.11 Endangered and threatened wildlife",
+                    "provider": "govinfo",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_primary_source",
+                    "accessStatus": "full_text_verified",
+                    "topicalRelevance": "on_topic",
+                    "confidence": "high",
+                    "isPrimarySource": True,
+                },
+                {
+                    "sourceId": "2022-25998",
+                    "title": "Endangered Species Status for the Northern Long-Eared Bat",
+                    "provider": "federal_register",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "access_unverified",
+                    "topicalRelevance": "on_topic",
+                    "confidence": "medium",
+                    "isPrimarySource": True,
+                },
+            ],
+        },
+    )
+
+    payload = _payload(
+        await server.call_tool(
+            "follow_up_research",
+            {
+                "searchSessionId": "ssn-follow-up-source-overview",
+                "question": "Which source is the authoritative current-text source in this session?",
+            },
+        )
+    )
+
+    assert payload["answerStatus"] == "answered"
+    assert "No saved source matched 'is'" not in payload["answer"]
+    assert "Saved sources included:" in payload["answer"]
+    assert payload["selectedEvidenceIds"] == ["50 CFR 17.11", "2022-25998"]
+    assert payload["executionProvenance"]["answerSource"] == "saved_session_metadata"
+
+
+@pytest.mark.asyncio
+async def test_follow_up_research_uses_evidence_contract_records_when_sources_are_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRuntime:
+        async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
+            raise AssertionError(f"ask_result_set should not run for evidence-only session introspection: {kwargs!r}")
+
+    isolated_registry = type(server.workspace_registry)()
+    monkeypatch.setattr(server, "workspace_registry", isolated_registry)
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-follow-up-evidence-only",
+        query="50 CFR 17.11 northern long-eared bat current text",
+        payload={
+            "searchSessionId": "ssn-follow-up-evidence-only",
+            "intent": "regulatory",
+            "resultStatus": "succeeded",
+            "answerability": "grounded",
+            "routingSummary": {"intent": "regulatory", "anchorType": "cfr_citation"},
+            "evidence": [
+                {
+                    "evidenceId": "50 CFR 17.11",
+                    "title": "50 CFR 17.11 Endangered and threatened wildlife",
+                    "provider": "govinfo",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_primary_source",
+                    "accessStatus": "full_text_verified",
+                    "topicalRelevance": "on_topic",
+                    "isPrimarySource": True,
+                    "canonicalUrl": "https://www.govinfo.gov/example/cfr",
+                    "whyIncluded": "Authoritative current text for this CFR section.",
+                    "date": "2024-10-01",
+                }
+            ],
+            "leads": [
+                {
+                    "evidenceId": "2022-25998",
+                    "title": "Endangered Species Status for the Northern Long-Eared Bat",
+                    "provider": "federal_register",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "access_unverified",
+                    "topicalRelevance": "weak_match",
+                    "isPrimarySource": True,
+                    "whyIncluded": "Related but not current codified text.",
+                    "whyNotVerified": "Topical relevance was weak_match.",
+                }
+            ],
+            "evidenceGaps": [],
+            "coverageSummary": {
+                "providersAttempted": ["govinfo", "federal_register"],
+                "providersSucceeded": ["govinfo", "federal_register"],
+                "providersFailed": [],
+                "providersZeroResults": [],
+                "searchMode": "regulatory_primary_source",
+            },
+        },
+    )
+
+    payload = _payload(
+        await server.call_tool(
+            "follow_up_research",
+            {
+                "searchSessionId": "ssn-follow-up-evidence-only",
+                "question": "Which sources were found in this session?",
+            },
+        )
+    )
+
+    assert payload["answerStatus"] == "answered"
+    assert payload["answer"].startswith("Saved sources included:")
+    assert "50 CFR 17.11 Endangered and threatened wildlife" in payload["answer"]
+    assert payload["selectedEvidenceIds"] == ["50 CFR 17.11"]
+    assert payload["routingSummary"]["intent"] == "regulatory"
+    assert payload["answerability"] == "grounded"
+
+
+@pytest.mark.asyncio
+async def test_inspect_source_reads_evidence_contract_records_without_legacy_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    isolated_registry = type(server.workspace_registry)()
+    monkeypatch.setattr(server, "workspace_registry", isolated_registry)
+
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-inspect-evidence-only",
+        query="50 CFR 17.11 northern long-eared bat current text",
+        payload={
+            "searchSessionId": "ssn-inspect-evidence-only",
+            "intent": "regulatory",
+            "routingSummary": {"intent": "regulatory", "anchorType": "cfr_citation"},
+            "coverageSummary": {"searchMode": "regulatory_primary_source"},
+            "evidence": [
+                {
+                    "evidenceId": "50 CFR 17.11",
+                    "title": "50 CFR 17.11 Endangered and threatened wildlife",
+                    "provider": "govinfo",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_primary_source",
+                    "accessStatus": "full_text_verified",
+                    "topicalRelevance": "on_topic",
+                    "isPrimarySource": True,
+                    "canonicalUrl": "https://www.govinfo.gov/example/cfr",
+                    "whyIncluded": "Authoritative current text for this CFR section.",
+                }
+            ],
+            "leads": [],
+            "evidenceGaps": [],
+        },
+    )
+
+    payload = _payload(
+        await server.call_tool(
+            "inspect_source",
+            {
+                "searchSessionId": "ssn-inspect-evidence-only",
+                "sourceId": "50 CFR 17.11",
+            },
+        )
+    )
+
+    assert payload["source"]["sourceId"] == "50 CFR 17.11"
+    assert payload["evidenceId"] == "50 CFR 17.11"
+    assert payload["selectedEvidenceIds"] == ["50 CFR 17.11"]
+    assert payload["routingSummary"]["intent"] == "regulatory"
+    assert payload["coverageSummary"]["searchMode"] == "regulatory_primary_source"
+    assert payload["evidence"]
+    assert payload["evidence"][0]["evidenceId"] == "50 CFR 17.11"
 
 
 @pytest.mark.asyncio

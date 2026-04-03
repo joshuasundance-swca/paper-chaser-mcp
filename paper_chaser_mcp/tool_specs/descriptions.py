@@ -12,14 +12,16 @@ TOOL_DESCRIPTIONS = {
         "Default guided entry point for low-context research requests. Use this for topic discovery, "
         "known-item recovery, citation repair, and regulatory or species-history questions when you want "
         "one trust-graded response instead of choosing among raw tools. The server picks the safest retrieval "
-        "path, applies a server-owned quality-first policy for this guided flow, returns a compact "
-        "evidence summary plus source records, and abstains or marks partial results "
+        "path, applies a server-owned quality-first policy for this guided flow, returns resultStatus, "
+        "answerability, routingSummary, coverageSummary, evidence, leads, and source records, "
+        "and abstains or marks partial results "
         "when evidence is weak, off-topic, or incomplete."
     ),
     "follow_up_research": (
         "Grounded follow-up over a prior guided research result. Use searchSessionId from research and ask one "
-        "specific question. This tool answers only when the saved evidence is strong enough; otherwise it "
-        "returns an explicit abstention or insufficient-evidence response plus next actions."
+        "specific question. This tool answers only when the saved evidence is strong enough, selects exact "
+        "evidence ids when it can ground the answer, and otherwise returns an explicit abstention or "
+        "insufficient-evidence response plus next actions."
     ),
     "resolve_reference": (
         "Resolve one reference-like input into the safest next anchor. Accepts citations, DOI strings, DOI URLs, "
@@ -28,8 +30,8 @@ TOOL_DESCRIPTIONS = {
         "when the input should pivot into a primary-source path."
     ),
     "inspect_source": (
-        "Inspect one source from a prior guided research result. Pass the searchSessionId and a source id from the "
-        "research response to get provenance, trust state, source-access details, "
+        "Inspect one source from a prior guided research result. Pass the searchSessionId and an evidence id, "
+        "source alias, or source id from the research response to get provenance, trust state, source-access details, "
         "and the best direct-read follow-through."
     ),
     "get_runtime_status": (
@@ -459,10 +461,10 @@ TOOL_DESCRIPTIONS = {
         "for smoke tests or debugging. providerBudget lets advanced clients cap total, "
         "per-provider, or paid usage for one smart search, and includeEnrichment "
         "adds Crossref + Unpaywall metadata only to the final returned hits after "
-        "ranking is complete. Returns compact smart hits, strategyMetadata, trust-graded "
-        "sections such as verifiedFindings/likelyUnverified/evidenceGaps/structuredSources, "
+        "ranking is complete. Returns compact smart hits, strategyMetadata, resultStatus, "
+        "answerability, routingSummary, evidence, leads, evidenceGaps, structuredSources, "
         "coverage/failure summaries, agentHints, resourceUris, and a concrete next-step "
-        "recommendation. Best "
+        "recommendation. Legacy trust fields remain available as compatibility views. Best "
         "entry point for concept discovery, but treat it as a lead generator on "
         "sparse cross-domain queries and inspect strategyMetadata, driftWarnings, "
         "and the returned evidence before trusting borderline results. In known-item "

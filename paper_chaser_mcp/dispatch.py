@@ -22,6 +22,13 @@ from .enrichment import (
     attach_enrichments_to_paper_payload,
     hydrate_paper_for_enrichment,
 )
+from .guided_semantic import (
+    build_evidence_records,
+    build_follow_up_decision,
+    build_routing_decision,
+    classify_answerability,
+    explicit_source_reference,
+)
 from .identifiers import resolve_doi_from_paper_payload
 from .models import TOOL_INPUT_MODELS, CitationFormatsResponse, RuntimeSummary, dump_jsonable
 from .models.common import (
@@ -867,7 +874,16 @@ def _paper_topical_relevance(query: str, paper: dict[str, Any]) -> str:
 
 
 def _guided_source_id(candidate: dict[str, Any], *, fallback_prefix: str, index: int) -> str:
-    for key in ("sourceId", "paperId", "canonicalId", "recommendedExpansionId", "citationText", "canonicalUrl", "url"):
+    for key in (
+        "sourceId",
+        "evidenceId",
+        "paperId",
+        "canonicalId",
+        "recommendedExpansionId",
+        "citationText",
+        "canonicalUrl",
+        "url",
+    ):
         value = candidate.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
@@ -1232,7 +1248,7 @@ def _guided_extract_source_id(arguments: dict[str, Any]) -> Any:
     return next(
         (
             arguments.get(key)
-            for key in ("sourceId", "source_id", "source", "sourceRef", "id")
+            for key in ("sourceId", "source_id", "evidenceId", "evidence_id", "source", "sourceRef", "leadId", "id")
             if arguments.get(key) is not None
         ),
         None,
@@ -1461,6 +1477,14 @@ def _guided_strategy_metadata_from_runs(smart_runs: list[dict[str, Any]]) -> dic
         if not isinstance(metadata, dict):
             continue
         for field in (
+            "intent",
+            "intentConfidence",
+            "routingConfidence",
+            "intentRationale",
+            "anchorType",
+            "anchoredSubject",
+            "providerPlan",
+            "providersUsed",
             "configuredSmartProvider",
             "activeSmartProvider",
             "providerBudgetApplied",
@@ -1563,6 +1587,8 @@ def _guided_normalize_follow_up_arguments(
     workspace_registry: Any,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     normalized_args = dict(arguments)
+    for alias in ("search_session_id", "sessionId", "session_id", "session", "prompt", "query"):
+        normalized_args.pop(alias, None)
     repairs: list[dict[str, str]] = []
     warnings: list[str] = []
 
@@ -1630,6 +1656,21 @@ def _guided_normalize_inspect_arguments(
     workspace_registry: Any,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     normalized_args = dict(arguments)
+    for alias in (
+        "search_session_id",
+        "sessionId",
+        "session_id",
+        "session",
+        "source_id",
+        "source",
+        "sourceRef",
+        "evidenceId",
+        "evidence_id",
+        "leadId",
+        "lead_id",
+        "id",
+    ):
+        normalized_args.pop(alias, None)
     repairs: list[dict[str, str]] = []
     warnings: list[str] = []
 
@@ -1769,6 +1810,8 @@ def _guided_merge_coverage_summaries(*coverages: dict[str, Any] | None) -> dict[
     usable = [coverage for coverage in coverages if isinstance(coverage, dict)]
     if not usable:
         return None
+    if len(usable) == 1:
+        return dict(usable[0])
 
     def _merge_list(field: str) -> list[Any]:
         merged: list[Any] = []
@@ -2266,6 +2309,14 @@ def _guided_result_state(
 
 def _guided_record_source_candidates(record: Any) -> list[dict[str, Any]]:
     payload = record.payload if isinstance(record.payload, dict) else {}
+    evidence_sources = [
+        _guided_source_record_from_structured_source(source, index=index)
+        for index, source in enumerate(payload.get("evidence") or [], start=1)
+        if isinstance(source, dict)
+    ]
+    if evidence_sources:
+        return _guided_dedupe_source_records(evidence_sources)
+
     explicit_sources = [source for source in payload.get("sources") or [] if isinstance(source, dict)]
     if explicit_sources:
         return _guided_dedupe_source_records(explicit_sources)
@@ -2277,6 +2328,14 @@ def _guided_record_source_candidates(record: Any) -> list[dict[str, Any]]:
     ]
     if structured_sources:
         return _guided_dedupe_source_records(structured_sources)
+
+    lead_sources = [
+        _guided_source_record_from_structured_source(source, index=index)
+        for index, source in enumerate(payload.get("leads") or [], start=1)
+        if isinstance(source, dict)
+    ]
+    if lead_sources:
+        return _guided_dedupe_source_records(lead_sources)
 
     query = str(record.query or payload.get("query") or "")
     paper_sources = [
@@ -2329,6 +2388,7 @@ def _find_record_source_with_resolution(
     for source in sources:
         for candidate in (
             source.get("sourceId"),
+            source.get("sourceAlias"),
             source.get("citationText"),
             source.get("canonicalUrl"),
             source.get("retrievedUrl"),
@@ -2363,38 +2423,18 @@ def _find_record_source(
     if not normalized_search_session_id:
         return None
     record = workspace_registry.get(normalized_search_session_id)
-    payload = record.payload if isinstance(record.payload, dict) else {}
     normalized_source_id = _guided_normalize_whitespace(source_id)
     if not normalized_source_id:
         return None
-    for source in payload.get("sources") or []:
-        if isinstance(source, dict) and normalized_source_id in {
-            _guided_normalize_whitespace(source.get("sourceId")),
-            _guided_normalize_whitespace(source.get("sourceAlias")),
-        }:
-            return source
-    for source in payload.get("structuredSources") or []:
-        if not isinstance(source, dict):
-            continue
+    for source in _guided_record_source_candidates(record):
         candidate_ids = {
             _guided_normalize_whitespace(source.get("sourceId")),
             _guided_normalize_whitespace(source.get("citationText")),
             _guided_normalize_whitespace(source.get("canonicalUrl")),
+            _guided_normalize_whitespace(source.get("retrievedUrl")),
         }
         if normalized_source_id in candidate_ids:
-            return _guided_source_record_from_structured_source(source, index=1)
-    for index, paper in enumerate(record.papers, start=1):
-        if not isinstance(paper, dict):
-            continue
-        candidate_ids = {
-            _guided_normalize_whitespace(paper.get("paperId")),
-            _guided_normalize_whitespace(paper.get("sourceId")),
-            _guided_normalize_whitespace(paper.get("canonicalId")),
-            _guided_normalize_whitespace(paper.get("recommendedExpansionId")),
-        }
-        if normalized_source_id in candidate_ids:
-            query = str(record.query or payload.get("query") or "")
-            return _guided_source_record_from_paper(query, paper, index=index)
+            return source
     return None
 
 
@@ -2428,6 +2468,60 @@ def _guided_follow_up_status(status: str | None) -> str:
     if normalized == "insufficient_evidence":
         return "partial"
     return "partial"
+
+
+def _guided_contract_fields(
+    *,
+    query: str,
+    intent: str,
+    status: str,
+    sources: list[dict[str, Any]],
+    unverified_leads: list[dict[str, Any]],
+    evidence_gaps: list[str],
+    coverage_summary: dict[str, Any] | None,
+    strategy_metadata: dict[str, Any] | None,
+    timeline: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    evidence, leads = build_evidence_records(sources=sources, leads=unverified_leads)
+    routing_summary = build_routing_decision(
+        query=query,
+        intent=intent,
+        strategy_metadata=strategy_metadata,
+        coverage_summary=coverage_summary,
+    ).model_dump(by_alias=True)
+    result_status = _guided_follow_up_status(status)
+    return {
+        "resultStatus": result_status,
+        "answerability": classify_answerability(
+            status=status,
+            evidence=evidence,
+            leads=leads,
+            evidence_gaps=evidence_gaps,
+        ),
+        "routingSummary": {
+            "intent": routing_summary["intent"],
+            "decisionConfidence": routing_summary["confidence"],
+            "rationale": routing_summary["rationale"],
+            "anchorType": ((routing_summary.get("anchor") or {}).get("anchorType")),
+            "anchorValue": ((routing_summary.get("anchor") or {}).get("anchorValue")),
+            "providerPlan": list((routing_summary.get("providerPlan") or {}).get("providers") or []),
+            "requiredPrimarySources": list(((routing_summary.get("anchor") or {}).get("requiredPrimarySources") or [])),
+            "successCriteria": list(((routing_summary.get("anchor") or {}).get("successCriteria") or [])),
+            "providersAttempted": list((coverage_summary or {}).get("providersAttempted") or []),
+            "providersMatched": list((coverage_summary or {}).get("providersSucceeded") or []),
+            "providersFailed": list((coverage_summary or {}).get("providersFailed") or []),
+            "providersNotAttempted": [
+                provider
+                for provider in list((routing_summary.get("providerPlan") or {}).get("providers") or [])
+                if provider not in list((coverage_summary or {}).get("providersAttempted") or [])
+            ],
+            "whyPartial": evidence_gaps[0] if evidence_gaps and result_status != "succeeded" else None,
+        },
+        "coverageSummary": coverage_summary,
+        "evidence": evidence,
+        "leads": leads,
+        "timeline": timeline,
+    }
 
 
 def _guided_session_findings(payload: dict[str, Any], sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2475,7 +2569,13 @@ def _guided_session_state(
     except Exception:
         return None
     payload = record.payload if isinstance(record.payload, dict) else {}
-    sources = [source for source in payload.get("sources") or [] if isinstance(source, dict)]
+    sources = [
+        _guided_source_record_from_structured_source(source, index=index)
+        for index, source in enumerate(payload.get("evidence") or [], start=1)
+        if isinstance(source, dict)
+    ]
+    if not sources:
+        sources = [source for source in payload.get("sources") or [] if isinstance(source, dict)]
     if not sources:
         sources = [
             _guided_source_record_from_structured_source(source, index=index)
@@ -2490,6 +2590,12 @@ def _guided_session_state(
             if isinstance(paper, dict)
         ]
     unverified_leads = [lead for lead in payload.get("unverifiedLeads") or [] if isinstance(lead, dict)]
+    if not unverified_leads:
+        unverified_leads = [
+            _guided_source_record_from_structured_source(source, index=index)
+            for index, source in enumerate(payload.get("leads") or [], start=1)
+            if isinstance(source, dict)
+        ]
     if not unverified_leads:
         unverified_leads = [
             _guided_source_record_from_structured_source(source, index=index)
@@ -2508,6 +2614,8 @@ def _guided_session_state(
     )
     return {
         "searchSessionId": record.search_session_id,
+        "query": str(record.query or payload.get("query") or ""),
+        "intent": str(payload.get("intent") or payload.get("strategyMetadata", {}).get("intent") or "discovery"),
         "status": status,
         "sources": sources,
         "unverifiedLeads": unverified_leads,
@@ -2531,6 +2639,15 @@ def _guided_session_state(
             status=status,
             has_sources=bool(sources),
         ),
+        "strategyMetadata": cast(
+            dict[str, Any] | None,
+            payload.get("strategyMetadata") or record.metadata.get("strategyMetadata"),
+        ),
+        "routingSummary": cast(
+            dict[str, Any] | None,
+            payload.get("routingSummary") or record.metadata.get("routingSummary"),
+        ),
+        "timeline": cast(dict[str, Any] | None, payload.get("timeline") or payload.get("regulatoryTimeline")),
         "resultState": payload.get("resultState")
         or _guided_result_state(
             status=status,
@@ -2640,26 +2757,13 @@ def _guided_follow_up_introspection_facets(question: str) -> set[str]:
         )
     ):
         facets.add("source_overview")
-    if re.search(r"\bsource(?:\s*id)?\b", text):
+    if explicit_source_reference(question):
         facets.add("specific_source")
     return facets
 
 
 def _guided_extract_source_reference_from_question(question: str) -> str | None:
-    normalized_question = _guided_normalize_whitespace(question)
-    if not normalized_question:
-        return None
-    patterns = (
-        re.compile(r"\bsource(?:\s*id)?\s*[:=]?\s*['\"]?(?P<id>[A-Za-z0-9._:/#-]{2,})['\"]?", re.IGNORECASE),
-        re.compile(r"\binspect\s+source\s+['\"]?(?P<id>[A-Za-z0-9._:/#-]{2,})['\"]?", re.IGNORECASE),
-    )
-    for pattern in patterns:
-        match = pattern.search(normalized_question)
-        if match:
-            candidate = _guided_normalize_whitespace(match.group("id"))
-            if candidate:
-                return candidate
-    return None
+    return explicit_source_reference(question)
 
 
 def _guided_is_usable_answer_text(value: Any) -> bool:
@@ -2674,12 +2778,6 @@ def _guided_select_follow_up_source(question: str, sources: list[dict[str, Any]]
         return None
     if len(sources) == 1:
         return sources[0]
-
-    normalized_question = _guided_normalize_whitespace(question).lower()
-    for source in sources:
-        title = _guided_normalize_whitespace(source.get("title")).lower()
-        if title and title in normalized_question:
-            return source
 
     source_reference = _guided_extract_source_reference_from_question(question)
     if source_reference:
@@ -2698,6 +2796,10 @@ def _guided_source_metadata_answers(question: str, sources: list[dict[str, Any]]
         return []
 
     normalized_question = _guided_normalize_whitespace(question).lower()
+    is_source_overview_question = any(
+        marker in normalized_question
+        for marker in ("which sources", "what sources", "which records", "what records", "which documents")
+    )
     raw_citation = source.get("citation")
     citation: dict[str, Any] = cast(dict[str, Any], raw_citation) if isinstance(raw_citation, dict) else {}
     answers: list[str] = []
@@ -2724,7 +2826,9 @@ def _guided_source_metadata_answers(question: str, sources: list[dict[str, Any]]
         if year:
             answers.append(f"Publication year listed for this source: {year}.")
 
-    if any(marker in normalized_question for marker in ("title", "which paper", "which source", "what paper")):
+    if not is_source_overview_question and any(
+        marker in normalized_question for marker in ("title", "which paper", "which source", "what paper")
+    ):
         title = str(source.get("title") or source.get("sourceId") or "").strip()
         if title:
             answers.append(f"Matched source title: {title}.")
@@ -2748,9 +2852,14 @@ def _answer_follow_up_from_session_state(
     ]
     sources = [source for source in session_state.get("sources") or [] if isinstance(source, dict)]
     trust_summary = cast(dict[str, Any] | None, session_state.get("trustSummary")) or {}
-    metadata_answers = _guided_source_metadata_answers(question, sources)
     facets = _guided_follow_up_introspection_facets(question)
-    if not facets and not metadata_answers:
+    follow_up_decision = build_follow_up_decision(
+        question=question,
+        session_state=session_state,
+        facets=facets,
+    )
+    metadata_answers = _guided_source_metadata_answers(question, sources)
+    if not facets and not metadata_answers and not follow_up_decision.answer_from_session:
         return None
 
     answer_parts.extend(metadata_answers)
@@ -2837,19 +2946,31 @@ def _answer_follow_up_from_session_state(
             answer_parts.append(result_meaning)
 
     if "source_overview" in facets:
-        if sources:
+        selected_evidence_ids = set(follow_up_decision.selected_evidence_ids)
+        selected_sources = [
+            source
+            for source in sources
+            if str(source.get("sourceId") or source.get("sourceAlias") or "").strip() in selected_evidence_ids
+        ] or sources
+        if selected_sources:
             source_titles = [
                 str(source.get("title") or source.get("sourceId") or "").strip()
-                for source in sources[:3]
+                for source in selected_sources[:3]
                 if str(source.get("title") or source.get("sourceId") or "").strip()
             ]
             if source_titles:
                 answer_parts.append("Saved sources included: " + "; ".join(source_titles) + ".")
         else:
             unverified_leads = [lead for lead in session_state.get("unverifiedLeads") or [] if isinstance(lead, dict)]
+            selected_lead_ids = set(follow_up_decision.selected_lead_ids)
+            selected_leads = [
+                lead
+                for lead in unverified_leads
+                if str(lead.get("sourceId") or lead.get("sourceAlias") or "").strip() in selected_lead_ids
+            ] or unverified_leads
             lead_titles = [
                 str(lead.get("title") or lead.get("sourceId") or "").strip()
-                for lead in unverified_leads[:3]
+                for lead in selected_leads[:3]
                 if str(lead.get("title") or lead.get("sourceId") or "").strip()
             ]
             if lead_titles:
@@ -2869,8 +2990,10 @@ def _answer_follow_up_from_session_state(
                 for candidate in sources + session_leads
                 if (
                     lower_reference == _guided_normalize_whitespace(candidate.get("sourceId")).lower()
-                    or lower_reference in _guided_normalize_whitespace(candidate.get("title")).lower()
-                    or lower_reference in _guided_normalize_whitespace(candidate.get("canonicalUrl")).lower()
+                    or lower_reference == _guided_normalize_whitespace(candidate.get("sourceAlias")).lower()
+                    or lower_reference == _guided_normalize_whitespace(candidate.get("citationText")).lower()
+                    or lower_reference == _guided_normalize_whitespace(candidate.get("canonicalUrl")).lower()
+                    or lower_reference == _guided_normalize_whitespace(candidate.get("retrievedUrl")).lower()
                 )
             ]
             if len(source_matches) == 1:
@@ -2899,6 +3022,8 @@ def _answer_follow_up_from_session_state(
         "answerStatus": "answered",
         "answer": " ".join(answer_parts),
         "evidence": [],
+        "selectedEvidenceIds": follow_up_decision.selected_evidence_ids,
+        "selectedLeadIds": follow_up_decision.selected_lead_ids,
         "unsupportedAsks": [],
         "followUpQuestions": [],
         "verifiedFindings": session_state["verifiedFindings"],
@@ -2915,6 +3040,17 @@ def _answer_follow_up_from_session_state(
             sources=sources,
             evidence_gaps=evidence_gaps,
             search_session_id=str(session_state.get("searchSessionId") or ""),
+        ),
+        **_guided_contract_fields(
+            query=str(session_state.get("query") or ""),
+            intent=str(session_state.get("intent") or "discovery"),
+            status="answered",
+            sources=sources,
+            unverified_leads=cast(list[dict[str, Any]], session_state.get("unverifiedLeads") or []),
+            evidence_gaps=evidence_gaps,
+            coverage_summary=coverage,
+            strategy_metadata=cast(dict[str, Any] | None, session_state.get("strategyMetadata")),
+            timeline=cast(dict[str, Any] | None, session_state.get("timeline")),
         ),
         "executionProvenance": _guided_execution_provenance_payload(
             execution_mode="session_introspection",
@@ -3188,6 +3324,18 @@ async def dispatch_tool(
                 ),
                 "inputNormalization": _guided_normalization_payload(research_normalization),
             }
+            response.update(
+                _guided_contract_fields(
+                    query=research_args.query,
+                    intent=intent,
+                    status=status,
+                    sources=sources,
+                    unverified_leads=unverified_leads,
+                    evidence_gaps=evidence_gaps,
+                    coverage_summary=None,
+                    strategy_metadata=None,
+                )
+            )
             abstention_details = _guided_abstention_details_payload(
                 status=status,
                 sources=sources,
@@ -3431,6 +3579,19 @@ async def dispatch_tool(
                 ),
                 "inputNormalization": _guided_normalization_payload(research_normalization),
             }
+            response.update(
+                _guided_contract_fields(
+                    query=research_args.query,
+                    intent=derived_intent,
+                    status=status,
+                    sources=sources,
+                    unverified_leads=unverified_leads,
+                    evidence_gaps=evidence_gaps,
+                    coverage_summary=merged_coverage,
+                    strategy_metadata=strategy_metadata,
+                    timeline=cast(dict[str, Any] | None, response.get("regulatoryTimeline")),
+                )
+            )
             abstention_details = _guided_abstention_details_payload(
                 status=status,
                 sources=sources,
@@ -3513,6 +3674,18 @@ async def dispatch_tool(
             ),
             "inputNormalization": _guided_normalization_payload(research_normalization),
         }
+        response.update(
+            _guided_contract_fields(
+                query=research_args.query,
+                intent=intent,
+                status=status,
+                sources=sources,
+                unverified_leads=unverified_leads,
+                evidence_gaps=evidence_gaps,
+                coverage_summary=cast(dict[str, Any] | None, raw.get("coverageSummary")),
+                strategy_metadata=None,
+            )
+        )
         abstention_details = _guided_abstention_details_payload(
             status=status,
             sources=sources,
@@ -3838,6 +4011,32 @@ async def dispatch_tool(
             ),
             "inputNormalization": _guided_normalization_payload(follow_up_normalization),
         }
+        response.update(
+            _guided_contract_fields(
+                query=follow_up_args.question,
+                intent=str(
+                    (session_strategy_metadata or {}).get("intent")
+                    or (session_state or {}).get("intent")
+                    or "discovery"
+                ),
+                status=guided_status,
+                sources=sources,
+                unverified_leads=unverified_leads,
+                evidence_gaps=evidence_gaps,
+                coverage_summary=cast(dict[str, Any] | None, ask.get("coverageSummary")),
+                strategy_metadata=session_strategy_metadata,
+            )
+        )
+        response["selectedEvidenceIds"] = [
+            str(item.get("evidenceId") or "").strip()
+            for item in response.get("evidence") or []
+            if isinstance(item, dict) and str(item.get("evidenceId") or "").strip()
+        ]
+        response["selectedLeadIds"] = [
+            str(item.get("evidenceId") or "").strip()
+            for item in response.get("leads") or []
+            if isinstance(item, dict) and str(item.get("evidenceId") or "").strip()
+        ]
         session_answer = _answer_follow_up_from_session_state(
             question=follow_up_args.question,
             session_state=session_state,
@@ -4048,9 +4247,29 @@ async def dispatch_tool(
             if abstention_details is not None:
                 response["abstentionDetails"] = abstention_details
             return response
+        inspect_session_state = _guided_session_state(
+            workspace_registry=workspace_registry,
+            search_session_id=inspect_args.search_session_id,
+        )
+        session_sources = (
+            [candidate for candidate in inspect_session_state.get("sources") or [] if isinstance(candidate, dict)]
+            if isinstance(inspect_session_state, dict)
+            else [source]
+        )
+        session_leads = (
+            [
+                candidate
+                for candidate in inspect_session_state.get("unverifiedLeads") or []
+                if isinstance(candidate, dict)
+            ]
+            if isinstance(inspect_session_state, dict)
+            else []
+        )
         return {
             "searchSessionId": inspect_args.search_session_id,
             "source": source,
+            "evidenceId": source.get("sourceId"),
+            "selectedEvidenceIds": [str(source.get("sourceId") or "").strip()],
             "directReadRecommendations": _direct_read_recommendations(source, tool_profile=tool_profile),
             "nextActions": _guided_next_actions(
                 search_session_id=inspect_args.search_session_id,
@@ -4073,6 +4292,17 @@ async def dispatch_tool(
                 execution_mode="guided_source_inspection",
                 answer_source="saved_session_source",
                 passes_run=0,
+            ),
+            **_guided_contract_fields(
+                query=str((inspect_session_state or {}).get("query") or ""),
+                intent=str((inspect_session_state or {}).get("intent") or "discovery"),
+                status="succeeded",
+                sources=session_sources,
+                unverified_leads=session_leads,
+                evidence_gaps=[],
+                coverage_summary=cast(dict[str, Any] | None, (inspect_session_state or {}).get("coverage")),
+                strategy_metadata=cast(dict[str, Any] | None, (inspect_session_state or {}).get("strategyMetadata")),
+                timeline=cast(dict[str, Any] | None, (inspect_session_state or {}).get("timeline")),
             ),
             "inputNormalization": _guided_normalization_payload(inspect_normalization),
         }

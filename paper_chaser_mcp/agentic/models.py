@@ -244,6 +244,8 @@ class StructuredSourceRecord(ApiModel):
     citation: CitationRecord | None = None
     date: str | None = None
     note: str | None = None
+    lead_reason: str | None = Field(default=None, alias="leadReason")
+    why_not_verified: str | None = Field(default=None, alias="whyNotVerified")
 
 
 class ScoreBreakdown(ApiModel):
@@ -338,6 +340,10 @@ class SmartSearchResponse(ApiModel):
     )
     verified_findings: list[str] = Field(default_factory=list, alias="verifiedFindings")
     likely_unverified: list[str] = Field(default_factory=list, alias="likelyUnverified")
+    answerability: Literal["grounded", "limited", "insufficient"] = "limited"
+    routing_summary: dict[str, Any] | None = Field(default=None, alias="routingSummary")
+    evidence: list[StructuredSourceRecord] = Field(default_factory=list)
+    leads: list[StructuredSourceRecord] = Field(default_factory=list)
     candidate_leads: list[StructuredSourceRecord] = Field(default_factory=list, alias="candidateLeads")
     evidence_gaps: list[str] = Field(default_factory=list, alias="evidenceGaps")
     structured_sources: list[StructuredSourceRecord] = Field(default_factory=list, alias="structuredSources")
@@ -353,6 +359,7 @@ class SmartSearchResponse(ApiModel):
 class EvidenceItem(ApiModel):
     """Evidence citation attached to grounded answers."""
 
+    evidence_id: str | None = Field(default=None, alias="evidenceId")
     paper: Paper
     excerpt: str = ""
     why_relevant: str = Field(default="", alias="whyRelevant")
@@ -376,6 +383,9 @@ class AskResultSetResponse(ApiModel):
         default_factory=list,
         alias="followUpQuestions",
     )
+    answerability: Literal["grounded", "limited", "insufficient"] = "limited"
+    selected_evidence_ids: list[str] = Field(default_factory=list, alias="selectedEvidenceIds")
+    selected_lead_ids: list[str] = Field(default_factory=list, alias="selectedLeadIds")
     confidence: Literal["high", "medium", "low"] = "medium"
     search_session_id: str = Field(alias="searchSessionId")
     agent_hints: AgentHints = Field(alias="agentHints")
@@ -516,6 +526,26 @@ class PlannerDecision(ApiModel):
     provider_plan: list[str] = Field(
         default_factory=list,
         alias="providerPlan",
+    )
+    authority_first: bool = Field(
+        default=True,
+        alias="authorityFirst",
+    )
+    anchor_type: str | None = Field(
+        default=None,
+        alias="anchorType",
+    )
+    anchor_value: str | None = Field(
+        default=None,
+        alias="anchorValue",
+    )
+    required_primary_sources: list[str] = Field(
+        default_factory=list,
+        alias="requiredPrimarySources",
+    )
+    success_criteria: list[str] = Field(
+        default_factory=list,
+        alias="successCriteria",
     )
     follow_up_mode: Literal["qa", "claim_check", "comparison"] = Field(
         default="qa",

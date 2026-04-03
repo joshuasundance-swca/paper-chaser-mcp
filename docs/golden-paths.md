@@ -45,8 +45,8 @@ gh aw compile test-paper-chaser --dir .github/workflows
 
 1. Start with `research` for discovery, literature review, known-item recovery,
    citation repair, and regulatory history asks.
-2. Inspect `status`, `verifiedFindings`, `sources`, `unverifiedLeads`,
-  `evidenceGaps`, `trustSummary`, `coverage`, `failureSummary`,
+2. Inspect `resultStatus`, `answerability`, `evidence`, `leads`,
+  `routingSummary`, `coverageSummary`, `evidenceGaps`, `failureSummary`,
   `executionProvenance`, and `nextActions`.
 3. Save `searchSessionId` for follow-up steps.
 
@@ -54,14 +54,14 @@ gh aw compile test-paper-chaser --dir .github/workflows
 
 ```text
 research(query="retrieval-augmented generation for coding agents", limit=5)
-→ inspect status/verifiedFindings/sources/trustSummary
+→ inspect resultStatus/answerability/evidence/routingSummary
 → save searchSessionId
 ```
 
 **Success signals**
 
-- `status=succeeded` or `partial` with clear evidence semantics.
-- Trust fields are usable without reading raw provider payloads.
+- `resultStatus=succeeded` or `partial` with clear evidence semantics.
+- Evidence and routing fields are usable without reading raw provider payloads.
 - `nextActions` points to the next safe step.
 
 ### 2. Grounded follow-up (`follow_up_research`)

@@ -22,6 +22,7 @@ from .provider_helpers import (
     _ExpansionListSchema,
     _filter_expansion_candidates,
     _langchain_message_text,
+    _normalize_answer_schema_output,
     _normalize_theme_label_output,
     _PlannerResponseSchema,
     _ResponseModelT,
@@ -312,8 +313,9 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
         planner, _ = self._load_models()
         try:
             base_prompt = (
-                "Plan a grounded literature-search workflow. Keep providerPlan "
-                "limited to semantic_scholar, openalex, scholarapi, core, and arxiv. "
+                "Plan a grounded search workflow. intent may be discovery, review, known_item, author, "
+                "citation, or regulatory. Keep providerPlan limited to semantic_scholar, openalex, "
+                "scholarapi, core, arxiv, ecos, federal_register, govinfo, tavily, and perplexity. "
                 "Return compact structured output only."
             )
             direct = self._structured_sync(
@@ -339,10 +341,13 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
                 system_prompt=self._json_only_system_prompt(
                     base_prompt,
                     json_shape=(
-                        '{"intent":"discovery|review|known_item|author|citation",'
+                        '{"intent":"discovery|review|known_item|author|citation|regulatory",'
                         '"constraints":{"year":"optional","venue":"optional","focus":"optional"},'
                         '"seedIdentifiers":["..."],"candidateConcepts":["..."],'
-                        '"providerPlan":["semantic_scholar"],"followUpMode":"qa|claim_check|comparison"}'
+                        '"providerPlan":["semantic_scholar"],"authorityFirst":true,'
+                        '"anchorType":"optional","anchorValue":"optional",'
+                        '"requiredPrimarySources":["optional"],"successCriteria":["optional"],'
+                        '"followUpMode":"qa|claim_check|comparison"}'
                     ),
                 ),
                 payload={
@@ -375,8 +380,9 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
         planner, _ = self._load_models()
         try:
             base_prompt = (
-                "Plan a grounded literature-search workflow. Keep providerPlan "
-                "limited to semantic_scholar, openalex, scholarapi, core, and arxiv. "
+                "Plan a grounded search workflow. intent may be discovery, review, known_item, author, "
+                "citation, or regulatory. Keep providerPlan limited to semantic_scholar, openalex, "
+                "scholarapi, core, arxiv, ecos, federal_register, govinfo, tavily, and perplexity. "
                 "Return compact structured output only."
             )
             direct = await self._structured_async(
@@ -404,10 +410,13 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
                 system_prompt=self._json_only_system_prompt(
                     base_prompt,
                     json_shape=(
-                        '{"intent":"discovery|review|known_item|author|citation",'
+                        '{"intent":"discovery|review|known_item|author|citation|regulatory",'
                         '"constraints":{"year":"optional","venue":"optional","focus":"optional"},'
                         '"seedIdentifiers":["..."],"candidateConcepts":["..."],'
-                        '"providerPlan":["semantic_scholar"],"followUpMode":"qa|claim_check|comparison"}'
+                        '"providerPlan":["semantic_scholar"],"authorityFirst":true,'
+                        '"anchorType":"optional","anchorValue":"optional",'
+                        '"requiredPrimarySources":["optional"],"successCriteria":["optional"],'
+                        '"followUpMode":"qa|claim_check|comparison"}'
                     ),
                 ),
                 payload={
@@ -706,8 +715,11 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
                 payload=_build_answer_payload(question, answer_mode, evidence_papers),
             )
             if direct is not None:
-                parsed = direct.model_dump()
-                parsed["confidence"] = self.normalize_confidence(parsed.get("confidence"))
+                parsed = _normalize_answer_schema_output(
+                    parsed_answer=direct,
+                    evidence_papers=evidence_papers,
+                    confidence_normalizer=self.normalize_confidence,
+                )
                 self._mark_provider_used()
                 return parsed
             text_fallback = self._structured_from_text_sync(
@@ -716,14 +728,18 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
                 response_model=_AnswerSchema,
                 system_prompt=(
                     "Answer only from the supplied papers. If evidence is weak, say so. "
-                    "Return only JSON with keys answer, unsupportedAsks, followUpQuestions, confidence. "
+                    "Return only JSON with keys answer, unsupportedAsks, followUpQuestions, confidence, "
+                    "answerability, selectedEvidenceIds, and selectedLeadIds. "
                     "Confidence must be exactly one of: high, medium, low."
                 ),
                 payload=_build_answer_payload(question, answer_mode, evidence_papers),
             )
             if text_fallback is not None:
-                parsed = text_fallback.model_dump()
-                parsed["confidence"] = self.normalize_confidence(parsed.get("confidence"))
+                parsed = _normalize_answer_schema_output(
+                    parsed_answer=text_fallback,
+                    evidence_papers=evidence_papers,
+                    confidence_normalizer=self.normalize_confidence,
+                )
                 self._mark_provider_used()
                 return parsed
         except Exception:
@@ -762,8 +778,11 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
                 request_id=request_id,
             )
             if direct is not None:
-                parsed = direct.model_dump()
-                parsed["confidence"] = self.normalize_confidence(parsed.get("confidence"))
+                parsed = _normalize_answer_schema_output(
+                    parsed_answer=direct,
+                    evidence_papers=evidence_papers,
+                    confidence_normalizer=self.normalize_confidence,
+                )
                 self._mark_provider_used()
                 return parsed
             text_fallback = await self._structured_from_text_async(
@@ -772,7 +791,8 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
                 response_model=_AnswerSchema,
                 system_prompt=(
                     "Answer only from the supplied papers. If evidence is weak, say so. "
-                    "Return only JSON with keys answer, unsupportedAsks, followUpQuestions, confidence. "
+                    "Return only JSON with keys answer, unsupportedAsks, followUpQuestions, confidence, "
+                    "answerability, selectedEvidenceIds, and selectedLeadIds. "
                     "Confidence must be exactly one of: high, medium, low."
                 ),
                 payload=_build_answer_payload(question, answer_mode, evidence_papers),
@@ -780,8 +800,11 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
                 request_id=request_id,
             )
             if text_fallback is not None:
-                parsed = text_fallback.model_dump()
-                parsed["confidence"] = self.normalize_confidence(parsed.get("confidence"))
+                parsed = _normalize_answer_schema_output(
+                    parsed_answer=text_fallback,
+                    evidence_papers=evidence_papers,
+                    confidence_normalizer=self.normalize_confidence,
+                )
                 self._mark_provider_used()
                 return parsed
         except Exception:

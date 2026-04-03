@@ -53,10 +53,9 @@ environments even though the server still supports those tools in expert mode.
 ## Contract Changes To Handle
 
 - Guided `research` returns explicit trust and control fields:
-  - `status`: `succeeded|partial|needs_disambiguation|abstained|failed`
-  - `verifiedFindings`, `sources`, `unverifiedLeads`, `evidenceGaps`,
-    `trustSummary`, `failureSummary`, `resultMeaning`, `nextActions`,
-    `executionProvenance`
+  - `resultStatus`: `succeeded|partial|needs_disambiguation|abstained|failed`
+  - `answerability`, `routingSummary`, `coverageSummary`, `evidence`, `leads`,
+    `evidenceGaps`, `failureSummary`, `nextActions`, `executionProvenance`
 - Guided follow-up returns explicit answer gating:
   - `answerStatus`: `answered|abstained|insufficient_evidence`
   - `answer` is `null` when not safely answerable.

@@ -70,8 +70,9 @@ Decision tree for tool selection:
     (default low-context entry point for discovery, literature review,
     citation repair, known-item recovery, and regulatory or species-history
     questions; guided research uses a server-owned quality-first policy and now
-    returns executionProvenance plus trust-graded sections such as
-    verifiedFindings/sources/unverifiedLeads/evidenceGaps)
+    returns executionProvenance plus evidence-first sections such as
+    evidence/leads/routingSummary/coverageSummary/evidenceGaps, with
+    verifiedFindings/sources/unverifiedLeads kept as compatibility views)
 2. GUIDED FOLLOW-UP → follow_up_research
     (one grounded follow-up over a saved searchSessionId; returns answerStatus,
     nextActions, executionProvenance, and sessionResolution when session reuse is
@@ -85,9 +86,10 @@ Decision tree for tool selection:
     (surfaces effective profile, smart-provider state, guidedPolicy, guided
     latency defaults, and runtime warnings)
 6. EXPERT CONCEPT-LEVEL DISCOVERY / REVIEW → search_papers_smart
-    (returns searchSessionId, strategyMetadata, trust-graded sections such as
-    verifiedFindings/likelyUnverified/evidenceGaps/structuredSources, plus
-    resourceUris and agentHints; use latencyProfile=deep for highest-quality
+    (returns searchSessionId, strategyMetadata, resultStatus, answerability,
+    routingSummary, evidence, leads, evidenceGaps, structuredSources,
+    coverageSummary, plus resourceUris and agentHints; legacy trust fields stay
+    available as compatibility views. Use latencyProfile=deep for highest-quality
     expert work, balanced when lower latency matters, and fast only for smoke
     tests or debugging)
 7. QUICK RAW DISCOVERY → search_papers
@@ -133,11 +135,11 @@ Decision tree for tool selection:
 
 After search_papers: read brokerMetadata.nextStepHint for the recommended next move.
 After search_papers_smart: reuse searchSessionId for ask_result_set,
-map_research_landscape, or expand_research_graph, and inspect verifiedFindings,
-likelyUnverified, evidenceGaps, structuredSources, coverageSummary,
-failureSummary, acceptedExpansions, rejectedExpansions, speculativeExpansions,
-providersUsed, driftWarnings, latencyProfile, providerBudgetApplied, and
-providerOutcomes. Set
+map_research_landscape, or expand_research_graph, and inspect resultStatus,
+answerability, routingSummary, evidence, leads, structuredSources,
+coverageSummary, failureSummary,
+acceptedExpansions, rejectedExpansions, speculativeExpansions, providersUsed,
+driftWarnings, latencyProfile, providerBudgetApplied, and providerOutcomes. Set
 includeEnrichment=true only when you want Crossref, Unpaywall, and OpenAlex metadata on the
 final smart-ranked hits; enrichment is post-ranking only and never changes
 retrieval or provider ordering. When ScholarAPI is enabled, smart retrieval may
@@ -203,7 +205,8 @@ Default guided workflow:
 3. RESOLVE ONE REFERENCE -> resolve_reference
    Use this for citations, DOI strings, arXiv IDs, URLs, title fragments, and regulatory references.
 4. INSPECT ONE SOURCE -> inspect_source
-   Pass searchSessionId plus sourceId from research to inspect provenance, trust state, and direct-read next steps.
+   Pass searchSessionId plus evidenceId, sourceAlias, or sourceId from research to inspect provenance, trust state,
+   and direct-read next steps.
 
 Use get_runtime_status when behavior looks different across environments and you need the active runtime truth.
 The guided surface is intentionally opinionated: it prefers trust-graded evidence, explicit abstention, and direct next
@@ -225,23 +228,24 @@ AGENT_WORKFLOW_GUIDE = """
   It is supposed to abstain when the evidence is weak, off-topic, or incomplete.
 - Use `resolve_reference` when the user already has a citation, DOI, arXiv ID,
   URL, title fragment, or regulatory reference and wants the safest next anchor.
-- Use `inspect_source` with `searchSessionId` plus `sourceId` to inspect
+- Use `inspect_source` with `searchSessionId` plus `evidenceId`, `sourceAlias`,
+  or `sourceId` to inspect
   provenance, trust state, access status, and direct-read next steps.
 - Use `get_runtime_status` when behavior differs across environments and you need
   the active runtime truth without digging through low-level diagnostics.
 
 ## Guided output contract
 
-- `research` returns `intent`, `status`, `summary`, `verifiedFindings`, `sources`,
-  `unverifiedLeads`, `evidenceGaps`, `trustSummary`, `coverage`, `failureSummary`,
-  `resultMeaning`, `nextActions`, and `clarification`.
-- `status` is one of `succeeded`, `partial`, `needs_disambiguation`,
+- `research` returns `resultStatus`, `answerability`, `summary`, `routingSummary`,
+  `coverageSummary`, `evidence`, `leads`, `evidenceGaps`, `timeline`,
+  `nextActions`, and `clarification`.
+- `resultStatus` is one of `succeeded`, `partial`, `needs_disambiguation`,
   `abstained`, or `failed`.
-- Treat `verifiedFindings` as the compact trust-graded claims list and `sources`
-  as the canonical source records for inspection and citation.
-- Treat `unverifiedLeads` as auditable but not yet trusted evidence. It is the
-  place for weak, filtered, or off-topic leads that should not be promoted into
-  verified findings.
+- Treat `evidence` as the canonical grounded support set for answers and
+  inspection. Treat `leads` as auditable but not-yet-grounded context.
+- Legacy `verifiedFindings`, `sources`, and `unverifiedLeads` may still be
+  present for compatibility, but they should be derived views rather than the
+  primary trust contract.
 - If the tool abstains or asks for clarification, do not smooth that over with
   your own synthesis. Ask a narrower question or inspect the returned sources.
 
@@ -868,8 +872,8 @@ def triage_literature(
 ) -> str:
     return (
         f"Triage literature for '{topic}'. Goal: {goal}. Start with "
-        "research. Inspect status, verifiedFindings, sources, unverifiedLeads, evidenceGaps, "
-        "trustSummary, coverage, failureSummary, "
+        "research. Inspect resultStatus, answerability, evidence, leads, routingSummary, "
+        "coverageSummary, evidenceGaps, failureSummary, "
         "and clarification. Save the searchSessionId, then ask one grounded question with "
         "follow_up_research. If one hit becomes a strong anchor, use inspect_source for "
         "provenance before treating it as settled."
@@ -906,8 +910,9 @@ def refine_query(
 ) -> str:
     return (
         f"Refine the query '{query}'. Problem signal: {weakness}. "
-        "Try research first and inspect status, trustSummary, coverage, failureSummary, and "
-        "clarification. If the guided path abstains, add a concrete anchor such as a year, "
+        "Try research first and inspect resultStatus, answerability, routingSummary, coverageSummary, "
+        "evidenceGaps, failureSummary, and clarification. If the guided path abstains, "
+        "add a concrete anchor such as a year, "
         "venue, DOI, species name, agency, or title fragment. Use get_runtime_status when behavior "
         "differs across environments and you need the active runtime truth."
     )

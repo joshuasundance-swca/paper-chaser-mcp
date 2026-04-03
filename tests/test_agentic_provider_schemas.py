@@ -20,6 +20,11 @@ def test_planner_response_schema_is_openai_strict_compatible() -> None:
         "seedIdentifiers",
         "candidateConcepts",
         "providerPlan",
+        "authorityFirst",
+        "anchorType",
+        "anchorValue",
+        "requiredPrimarySources",
+        "successCriteria",
         "followUpMode",
     ]
 
@@ -57,3 +62,29 @@ def test_planner_response_schema_round_trips_constraints() -> None:
     assert decision.candidate_concepts == ["tool agents"]
     assert decision.provider_plan == ["semantic_scholar", "openalex"]
     assert decision.follow_up_mode == "claim_check"
+
+
+def test_planner_response_schema_round_trips_regulatory_fields() -> None:
+    response = _PlannerResponseSchema(
+        intent="regulatory",
+        constraints=_PlannerConstraintsSchema(focus="current text"),
+        seedIdentifiers=["50 CFR 17.11"],
+        candidateConcepts=["northern long-eared bat"],
+        providerPlan=["govinfo", "federal_register", "ecos"],
+        authorityFirst=True,
+        anchorType="cfr_citation",
+        anchorValue="50 CFR 17.11",
+        requiredPrimarySources=["govinfo"],
+        successCriteria=["current_text_required"],
+        followUpMode="qa",
+    )
+
+    decision = response.to_planner_decision()
+
+    assert decision.intent == "regulatory"
+    assert decision.provider_plan == ["govinfo", "federal_register", "ecos"]
+    assert decision.authority_first is True
+    assert decision.anchor_type == "cfr_citation"
+    assert decision.anchor_value == "50 CFR 17.11"
+    assert decision.required_primary_sources == ["govinfo"]
+    assert decision.success_criteria == ["current_text_required"]

@@ -126,6 +126,20 @@ TAXON_GROUPS: dict[str, set[str]] = {
     "reptiles": {"reptile", "reptiles", "lizard", "lizards", "snake", "snakes"},
     "invertebrates": {"invertebrate", "invertebrates", "insect", "insects"},
 }
+_LITERATURE_PROVIDER_SET = {"semantic_scholar", "openalex", "scholarapi", "core", "arxiv"}
+_REGULATORY_PROVIDER_SET = {"ecos", "federal_register", "govinfo", "tavily", "perplexity"}
+_PRIMARY_SOURCE_PROVIDER_SET = {"ecos", "federal_register", "govinfo", "agency_primary_source"}
+_PLANNER_INTENTS = {"discovery", "review", "known_item", "author", "citation", "regulatory"}
+_ANCHOR_TYPES = {
+    "cfr_citation",
+    "fr_citation",
+    "document_number",
+    "species_common_name",
+    "species_scientific_name",
+    "agency_guidance_title",
+    "regulatory_subject",
+}
+_SUCCESS_CRITERIA = {"current_text_required", "timeline_required", "dossier_required", "guidance_doc_required"}
 
 
 class _PlannerConstraintsSchema(BaseModel):
@@ -139,26 +153,35 @@ class _PlannerConstraintsSchema(BaseModel):
 class _PlannerResponseSchema(BaseModel):
     """Structured planner response that avoids free-form object maps."""
 
-    intent: Literal[
-        "discovery",
-        "review",
-        "known_item",
-        "author",
-        "citation",
-    ] = "discovery"
+    intent: Literal["discovery", "review", "known_item", "author", "citation", "regulatory"] = "discovery"
     constraints: _PlannerConstraintsSchema = Field(default_factory=_PlannerConstraintsSchema)
     seedIdentifiers: list[str] = Field(default_factory=list)
     candidateConcepts: list[str] = Field(default_factory=list)
     providerPlan: list[str] = Field(default_factory=list)
+    authorityFirst: bool = True
+    anchorType: str | None = None
+    anchorValue: str | None = None
+    requiredPrimarySources: list[str] = Field(default_factory=list)
+    successCriteria: list[str] = Field(default_factory=list)
     followUpMode: Literal["qa", "claim_check", "comparison"] = "qa"
 
     def to_planner_decision(self) -> PlannerDecision:
+        intent = self.intent if self.intent in _PLANNER_INTENTS else "discovery"
+        provider_plan = _sanitize_provider_plan(intent=intent, provider_plan=self.providerPlan)
+        anchor_type = self.anchorType if self.anchorType in _ANCHOR_TYPES else None
+        required_primary = _sanitize_primary_sources(self.requiredPrimarySources)
+        success_criteria = _sanitize_success_criteria(self.successCriteria)
         return PlannerDecision(
-            intent=self.intent,
+            intent=intent,
             constraints={key: value for key, value in self.constraints.model_dump(exclude_none=True).items() if value},
             seedIdentifiers=self.seedIdentifiers,
             candidateConcepts=self.candidateConcepts,
-            providerPlan=self.providerPlan,
+            providerPlan=provider_plan,
+            authorityFirst=bool(self.authorityFirst),
+            anchorType=anchor_type,
+            anchorValue=str(self.anchorValue or "").strip() or None,
+            requiredPrimarySources=required_primary,
+            successCriteria=success_criteria,
             followUpMode=self.followUpMode,
         )
 
@@ -178,6 +201,9 @@ class _AnswerSchema(BaseModel):
     unsupportedAsks: list[str] = Field(default_factory=list)
     followUpQuestions: list[str] = Field(default_factory=list)
     confidence: Literal["high", "medium", "low"] = "medium"
+    answerability: Literal["grounded", "limited", "insufficient"] = "limited"
+    selectedEvidenceIds: list[str] = Field(default_factory=list)
+    selectedLeadIds: list[str] = Field(default_factory=list)
 
 
 def _tokenize(text: str) -> list[str]:
@@ -454,10 +480,16 @@ def _normalize_confidence_label(value: Any) -> Literal["high", "medium", "low"]:
 def _paper_evidence_payload(papers: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
     return [
         {
+            "paperId": paper.get("paperId") or paper.get("sourceId") or paper.get("canonicalId"),
             "title": paper.get("title"),
             "abstract": paper.get("abstract"),
             "venue": paper.get("venue"),
             "year": paper.get("year"),
+            "provider": paper.get("source") or paper.get("provider"),
+            "sourceType": paper.get("sourceType"),
+            "verificationStatus": paper.get("verificationStatus"),
+            "accessStatus": paper.get("accessStatus"),
+            "canonicalUrl": paper.get("canonicalUrl") or paper.get("url"),
         }
         for paper in papers[:limit]
     ]
@@ -563,9 +595,10 @@ def _extract_json_object(text: str) -> str | None:
     if fenced:
         return fenced.group(1).strip()
 
-    start = text.find("{")
-    if start < 0:
+    stripped = text.lstrip()
+    if not stripped.startswith("{"):
         return None
+    start = text.find("{")
     depth = 0
     for index, char in enumerate(text[start:], start=start):
         if char == "{":
@@ -635,4 +668,84 @@ def _extract_seed_identifiers(query: str) -> list[str]:
             continue
         seen.add(identifier)
         deduped.append(identifier)
+    return deduped
+
+
+def _normalize_answer_schema_output(
+    *,
+    parsed_answer: _AnswerSchema,
+    evidence_papers: list[dict[str, Any]],
+    confidence_normalizer: Any,
+) -> dict[str, Any]:
+    payload = parsed_answer.model_dump()
+    payload["confidence"] = confidence_normalizer(payload.get("confidence"))
+    valid_evidence_ids = _collect_evidence_ids(evidence_papers)
+    selected_evidence_ids = [
+        str(identifier).strip()
+        for identifier in payload.get("selectedEvidenceIds") or []
+        if str(identifier).strip() in valid_evidence_ids
+    ]
+    payload["selectedEvidenceIds"] = selected_evidence_ids
+    payload["selectedLeadIds"] = [str(identifier).strip() for identifier in payload.get("selectedLeadIds") or []]
+    if payload.get("answerability") == "grounded" and not selected_evidence_ids and evidence_papers:
+        payload["answerability"] = "limited"
+    return payload
+
+
+def _collect_evidence_ids(evidence_papers: list[dict[str, Any]]) -> set[str]:
+    valid_ids: set[str] = set()
+    for paper in evidence_papers:
+        if not isinstance(paper, dict):
+            continue
+        for key in ("paperId", "sourceId", "canonicalId"):
+            value = str(paper.get(key) or "").strip()
+            if value:
+                valid_ids.add(value)
+    return valid_ids
+
+
+def _sanitize_provider_plan(*, intent: str, provider_plan: list[str]) -> list[str]:
+    allowed = _REGULATORY_PROVIDER_SET if intent == "regulatory" else _LITERATURE_PROVIDER_SET
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for provider in provider_plan:
+        normalized = str(provider or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        if normalized not in allowed:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
+    if deduped:
+        return deduped
+    if intent == "regulatory":
+        return ["ecos", "federal_register", "govinfo"]
+    return ["semantic_scholar", "openalex", "scholarapi", "core", "arxiv"]
+
+
+def _sanitize_primary_sources(primary_sources: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for provider in primary_sources:
+        normalized = str(provider or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        if normalized not in _PRIMARY_SOURCE_PROVIDER_SET:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
+    return deduped
+
+
+def _sanitize_success_criteria(criteria: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for criterion in criteria:
+        normalized = str(criterion or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        if normalized not in _SUCCESS_CRITERIA:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
     return deduped
