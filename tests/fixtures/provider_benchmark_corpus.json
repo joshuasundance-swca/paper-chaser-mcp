@@ -1,6 +1,56 @@
 {
-  "version": 1,
+  "version": 2,
   "cases": [
+    {
+      "id": "guided_default_research_entrypoint",
+      "category": "guided_default_profile",
+      "tool": "research",
+      "inputs": {
+        "query": "retrieval-augmented generation for coding agents",
+        "limit": 5
+      },
+      "latencyProfile": "balanced",
+      "expected": {
+        "goal": "low_context_guided_success",
+        "statusAnyOf": [
+          "succeeded",
+          "partial",
+          "abstained",
+          "needs_disambiguation"
+        ],
+        "requiresFields": [
+          "intent",
+          "status",
+          "summary",
+          "findings",
+          "sources",
+          "trustSummary",
+          "nextActions"
+        ]
+      }
+    },
+    {
+      "id": "guided_runtime_truth_status",
+      "category": "runtime_summary_truth",
+      "tool": "get_runtime_status",
+      "inputs": {},
+      "latencyProfile": "fast",
+      "expected": {
+        "goal": "runtime_truth_consistency",
+        "requiresFields": [
+          "runtimeSummary",
+          "providerOrder",
+          "providers"
+        ],
+        "runtimeSummaryFields": [
+          "effectiveProfile",
+          "configuredSmartProvider",
+          "activeSmartProvider",
+          "activeProviderSet",
+          "disabledProviderSet"
+        ]
+      }
+    },
     {
       "id": "doi_lookup_known_item",
       "category": "doi_lookup",
@@ -57,6 +107,30 @@
       }
     },
     {
+      "id": "safe_abstention_unsupported_follow_up",
+      "category": "safe_abstention",
+      "tool": "follow_up_research",
+      "inputs": {
+        "searchSessionId": "ssn_fixture_placeholder",
+        "question": "What evaluation tradeoffs show up here?"
+      },
+      "latencyProfile": "balanced",
+      "expected": {
+        "goal": "safe_abstention_over_plausible_garbage",
+        "answerStatusAnyOf": [
+          "answered",
+          "abstained",
+          "insufficient_evidence"
+        ],
+        "abstentionContract": {
+          "answerMustBeNullWhen": [
+            "abstained",
+            "insufficient_evidence"
+          ]
+        }
+      }
+    },
+    {
       "id": "citation_expansion_serpapi_cited_by",
       "category": "citation_expansion",
       "tool": "search_papers_serpapi_cited_by",
@@ -80,6 +154,26 @@
       },
       "expected": {
         "goal": "theme_mapping_with_grounded_clusters"
+      }
+    },
+    {
+      "id": "regulatory_condor_primary_source_correctness",
+      "category": "regulatory_correctness",
+      "tool": "search_papers_smart",
+      "inputs": {
+        "query": "regulatory history of California condor under 50 CFR 17.95",
+        "limit": 5,
+        "latencyProfile": "balanced"
+      },
+      "expected": {
+        "goal": "subject_anchored_primary_source_timeline",
+        "requiresFields": [
+          "structuredSources",
+          "verifiedFindings",
+          "evidenceGaps",
+          "regulatoryTimeline"
+        ],
+        "mustFilterUnrelatedSpeciesNotices": true
       }
     },
     {

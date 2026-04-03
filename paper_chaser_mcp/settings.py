@@ -23,6 +23,7 @@ AgenticProvider = Literal[
     "deterministic",
 ]
 AgenticIndexBackend = Literal["memory", "faiss"]
+ToolProfile = Literal["guided", "expert"]
 
 
 def _env_bool(key: str, default: bool = True) -> bool:
@@ -146,7 +147,8 @@ class AppSettings(BaseModel):
     enable_ecos: bool = True
     enable_federal_register: bool = True
     enable_govinfo_cfr: bool = True
-    hide_disabled_tools: bool = False
+    tool_profile: ToolProfile = "guided"
+    hide_disabled_tools: bool = True
     provider_order: tuple[SearchProvider, ...] = DEFAULT_SEARCH_PROVIDER_ORDER
     transport: Literal["stdio", "http", "streamable-http", "sse"] = "stdio"
     http_host: str = "127.0.0.1"
@@ -181,6 +183,8 @@ class AppSettings(BaseModel):
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "AppSettings":
         env = environ if environ is not None else os.environ
+        tool_profile = cast_tool_profile(env.get("PAPER_CHASER_TOOL_PROFILE"))
+        hide_disabled_tools_value = env.get("PAPER_CHASER_HIDE_DISABLED_TOOLS")
         return cls(
             openai_api_key=_parse_optional_string(env, "OPENAI_API_KEY"),
             nvidia_api_key=_parse_optional_string(env, "NVIDIA_API_KEY"),
@@ -258,10 +262,15 @@ class AppSettings(BaseModel):
                 "PAPER_CHASER_ENABLE_GOVINFO_CFR",
                 True,
             ),
-            hide_disabled_tools=_parse_env_bool(
-                env,
-                "PAPER_CHASER_HIDE_DISABLED_TOOLS",
-                False,
+            tool_profile=tool_profile,
+            hide_disabled_tools=(
+                _parse_env_bool(
+                    env,
+                    "PAPER_CHASER_HIDE_DISABLED_TOOLS",
+                    tool_profile == "guided",
+                )
+                if hide_disabled_tools_value is not None
+                else (tool_profile == "guided")
             ),
             provider_order=_parse_provider_order(env, "PAPER_CHASER_PROVIDER_ORDER"),
             transport=cast_transport(env.get("PAPER_CHASER_TRANSPORT")),
@@ -405,6 +414,11 @@ class AppSettings(BaseModel):
                 "Disabled tools are hidden from list_tools output, which can make "
                 "capability gaps harder to diagnose from clients."
             )
+        if self.tool_profile == "guided":
+            warnings.append(
+                "Guided tool profile is active: list_tools exposes only the low-context "
+                "guided surface while expert tools remain internal/operator-facing."
+            )
         return warnings
 
     def _provider_enabled(self, provider: SearchProvider) -> bool:
@@ -449,6 +463,16 @@ def cast_agentic_provider(value: str | None) -> AgenticProvider:
         "PAPER_CHASER_AGENTIC_PROVIDER must be one of: openai, azure-openai, "
         "anthropic, nvidia, google, mistral, huggingface, deterministic"
     )
+
+
+def cast_tool_profile(value: str | None) -> ToolProfile:
+    """Normalize the configured public tool profile."""
+    if value is None or value == "":
+        return "guided"
+    normalized = value.strip().lower()
+    if normalized in {"guided", "expert"}:
+        return cast(ToolProfile, normalized)
+    raise ValueError("PAPER_CHASER_TOOL_PROFILE must be one of: guided, expert")
 
 
 def cast_agentic_index_backend(value: str | None) -> AgenticIndexBackend:

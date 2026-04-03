@@ -6,7 +6,8 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from typing import Any, Callable, cast
 
-from .citation_repair import looks_like_paper_identifier, resolve_citation
+from .agentic.planner import detect_regulatory_intent, query_facets, query_terms
+from .citation_repair import looks_like_citation_query, looks_like_paper_identifier, parse_citation, resolve_citation
 from .clients.scholarapi import (
     ScholarApiError,
     ScholarApiKeyMissingError,
@@ -27,15 +28,20 @@ from .models.tools import (
     BasicSearchPapersArgs,
     EcosSpeciesLookupArgs,
     ExpandResearchGraphArgs,
+    FollowUpResearchArgs,
     GetCfrTextArgs,
     GetCitationFormatsArgs,
     GetDocumentTextEcosArgs,
     GetFederalRegisterDocumentArgs,
+    GetRuntimeStatusArgs,
+    InspectSourceArgs,
     ListSpeciesDocumentsEcosArgs,
     MapResearchLandscapeArgs,
     PaperLookupArgs,
     PaperMatchArgs,
+    ResearchArgs,
     ResolveCitationArgs,
+    ResolveReferenceArgs,
     SearchFederalRegisterArgs,
     SearchPapersArgs,
     SearchProvider,
@@ -581,6 +587,468 @@ SMART_TOOLS = {
     "expand_research_graph",
 }
 
+GUIDED_TOOLS = {
+    "research",
+    "follow_up_research",
+    "resolve_reference",
+    "inspect_source",
+    "get_runtime_status",
+}
+
+
+def _runtime_provider_order(
+    *,
+    provider_order: list[SearchProvider] | None,
+    smart_provider_order: list[str],
+) -> list[str]:
+    return [
+        *(provider_order or []),
+        "openalex",
+        "scholarapi",
+        "crossref",
+        "unpaywall",
+        *smart_provider_order,
+        "ecos",
+        "federal_register",
+        "govinfo",
+    ]
+
+
+def _smart_runtime_provider_state(agentic_runtime: Any) -> tuple[dict[str, bool], list[str], str | None, str | None]:
+    smart_provider_enabled = {
+        "openai": False,
+        "azure-openai": False,
+        "anthropic": False,
+        "nvidia": False,
+        "google": False,
+        "mistral": False,
+        "huggingface": False,
+    }
+    smart_provider_order = [
+        "openai",
+        "azure-openai",
+        "anthropic",
+        "nvidia",
+        "google",
+        "mistral",
+        "huggingface",
+    ]
+    configured_smart_provider: str | None = None
+    active_smart_provider: str | None = None
+    if agentic_runtime is not None and hasattr(agentic_runtime, "smart_provider_diagnostics"):
+        smart_provider_enabled, smart_provider_order = agentic_runtime.smart_provider_diagnostics()
+    provider_bundle = getattr(agentic_runtime, "_provider_bundle", None)
+    if provider_bundle is not None and hasattr(provider_bundle, "selection_metadata"):
+        selection = provider_bundle.selection_metadata()
+        configured_value = selection.get("configuredSmartProvider")
+        active_value = selection.get("activeSmartProvider")
+        configured_smart_provider = str(configured_value) if configured_value else None
+        active_smart_provider = str(active_value) if active_value else None
+    return smart_provider_enabled, smart_provider_order, configured_smart_provider, active_smart_provider
+
+
+def _build_provider_diagnostics_snapshot(
+    *,
+    include_recent_outcomes: bool,
+    provider_order: list[SearchProvider] | None,
+    provider_registry: Any,
+    agentic_runtime: Any,
+    transport_mode: str,
+    tool_profile: str,
+    hide_disabled_tools: bool,
+    session_ttl_seconds: int | None,
+    embeddings_enabled: bool | None,
+    enable_core: bool,
+    enable_semantic_scholar: bool,
+    enable_openalex: bool,
+    enable_arxiv: bool,
+    enable_serpapi: bool,
+    enable_scholarapi: bool,
+    enable_crossref: bool,
+    enable_unpaywall: bool,
+    enable_ecos: bool,
+    enable_federal_register: bool,
+    enable_govinfo_cfr: bool,
+    serpapi_client: Any,
+    scholarapi_client: Any,
+) -> dict[str, Any]:
+    try:
+        package_version_value = package_version("paper-chaser-mcp")
+    except PackageNotFoundError:
+        package_version_value = None
+
+    (
+        smart_provider_enabled,
+        smart_provider_order,
+        configured_smart_provider,
+        active_smart_provider,
+    ) = _smart_runtime_provider_state(agentic_runtime)
+    enabled_state = {
+        "semantic_scholar": enable_semantic_scholar,
+        "openalex": enable_openalex,
+        "core": enable_core,
+        "arxiv": enable_arxiv,
+        "serpapi_google_scholar": enable_serpapi,
+        "scholarapi": enable_scholarapi,
+        "crossref": enable_crossref,
+        "unpaywall": enable_unpaywall,
+        **smart_provider_enabled,
+        "ecos": enable_ecos,
+        "federal_register": enable_federal_register,
+        "govinfo": enable_govinfo_cfr,
+    }
+    provider_list_order = _runtime_provider_order(
+        provider_order=provider_order,
+        smart_provider_order=smart_provider_order,
+    )
+    provider_order_effective = [str(provider) for provider in (provider_order or [])]
+    active_provider_set = sorted([provider for provider, enabled in enabled_state.items() if enabled])
+    disabled_provider_set = sorted([provider for provider, enabled in enabled_state.items() if not enabled])
+    runtime_warnings: list[str] = []
+    enabled_raw_providers = [provider for provider in (provider_order or []) if provider in active_provider_set]
+    if len(enabled_raw_providers) <= 1:
+        runtime_warnings.append(
+            "The effective broker order is very narrow, so no-result responses "
+            "may reflect limited provider coverage rather than absence of evidence."
+        )
+    if not enable_serpapi and serpapi_client is not None:
+        runtime_warnings.append(
+            "SerpApi client state is present but PAPER_CHASER_ENABLE_SERPAPI is "
+            "false, so paid recall recovery is disabled."
+        )
+    if not enable_scholarapi and scholarapi_client is not None:
+        runtime_warnings.append(
+            "ScholarAPI client state is present but PAPER_CHASER_ENABLE_"
+            "SCHOLARAPI is false, so ScholarAPI discovery and full-text paths "
+            "are inactive."
+        )
+    if transport_mode == "stdio":
+        runtime_warnings.append(
+            "The current runtime is stdio, so HTTP deployment settings do not affect this invocation path."
+        )
+    if configured_smart_provider == "huggingface":
+        runtime_warnings.append(
+            "Hugging Face is configured as a chat-only smart provider in this repo; embeddings stay disabled."
+        )
+    runtime_summary = RuntimeSummary(
+        effectiveProfile=tool_profile,
+        transportMode=transport_mode,
+        smartLayerEnabled=agentic_runtime is not None,
+        activeProviderSet=active_provider_set,
+        disabledProviderSet=disabled_provider_set,
+        configuredSmartProvider=configured_smart_provider,
+        activeSmartProvider=active_smart_provider,
+        providerOrderEffective=provider_order_effective,
+        toolsHidden=hide_disabled_tools,
+        sessionTtlSeconds=session_ttl_seconds,
+        embeddingsEnabled=embeddings_enabled,
+        version=package_version_value,
+        warnings=runtime_warnings,
+    )
+    if provider_registry is None:
+        return {
+            "generatedAt": None,
+            "providerOrder": provider_list_order,
+            "providers": [],
+            "runtimeSummary": runtime_summary.model_dump(by_alias=True, exclude_none=True),
+        }
+
+    snapshot = provider_registry.snapshot(
+        enabled=enabled_state,
+        provider_order=provider_list_order,
+    )
+    if not include_recent_outcomes:
+        for provider in snapshot.get("providers", []):
+            if isinstance(provider, dict):
+                provider["recentOutcomes"] = []
+    snapshot["runtimeSummary"] = runtime_summary.model_dump(by_alias=True, exclude_none=True)
+    return snapshot
+
+
+def _tokenize_relevance_text(value: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]{2,}", value.lower()))
+
+
+def _facet_match(tokens: set[str], facet: str) -> bool:
+    facet_tokens = _tokenize_relevance_text(facet)
+    return bool(facet_tokens) and facet_tokens.issubset(tokens)
+
+
+def _topical_relevance_from_signals(
+    *,
+    query_similarity: float,
+    title_facet_coverage: float,
+    title_anchor_coverage: float,
+    query_facet_coverage: float,
+    query_anchor_coverage: float,
+) -> str:
+    title_has_anchor = title_facet_coverage > 0 or title_anchor_coverage > 0
+    body_has_anchor = query_facet_coverage > 0 or query_anchor_coverage > 0
+    if query_similarity >= 0.25 and title_has_anchor:
+        return "on_topic"
+    if query_similarity < 0.12 or not (title_has_anchor or body_has_anchor):
+        return "off_topic"
+    return "weak_match"
+
+
+def _paper_topical_relevance(query: str, paper: dict[str, Any]) -> str:
+    facets = query_facets(query)
+    terms = query_terms(query)
+    title_tokens = _tokenize_relevance_text(str(paper.get("title") or ""))
+    paper_tokens = _tokenize_relevance_text(
+        " ".join(
+            part
+            for part in [
+                str(paper.get("title") or ""),
+                str(paper.get("abstract") or ""),
+                str(paper.get("venue") or ""),
+            ]
+            if part
+        )
+    )
+    matched_terms = [term for term in terms if term in paper_tokens]
+    matched_title_terms = [term for term in terms if term in title_tokens]
+    matched_facets = [facet for facet in facets if _facet_match(paper_tokens, facet)]
+    matched_title_facets = [facet for facet in facets if _facet_match(title_tokens, facet)]
+    term_coverage = len(matched_terms) / len(terms) if terms else 0.0
+    title_term_coverage = len(matched_title_terms) / len(terms) if terms else 0.0
+    query_similarity = max(term_coverage, title_term_coverage)
+    return _topical_relevance_from_signals(
+        query_similarity=query_similarity,
+        title_facet_coverage=(len(matched_title_facets) / len(facets) if facets else 0.0),
+        title_anchor_coverage=title_term_coverage,
+        query_facet_coverage=(len(matched_facets) / len(facets) if facets else 0.0),
+        query_anchor_coverage=term_coverage,
+    )
+
+
+def _guided_source_id(candidate: dict[str, Any], *, fallback_prefix: str, index: int) -> str:
+    for key in ("sourceId", "paperId", "canonicalId", "recommendedExpansionId", "citation", "canonicalUrl", "url"):
+        value = candidate.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    title = str(candidate.get("title") or "").strip()
+    if title:
+        return title
+    return f"{fallback_prefix}-{index}"
+
+
+def _guided_source_record_from_structured_source(source: dict[str, Any], *, index: int) -> dict[str, Any]:
+    return {
+        "sourceId": _guided_source_id(source, fallback_prefix="source", index=index),
+        "title": source.get("title"),
+        "provider": source.get("provider"),
+        "sourceType": source.get("sourceType") or "unknown",
+        "verificationStatus": source.get("verificationStatus") or "unverified",
+        "accessStatus": source.get("accessStatus") or "access_unverified",
+        "topicalRelevance": source.get("topicalRelevance") or "weak_match",
+        "confidence": source.get("confidence") or "medium",
+        "isPrimarySource": bool(source.get("isPrimarySource")),
+        "canonicalUrl": source.get("canonicalUrl"),
+        "retrievedUrl": source.get("retrievedUrl"),
+        "date": source.get("date"),
+        "note": source.get("note"),
+    }
+
+
+def _guided_source_record_from_paper(query: str, paper: dict[str, Any], *, index: int) -> dict[str, Any]:
+    canonical_url = paper.get("canonicalUrl") or paper.get("url") or paper.get("pdfUrl")
+    source_type = paper.get("sourceType") or "scholarly_article"
+    verification_status = paper.get("verificationStatus") or "verified_metadata"
+    access_status = paper.get("accessStatus") or (
+        "full_text_verified" if paper.get("fullTextObserved") else "access_unverified"
+    )
+    topical_relevance = _paper_topical_relevance(query, paper)
+    confidence = paper.get("confidence") or ("high" if topical_relevance == "on_topic" else "medium")
+    return {
+        "sourceId": _guided_source_id(paper, fallback_prefix="paper", index=index),
+        "title": paper.get("title"),
+        "provider": paper.get("source"),
+        "sourceType": source_type,
+        "verificationStatus": verification_status,
+        "accessStatus": access_status,
+        "topicalRelevance": topical_relevance,
+        "confidence": confidence,
+        "isPrimarySource": bool(paper.get("isPrimarySource")),
+        "canonicalUrl": canonical_url,
+        "retrievedUrl": paper.get("retrievedUrl") or canonical_url,
+        "date": paper.get("publicationDate") or paper.get("year"),
+        "note": paper.get("venue"),
+    }
+
+
+def _guided_findings_from_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for source in sources:
+        if source.get("topicalRelevance") != "on_topic":
+            continue
+        verification_status = str(source.get("verificationStatus") or "")
+        if verification_status not in {"verified_primary_source", "verified_metadata"}:
+            continue
+        claim = str(source.get("title") or source.get("note") or source.get("sourceId") or "").strip()
+        if not claim:
+            continue
+        findings.append(
+            {
+                "claim": claim,
+                "supportingSourceIds": [source["sourceId"]],
+                "trustLevel": "verified",
+            }
+        )
+    return findings
+
+
+def _guided_candidate_leads_from_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    leads: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for source in sources:
+        if source.get("topicalRelevance") == "on_topic" and source.get("verificationStatus") in {
+            "verified_primary_source",
+            "verified_metadata",
+        }:
+            continue
+        source_id = str(source.get("sourceId") or "").strip()
+        if source_id and source_id in seen:
+            continue
+        if source_id:
+            seen.add(source_id)
+        leads.append(source)
+    return leads[:6]
+
+
+def _guided_trust_summary(sources: list[dict[str, Any]], evidence_gaps: list[str]) -> dict[str, Any]:
+    return {
+        "verifiedSourceCount": sum(
+            1
+            for source in sources
+            if source.get("verificationStatus") in {"verified_primary_source", "verified_metadata"}
+        ),
+        "onTopicSourceCount": sum(1 for source in sources if source.get("topicalRelevance") == "on_topic"),
+        "weakMatchCount": sum(1 for source in sources if source.get("topicalRelevance") == "weak_match"),
+        "offTopicCount": sum(1 for source in sources if source.get("topicalRelevance") == "off_topic"),
+        "evidenceGapCount": len(evidence_gaps),
+    }
+
+
+def _guided_research_status(
+    *,
+    intent: str,
+    sources: list[dict[str, Any]],
+    findings: list[dict[str, Any]],
+    failure_summary: dict[str, Any] | None,
+    clarification: dict[str, Any] | None,
+) -> str:
+    if clarification is not None:
+        return "needs_disambiguation"
+    if intent == "known_item" and findings:
+        return "succeeded"
+    if intent == "regulatory":
+        primary_sources = [
+            source
+            for source in sources
+            if source.get("topicalRelevance") == "on_topic" and bool(source.get("isPrimarySource"))
+        ]
+        if primary_sources:
+            return "partial" if failure_summary is not None else "succeeded"
+        return "needs_disambiguation" if sources else "abstained"
+    if len(findings) >= 2:
+        return "partial" if failure_summary is not None else "succeeded"
+    if sources:
+        return "partial"
+    return "abstained"
+
+
+def _guided_summary(intent: str, status: str, findings: list[dict[str, Any]], sources: list[dict[str, Any]]) -> str:
+    if findings:
+        claims = "; ".join(str(finding["claim"]) for finding in findings[:3])
+        return f"{intent.replace('_', ' ').title()} evidence grounded in {len(findings)} verified source(s): {claims}."
+    if sources:
+        return (
+            "The search found some source leads, but the evidence stayed too weak, off-topic, or incomplete "
+            "for a grounded summary."
+        )
+    if status == "needs_disambiguation":
+        return "The request needs a more specific anchor before the system can build a grounded result."
+    return "No sufficiently trustworthy evidence was found for a grounded result."
+
+
+def _guided_next_actions(
+    *,
+    search_session_id: str | None,
+    next_step_hint: str | None,
+    status: str,
+) -> list[str]:
+    actions: list[str] = []
+    if search_session_id:
+        actions.append(
+            f"Use inspect_source with searchSessionId='{search_session_id}' and one sourceId to inspect evidence."
+        )
+        actions.append(
+            f"Use follow_up_research with searchSessionId='{search_session_id}' to ask one grounded follow-up question."
+        )
+    if next_step_hint:
+        actions.append(str(next_step_hint))
+    if status in {"abstained", "needs_disambiguation"}:
+        actions.append("Narrow the request with a specific title, DOI, species name, agency, venue, or year range.")
+    return actions[:4]
+
+
+def _find_record_source(
+    *,
+    workspace_registry: Any,
+    search_session_id: str,
+    source_id: str,
+) -> dict[str, Any] | None:
+    if workspace_registry is None:
+        return None
+    record = workspace_registry.get(search_session_id)
+    payload = record.payload if isinstance(record.payload, dict) else {}
+    for source in payload.get("sources") or []:
+        if isinstance(source, dict) and str(source.get("sourceId") or "").strip() == source_id:
+            return source
+    for source in payload.get("structuredSources") or []:
+        if not isinstance(source, dict):
+            continue
+        candidate_ids = {
+            str(source.get("sourceId") or "").strip(),
+            str(source.get("citation") or "").strip(),
+            str(source.get("canonicalUrl") or "").strip(),
+        }
+        if source_id in candidate_ids:
+            return _guided_source_record_from_structured_source(source, index=1)
+    for index, paper in enumerate(record.papers, start=1):
+        if not isinstance(paper, dict):
+            continue
+        candidate_ids = {
+            str(paper.get("paperId") or "").strip(),
+            str(paper.get("sourceId") or "").strip(),
+            str(paper.get("canonicalId") or "").strip(),
+            str(paper.get("recommendedExpansionId") or "").strip(),
+        }
+        if source_id in candidate_ids:
+            query = str(record.query or payload.get("query") or "")
+            return _guided_source_record_from_paper(query, paper, index=index)
+    return None
+
+
+def _direct_read_recommendations(source: dict[str, Any]) -> list[str]:
+    recommendations: list[str] = []
+    canonical_url = str(source.get("canonicalUrl") or source.get("retrievedUrl") or "").strip()
+    if canonical_url:
+        recommendations.append(f"Open the canonical source: {canonical_url}")
+    provider = str(source.get("provider") or "")
+    if provider == "govinfo":
+        recommendations.append("Use get_cfr_text for authoritative CFR follow-through.")
+    elif provider == "federal_register":
+        recommendations.append("Use get_federal_register_document to read the full Federal Register item.")
+    elif provider == "ecos":
+        recommendations.append("Use get_document_text_ecos for the full ECOS document text when available.")
+    elif provider in {"semantic_scholar", "openalex", "arxiv", "core", "scholarapi"}:
+        recommendations.append(
+            "Use expert paper-detail tools if you need the full provider payload or citation expansion."
+        )
+    return recommendations[:3]
+
 
 async def dispatch_tool(
     name: str,
@@ -614,6 +1082,7 @@ async def dispatch_tool(
     workspace_registry: Any = None,
     agentic_runtime: Any = None,
     transport_mode: str = "stdio",
+    tool_profile: str = "guided",
     hide_disabled_tools: bool = False,
     session_ttl_seconds: int | None = None,
     embeddings_enabled: bool | None = None,
@@ -630,6 +1099,348 @@ async def dispatch_tool(
         enable_openalex=enable_openalex,
         provider_registry=provider_registry,
     )
+
+    async def _dispatch_internal(tool_name: str, tool_arguments: dict[str, Any]) -> dict[str, Any]:
+        return await dispatch_tool(
+            tool_name,
+            tool_arguments,
+            client=client,
+            core_client=core_client,
+            openalex_client=openalex_client,
+            scholarapi_client=scholarapi_client,
+            arxiv_client=arxiv_client,
+            enable_core=enable_core,
+            enable_semantic_scholar=enable_semantic_scholar,
+            enable_openalex=enable_openalex,
+            enable_scholarapi=enable_scholarapi,
+            enable_arxiv=enable_arxiv,
+            serpapi_client=serpapi_client,
+            enable_serpapi=enable_serpapi,
+            crossref_client=crossref_client,
+            unpaywall_client=unpaywall_client,
+            ecos_client=ecos_client,
+            federal_register_client=federal_register_client,
+            govinfo_client=govinfo_client,
+            enable_crossref=enable_crossref,
+            enable_unpaywall=enable_unpaywall,
+            enable_ecos=enable_ecos,
+            enable_federal_register=enable_federal_register,
+            enable_govinfo_cfr=enable_govinfo_cfr,
+            enrichment_service=resolved_enrichment_service,
+            provider_order=provider_order,
+            provider_registry=provider_registry,
+            workspace_registry=workspace_registry,
+            agentic_runtime=agentic_runtime,
+            transport_mode=transport_mode,
+            tool_profile=tool_profile,
+            hide_disabled_tools=hide_disabled_tools,
+            session_ttl_seconds=session_ttl_seconds,
+            embeddings_enabled=embeddings_enabled,
+            ctx=ctx,
+            allow_elicitation=allow_elicitation,
+        )
+
+    if name == "get_runtime_status":
+        cast(GetRuntimeStatusArgs, TOOL_INPUT_MODELS[name].model_validate(arguments))
+        diagnostics = _build_provider_diagnostics_snapshot(
+            include_recent_outcomes=False,
+            provider_order=provider_order,
+            provider_registry=provider_registry,
+            agentic_runtime=agentic_runtime,
+            transport_mode=transport_mode,
+            tool_profile=tool_profile,
+            hide_disabled_tools=hide_disabled_tools,
+            session_ttl_seconds=session_ttl_seconds,
+            embeddings_enabled=embeddings_enabled,
+            enable_core=enable_core,
+            enable_semantic_scholar=enable_semantic_scholar,
+            enable_openalex=enable_openalex,
+            enable_arxiv=enable_arxiv,
+            enable_serpapi=enable_serpapi,
+            enable_scholarapi=enable_scholarapi,
+            enable_crossref=enable_crossref,
+            enable_unpaywall=enable_unpaywall,
+            enable_ecos=enable_ecos,
+            enable_federal_register=enable_federal_register,
+            enable_govinfo_cfr=enable_govinfo_cfr,
+            serpapi_client=serpapi_client,
+            scholarapi_client=scholarapi_client,
+        )
+        return {
+            "status": "ok",
+            "runtimeSummary": diagnostics["runtimeSummary"],
+            "providerOrder": diagnostics.get("providerOrder") or [],
+            "providers": diagnostics.get("providers") or [],
+            "warnings": diagnostics["runtimeSummary"].get("warnings") or [],
+        }
+
+    if name == "resolve_reference":
+        resolve_args = cast(ResolveReferenceArgs, TOOL_INPUT_MODELS[name].model_validate(arguments))
+        parsed = parse_citation(resolve_args.reference)
+        raw = await _dispatch_internal("resolve_citation", {"citation": resolve_args.reference})
+        best_match = raw.get("bestMatch")
+        alternatives = list(raw.get("alternatives") or [])
+        resolution_type = "title_fragment"
+        if parsed.looks_like_regulatory:
+            resolution_type = "regulatory_reference"
+        elif looks_like_paper_identifier(resolve_args.reference):
+            resolution_type = "paper_identifier"
+        elif looks_like_citation_query(resolve_args.reference):
+            resolution_type = "citation_repair"
+        status = "no_match"
+        if parsed.looks_like_regulatory and best_match is None:
+            status = "regulatory_primary_source"
+        elif best_match is not None:
+            status = (
+                "resolved"
+                if str(raw.get("resolutionConfidence") or "low") == "high" or not alternatives
+                else "multiple_candidates"
+            )
+        elif alternatives:
+            status = "multiple_candidates"
+        next_actions: list[str] = []
+        if status == "regulatory_primary_source":
+            next_actions = [
+                "Use research for a full trust-graded regulatory pass.",
+                "Use search_federal_register for notice or rule discovery when you need expert control.",
+                "Use get_cfr_text when the reference points at an exact CFR citation.",
+            ]
+        elif status in {"resolved", "multiple_candidates"}:
+            next_actions = [
+                "Use research with the resolved title or identifier to gather broader context.",
+                "Inspect the resolved metadata before citing or expanding it.",
+            ]
+        else:
+            next_actions = [
+                "Try adding an author, year, venue, DOI, or a more exact title fragment.",
+                "Use research when you want a broader trust-graded search instead of one exact resolution.",
+            ]
+        return {
+            "resolutionType": resolution_type,
+            "status": status,
+            "bestMatch": best_match,
+            "alternatives": alternatives,
+            "nextActions": next_actions,
+            "searchSessionId": raw.get("searchSessionId"),
+        }
+
+    if name == "research":
+        research_args = cast(ResearchArgs, TOOL_INPUT_MODELS[name].model_validate(arguments))
+        intent = "discovery"
+        if detect_regulatory_intent(research_args.query, research_args.focus):
+            intent = "regulatory"
+        elif looks_like_paper_identifier(research_args.query) or looks_like_citation_query(research_args.query):
+            intent = "known_item"
+
+        if intent == "known_item":
+            resolved = await _dispatch_internal("resolve_reference", {"reference": research_args.query})
+            paper = resolved.get("bestMatch", {}).get("paper") if isinstance(resolved.get("bestMatch"), dict) else None
+            sources = (
+                [_guided_source_record_from_paper(research_args.query, paper, index=1)]
+                if isinstance(paper, dict)
+                else []
+            )
+            findings = _guided_findings_from_sources(sources)
+            candidate_leads = _guided_candidate_leads_from_sources(sources)
+            status = "succeeded" if paper is not None else ("partial" if resolved.get("alternatives") else "abstained")
+            return {
+                "intent": intent,
+                "status": status,
+                "searchSessionId": resolved.get("searchSessionId"),
+                "summary": (
+                    f"Resolved the request to {paper.get('title')}."
+                    if isinstance(paper, dict)
+                    else "The reference could not be resolved confidently."
+                ),
+                "findings": findings,
+                "sources": sources,
+                "candidateLeads": candidate_leads,
+                "trustSummary": _guided_trust_summary(sources, []),
+                "coverage": None,
+                "failure": None,
+                "nextActions": list(resolved.get("nextActions") or []),
+                "clarification": None,
+            }
+
+        if agentic_runtime is not None:
+            smart = await _dispatch_internal(
+                "search_papers_smart",
+                {
+                    "query": research_args.query,
+                    "limit": research_args.limit,
+                    "year": research_args.year,
+                    "venue": research_args.venue,
+                    "focus": research_args.focus,
+                    "latencyProfile": research_args.latency_profile,
+                    "providerBudget": {"allowPaidProviders": False},
+                },
+            )
+            sources = [
+                _guided_source_record_from_structured_source(source, index=index)
+                for index, source in enumerate(smart.get("structuredSources") or [], start=1)
+                if isinstance(source, dict)
+            ]
+            findings = _guided_findings_from_sources(sources)
+            candidate_leads = [
+                _guided_source_record_from_structured_source(source, index=index)
+                for index, source in enumerate(smart.get("candidateLeads") or [], start=1)
+                if isinstance(source, dict)
+            ] or _guided_candidate_leads_from_sources(sources)
+            status = _guided_research_status(
+                intent=str(smart.get("strategyMetadata", {}).get("intent") or intent),
+                sources=sources,
+                findings=findings,
+                failure_summary=cast(dict[str, Any] | None, smart.get("failureSummary")),
+                clarification=cast(dict[str, Any] | None, smart.get("clarification")),
+            )
+            return {
+                "intent": str(smart.get("strategyMetadata", {}).get("intent") or intent),
+                "status": status,
+                "searchSessionId": smart.get("searchSessionId"),
+                "summary": _guided_summary(intent, status, findings, sources),
+                "findings": findings,
+                "sources": sources,
+                "candidateLeads": candidate_leads,
+                "trustSummary": _guided_trust_summary(sources, list(smart.get("evidenceGaps") or [])),
+                "coverage": smart.get("coverageSummary"),
+                "failure": smart.get("failureSummary"),
+                "nextActions": _guided_next_actions(
+                    search_session_id=cast(str | None, smart.get("searchSessionId")),
+                    next_step_hint=cast(str | None, smart.get("nextStepHint")),
+                    status=status,
+                ),
+                "clarification": smart.get("clarification"),
+                "regulatoryTimeline": smart.get("regulatoryTimeline"),
+            }
+
+        raw = await _dispatch_internal(
+            "search_papers",
+            {
+                "query": research_args.query,
+                "limit": research_args.limit,
+                "year": research_args.year,
+                "venue": ([research_args.venue] if research_args.venue else None),
+            },
+        )
+        sources = [
+            _guided_source_record_from_paper(research_args.query, paper, index=index)
+            for index, paper in enumerate(raw.get("data") or [], start=1)
+            if isinstance(paper, dict)
+        ]
+        findings = _guided_findings_from_sources(sources)
+        candidate_leads = _guided_candidate_leads_from_sources(sources)
+        status = _guided_research_status(
+            intent=intent,
+            sources=sources,
+            findings=findings,
+            failure_summary=cast(dict[str, Any] | None, raw.get("failureSummary")),
+            clarification=None,
+        )
+        return {
+            "intent": intent,
+            "status": status,
+            "searchSessionId": raw.get("searchSessionId"),
+            "summary": _guided_summary(intent, status, findings, sources),
+            "findings": findings,
+            "sources": sources,
+            "candidateLeads": candidate_leads,
+            "trustSummary": _guided_trust_summary(sources, []),
+            "coverage": raw.get("coverageSummary"),
+            "failure": raw.get("failureSummary"),
+            "nextActions": _guided_next_actions(
+                search_session_id=cast(str | None, raw.get("searchSessionId")),
+                next_step_hint=cast(str | None, raw.get("brokerMetadata", {}).get("nextStepHint")),
+                status=status,
+            ),
+            "clarification": None,
+        }
+
+    if name == "follow_up_research":
+        follow_up_args = cast(FollowUpResearchArgs, TOOL_INPUT_MODELS[name].model_validate(arguments))
+        if agentic_runtime is None:
+            return {
+                "searchSessionId": follow_up_args.search_session_id,
+                "answerStatus": "insufficient_evidence",
+                "answer": None,
+                "evidence": [],
+                "unsupportedAsks": [follow_up_args.question],
+                "followUpQuestions": [],
+                "sources": [],
+                "candidateLeads": [],
+                "trustSummary": _guided_trust_summary([], [follow_up_args.question]),
+                "coverage": None,
+                "failure": {
+                    "whatFailed": "Grounded follow-up requires the smart runtime to be enabled.",
+                    "whatStillWorked": "The saved search session can still be inspected source by source.",
+                    "fallbackAttempted": False,
+                    "completenessImpact": "No grounded synthesis was attempted.",
+                    "recommendedNextAction": "inspect_source",
+                },
+                "nextActions": [
+                    "Use inspect_source to inspect one source directly.",
+                    "Re-run research in an environment with the smart runtime enabled for grounded follow-up.",
+                ],
+            }
+        ask = await _dispatch_internal(
+            "ask_result_set",
+            {
+                "searchSessionId": follow_up_args.search_session_id,
+                "question": follow_up_args.question,
+            },
+        )
+        sources = [
+            _guided_source_record_from_structured_source(source, index=index)
+            for index, source in enumerate(ask.get("structuredSources") or [], start=1)
+            if isinstance(source, dict)
+        ]
+        candidate_leads = [
+            _guided_source_record_from_structured_source(source, index=index)
+            for index, source in enumerate(ask.get("candidateLeads") or [], start=1)
+            if isinstance(source, dict)
+        ] or _guided_candidate_leads_from_sources(sources)
+        answer_status = str(ask.get("answerStatus") or "answered")
+        return {
+            "searchSessionId": follow_up_args.search_session_id,
+            "answerStatus": answer_status,
+            "answer": ask.get("answer"),
+            "evidence": ask.get("evidence") or [],
+            "unsupportedAsks": ask.get("unsupportedAsks") or [],
+            "followUpQuestions": ask.get("followUpQuestions") or [],
+            "sources": sources,
+            "candidateLeads": candidate_leads,
+            "trustSummary": _guided_trust_summary(sources, list(ask.get("evidenceGaps") or [])),
+            "coverage": ask.get("coverageSummary"),
+            "failure": ask.get("failureSummary"),
+            "nextActions": _guided_next_actions(
+                search_session_id=follow_up_args.search_session_id,
+                next_step_hint=None,
+                status=("partial" if answer_status == "insufficient_evidence" else answer_status),
+            ),
+        }
+
+    if name == "inspect_source":
+        inspect_args = cast(InspectSourceArgs, TOOL_INPUT_MODELS[name].model_validate(arguments))
+        source = _find_record_source(
+            workspace_registry=workspace_registry,
+            search_session_id=inspect_args.search_session_id,
+            source_id=inspect_args.source_id,
+        )
+        if source is None:
+            raise ValueError(
+                f"Could not find sourceId {inspect_args.source_id!r} in searchSessionId "
+                f"{inspect_args.search_session_id!r}."
+            )
+        return {
+            "searchSessionId": inspect_args.search_session_id,
+            "source": source,
+            "directReadRecommendations": _direct_read_recommendations(source),
+            "nextActions": _guided_next_actions(
+                search_session_id=inspect_args.search_session_id,
+                next_step_hint=None,
+                status="succeeded",
+            ),
+        }
+
     if name == "search_papers_smart":
         smart_args = cast(
             SmartSearchPapersArgs,
@@ -737,140 +1548,30 @@ async def dispatch_tool(
     if name == "get_provider_diagnostics":
         validated_payload = TOOL_INPUT_MODELS[name].model_validate(arguments)
         args_dict = validated_payload.model_dump(by_alias=False)
-        package_version_value: str | None
-        try:
-            package_version_value = package_version("paper-chaser-mcp")
-        except PackageNotFoundError:
-            package_version_value = None
-        active_provider_set = [
-            provider
-            for provider, enabled in {
-                "semantic_scholar": enable_semantic_scholar,
-                "openalex": enable_openalex,
-                "core": enable_core,
-                "arxiv": enable_arxiv,
-                "serpapi_google_scholar": enable_serpapi,
-                "scholarapi": enable_scholarapi,
-                "crossref": enable_crossref,
-                "unpaywall": enable_unpaywall,
-                "ecos": enable_ecos,
-                "federal_register": enable_federal_register,
-                "govinfo": enable_govinfo_cfr,
-            }.items()
-            if enabled
-        ]
-        disabled_provider_set = [
-            provider
-            for provider, enabled in {
-                "semantic_scholar": enable_semantic_scholar,
-                "openalex": enable_openalex,
-                "core": enable_core,
-                "arxiv": enable_arxiv,
-                "serpapi_google_scholar": enable_serpapi,
-                "scholarapi": enable_scholarapi,
-                "crossref": enable_crossref,
-                "unpaywall": enable_unpaywall,
-                "ecos": enable_ecos,
-                "federal_register": enable_federal_register,
-                "govinfo": enable_govinfo_cfr,
-            }.items()
-            if not enabled
-        ]
-        runtime_warnings: list[str] = []
-        enabled_raw_providers = [provider for provider in (provider_order or []) if provider in active_provider_set]
-        if len(enabled_raw_providers) <= 1:
-            runtime_warnings.append(
-                "The effective broker order is very narrow, so no-result responses "
-                "may reflect limited provider coverage rather than absence of evidence."
-            )
-        if not enable_serpapi and serpapi_client is not None:
-            runtime_warnings.append(
-                "SerpApi client state is present but PAPER_CHASER_ENABLE_SERPAPI is "
-                "false, so paid recall recovery is disabled."
-            )
-        if not enable_scholarapi and scholarapi_client is not None:
-            runtime_warnings.append(
-                "ScholarAPI client state is present but PAPER_CHASER_ENABLE_"
-                "SCHOLARAPI is false, so ScholarAPI discovery and full-text paths "
-                "are inactive."
-            )
-        if transport_mode == "stdio":
-            runtime_warnings.append(
-                "The current runtime is stdio, so HTTP deployment settings do not affect this invocation path."
-            )
-        runtime_summary = RuntimeSummary(
-            transportMode=transport_mode,
-            smartLayerEnabled=agentic_runtime is not None,
-            activeProviderSet=sorted(active_provider_set),
-            disabledProviderSet=sorted(disabled_provider_set),
-            providerOrderEffective=list(provider_order or []),
-            toolsHidden=hide_disabled_tools,
-            sessionTtlSeconds=session_ttl_seconds,
-            embeddingsEnabled=embeddings_enabled,
-            version=package_version_value,
-            warnings=runtime_warnings,
+        return _build_provider_diagnostics_snapshot(
+            include_recent_outcomes=bool(args_dict.get("include_recent_outcomes", True)),
+            provider_order=provider_order,
+            provider_registry=provider_registry,
+            agentic_runtime=agentic_runtime,
+            transport_mode=transport_mode,
+            tool_profile=tool_profile,
+            hide_disabled_tools=hide_disabled_tools,
+            session_ttl_seconds=session_ttl_seconds,
+            embeddings_enabled=embeddings_enabled,
+            enable_core=enable_core,
+            enable_semantic_scholar=enable_semantic_scholar,
+            enable_openalex=enable_openalex,
+            enable_arxiv=enable_arxiv,
+            enable_serpapi=enable_serpapi,
+            enable_scholarapi=enable_scholarapi,
+            enable_crossref=enable_crossref,
+            enable_unpaywall=enable_unpaywall,
+            enable_ecos=enable_ecos,
+            enable_federal_register=enable_federal_register,
+            enable_govinfo_cfr=enable_govinfo_cfr,
+            serpapi_client=serpapi_client,
+            scholarapi_client=scholarapi_client,
         )
-        if provider_registry is None:
-            return {
-                "generatedAt": None,
-                "providerOrder": list(provider_order or []),
-                "providers": [],
-                "runtimeSummary": runtime_summary.model_dump(by_alias=True, exclude_none=True),
-            }
-        smart_provider_enabled = {
-            "openai": False,
-            "azure-openai": False,
-            "anthropic": False,
-            "nvidia": False,
-            "google": False,
-            "mistral": False,
-            "huggingface": False,
-        }
-        smart_provider_order = [
-            "openai",
-            "azure-openai",
-            "anthropic",
-            "nvidia",
-            "google",
-            "mistral",
-            "huggingface",
-        ]
-        if agentic_runtime is not None and hasattr(agentic_runtime, "smart_provider_diagnostics"):
-            smart_provider_enabled, smart_provider_order = agentic_runtime.smart_provider_diagnostics()
-
-        snapshot = provider_registry.snapshot(
-            enabled={
-                "semantic_scholar": enable_semantic_scholar,
-                "openalex": enable_openalex,
-                "core": enable_core,
-                "arxiv": enable_arxiv,
-                "serpapi_google_scholar": enable_serpapi,
-                "scholarapi": enable_scholarapi,
-                "crossref": enable_crossref,
-                "unpaywall": enable_unpaywall,
-                **smart_provider_enabled,
-                "ecos": enable_ecos,
-                "federal_register": enable_federal_register,
-                "govinfo": enable_govinfo_cfr,
-            },
-            provider_order=[
-                *(provider_order or []),
-                "openalex",
-                "scholarapi",
-                "crossref",
-                "unpaywall",
-                *smart_provider_order,
-                "ecos",
-                "federal_register",
-                "govinfo",
-            ],
-        )
-        if not args_dict.get("include_recent_outcomes", True):
-            for provider in snapshot.get("providers", []):
-                if isinstance(provider, dict):
-                    provider["recentOutcomes"] = []
-        snapshot["runtimeSummary"] = runtime_summary.model_dump(by_alias=True, exclude_none=True)
-        return snapshot
 
     if name == "search_species_ecos":
         if not enable_ecos or ecos_client is None:

@@ -1,24 +1,16 @@
 {
   "name": "paper-chaser-core",
-  "title": "Paper Chaser MCP Core Tool Set",
-  "description": "Conservative Microsoft-friendly tool subset for low-round-trip scholarly workflows: search, citation repair, known-item lookup, enrichment, citation chasing, and author pivots. Prefer this package when you want the stable raw path without smart-tool synthesis or regulatory-provider branches.",
+  "title": "Paper Chaser Guided Tool Set",
+  "description": "Low-context guided package for the safe default Paper Chaser experience. Start with research, reuse searchSessionId with follow_up_research or inspect_source, use resolve_reference for citations and identifiers, and use get_runtime_status when environment behavior looks inconsistent. This package matches PAPER_CHASER_TOOL_PROFILE=guided.",
   "transport": {
     "type": "streamable-http",
     "path": "/mcp"
   },
   "tools": [
-    "search_papers",
-    "resolve_citation",
-    "search_papers_match",
-    "get_paper_details",
-    "get_paper_metadata_crossref",
-    "get_paper_open_access_unpaywall",
-    "enrich_paper",
-    "search_papers_bulk",
-    "get_paper_citations",
-    "get_paper_references",
-    "search_authors",
-    "get_author_info",
-    "get_author_papers"
+    "research",
+    "follow_up_research",
+    "resolve_reference",
+    "inspect_source",
+    "get_runtime_status"
   ]
 }

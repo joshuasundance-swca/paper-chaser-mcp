@@ -1,25 +1,26 @@
 {
   "name": "Paper Chaser MCP",
-  "description_for_model": "Use Paper Chaser MCP for concept-level literature discovery, citation repair, known-item resolution, citation chasing, author pivots, grounded follow-up over saved searchSessionId result sets, and regulatory primary-source retrieval through ECOS, Federal Register, and CFR workflows. Best path: search_papers_smart for concept discovery, resolve_citation for broken references, search_papers_match or get_paper_details for known items, and search_federal_register or get_cfr_text for clearly regulatory citations.",
+  "description_for_model": "Use Paper Chaser MCP as a trust-graded evidence tool. Default path: research for discovery, literature review, known-item recovery, citation repair, and regulatory routing; follow_up_research for one grounded question over a saved searchSessionId; resolve_reference for citations, DOI strings, arXiv IDs, URLs, and regulatory references; inspect_source to inspect one sourceId from research; get_runtime_status when behavior differs across environments. If the server is intentionally running with PAPER_CHASER_TOOL_PROFILE=expert, you may also use raw and provider-specific tools such as search_papers_smart, search_federal_register, get_cfr_text, and explicit ScholarAPI/OpenAlex paths.",
   "transport": {
     "type": "streamable-http",
     "path": "/mcp"
   },
   "tool_package": "mcp-tools.full.json",
   "conversation_starters": [
-    "Find the main research themes in retrieval-augmented generation for coding agents.",
-    "Repair this incomplete citation and give me the canonical paper plus alternatives.",
-    "Resolve the paper behind arXiv:1706.03762 and show its most important citations.",
-    "Map recent work on biomedical literature-review agents and highlight gaps.",
-    "Show me recent papers by this author and the best follow-up graph expansion.",
-    "Answer a grounded question using only the saved result set from my last search.",
+    "Research retrieval-augmented generation for coding agents and show only the most trustworthy findings.",
+    "Resolve this incomplete reference and tell me the safest next step plus any alternatives.",
+    "Research the regulatory history of California condor under 50 CFR 17.95 and call out any evidence gaps.",
+    "Use the searchSessionId from my last research run to answer one grounded follow-up question.",
+    "Inspect one source from my last research run and tell me whether it is safe to rely on.",
     "Find the Federal Register notice behind this ECOS species review and then show me the affected CFR text.",
     "Find papers on graphene with accessible full text, then fetch the best ScholarAPI text or PDF."
   ],
   "notes": [
-    "Use mcp-tools.core.json instead when a smaller raw-tool subset is preferable or when smart synthesis is unnecessary.",
+    "This sample points at mcp-tools.full.json and assumes PAPER_CHASER_TOOL_PROFILE=expert when you want the raw and provider-specific expert surface to be advertised.",
+    "If you want the safest low-context default, use mcp-tools.core.json with PAPER_CHASER_TOOL_PROFILE=guided.",
     "Resources are surfaced from tool outputs via resourceUris and searchSessionId handles.",
-    "For broken references, start with resolve_citation; for clearly regulatory references, use the Federal Register or CFR tools instead of forcing paper recovery.",
+    "If research abstains or asks for clarification, treat that as a real result rather than filling in unsupported synthesis.",
+    "For broken references, start with resolve_reference; for clearly regulatory references, use research first or pivot into the Federal Register/CFR expert tools when needed.",
     "The server remains universal; these assets are packaging guidance, not a separate build."
   ]
 }

@@ -18,10 +18,12 @@ An MCP server for academic research — search papers, chase citations, look up 
 ## Contents
 
 - [What can it do?](#what-can-it-do)
+- [Guided vs expert profiles](#guided-vs-expert-profiles)
 - [Quick start](#quick-start)
 - [Quick tool decision guide](#quick-tool-decision-guide)
 - [Core workflows](#core-workflows)
 - [Agent response contract](#agent-response-contract)
+- [Migration note](#migration-note)
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [Tools](#tools)
@@ -37,15 +39,33 @@ An MCP server for academic research — search papers, chase citations, look up 
 
 ## What can it do?
 
-Paper Chaser MCP combines one stable research-oriented MCP surface with an additive smart layer and a few specialized non-paper workflows:
+Paper Chaser MCP is now guided-first: the default public surface is designed to
+be hard to misuse and explicit about trust.
 
-- **Discovery**: `search_papers` for a fast brokered first page, `search_papers_bulk` for exhaustive retrieval, and provider-specific search tools when you need explicit source control.
-- **Concept-level research**: `search_papers_smart` plus `ask_result_set`, `map_research_landscape`, and `expand_research_graph` for grounded follow-up over a reusable `searchSessionId`, with trust-graded `verifiedFindings`, `likelyUnverified`, `evidenceGaps`, `structuredSources`, and coverage/failure summaries.
-- **Known-item recovery**: `resolve_citation`, `search_papers_match`, `get_paper_details`, and autocomplete tools for messy titles, incomplete references, DOIs, arXiv IDs, and URLs.
-- **Citation and author pivots**: citation/reference traversal, recommendations, batch lookups, and author workflows across Semantic Scholar and explicit OpenAlex tool families.
-- **Enrichment and access**: Crossref, Unpaywall, and OpenAlex enrichment for metadata, open-access status, citation context, and PDF discovery after you already have a paper or DOI-bearing identifier.
-- **Regulatory and species workflows**: ECOS dossiers plus Federal Register and CFR retrieval for primary-source research outside the normal paper graph. `search_papers_smart` can now route clearly regulatory asks into a primary-source timeline instead of forcing a paper-only workflow.
-- **Agent-friendly outputs**: structured responses, `brokerMetadata.nextStepHint`, `agentHints`, `clarification`, `resourceUris`, `searchSessionId`, and provider diagnostics.
+- **Default research entrypoint**: `research` handles discovery, known-item
+  recovery, citation repair, and regulatory routing in one trust-graded path.
+- **Grounded follow-up**: `follow_up_research` uses `searchSessionId` and can
+  abstain when evidence is weak or unsupported.
+- **Reference-first recovery**: `resolve_reference` handles DOI/arXiv/URL,
+  citation fragments, and regulatory-style references.
+- **Source auditability**: `inspect_source` exposes one `sourceId` with
+  provenance, trust state, and direct-read next steps.
+- **Runtime truth**: `get_runtime_status` surfaces active profile/transport and
+  provider-state warnings without requiring low-level diagnostics.
+- **Expert depth remains available**: raw/smart/provider-specific tools still
+  exist for operator workflows under the expert profile.
+
+## Guided vs expert profiles
+
+Use `PAPER_CHASER_TOOL_PROFILE` to choose the advertised surface:
+
+| Profile | Default | Exposed surface | Intended user |
+| --- | --- | --- | --- |
+| `guided` | yes | `research`, `follow_up_research`, `resolve_reference`, `inspect_source`, `get_runtime_status` | Low-context users and agents |
+| `expert` | no | Guided tools plus raw/provider-specific families (`search_papers*`, smart graph tools, regulatory direct tools, full diagnostics) | Power users and operator workflows |
+
+Practical default: `PAPER_CHASER_TOOL_PROFILE=guided` with
+`PAPER_CHASER_HIDE_DISABLED_TOOLS=true`.
 
 ## Quick start
 
@@ -62,6 +82,8 @@ pip install -e .
       "command": "python",
       "args": ["-m", "paper_chaser_mcp"],
       "env": {
+        "PAPER_CHASER_TOOL_PROFILE": "guided",
+        "PAPER_CHASER_HIDE_DISABLED_TOOLS": "true",
         "PAPER_CHASER_ENABLE_SEMANTIC_SCHOLAR": "true",
         "PAPER_CHASER_ENABLE_ARXIV": "true",
         "PAPER_CHASER_ENABLE_CORE": "false"
@@ -73,9 +95,10 @@ pip install -e .
 
 Then start with one of these prompts in your MCP client:
 
-- `Find recent papers on language-model alignment.`
-- `Resolve this citation: Vaswani et al. 2017 Attention Is All You Need.`
-- `Map the research themes in retrieval-augmented generation for coding agents.`
+- `Research retrieval-augmented generation for coding agents and return only trustworthy findings.`
+- `Use my last searchSessionId to answer one grounded follow-up question.`
+- `Resolve this citation fragment: Vaswani et al. 2017 Attention Is All You Need.`
+- `Research the regulatory history of California condor under 50 CFR 17.95.`
 
 If you want a local env template for shell runs or Docker Compose, copy `.env.example` to `.env` and fill in only the providers you use.
 
@@ -85,106 +108,94 @@ If you want a local env template for shell runs or Docker Compose, copy `.env.ex
 
 | Goal | Start here |
 |---|---|
-| Concept discovery or literature review | `search_papers_smart` (smart layer) |
-| Quick paper search | `search_papers` → read `brokerMetadata.nextStepHint` |
-| All papers on a topic / multi-page | `search_papers_bulk` (cursor loop) |
-| Broken or incomplete citation | `resolve_citation` |
-| Known paper by messy title | `search_papers_match` |
-| Known paper by DOI / arXiv ID / URL | `get_paper_details` |
-| ScholarAPI monitoring / indexed scans | `list_papers_scholarapi` |
-| Papers that cite X / refs behind X | `get_paper_citations` / `get_paper_references` |
-| Author's work | `search_authors` → `get_author_info` → `get_author_papers` |
-| OA status or full-text PDF for a known paper | `get_paper_open_access_unpaywall` or `enrich_paper` |
-| OpenAlex DOI/ID, cursor pagination, entity pivots | `*_openalex` tools |
-| Species dossier / recovery documents | `search_species_ecos` → `get_species_profile_ecos` → `list_species_documents_ecos` |
-| Federal Register notice or rule | `search_federal_register` → `get_federal_register_document` |
-| CFR regulatory text | `get_cfr_text` |
-| Quote or phrase recovery (last resort) | `search_snippets` |
-| Provider health | `get_provider_diagnostics` |
-
-After `search_papers`: read `brokerMetadata.nextStepHint`.
-After `search_papers_smart`: reuse `searchSessionId` with `ask_result_set`, `map_research_landscape`, or `expand_research_graph`.
-After trust-graded responses: read `verifiedFindings`, `likelyUnverified`, `evidenceGaps`, `structuredSources`, and `coverageSummary` before treating a result set as complete.
-For Semantic Scholar expansion tools: prefer `paper.recommendedExpansionId`; if `paper.expansionIdStatus` is `not_portable`, resolve through DOI first.
-For `enrich_paper`: treat it as additive metadata lookup, not known-item resolution. Query-only calls without a paper or DOI anchor now abstain instead of guessing a canonical DOI.
+| Discovery, literature review, or regulatory history | `research` |
+| Grounded follow-up over saved results | `follow_up_research` |
+| Citation/DOI/arXiv/URL/reference cleanup | `resolve_reference` |
+| Audit one returned source before relying on it | `inspect_source` |
+| Explain environment/runtime differences | `get_runtime_status` |
+| Need direct provider control or specialized pagination | switch to expert profile and use raw/provider-specific tools |
 
 ## Core workflows
 
-### Quick discovery
-
-Use `search_papers` when you want a strong first page quickly. It is a brokered single-page search, not a pagination entry point.
+### 1. Guided research first
 
 ```text
-search_papers(query="large language model alignment", limit=10)
-→ inspect brokerMetadata.providerUsed and brokerMetadata.nextStepHint
-→ if you need exhaustive retrieval, switch to search_papers_bulk
-→ if you find a promising anchor paper, pivot to citations, references, or authors
+research(query="retrieval-augmented generation for coding agents", limit=5)
+→ inspect status, summary, findings, sources, trustSummary
+→ save searchSessionId for follow-up or source inspection
 ```
 
-### Concept discovery and grounded follow-up
-
-Use `search_papers_smart` for literature reviews, concept discovery, and question-driven exploration.
+### 2. Ask one grounded follow-up
 
 ```text
-search_papers_smart(query="retrieval-augmented generation for coding agents", limit=10)
-→ save searchSessionId
-→ ask_result_set(searchSessionId="...", question="What evaluation tradeoffs show up here?")
-→ map_research_landscape(searchSessionId="...")
-→ expand_research_graph(seedSearchSessionId="...", direction="citations")
+follow_up_research(searchSessionId="...", question="What evaluation tradeoffs show up here?")
+→ inspect answerStatus
+→ if answered: use answer + evidence
+→ if abstained/insufficient_evidence: use nextActions and inspect_source
 ```
 
-For clearly regulatory or environmental-history asks, `search_papers_smart` can also be the first step:
+### 3. Resolve references before broad search when possible
 
 ```text
-search_papers_smart(query="regulatory history of California condor under 50 CFR 17.95", limit=5)
-→ inspect verifiedFindings, structuredSources, regulatoryTimeline, coverageSummary, failureSummary
-→ pivot into get_species_profile_ecos, list_species_documents_ecos, get_federal_register_document, or get_cfr_text
+resolve_reference(reference="Rockstrom et al planetary boundaries 2009 Nature 461 472")
+→ inspect status and bestMatch/alternatives
+→ if resolved: run research with the resolved anchor
 ```
 
-### Known-item lookup and citation chasing
-
-Use `resolve_citation` for broken references, `search_papers_match` for messy titles, and `get_paper_details` for DOI/arXiv/URL lookup.
+### 4. Inspect one source before citing it
 
 ```text
-resolve_citation(citation="Rockstrom et al planetary boundaries 2009 Nature 461 472")
-→ confirm the canonical paper or alternatives
-→ get_paper_citations(paper_id=paper.recommendedExpansionId)
-→ cursor-loop with pagination.nextCursor if you need more results
+inspect_source(searchSessionId="...", sourceId="...")
+→ inspect verificationStatus, topicalRelevance, canonicalUrl, directReadRecommendations
 ```
 
-### Regulatory and species follow-through
+### 5. Handle abstention and clarification explicitly
 
-Use the non-paper tools when the source is clearly regulatory or species-oriented rather than scholarly.
+- If `research.status` is `abstained` or `needs_disambiguation`, do not invent
+  synthesis. Narrow with a concrete anchor: DOI, exact title, species name,
+  agency, year, or venue.
+- If `follow_up_research.answerStatus` is `abstained` or
+  `insufficient_evidence`, treat it as a safety signal. Use `inspect_source`
+  and rerun `research` with tighter scope.
+
+### 6. Expert fallback when you need fine control
 
 ```text
-search_species_ecos(query="California least tern")
-→ get_species_profile_ecos(species_id="8104")
-→ list_species_documents_ecos(species_id="8104")
-→ get_document_text_ecos(...)
-
-search_federal_register(query="California least tern")
-→ get_federal_register_document(...)
-→ get_cfr_text(...) when you need the affected CFR text
+PAPER_CHASER_TOOL_PROFILE=expert
+→ search_papers_smart / ask_result_set / map_research_landscape / expand_research_graph
+→ search_papers / search_papers_bulk and provider-specific families
+→ search_federal_register / get_federal_register_document / get_cfr_text for direct regulatory primary-source control
 ```
 
 ## Agent response contract
 
-These fields are the high-value response contracts to pay attention to:
+Treat these as the main guided contracts:
 
 | Field or pattern | Where it appears | What to do with it |
 | --- | --- | --- |
-| `brokerMetadata.nextStepHint` | `search_papers` | Treat it as the server's recommended next move after the first page |
-| `searchSessionId` | smart workflows and saved result sets | Reuse it for grounded follow-up instead of rerunning discovery |
-| `verifiedFindings` / `likelyUnverified` / `evidenceGaps` | smart workflows | Treat these as the trust boundary: verified evidence first, weaker leads second, explicit gaps third |
-| `structuredSources` | smart workflows | Use this when you need provenance, access state, primary-source status, or audit-ready citations |
-| `coverageSummary` / `failureSummary` | brokered and smart workflows | Use these to understand partial success, provider coverage, and whether retries or alternate tools are justified |
-| `runtimeSummary` | `get_provider_diagnostics` | Use this to confirm the effective transport, enabled providers, warnings, embeddings state, and active broker order |
-| `agentHints` | primary read tools | Use for retry guidance, follow-on tool suggestions, and warning handling |
-| `clarification` | ambiguous cases | Ask the user only when the server surfaces a bounded clarification request |
-| `resourceUris` | primary read tools | Open follow-on resources directly when your MCP client supports them |
-| `pagination.nextCursor` | paginated tools | Pass it back exactly as returned; it is opaque and tool-specific |
-| `paper.recommendedExpansionId` | brokered and known-item flows | Prefer this for Semantic Scholar expansion tools |
-| `paper.expansionIdStatus=not_portable` | non-Semantic-Scholar results | Resolve through DOI or a Semantic Scholar-native lookup before citation/reference expansion |
+| `status` | `research` | `succeeded`, `partial`, `needs_disambiguation`, `abstained`, `failed` |
+| `findings` | `research` | Use as trust-graded claims only when they are present |
+| `sources` | `research`, `follow_up_research` | Canonical source records for inspection and citation |
+| `candidateLeads` | `research`, `follow_up_research`, expert smart tools | Review weak, filtered, or off-topic leads without promoting them into verified evidence |
+| `trustSummary` | `research`, `follow_up_research` | Check on-topic vs weak/off-topic counts before relying on synthesis |
+| `nextActions` | guided tools | Treat as server-preferred recovery path on weak evidence |
+| `clarification` | `research` | Ask the user only when a bounded clarification request is provided |
+| `answerStatus` | `follow_up_research` | `answered`, `abstained`, `insufficient_evidence` |
+| `sourceId` | `sources[*]` | Pass to `inspect_source` for per-source provenance checks |
+| `runtimeSummary` | `get_runtime_status` and expert diagnostics | Confirm effective profile, smart provider state, and warnings |
+
+## Migration note
+
+If you previously used the smart/raw-first surface directly:
+
+1. Start with `research` instead of `search_papers_smart` or `search_papers`.
+2. Use `follow_up_research` instead of `ask_result_set` for default grounded QA.
+3. Use `resolve_reference` instead of `resolve_citation`/`search_papers_match`
+   as your first known-item recovery step.
+4. Keep expert tools for explicit operator workflows by setting
+   `PAPER_CHASER_TOOL_PROFILE=expert`.
+
+For the detailed breaking-change note, see [Guided Reset Migration Note](docs/guided-reset-migration-note.md).
 
 ---
 
@@ -233,10 +244,12 @@ See the [Quick start](#quick-start) JSON example above for the server definition
 
 ### Search broker and feature flags
 
-`search_papers` is a brokered single-page search. It returns the first successful provider in the active chain and does **not** paginate. Use `search_papers_bulk` for exhaustive retrieval.
+Guided mode starts from `research`. The brokered and provider-specific controls
+below are expert-path controls.
 
 | Area | Default | Main variables | Notes |
 | --- | --- | --- | --- |
+| Tool profile | `guided` | `PAPER_CHASER_TOOL_PROFILE` | `guided` exposes the 5 low-context tools; `expert` exposes the full raw/provider-specific surface |
 | Search broker | `semantic_scholar,arxiv,core,serpapi_google_scholar` | `PAPER_CHASER_ENABLE_SEMANTIC_SCHOLAR`, `PAPER_CHASER_ENABLE_ARXIV`, `PAPER_CHASER_ENABLE_CORE`, `PAPER_CHASER_ENABLE_SERPAPI`, `PAPER_CHASER_PROVIDER_ORDER` | SerpApi is opt-in and paid; CORE is off by default |
 | OpenAlex tool family | enabled | `PAPER_CHASER_ENABLE_OPENALEX`, `OPENALEX_API_KEY`, `OPENALEX_MAILTO` | Explicit tool family, not a default broker hop |
 | ScholarAPI tool family | disabled | `PAPER_CHASER_ENABLE_SCHOLARAPI`, `SCHOLARAPI_API_KEY` | Explicit discovery, monitoring, full-text, and PDF family; also available as an opt-in broker target via `preferredProvider` or `providerOrder`. ScholarAPI-sourced paper results now include a separate `contentAccess` block for access/full-text metadata. |
@@ -244,7 +257,7 @@ See the [Quick start](#quick-start) JSON example above for the server definition
 | ECOS | enabled | `PAPER_CHASER_ENABLE_ECOS`, `ECOS_BASE_URL`, `ECOS_TIMEOUT_SECONDS`, document timeout and size vars, TLS vars | Species and document workflows |
 | Federal Register / GovInfo | enabled | `PAPER_CHASER_ENABLE_FEDERAL_REGISTER`, `PAPER_CHASER_ENABLE_GOVINFO_CFR`, `GOVINFO_API_KEY`, GovInfo timeout and size vars | Federal Register search is keyless; authoritative CFR retrieval uses GovInfo |
 | Smart layer | disabled | `OPENAI_API_KEY`, `HUGGINGFACE_API_KEY`, `HUGGINGFACE_BASE_URL`, `NVIDIA_API_KEY`, `NVIDIA_NIM_BASE_URL`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `MISTRAL_API_KEY`, `PAPER_CHASER_ENABLE_AGENTIC`, model and index vars | Additive only; supports `openai`, `azure-openai`, `anthropic`, `nvidia`, `google`, `mistral`, `huggingface`, and `deterministic`. OpenAI ships with checked-in model defaults, Anthropic, NVIDIA, Google, and Mistral auto-swap to provider defaults when those OpenAI defaults are left untouched, and Azure OpenAI can override both roles with deployment names. Hugging Face is documented as an OpenAI-compatible chat router configured with `HUGGINGFACE_BASE_URL`; it remains chat-only in this repo and does not enable embeddings. `NVIDIA_NIM_BASE_URL` is optional for self-hosted NIMs; leave it empty for hosted NVIDIA API Catalog access. Embeddings remain disabled by default. When ScholarAPI is enabled, smart discovery can also route through it and cap it via `providerBudget.maxScholarApiCalls`. |
-| Hide disabled tools | disabled | `PAPER_CHASER_HIDE_DISABLED_TOOLS` | Opt-in. When true, `list_tools` hides disabled explicit provider families, hides generic Semantic Scholar-backed tools when Semantic Scholar is disabled, and hides brokered search or citation-repair entry points when no usable backend remains. Leave false for full-contract compatibility. |
+| Hide disabled tools | guided default `true`, expert default `false` | `PAPER_CHASER_HIDE_DISABLED_TOOLS` | Guided mode keeps this on to reduce dead-end tool picks; expert mode usually leaves it off for operator visibility |
 
 ### Smart-layer model defaults
 
@@ -425,7 +438,20 @@ IMAGE=ghcr.io/joshuasundance-swca/paper-chaser-mcp:latest docker compose -f comp
 
 Full tool reference. See the [Quick tool decision guide](#quick-tool-decision-guide) above for where to start.
 
-### Smart research layer
+### Guided default tools
+
+| Tool | Description |
+| --- | --- |
+| `research` | Default trust-graded entrypoint for discovery, known-item recovery, citation repair, and regulatory routing. |
+| `follow_up_research` | Grounded follow-up over a saved `searchSessionId`; returns explicit abstention/insufficient-evidence states when needed. |
+| `resolve_reference` | Resolve citation-like input (citation, DOI, arXiv, URL, title fragment, regulatory reference) into the safest next anchor. |
+| `inspect_source` | Inspect one `sourceId` from a guided result set for provenance, trust state, and direct-read follow-through. |
+| `get_runtime_status` | Guided runtime summary for active profile, transport, smart-provider state, and warnings. |
+
+### Expert smart research layer
+
+These tools are expert profile paths for deeper orchestration and provider
+control.
 
 | Tool | Description |
 | --- | --- |
@@ -555,9 +581,9 @@ California least tern is a representative end-to-end ECOS flow:
 - Resource: `author://{author_id}` - compact markdown + structured payload for a resolved author
 - Resource: `search://{searchSessionId}` - saved result set surfaced from tool outputs
 - Resource: `trail://paper/{paper_id}?direction=citations|references` - compact citation/reference trail resource
-- Prompt: `plan_paper_chaser_search` - reusable planning prompt for raw-vs-smart literature-search workflows
-- Prompt: `plan_smart_paper_chaser_search` - smart-tool-first planning prompt for concept discovery
-- Prompt: `triage_literature` - compact triage workflow for theme mapping and next-step selection
+- Prompt: `plan_paper_chaser_search` - reusable planning prompt with guided-first defaults and explicit expert fallback
+- Prompt: `plan_smart_paper_chaser_search` - planning prompt for intentional expert smart-mode workflows
+- Prompt: `triage_literature` - guided triage workflow for trust-aware theme mapping and next-step selection
 - Prompt: `plan_citation_chase` - citation-expansion planning prompt
 - Prompt: `refine_query` - bounded query-refinement prompt for broad or noisy searches
 
@@ -573,8 +599,8 @@ Primary read-tool responses also surface:
 This repository keeps one universal MCP server surface and ships additive
 packaging assets for Microsoft-oriented clients:
 
-- `mcp-tools.core.json` - conservative raw-tool subset
-- `mcp-tools.full.json` - full Microsoft-facing package including smart tools
+- `mcp-tools.core.json` - guided low-context default surface (`research`, `follow_up_research`, `resolve_reference`, `inspect_source`, `get_runtime_status`)
+- `mcp-tools.full.json` - guided + expert package for environments intentionally running with `PAPER_CHASER_TOOL_PROFILE=expert`
 - `microsoft-plugin.sample.json` - sample declarative-agent / plugin-oriented metadata
 
 These assets target Streamable HTTP and compact tool outputs. They are
@@ -726,9 +752,10 @@ pre-commit run --all-files
 Commit both the `.md` source and `.lock.yml` output together, then run
 `Test Paper Chaser MCP` from the GitHub Actions UI.
 
-**Workflow modes:** `smoke` (default), `comprehensive` (broader UX review), or
-`feature_probe` (with an optional focus prompt). Select via `workflow_dispatch`
-inputs.
+**Workflow inputs:** `mode` (`smoke`, `comprehensive`, or `feature_probe`),
+`tool_profile` (`guided` by default, `expert` when you intentionally want
+raw/provider-specific coverage), and an optional `focus_prompt`. Select them
+via `workflow_dispatch` inputs.
 
 **Required secrets:** `COPILOT_GITHUB_TOKEN` is required.
 `GH_AW_MODEL_AGENT_COPILOT` (Actions variable, optional) controls the agent
@@ -752,6 +779,7 @@ For maintainer orientation after the module split, start with `docs/agent-handof
 - [GitHub Copilot Instructions](.github/copilot-instructions.md) - repo-specific guidance for GitHub Copilot and the GitHub cloud coding agent, including workflow defaults and durable planning expectations.
 - [Agent Handoff](docs/agent-handoff.md) - current repo status, validation commands, and next recommended work for follow-on agents.
 - [Release And Publishing Plan](docs/release-publishing-plan.md) - the current release playbook for GHCR, GitHub Release assets, manual MCP Registry publication, and dormant PyPI.
+- [Guided Reset Migration Note](docs/guided-reset-migration-note.md) - breaking default-surface change, guided-vs-expert split, and client migration checklist.
 - [Paper Chaser Golden Paths](docs/golden-paths.md) - primary personas, workflow defaults, success signals, and future workflow-oriented follow-up work.
 - [Azure Deployment](docs/azure-deployment.md) - deployment modes, required secrets and variables, and validation paths for the private Azure rollout.
 - [Azure Architecture](docs/azure-architecture.md) - trust boundaries, runtime topology, and credential separation for the Azure scaffold.

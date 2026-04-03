@@ -177,10 +177,13 @@ class FailureSummary(ApiModel):
 class RuntimeSummary(ApiModel):
     """Effective runtime state for debugging and support."""
 
+    effective_profile: str = Field(alias="effectiveProfile")
     transport_mode: str = Field(alias="transportMode")
     smart_layer_enabled: bool = Field(alias="smartLayerEnabled")
     active_provider_set: list[str] = Field(default_factory=list, alias="activeProviderSet")
     disabled_provider_set: list[str] = Field(default_factory=list, alias="disabledProviderSet")
+    configured_smart_provider: str | None = Field(default=None, alias="configuredSmartProvider")
+    active_smart_provider: str | None = Field(default=None, alias="activeSmartProvider")
     provider_order_effective: list[str] = Field(default_factory=list, alias="providerOrderEffective")
     tools_hidden: bool = Field(default=False, alias="toolsHidden")
     session_ttl_seconds: int | None = Field(default=None, alias="sessionTtlSeconds")

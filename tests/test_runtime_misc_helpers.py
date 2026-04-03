@@ -107,7 +107,15 @@ def test_parsing_helpers_and_tool_definitions_are_usable() -> None:
     assert _text(types.SimpleNamespace(text="  trimmed  ")) == "trimmed"
 
     tool_definitions = get_tool_definitions()
+    expert_tool_definitions = get_tool_definitions(tool_profile="expert")
 
     assert tool_definitions
-    assert any(tool.name == "search_papers" for tool in tool_definitions)
+    assert {tool.name for tool in tool_definitions} == {
+        "research",
+        "follow_up_research",
+        "resolve_reference",
+        "inspect_source",
+        "get_runtime_status",
+    }
+    assert any(tool.name == "search_papers" for tool in expert_tool_definitions)
     assert all(tool.description for tool in tool_definitions)

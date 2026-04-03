@@ -8,6 +8,33 @@ OPAQUE_CURSOR_CONTRACT = (
 )
 
 TOOL_DESCRIPTIONS = {
+    "research": (
+        "Default guided entry point for low-context research requests. Use this for topic discovery, "
+        "known-item recovery, citation repair, and regulatory or species-history questions when you want "
+        "one trust-graded response instead of choosing among raw tools. The server picks the safest retrieval "
+        "path, returns a compact evidence summary plus source records, and abstains or marks partial results "
+        "when evidence is weak, off-topic, or incomplete."
+    ),
+    "follow_up_research": (
+        "Grounded follow-up over a prior guided research result. Use searchSessionId from research and ask one "
+        "specific question. This tool answers only when the saved evidence is strong enough; otherwise it "
+        "returns an explicit abstention or insufficient-evidence response plus next actions."
+    ),
+    "resolve_reference": (
+        "Resolve one reference-like input into the safest next anchor. Accepts citations, DOI strings, DOI URLs, "
+        "arXiv IDs, title fragments, and regulatory references. Returns the best match when one is trustworthy, "
+        "alternatives when ambiguity remains, and direct next actions "
+        "when the input should pivot into a primary-source path."
+    ),
+    "inspect_source": (
+        "Inspect one source from a prior guided research result. Pass the searchSessionId and a source id from the "
+        "research response to get provenance, trust state, source-access details, "
+        "and the best direct-read follow-through."
+    ),
+    "get_runtime_status": (
+        "Guided runtime and provider-status summary. Use this to confirm the active tool profile, transport, "
+        "effective smart provider, enabled coverage, and high-level warnings without reading low-level diagnostics."
+    ),
     "search_papers": (
         "Primary entry point for quick literature discovery: start here when "
         "quick topic exploration needs one strong first page fast. Best-effort "

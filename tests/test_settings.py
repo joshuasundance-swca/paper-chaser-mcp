@@ -61,6 +61,8 @@ def test_app_settings_serpapi_disabled_by_default() -> None:
     """SerpApi must be disabled by default to protect users from surprise costs."""
 
     settings = AppSettings.from_env({})  # empty env
+    assert settings.tool_profile == "guided"
+    assert settings.hide_disabled_tools is True
     assert settings.enable_serpapi is False
     assert settings.enable_scholarapi is False
     assert settings.enable_agentic is False
@@ -162,6 +164,17 @@ def test_app_settings_parses_hide_disabled_tools_flag() -> None:
     )
 
     assert settings.hide_disabled_tools is True
+
+
+def test_app_settings_parses_tool_profile_and_expert_defaults() -> None:
+    settings = AppSettings.from_env(
+        {
+            "PAPER_CHASER_TOOL_PROFILE": "expert",
+        }
+    )
+
+    assert settings.tool_profile == "expert"
+    assert settings.hide_disabled_tools is False
 
 
 def test_app_settings_parses_ecos_configuration() -> None:

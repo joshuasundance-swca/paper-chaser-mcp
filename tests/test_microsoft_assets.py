@@ -26,20 +26,18 @@ def test_core_and_full_tool_assets_exist_and_use_streamable_http() -> None:
     assert full["transport"]["path"] == "/mcp"
 
     assert core["tools"] == [
-        "search_papers",
-        "resolve_citation",
-        "search_papers_match",
-        "get_paper_details",
-        "get_paper_metadata_crossref",
-        "get_paper_open_access_unpaywall",
-        "enrich_paper",
-        "search_papers_bulk",
-        "get_paper_citations",
-        "get_paper_references",
-        "search_authors",
-        "get_author_info",
-        "get_author_papers",
+        "research",
+        "follow_up_research",
+        "resolve_reference",
+        "inspect_source",
+        "get_runtime_status",
     ]
+    assert "research" in full["tools"]
+    assert "follow_up_research" in full["tools"]
+    assert "resolve_reference" in full["tools"]
+    assert "inspect_source" in full["tools"]
+    assert "get_runtime_status" in full["tools"]
+    assert "search_papers" in full["tools"]
     assert "search_papers_smart" in full["tools"]
     assert "resolve_citation" in full["tools"]
     assert "get_paper_metadata_crossref" in full["tools"]
@@ -69,9 +67,16 @@ def test_microsoft_plugin_sample_points_at_full_tool_asset() -> None:
 
     assert sample["tool_package"] == "mcp-tools.full.json"
     assert len(sample["conversation_starters"]) >= 5
-    assert any("citation" in starter.lower() for starter in sample["conversation_starters"])
+    assert "research" in sample["description_for_model"]
+    assert "follow_up_research" in sample["description_for_model"]
+    assert "resolve_reference" in sample["description_for_model"]
+    assert "inspect_source" in sample["description_for_model"]
+    assert any(
+        "citation" in starter.lower() or "reference" in starter.lower() for starter in sample["conversation_starters"]
+    )
     assert any("Federal Register" in starter for starter in sample["conversation_starters"])
     assert any(
         "full text" in starter.lower() or "pdf" in starter.lower() for starter in sample["conversation_starters"]
     )
+    assert any("PAPER_CHASER_TOOL_PROFILE=expert" in note for note in sample["notes"])
     assert any("searchSessionId" in note for note in sample["notes"])

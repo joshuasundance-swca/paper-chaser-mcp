@@ -33,6 +33,11 @@ def test_agentic_workflow_source_and_lockfile_are_checked_in() -> None:
     allowed_tools = set(_extract_allowed_tools(workflow_source_content))
 
     expected_allowed_tools = {
+        "research",
+        "follow_up_research",
+        "resolve_reference",
+        "inspect_source",
+        "get_runtime_status",
         "search_papers",
         "search_papers_smart",
         "ask_result_set",
@@ -62,27 +67,33 @@ def test_agentic_workflow_source_and_lockfile_are_checked_in() -> None:
         "get_author_papers_openalex",
         "get_paper_citation_formats",
         "search_snippets",
+        "search_federal_register",
+        "get_federal_register_document",
+        "get_cfr_text",
     }
 
     assert "mcp-servers:" in workflow_source_content
     assert "paper-chaser:" in workflow_source_content
-    assert "primary Paper Chaser MCP golden paths" in workflow_source_content
+    assert "default guided UX first" in workflow_source_content
     assert "workflow_dispatch:" in workflow_source_content
     assert "feature_probe" in workflow_source_content
+    assert "tool_profile:" in workflow_source_content
     assert "focus_prompt:" in workflow_source_content
-    assert 'search_papers(query="graph neural networks", limit=5)' in workflow_source_content
-    assert 'search_papers_smart(query="graph neural networks", limit=5)' in workflow_source_content
-    assert (
-        'resolve_citation(citation="Rockstrom et al planetary boundaries '
-        '2009 Nature 461 472")' in workflow_source_content
+    assert 'research(query="graph neural networks", limit=5)' in workflow_source_content
+    assert "get_runtime_status()" in workflow_source_content
+    assert "follow_up_research(searchSessionId=..." in workflow_source_content
+    assert "inspect_source(searchSessionId=..., sourceId=...)" in workflow_source_content
+    assert 'resolve_reference(reference="Rockstrom et al planetary boundaries 2009 Nature 461 472")' in (
+        workflow_source_content
     )
+    assert 'research(query="regulatory history of California condor under 50 CFR 17.95", limit=5)' in (
+        workflow_source_content
+    )
+    assert 'search_papers_smart(query="graph neural networks", limit=5)' in workflow_source_content
     assert "ask_result_set(searchSessionId=..." in workflow_source_content
     assert "search_papers_bulk" in workflow_source_content
-    assert "search_papers_match" in workflow_source_content
     assert 'search_authors(query="Yoshua Bengio", limit=3)' in workflow_source_content
     assert 'search_papers_openalex(query="transformer architecture", limit=3)' in workflow_source_content
-    assert 'search_snippets(query="attention is all you need", limit=3)' in (workflow_source_content)
-    assert 'search_papers_serpapi(query="Attention Is All You Need", limit=3)' in workflow_source_content
     assert "code and/or documentation" in workflow_source_content
     assert "create at most one GitHub" in workflow_source_content
     assert allowed_tools == expected_allowed_tools
@@ -111,17 +122,20 @@ def test_agentic_workflow_documentation_stays_in_sync() -> None:
     assert ".github/workflows/test-paper-chaser.lock.yml" in readme
     assert compile_command in readme
     assert "feature_probe" in readme
+    assert "tool_profile" in readme
 
     assert ".github/workflows/test-paper-chaser.md" in handoff
     assert ".github/workflows/test-paper-chaser.lock.yml" in handoff
     assert compile_command in handoff
     assert "feature_probe" in handoff
+    assert "tool_profile" in handoff
     assert "workflow_dispatch" in readme
     assert 'The workflow is "deployed" when GitHub' in readme
     assert "pull requests cannot silently drift out of sync" in readme
 
     assert ".github/workflows/test-paper-chaser.md" in golden_paths
     assert "feature_probe" in golden_paths
+    assert "tool_profile" in golden_paths
     assert compile_command in instructions
     assert "feature_probe" in instructions
     assert "Install gh-aw" in validate_workflow
