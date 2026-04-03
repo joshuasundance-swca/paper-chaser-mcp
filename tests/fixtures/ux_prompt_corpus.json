@@ -40,6 +40,46 @@
     "Correct this almost-right title: Tool use for autonomous agent systems and give the most likely real paper.",
     "I have a DOI fragment, an author surname, and a year that might be off by one. Resolve the best candidate and explain uncertainty."
   ],
+  "guided_low_context_success": [
+    "Research retrieval-augmented generation for coding agents and return only trustworthy findings with clear next actions.",
+    "Research climate adaptation planning for ports and then tell me the single best grounded follow-up question to ask.",
+    "Resolve this citation-like string and guide me to the safest next step: Attention is all you need 2017 Vaswani.",
+    "Inspect one source from my previous research result and tell me if it is primary, verified, and on-topic.",
+    "Research biodiversity monitoring methods and summarize what is verified versus likely unverified.",
+    "Research electric-grid wildfire mitigation and show me where evidence is incomplete instead of guessing.",
+    "Research policy options for PFAS treatment and keep the output concise with trusted source records.",
+    "Research explainable AI in radiology and return a trust-graded summary I can audit quickly."
+  ],
+  "safe_abstention_and_clarification": [
+    "Use my last search session and answer: what exact cost savings should we promise to executives this quarter?",
+    "From the saved evidence, tell me the one true best method with zero uncertainty and no caveats.",
+    "I want a legal conclusion from this mixed paper set without additional sources.",
+    "Answer this follow-up even if there is no evidence: which intervention always works across all settings?",
+    "If results conflict, pick one answer and do not mention uncertainty.",
+    "Give me a definitive regulatory history from this weak result set without asking clarifying questions.",
+    "Use this broad query and produce a final recommendation even if sources are off-topic.",
+    "Skip clarification and synthesize a complete answer from whatever you have."
+  ],
+  "regulatory_primary_source_correctness": [
+    "Research the regulatory history of California condor under 50 CFR 17.95 and avoid unrelated species notices.",
+    "Find primary-source milestones for the California condor listing and critical habitat actions.",
+    "Trace CFR and Federal Register records for California condor with verifiable citations.",
+    "If Federal Register hits include other species, keep them out of verified findings and timeline events.",
+    "Map California condor regulatory chronology and flag any evidence gaps clearly.",
+    "Use ECOS, Federal Register, and CFR paths for condor history before broader synthesis.",
+    "Return a regulatory timeline only when subject anchoring is clear and auditable.",
+    "Show me candidate leads separately when notices mention 50 CFR 17.95 but do not match California condor."
+  ],
+  "runtime_summary_truth": [
+    "Get runtime status and confirm whether the active profile is guided or expert.",
+    "Check runtime status and explain the active smart provider versus configured smart provider.",
+    "Validate that active and disabled provider sets are internally consistent with provider rows.",
+    "Surface warnings when broker order is narrow so no-result responses are not over-trusted.",
+    "Confirm transport mode truth so users do not confuse stdio and HTTP behavior.",
+    "Inspect runtime status and call out disabled-but-credentialed provider mismatches.",
+    "Verify embeddings-enabled truth aligns with configured smart provider constraints.",
+    "Use runtime status to diagnose environment drift before suggesting retrieval changes."
+  ],
   "cross_discipline_generalization": [
     "Map the literature on solid-state battery degradation mechanisms and practical stability bottlenecks.",
     "Compare methods for causal inference in education policy interventions.",

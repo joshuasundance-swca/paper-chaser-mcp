@@ -16,6 +16,10 @@ Use this together with:
 
 The provider upgrade program now ships these cross-cutting changes:
 
+- A guided-first public surface reset: default profile prioritizes
+  `research`, `follow_up_research`, `resolve_reference`, `inspect_source`, and
+  `get_runtime_status`, while expert/raw tools remain available behind the
+  explicit expert profile.
 - A shared provider execution policy with normalized status buckets, bounded
   retries with jitter, per-provider concurrency caps, suppression state, and
   outcome telemetry.
@@ -197,16 +201,25 @@ The rollout now includes a benchmark corpus fixture at:
 
 The corpus covers:
 
+- guided/default-profile entrypoint behavior
+- runtime-summary truth and internal consistency checks
 - DOI lookup
 - title and citation repair
 - author disambiguation
 - broad topical discovery
+- safe abstention behavior for weak or unsupported follow-up asks
+- regulatory primary-source correctness with subject anchoring
 - citation expansion
 - smart landscape mapping
 - outage drills for Semantic Scholar, OpenAlex, CORE, SerpApi, arXiv, and
   OpenAI
 
-Treat this as the shared acceptance harness for future provider changes.
+The UX prompt corpus in `tests/fixtures/ux_prompt_corpus.json` is the
+companion harness for low-context guided success, abstention discipline,
+regulatory correctness, and runtime-truth validation prompts.
+
+Treat these fixtures as the shared acceptance harness for future provider and
+surface changes.
 
 ## Acceptance Gates
 
@@ -215,6 +228,14 @@ The upgrade is considered healthy when these conditions hold:
 - no duplicate launches in steady state
 - direct-tool p95 stays at or below 10 seconds on the benchmark corpus
 - `balanced` smart-tool p95 stays at or below 20 seconds on the benchmark corpus
+- guided/default-profile workflows succeed in low-context usage without needing
+  expert-only tool selection knowledge
+- safe abstention beats plausible-but-unsupported synthesis for weak or
+  off-topic evidence
+- regulatory primary-source timelines remain subject-anchored; unrelated notices
+  stay outside verified findings and timeline events
+- runtime summaries remain internally truthful (`effectiveProfile`,
+  `configuredSmartProvider`, `activeSmartProvider`, active/disabled sets)
 - provider-originated error rate drops materially from the captured baseline
 - SerpApi spend is attributable to successful recovery or discovery value
 - CORE remains out of the default broker until it clears the same gates as the

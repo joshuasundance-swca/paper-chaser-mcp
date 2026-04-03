@@ -8,6 +8,33 @@ OPAQUE_CURSOR_CONTRACT = (
 )
 
 TOOL_DESCRIPTIONS = {
+    "research": (
+        "Default guided entry point for low-context research requests. Use this for topic discovery, "
+        "known-item recovery, citation repair, and regulatory or species-history questions when you want "
+        "one trust-graded response instead of choosing among raw tools. The server picks the safest retrieval "
+        "path, returns a compact evidence summary plus source records, and abstains or marks partial results "
+        "when evidence is weak, off-topic, or incomplete."
+    ),
+    "follow_up_research": (
+        "Grounded follow-up over a prior guided research result. Use searchSessionId from research and ask one "
+        "specific question. This tool answers only when the saved evidence is strong enough; otherwise it "
+        "returns an explicit abstention or insufficient-evidence response plus next actions."
+    ),
+    "resolve_reference": (
+        "Resolve one reference-like input into the safest next anchor. Accepts citations, DOI strings, DOI URLs, "
+        "arXiv IDs, title fragments, and regulatory references. Returns the best match when one is trustworthy, "
+        "alternatives when ambiguity remains, and direct next actions "
+        "when the input should pivot into a primary-source path."
+    ),
+    "inspect_source": (
+        "Inspect one source from a prior guided research result. Pass the searchSessionId and a source id from the "
+        "research response to get provenance, trust state, source-access details, "
+        "and the best direct-read follow-through."
+    ),
+    "get_runtime_status": (
+        "Guided runtime and provider-status summary. Use this to confirm the active tool profile, transport, "
+        "effective smart provider, enabled coverage, and high-level warnings without reading low-level diagnostics."
+    ),
     "search_papers": (
         "Primary entry point for quick literature discovery: start here when "
         "quick topic exploration needs one strong first page fast. Best-effort "
@@ -355,9 +382,10 @@ TOOL_DESCRIPTIONS = {
     "get_provider_diagnostics": (
         "Return shared provider-health diagnostics for Semantic Scholar, OpenAlex, "
         "CORE, arXiv, SerpApi, Crossref, Unpaywall, OpenAI, and ECOS. Includes "
-        "suppression state, recent rate limits and failures, and normalized "
-        "outcome envelopes so transport and provider issues are visible without "
-        "reading raw logs."
+        "suppression state, recent rate limits and failures, normalized "
+        "outcome envelopes, and a runtimeSummary that exposes effective transport, "
+        "enabled/disabled providers, broker order, embeddings state, and warnings "
+        "so transport and provider issues are visible without reading raw logs."
     ),
     "search_species_ecos": (
         "Search the U.S. Fish and Wildlife Service ECOS species catalog using "
@@ -429,13 +457,18 @@ TOOL_DESCRIPTIONS = {
         "deep execution modes, providerBudget lets advanced clients cap total, "
         "per-provider, or paid usage for one smart search, and includeEnrichment "
         "adds Crossref + Unpaywall metadata only to the final returned hits after "
-        "ranking is complete. Returns compact smart hits, strategyMetadata, "
-        "agentHints, resourceUris, and a concrete next-step recommendation. Best "
+        "ranking is complete. Returns compact smart hits, strategyMetadata, trust-graded "
+        "sections such as verifiedFindings/likelyUnverified/evidenceGaps/structuredSources, "
+        "coverage/failure summaries, agentHints, resourceUris, and a concrete next-step "
+        "recommendation. Best "
         "entry point for concept discovery, but treat it as a lead generator on "
         "sparse cross-domain queries and inspect strategyMetadata, driftWarnings, "
         "and the returned evidence before trusting borderline results. In known-item "
         "mode, if exact paper recovery is weak, the tool now falls back to a broader "
-        "candidate set instead of ending in a dead-end configuration error."
+        "candidate set instead of ending in a dead-end configuration error. For clearly "
+        "regulatory or species-history queries, auto mode can route into ECOS, Federal "
+        "Register, and CFR retrieval first and return a regulatoryTimeline instead of "
+        "paper-centric ranking."
     ),
     "ask_result_set": (
         "Grounded follow-up over a saved searchSessionId. Answer a question using "

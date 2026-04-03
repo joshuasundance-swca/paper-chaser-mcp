@@ -6,6 +6,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Literal
+from urllib.parse import urlparse
 
 from .models import (
     ArxivSearchResponse,
@@ -122,12 +123,163 @@ def enrich_semantic_scholar_paper(paper: Paper) -> Paper:
     )
 
 
+_MIRROR_HOSTS = frozenset({"researchgate.net", "www.researchgate.net", "academia.edu", "www.academia.edu"})
+
+
+def _paper_doi(paper: Paper) -> str | None:
+    enrichments = paper.enrichments
+    if enrichments is not None:
+        for candidate in (
+            enrichments.crossref.doi if enrichments.crossref is not None else None,
+            enrichments.unpaywall.doi if enrichments.unpaywall is not None else None,
+            enrichments.openalex.doi if enrichments.openalex is not None else None,
+        ):
+            if candidate:
+                return candidate
+    external_ids: dict[str, Any] = (paper.model_extra or {}).get("externalIds") or {}
+    candidate = external_ids.get("DOI")
+    return str(candidate) if candidate else None
+
+
+def _paper_retrieved_url(paper: Paper) -> str | None:
+    enrichments = paper.enrichments
+    if paper.pdf_url:
+        return paper.pdf_url
+    if enrichments is not None and enrichments.unpaywall is not None:
+        if enrichments.unpaywall.pdf_url:
+            return enrichments.unpaywall.pdf_url
+        if enrichments.unpaywall.best_oa_url:
+            return enrichments.unpaywall.best_oa_url
+    return paper.url
+
+
+def _paper_canonical_url(paper: Paper, doi: str | None) -> str | None:
+    if doi:
+        return f"https://doi.org/{doi}"
+    enrichments = paper.enrichments
+    if enrichments is not None:
+        for candidate in (
+            enrichments.crossref.url if enrichments.crossref is not None else None,
+            enrichments.openalex.url if enrichments.openalex is not None else None,
+        ):
+            if candidate:
+                return candidate
+    return paper.url
+
+
+def _is_mirror_url(url: str | None) -> bool:
+    if not url:
+        return False
+    hostname = urlparse(url).hostname or ""
+    return hostname.lower() in _MIRROR_HOSTS
+
+
+def _paper_source_type(paper: Paper) -> str:
+    source = (paper.source or "").lower()
+    if source in {"semantic_scholar", "scholarapi", "serpapi_google_scholar"}:
+        return "scholarly_article"
+    if source in {"arxiv", "core", "openalex"}:
+        return "repository_record"
+    if _is_mirror_url(paper.url):
+        return "mirror"
+    return "unknown"
+
+
+def _paper_access_status(paper: Paper, retrieved_url: str | None) -> str:
+    scholarapi = paper.content_access.scholarapi if paper.content_access is not None else None
+    enrichments = paper.enrichments
+    if scholarapi is not None and (scholarapi.has_text or scholarapi.has_pdf):
+        return "full_text_verified"
+    if paper.pdf_url:
+        return "full_text_verified"
+    if enrichments is not None and enrichments.unpaywall is not None:
+        if enrichments.unpaywall.is_oa and (enrichments.unpaywall.pdf_url or enrichments.unpaywall.best_oa_url):
+            return "oa_verified"
+        if enrichments.unpaywall.is_oa:
+            return "oa_uncertain"
+    if _is_mirror_url(retrieved_url):
+        return "mirror_only"
+    if paper.abstract:
+        return "abstract_only"
+    return "access_unverified"
+
+
+def _paper_open_access_route(paper: Paper, canonical_url: str | None, retrieved_url: str | None) -> str:
+    enrichments = paper.enrichments
+    unpaywall = enrichments.unpaywall if enrichments is not None else None
+    if _is_mirror_url(retrieved_url):
+        return "mirror_only"
+    if unpaywall is not None and unpaywall.is_oa:
+        if canonical_url and canonical_url.startswith("https://doi.org/"):
+            return "canonical_open_access"
+        return "repository_open_access"
+    if paper.source in {"arxiv", "core", "openalex"} and (paper.pdf_url or paper.url):
+        return "repository_open_access"
+    if paper.access_status in {"full_text_verified", "oa_verified", "oa_uncertain", "abstract_only"}:
+        return "non_oa_or_unconfirmed"
+    return "unknown"
+
+
+def annotate_paper_trust_metadata(paper: Paper) -> Paper:
+    """Attach first-pass trust metadata to normalized scholarly paper results."""
+
+    doi = _paper_doi(paper)
+    canonical_url = _paper_canonical_url(paper, doi)
+    retrieved_url = _paper_retrieved_url(paper)
+    source_type = paper.source_type or _paper_source_type(paper)
+    access_status = paper.access_status or _paper_access_status(paper, retrieved_url)
+    full_text_observed = bool(
+        paper.full_text_observed
+        or paper.pdf_url
+        or (
+            paper.content_access is not None
+            and paper.content_access.scholarapi is not None
+            and (paper.content_access.scholarapi.has_text or paper.content_access.scholarapi.has_pdf)
+        )
+    )
+    if paper.verification_status is not None:
+        verification_status = paper.verification_status
+    elif source_type == "mirror":
+        verification_status = "search_hit_only"
+    elif paper.source in {"semantic_scholar", "arxiv", "core", "openalex", "scholarapi"}:
+        verification_status = "verified_metadata"
+    else:
+        verification_status = "search_hit_only"
+    confidence = paper.confidence
+    if confidence is None:
+        confidence = (
+            "high"
+            if verification_status == "verified_primary_source"
+            else ("medium" if verification_status == "verified_metadata" else "low")
+        )
+    return paper.model_copy(
+        update={
+            "source_type": source_type,
+            "verification_status": verification_status,
+            "access_status": access_status,
+            "canonical_url": canonical_url,
+            "retrieved_url": retrieved_url,
+            "confidence": confidence,
+            "is_primary_source": paper.is_primary_source if paper.is_primary_source is not None else False,
+            "full_text_observed": full_text_observed,
+            "abstract_observed": paper.abstract_observed
+            if paper.abstract_observed is not None
+            else bool(paper.abstract),
+            "open_access_route": paper.open_access_route
+            or _paper_open_access_route(paper, canonical_url, retrieved_url),
+        }
+    )
+
+
 def core_result(core_response: dict[str, Any], limit: int) -> SearchResponse:
     core_search = CoreSearchResponse.model_validate(core_response)
     return SearchResponse(
         total=core_search.total or len(core_search.entries),
         offset=0,
-        data=core_search.entries[:limit],
+        data=[
+            annotate_paper_trust_metadata(paper.model_copy(update={"source": paper.source or "core"}))
+            for paper in core_search.entries[:limit]
+        ],
     )
 
 
@@ -136,7 +288,10 @@ def semantic_result(s2_response: dict[str, Any], limit: int) -> SearchResponse:
     return SearchResponse(
         total=semantic_search.total or len(semantic_search.data),
         offset=semantic_search.offset,
-        data=[enrich_semantic_scholar_paper(paper) for paper in semantic_search.data[:limit]],
+        data=[
+            annotate_paper_trust_metadata(enrich_semantic_scholar_paper(paper))
+            for paper in semantic_search.data[:limit]
+        ],
     )
 
 
@@ -145,7 +300,7 @@ def serpapi_result(serpapi_papers: list[dict[str, Any]], limit: int) -> SearchRe
     return SearchResponse(
         total=len(validated),
         offset=0,
-        data=validated[:limit],
+        data=[annotate_paper_trust_metadata(paper) for paper in validated[:limit]],
     )
 
 
@@ -154,7 +309,7 @@ def arxiv_result(arxiv_response: dict[str, Any], limit: int) -> SearchResponse:
     return SearchResponse(
         total=arxiv_search.total_results,
         offset=0,
-        data=arxiv_search.entries[:limit],
+        data=[annotate_paper_trust_metadata(paper) for paper in arxiv_search.entries[:limit]],
     )
 
 
@@ -323,7 +478,10 @@ SEARCH_PROVIDER_SPECS: dict[ProviderExecutorName, SearchProviderSpec] = {
         parse_response=lambda payload, limit: SearchResponse(
             total=len(list((payload or {}).get("data") or [])),
             offset=0,
-            data=[Paper.model_validate(paper) for paper in list((payload or {}).get("data") or [])[:limit]],
+            data=[
+                annotate_paper_trust_metadata(Paper.model_validate(paper))
+                for paper in list((payload or {}).get("data") or [])[:limit]
+            ],
         ),
     ),
     "arxiv": SearchProviderSpec(
@@ -362,7 +520,10 @@ SEARCH_PROVIDER_SPECS: dict[ProviderExecutorName, SearchProviderSpec] = {
         parse_response=lambda payload, limit: SearchResponse(
             total=int((payload or {}).get("total") or len(list((payload or {}).get("data") or []))),
             offset=int((payload or {}).get("offset") or 0),
-            data=[Paper.model_validate(paper) for paper in list((payload or {}).get("data") or [])[:limit]],
+            data=[
+                annotate_paper_trust_metadata(Paper.model_validate(paper))
+                for paper in list((payload or {}).get("data") or [])[:limit]
+            ],
         ),
         propagate_exceptions=_scholarapi_propagate_exceptions,
     ),

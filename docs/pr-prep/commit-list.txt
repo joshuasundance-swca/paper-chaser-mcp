@@ -1,0 +1,4 @@
+4b272d3 (HEAD -> jsb) additional improvements
+fa4262c ignore feedback docs
+2f36d53 extended response to user feedback
+f5d4eac initial response to user feedback

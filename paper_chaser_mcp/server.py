@@ -67,7 +67,9 @@ SERVER_INSTRUCTIONS = """
 Decision tree for tool selection:
 
 1. CONCEPT-LEVEL DISCOVERY / REVIEW → search_papers_smart
-   (returns searchSessionId, strategyMetadata, resourceUris, and agentHints;
+    (returns searchSessionId, strategyMetadata, trust-graded sections such as
+    verifiedFindings/likelyUnverified/evidenceGaps/structuredSources, plus
+    resourceUris and agentHints;
    use latencyProfile=fast for smoke tests, balanced for default work, and deep
    for controlled multi-provider expansion)
 2. QUICK RAW DISCOVERY → search_papers
@@ -113,14 +115,18 @@ Decision tree for tool selection:
 
 After search_papers: read brokerMetadata.nextStepHint for the recommended next move.
 After search_papers_smart: reuse searchSessionId for ask_result_set,
-map_research_landscape, or expand_research_graph, and inspect acceptedExpansions,
-rejectedExpansions, speculativeExpansions, providersUsed, driftWarnings,
-latencyProfile, providerBudgetApplied, and providerOutcomes. Set
+map_research_landscape, or expand_research_graph, and inspect verifiedFindings,
+likelyUnverified, evidenceGaps, structuredSources, coverageSummary,
+failureSummary, acceptedExpansions, rejectedExpansions, speculativeExpansions,
+providersUsed, driftWarnings, latencyProfile, providerBudgetApplied, and
+providerOutcomes. Set
 includeEnrichment=true only when you want Crossref, Unpaywall, and OpenAlex metadata on the
 final smart-ranked hits; enrichment is post-ranking only and never changes
 retrieval or provider ordering. When ScholarAPI is enabled, smart retrieval may
 also include it explicitly, and providerBudget.maxScholarApiCalls can cap that
 paid path.
+When the query is clearly regulatory or species-history oriented, search_papers_smart can also route into
+ECOS/Federal Register/CFR retrieval first and return a regulatoryTimeline instead of paper-centric ranking.
 Primary read tools now also return agentHints, clarification, resourceUris, and,
 when they produce reusable result sets, searchSessionId.
 For known-item flows, includeEnrichment=true on search_papers_match,
@@ -166,161 +172,78 @@ returned, do not derive, edit, or fabricate it, and do not reuse it across a
 different tool or query flow.
 """.strip()
 
+GUIDED_SERVER_INSTRUCTIONS = """
+Default guided workflow:
+
+1. RESEARCH -> research
+   Use this for topic discovery, literature review, known-item recovery, citation repair,
+   and regulatory or species-history requests when you want one trust-graded answer.
+2. FOLLOW UP -> follow_up_research
+   Reuse searchSessionId from research to ask one grounded question. The tool abstains
+   when the saved evidence is too weak or off-topic.
+3. RESOLVE ONE REFERENCE -> resolve_reference
+   Use this for citations, DOI strings, arXiv IDs, URLs, title fragments, and regulatory references.
+4. INSPECT ONE SOURCE -> inspect_source
+   Pass searchSessionId plus sourceId from research to inspect provenance, trust state, and direct-read next steps.
+
+Use get_runtime_status when behavior looks different across environments and you need the active runtime truth.
+The guided surface is intentionally opinionated: it prefers trust-graded evidence, explicit abstention, and direct next
+actions over raw provider control.
+""".strip()
+
 AGENT_WORKFLOW_GUIDE = """
 # Paper Chaser agent workflow guide
 
-## Quick decision tree
+## Default guided path
 
-- **Concept-level discovery or literature review**: `search_papers_smart` →
-  reuse `searchSessionId` with `ask_result_set`, `map_research_landscape`,
-  or `expand_research_graph`. Use `latencyProfile=fast` for smoke baselines,
-  `balanced` for the default path, and `deep` when controlled multi-provider
-    expansion is worth the extra latency. In `known_item` mode, if one exact
-    anchor is not confidently resolved, the smart workflow now falls back to a
-        broader candidate set with warnings instead of stopping on a dead-end error.
-        When ScholarAPI is enabled, smart retrieval can include it explicitly and
-        cap it with `providerBudget.maxScholarApiCalls`.
-- **Quick literature discovery**: `search_papers` → inspect
-  `brokerMetadata.nextStepHint`, `agentHints`, and `resourceUris` to decide
-  whether to broaden, narrow, paginate, or pivot.
-- **Exhaustive / multi-page retrieval**: `search_papers_bulk` with cursor loop until
-  `pagination.hasMore` is false; read `retrievalNote` because default bulk
-  ordering is not relevance-ranked.
-- **Small targeted Semantic Scholar page**: `search_papers_semantic_scholar` (or
-  `search_papers` if brokered discovery is fine) instead of bulk retrieval.
-- **Citation repair / incomplete references**: `resolve_citation`
-- **Known-item lookup (messy title)**: `search_papers_match` — pass only a
-  `query` string (the title text to match); this tool does NOT accept separate
-  author, year, or venue fields. Use `resolve_citation` for multi-field
-  bibliographic references.
-- **Known-item lookup (DOI / arXiv / URL / S2 ID)**: `get_paper_details`
-- **Post-resolution paper enrichment**: `get_paper_metadata_crossref`,
-  `get_paper_open_access_unpaywall`, or `enrich_paper` after you already have a
-  paper or DOI. For known-item and smart flows, opt in with
-  `includeEnrichment=true` when you want additive metadata without changing the
-  retrieval path.
-- **Citation chasing (cited-by expansion)**: `get_paper_citations`
-- **Citation chasing (backward references)**: `get_paper_references`
-- **Author-centric workflows**: `search_authors` → `get_author_info` →
-  `get_author_papers`; pivot to `get_paper_authors` if starting from a paper.
-- **Common-name author disambiguation**: add affiliation, coauthor, venue, or
-  topic clues to `search_authors`, then confirm identity with
-  `get_author_info`/`get_author_papers`.
-- **Cross-provider ID portability**: for Semantic Scholar expansion tools prefer
-  `paper.recommendedExpansionId` when it is present. If
-  `paper.expansionIdStatus` is `not_portable`, brokered `paperId`, `sourceId`,
-  and `canonicalId` values are still provider-specific and must be resolved
-  through DOI or a Semantic Scholar-native lookup first.
-- **Outside-paper outputs**: dissertations, software releases, reports, and
-  other grey literature may fall outside the indexed paper surface even when a
-  title is real; treat a structured no-match from `search_papers_match` as a
-  signal to verify externally.
-- **Almost-right citations or broken bibliography lines**: prefer
-  `resolve_citation` before bouncing between title match, snippets, and broad
-  search. The resolver returns confidence, alternatives, conflicts, and the
-  fastest next clue to add.
-- **Regulatory primary-source citations**: if `resolve_citation` identifies a
-    Federal Register or CFR-style reference, pivot to `search_federal_register`,
-    `get_federal_register_document`, or `get_cfr_text` instead of treating it as
-    a scholarly paper.
-- **Quote or snippet validation**: `search_snippets` — special-purpose recovery
-  tool only when title/keyword search is weak; provider 4xx/5xx errors degrade
-  to empty results with retry guidance.
-- **Citation export**: `get_paper_citation_formats` — pass
-  `result_id=paper.scholarResultId` (not `paper.sourceId`) from any
-  `serpapi_google_scholar` result to get MLA, APA, BibTeX, etc.
-- **OpenAlex-specific workflows**: use `search_papers_openalex` for one explicit
-  OpenAlex page, `search_papers_openalex_bulk` for cursor-paginated OpenAlex
-  traversal, `get_paper_details_openalex` for OpenAlex ID/DOI lookup, and the
-  OpenAlex citation/author tools when you want OpenAlex-native semantics. Use
-  `paper_autocomplete_openalex`, `search_entities_openalex`, and
-  `search_papers_openalex_by_entity` for title hints plus venue, affiliation,
-  or topic pivots.
-- **SerpApi recovery workflows**: keep SerpApi off the default broad path and use
-  `search_papers_serpapi_cited_by`, `search_papers_serpapi_versions`,
-  `get_author_profile_serpapi`, `get_author_articles_serpapi`, and
-  `get_serpapi_account_status` only when Google Scholar recall recovery or quota
-  inspection is explicitly needed.
-- **ScholarAPI full-text workflows**: use `search_papers_scholarapi` for
-    explicit ScholarAPI-ranked discovery, `list_papers_scholarapi` for
-    indexed-at monitoring or exhaustive date-window scans, and
-    `get_paper_text_scholarapi`, `get_paper_texts_scholarapi`, or
-    `get_paper_pdf_scholarapi` when the next step requires accessible full text
-    or a PDF payload.
-- **Provider/runtime debugging**: `get_provider_diagnostics`
-- **ECOS species dossiers**: `search_species_ecos` -> `get_species_profile_ecos`
-  -> `list_species_documents_ecos` -> `get_document_text_ecos`
-- **Regulatory primary sources**: `search_federal_register` for discovery,
-    `get_federal_register_document` for one notice or rule, and `get_cfr_text`
-    for authoritative CFR text. This is the preferred path after an ECOS
-    document exposes `frCitation` or a GovInfo FR link. NOTE: Biological
-    opinions, Section 7 consultation records, and incidental take permits are
-    NOT published in the Federal Register — use the ECOS species dossier chain
-    (`search_species_ecos` → `list_species_documents_ecos`) for those.
-- **Grounded follow-up over a saved result set**: `ask_result_set` for QA,
-  claim checks, or comparisons; `map_research_landscape` for themes, gaps, and
-  disagreements; `expand_research_graph` for a compact citation or author graph.
+- Start with `research` for topic discovery, literature review, known-item recovery,
+  citation repair, and regulatory or species-history requests.
+- Save the returned `searchSessionId`. It is the anchor for `follow_up_research`
+  and `inspect_source`.
+- Use `follow_up_research` for one grounded question over the saved evidence.
+  It is supposed to abstain when the evidence is weak, off-topic, or incomplete.
+- Use `resolve_reference` when the user already has a citation, DOI, arXiv ID,
+  URL, title fragment, or regulatory reference and wants the safest next anchor.
+- Use `inspect_source` with `searchSessionId` plus `sourceId` to inspect
+  provenance, trust state, access status, and direct-read next steps.
+- Use `get_runtime_status` when behavior differs across environments and you need
+  the active runtime truth without digging through low-level diagnostics.
 
-## Provider steering
+## Guided output contract
 
-Set `preferredProvider` on `search_papers` to try one provider first while keeping
-the fallback chain. Set `providerOrder` to override the full broker chain for one
-call. Use `search_papers_core`, `search_papers_semantic_scholar`,
-`search_papers_serpapi`, `search_papers_scholarapi`, or `search_papers_arxiv`
-for single-source searches.
+- `research` returns `intent`, `status`, `summary`, `verifiedFindings`, `sources`,
+  `unverifiedLeads`, `evidenceGaps`, `trustSummary`, `coverage`, `failureSummary`,
+  `resultMeaning`, `nextActions`, and `clarification`.
+- `status` is one of `succeeded`, `partial`, `needs_disambiguation`,
+  `abstained`, or `failed`.
+- Treat `verifiedFindings` as the compact trust-graded claims list and `sources`
+  as the canonical source records for inspection and citation.
+- Treat `unverifiedLeads` as auditable but not yet trusted evidence. It is the
+  place for weak, filtered, or off-topic leads that should not be promoted into
+  verified findings.
+- If the tool abstains or asks for clarification, do not smooth that over with
+  your own synthesis. Ask a narrower question or inspect the returned sources.
 
-## Provider-specific tool contracts
+## Expert/operator-only fallback
 
-- `search_papers_core`, `search_papers_serpapi`, and `search_papers_arxiv`
-    expose only `query`, `limit`, and `year`.
-- `search_papers_openalex` exposes one explicit OpenAlex page, while
-    `search_papers_openalex_bulk` exposes OpenAlex cursor pagination.
-- `search_papers_semantic_scholar` exposes the wider Semantic Scholar-compatible
-    filter set.
-- `search_papers_scholarapi` and `list_papers_scholarapi` expose ScholarAPI
-    cursor, date-range, and full-text/PDF availability filters.
+- Use the expert surface only when you truly need raw provider control,
+  pagination semantics, or provider-native payloads.
+- Expert discovery tools include `search_papers`, `search_papers_bulk`,
+  `search_papers_smart`, `map_research_landscape`, and `expand_research_graph`.
+- Expert primary-source tools include `search_federal_register`,
+  `get_federal_register_document`, `get_cfr_text`, `search_species_ecos`,
+  `get_species_profile_ecos`, and `list_species_documents_ecos`.
+- Expert runtime debugging lives under `get_provider_diagnostics`.
 
-## Continuation vs pivot
+## Safety habits
 
-- `search_papers_bulk` is the closest continuation path when the task is already
-    aligned with Semantic Scholar retrieval semantics.
-- Even on Semantic Scholar paths, default bulk ordering is NOT relevance-ranked;
-    it is not "page 2" of `search_papers`. Read `retrievalNote` and use
-    `sort='citationCount:desc'` for citation-ranked bulk traversal.
-- If `search_papers` returned CORE, arXiv, ScholarAPI, or SerpApi results, `search_papers_bulk`
-    is a Semantic Scholar pivot, not another page from the same provider.
-- Venue-filtered Semantic Scholar searches can also broaden when moved to bulk
-    retrieval.
-- For small targeted pages, prefer `search_papers` or
-    `search_papers_semantic_scholar`; the upstream bulk endpoint may ignore small
-    `limit` values internally.
-
-## Pagination contract
-
-For every paginated tool: treat `pagination.nextCursor` as opaque, pass it back
-exactly as returned, and do not derive, edit, fabricate, or cross-reuse it.
-
-## Agent-facing metadata
-
-- Primary read tools now return `agentHints`, `clarification`, and
-  `resourceUris`.
-- Discovery and expansion tools that create reusable result sets also return
-  `searchSessionId`.
-- The resources surfaced from tool outputs are `paper://{paper_id}`,
-  `author://{author_id}`, `search://{searchSessionId}`, and
-  `trail://paper/{paper_id}?direction=citations|references`.
-
-## Agentic UX review loop
-
-- Start with a smoke baseline across discovery, known-item lookup, pagination,
-  and author workflows so regressions in the core paths stay visible.
-- If the task is a broader UX review, add deeper probes such as
-  `get_paper_references`, `get_paper_authors`, `search_snippets`, or the
-  explicit `*_openalex` tools.
-- If the task is a feature-specific probe, keep the baseline short and spend the
-  remaining effort on the supplied feature or UX hypothesis.
-- When you find a concrete defect, capture the exact tool calls, expected vs
-  actual behavior, and whether the likely fix belongs in code, docs, or both.
+- Prefer guided tools unless a concrete expert-only need is present.
+- Reuse `searchSessionId` instead of rephrasing the same question into multiple
+  raw tools.
+- Treat `pagination.nextCursor` as opaque whenever you are on an expert paginated
+  path.
+- Capture defects with the exact tool call, what the user expected, what the
+  tool returned, and whether the fix belongs in code, docs, or both.
 """.strip()
 
 __all__ = [
@@ -509,11 +432,18 @@ async def _execute_tool(
         provider_registry=provider_registry,
         workspace_registry=workspace_registry,
         agentic_runtime=agentic_runtime,
+        transport_mode=settings.transport,
+        tool_profile=settings.tool_profile,
+        hide_disabled_tools=settings.hide_disabled_tools,
+        session_ttl_seconds=settings.session_ttl_seconds,
+        embeddings_enabled=not settings.disable_embeddings,
         ctx=ctx,
     )
 
 
 settings = AppSettings.from_env()
+for warning in settings.runtime_warnings():
+    logger.warning("Runtime configuration warning: %s", warning)
 agentic_config = AgenticConfig.from_settings(settings)
 api_key = settings.semantic_scholar_api_key
 openai_api_key = settings.openai_api_key
@@ -630,12 +560,18 @@ agentic_runtime = AgenticRuntime(
     scholarapi_client=scholarapi_client,
     arxiv_client=arxiv_client,
     serpapi_client=serpapi_client,
+    ecos_client=ecos_client,
+    federal_register_client=federal_register_client,
+    govinfo_client=govinfo_client,
     enable_core=enable_core,
     enable_semantic_scholar=enable_semantic_scholar,
     enable_openalex=enable_openalex,
     enable_scholarapi=enable_scholarapi,
     enable_arxiv=enable_arxiv,
     enable_serpapi=enable_serpapi,
+    enable_ecos=enable_ecos,
+    enable_federal_register=enable_federal_register,
+    enable_govinfo_cfr=enable_govinfo_cfr,
     provider_registry=provider_registry,
     enrichment_service=enrichment_service,
 )
@@ -662,7 +598,7 @@ async def _server_lifespan(_: FastMCP):
 
 app = FastMCP(
     "paper-chaser",
-    instructions=SERVER_INSTRUCTIONS,
+    instructions=(GUIDED_SERVER_INSTRUCTIONS if settings.tool_profile == "guided" else SERVER_INSTRUCTIONS),
     lifespan=_server_lifespan,
     strict_input_validation=True,
 )
@@ -685,6 +621,7 @@ _enabled_tool_flags = {
 }
 
 for _tool_spec in iter_visible_tool_specs(
+    tool_profile=settings.tool_profile,
     hide_disabled_tools=hide_disabled_tools,
     enabled_flags=_enabled_tool_flags,
 ):
@@ -839,59 +776,23 @@ def plan_paper_chaser_search(
     return (
         f"You are planning a Paper Chaser workflow about '{topic}'. Goal: {goal}. "
         f"Mode: {mode}. {mode_guidance[mode]}{focus_text} "
-        "If the task is concept-level discovery, literature review, or a grounded "
-        "follow-up over a reusable result set, prefer search_papers_smart first "
-        "and reuse searchSessionId with ask_result_set, map_research_landscape, "
-        "or expand_research_graph. Fall back to raw tools when you need provider-"
-        "specific control, pagination, or exact low-level semantics. "
-        "Start with search_papers for quick literature discovery, then read "
-        "brokerMetadata.nextStepHint to decide whether to broaden, narrow, paginate, "
-        "pivot providers, or pivot into authors. "
-        "Treat search_papers_bulk as the closest continuation path only when the "
-        "workflow is already aligned with Semantic Scholar retrieval semantics. "
-        "Even then, default bulk ordering is NOT relevance-ranked, so it is not "
-        "'page 2' of search_papers; read retrievalNote in each bulk response, or "
-        "pass sort='citationCount:desc' for citation-ranked bulk traversal. If "
-        "results came from CORE, arXiv, or SerpApi, bulk retrieval is a Semantic "
-        "Scholar pivot rather than another page from the same provider. "
-        "If the task is exhaustive retrieval, first N results, or multi-page "
-        "collection, use search_papers_bulk. For small targeted pages, prefer "
-        "search_papers or search_papers_semantic_scholar because the upstream "
-        "bulk endpoint may ignore small limit values internally. "
-        "If the task explicitly needs OpenAlex-native DOI/ID lookup, OpenAlex "
-        "cursor pagination, or OpenAlex author/citation semantics, use the "
-        "dedicated *_openalex tools instead of the default broker. "
-        "If the task is citation repair, broken bibliography recovery, or "
-        "almost-right reference correction, use resolve_citation first. If the "
-        "task is known-item lookup, use search_papers_match for messy titles "
-        "and get_paper_details for DOI, arXiv ID, URL, or canonical IDs. Treat a "
-        "structured no-match from search_papers_match as a hint that the item may "
-        "be a dissertation, software release, report, or other output outside the "
-        "indexed paper surface. Once you have a stable paper anchor, use "
-        "get_paper_metadata_crossref, get_paper_open_access_unpaywall, or "
-        "enrich_paper for additive metadata and OA/PDF discovery. Known-item "
-        "tools and search_papers_smart also expose includeEnrichment=true when "
-        "you want post-resolution enrichment without changing ranking. "
-        "If the task starts from a known paper, use get_paper_citations for cited-by "
-        "expansion and get_paper_references for backward references, and explain "
-        "that direction clearly. "
-        "For author-centric workflows use search_authors, get_author_info, and "
-        "get_author_papers. For common names, add affiliation, coauthor, venue, "
-        "or topic clues before confirming the best candidate. For Semantic "
-        "Scholar expansion tools prefer paper.recommendedExpansionId when it is "
-        "present. If paper.expansionIdStatus is not_portable, do not retry with "
-        "brokered paperId/sourceId/canonicalId values; resolve the paper "
-        "through DOI or a Semantic Scholar-native lookup first. "
-        "Use search_snippets only as a special-purpose recovery tool when quote or "
-        "phrase search is needed and title/keyword search is weak; if the provider "
-        "rejects that query, expect an empty degraded response rather than a raw "
-        "4xx/5xx. "
-        "Use preferredProvider/providerOrder or provider-specific search_papers_* "
-        "tools only when source choice matters. Remember that search_papers_core, "
-        "search_papers_serpapi, and search_papers_arxiv only support query, limit, "
-        "and year, while search_papers_semantic_scholar supports the wider filter set "
-        "and search_papers_scholarapi/list_papers_scholarapi support ScholarAPI-specific "
-        "cursor, date, and full-text filters. "
+        "Default to the guided surface. Start with research for discovery, known-item "
+        "recovery, citation repair, and regulatory routing. If the user already has a "
+        "citation-like string, use resolve_reference first. Reuse searchSessionId with "
+        "follow_up_research for one grounded question and inspect_source for provenance. "
+        "Treat abstentions and clarification requests as real outputs, not failures to hide. "
+        "Only fall back to the expert surface when the task explicitly requires provider-specific control, "
+        "pagination, or provider-native payloads. On the expert surface, search_papers is "
+        "the quick brokered path, search_papers_bulk is the exhaustive Semantic Scholar-style "
+        "path, and search_papers_smart/map_research_landscape/expand_research_graph are the "
+        "deeper agentic tools. If the task explicitly needs OpenAlex-native DOI/ID lookup, "
+        "OpenAlex cursor pagination, or OpenAlex author/citation semantics, use the dedicated "
+        "*_openalex tools instead of the default broker. For exact paper follow-through, use "
+        "get_paper_details, get_paper_citations, get_paper_references, search_authors, "
+        "get_author_info, and get_author_papers as needed. "
+        "For regulatory work, prefer the guided path first; if you need exact primary-source "
+        "control, pivot into search_federal_register, get_federal_register_document, get_cfr_text, "
+        "or the ECOS tools. "
         "If you uncover a defect or confusing UX, summarize the exact tool calls, "
         "expected vs actual behavior, and whether the best follow-up is a code "
         "change, a documentation update, or both so the result can turn into an "
@@ -914,18 +815,16 @@ def plan_smart_paper_chaser_search(
 ) -> str:
     return (
         f"You are planning a smart Paper Chaser workflow about '{topic}'. "
-        f"Goal: {goal}. Mode: {mode}. Start with search_papers_smart for "
-        "concept-level discovery or "
-        "known-item resolution. For broken citations or almost-right "
-        "references, prefer resolve_citation before broader discovery. Reuse "
-        "searchSessionId across ask_result_set, "
-        "map_research_landscape, and expand_research_graph. If the smart workflow "
-        "cannot stay grounded, drop to raw tools: search_papers, search_papers_bulk, "
-        "get_paper_details, resolve_citation, get_paper_citations, "
-        "get_paper_references, search_authors, and get_author_papers."
-        " When you already have the right paper and want richer metadata or OA "
-        "signals, use includeEnrichment=true on the smart or known-item path, or "
-        "call enrich_paper explicitly."
+        f"Goal: {goal}. Mode: {mode}. Start with research unless you have a concrete "
+        "reason to force the expert smart surface. If you do need expert smart behavior, "
+        "use search_papers_smart for concept-level discovery and reuse searchSessionId across "
+        "ask_result_set, map_research_landscape, and expand_research_graph. For broken citations "
+        "or almost-right references, prefer resolve_reference on the guided path before broader "
+        "discovery. If the smart workflow cannot stay grounded, drop back to research, "
+        "inspect_source, or the raw expert tools such as search_papers, search_papers_bulk, "
+        "get_paper_details, get_paper_citations, get_paper_references, search_authors, and "
+        "get_author_papers. When you already have the right paper and want richer metadata or OA "
+        "signals, use the enrichment tools after resolution."
     )
 
 
@@ -940,12 +839,11 @@ def triage_literature(
 ) -> str:
     return (
         f"Triage literature for '{topic}'. Goal: {goal}. Start with "
-        "search_papers_smart. Inspect strategyMetadata, "
-        "acceptedExpansions, rejectedExpansions, resourceUris, and "
-        "agentHints. Save the searchSessionId, then ask one grounded question with "
-        "ask_result_set and one clustering question with map_research_landscape. "
-        "If one hit becomes a strong anchor, optionally enrich it with Crossref "
-        "and Unpaywall before the next citation or QA step."
+        "research. Inspect status, verifiedFindings, sources, unverifiedLeads, evidenceGaps, "
+        "trustSummary, coverage, failureSummary, "
+        "and clarification. Save the searchSessionId, then ask one grounded question with "
+        "follow_up_research. If one hit becomes a strong anchor, use inspect_source for "
+        "provenance before treating it as settled."
     )
 
 
@@ -979,10 +877,10 @@ def refine_query(
 ) -> str:
     return (
         f"Refine the query '{query}'. Problem signal: {weakness}. "
-        "Try search_papers_smart first and inspect acceptedExpansions, "
-        "rejectedExpansions, speculativeExpansions, and driftWarnings. "
-        "If needed, add year/venue/focus constraints or fall back to raw search_papers "
-        "with providerOrder or preferredProvider."
+        "Try research first and inspect status, trustSummary, coverage, failureSummary, and "
+        "clarification. If the guided path abstains, add a concrete anchor such as a year, "
+        "venue, DOI, species name, agency, or title fragment. Use get_runtime_status when behavior "
+        "differs across environments and you need the active runtime truth."
     )
 
 

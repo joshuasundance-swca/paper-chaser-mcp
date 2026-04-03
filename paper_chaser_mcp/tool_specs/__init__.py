@@ -54,12 +54,18 @@ class ToolSpec:
     input_model: type[BaseModel]
     description: str
     tags: tuple[str, ...]
+    profiles: tuple[Literal["guided", "expert"], ...]
     execution: ToolExecutionSpec
     result_policy: ToolResultPolicy
 
 
 def _default_tags(name: str) -> tuple[str, ...]:
     provider_tags: dict[str, tuple[str, ...]] = {
+        "research": ("guided", "research"),
+        "follow_up_research": ("guided", "follow-up"),
+        "resolve_reference": ("guided", "reference-resolution"),
+        "inspect_source": ("guided", "source-inspection"),
+        "get_runtime_status": ("guided", "runtime-status"),
         "search_papers": ("search", "brokered"),
         "search_papers_smart": ("search", "smart", "agentic"),
         "resolve_citation": ("known-item", "citation-repair", "recovery"),
@@ -195,6 +201,11 @@ def _default_tags(name: str) -> tuple[str, ...]:
 
 def _default_execution_kind(name: str) -> ToolHandlerKind:
     if name in {
+        "research",
+        "follow_up_research",
+        "resolve_reference",
+        "inspect_source",
+        "get_runtime_status",
         "search_papers",
         "search_papers_core",
         "search_papers_semantic_scholar",
@@ -229,6 +240,7 @@ def _default_execution_kind(name: str) -> ToolHandlerKind:
 
 def _default_search_session_policy(name: str) -> SearchSessionPolicy:
     if name in {
+        "research",
         "search_papers",
         "search_papers_core",
         "search_papers_semantic_scholar",
@@ -254,12 +266,24 @@ def _default_search_session_policy(name: str) -> SearchSessionPolicy:
     }:
         return SearchSessionPolicy(
             persist_result_set=True,
-            query_hint_arg="citation" if name == "resolve_citation" else "query",
+            query_hint_arg=(
+                "citation" if name == "resolve_citation" else ("reference" if name == "resolve_reference" else "query")
+            ),
         )
     return SearchSessionPolicy()
 
 
 def _default_hint_profile(name: str) -> str | None:
+    if name == "research":
+        return "research"
+    if name == "follow_up_research":
+        return "follow_up_research"
+    if name == "resolve_reference":
+        return "resolve_reference"
+    if name == "inspect_source":
+        return "inspect_source"
+    if name == "get_runtime_status":
+        return "get_runtime_status"
     if name in {
         "search_papers",
         "search_papers_core",
@@ -324,6 +348,8 @@ def _default_hint_profile(name: str) -> str | None:
 
 def _default_clarification_profile(name: str) -> str | None:
     if name in {
+        "research",
+        "resolve_reference",
         "search_papers",
         "search_papers_match",
         "resolve_citation",
@@ -338,6 +364,7 @@ def _default_resource_emitters(name: str) -> tuple[ResourceEmitter, ...]:
     if _default_search_session_policy(name).persist_result_set:
         emitters.append("search_session")
     if name in {
+        "research",
         "search_papers",
         "search_papers_core",
         "search_papers_semantic_scholar",
@@ -356,6 +383,7 @@ def _default_resource_emitters(name: str) -> tuple[ResourceEmitter, ...]:
     }:
         emitters.extend(("data_items",))
     if name in {
+        "inspect_source",
         "search_papers_match",
         "get_paper_details",
         "get_paper_text_scholarapi",
@@ -381,6 +409,19 @@ def _default_resource_emitters(name: str) -> tuple[ResourceEmitter, ...]:
     return tuple(dict.fromkeys(emitters))
 
 
+def _default_profiles(name: str) -> tuple[Literal["guided", "expert"], ...]:
+    guided_tools = {
+        "research",
+        "follow_up_research",
+        "resolve_reference",
+        "inspect_source",
+        "get_runtime_status",
+    }
+    if name in guided_tools:
+        return ("guided", "expert")
+    return ("expert",)
+
+
 def _build_result_policy(name: str) -> ToolResultPolicy:
     return ToolResultPolicy(
         search_session=_default_search_session_policy(name),
@@ -396,6 +437,7 @@ def _build_spec(name: str, input_model: type) -> ToolSpec:
         input_model=input_model,
         description=TOOL_DESCRIPTIONS[name],
         tags=_default_tags(name),
+        profiles=_default_profiles(name),
         execution=ToolExecutionSpec(kind=_default_execution_kind(name)),
         result_policy=_build_result_policy(name),
     )
@@ -448,10 +490,15 @@ _SEMANTIC_SCHOLAR_GENERIC_TOOL_NAMES = {
 def tool_is_visible(
     name: str,
     *,
+    tool_profile: Literal["guided", "expert"] = "expert",
     hide_disabled_tools: bool,
     enabled_flags: Mapping[str, bool] | None = None,
 ) -> bool:
     """Return whether one tool should be advertised for the current settings."""
+
+    spec = get_tool_spec(name)
+    if tool_profile not in spec.profiles:
+        return False
 
     if not hide_disabled_tools:
         return True
@@ -486,7 +533,6 @@ def tool_is_visible(
     if name == "get_cfr_text":
         return flags.get("enable_govinfo_cfr", False)
 
-    spec = get_tool_spec(name)
     for tag in spec.tags:
         flag_name = _PROVIDER_TAG_ENABLE_FLAG.get(tag)
         if flag_name is not None:
@@ -496,6 +542,7 @@ def tool_is_visible(
 
 def iter_visible_tool_specs(
     *,
+    tool_profile: Literal["guided", "expert"] = "expert",
     hide_disabled_tools: bool,
     enabled_flags: Mapping[str, bool] | None = None,
 ) -> tuple[ToolSpec, ...]:
@@ -506,6 +553,7 @@ def iter_visible_tool_specs(
         for spec in iter_tool_specs()
         if tool_is_visible(
             spec.name,
+            tool_profile=tool_profile,
             hide_disabled_tools=hide_disabled_tools,
             enabled_flags=enabled_flags,
         )

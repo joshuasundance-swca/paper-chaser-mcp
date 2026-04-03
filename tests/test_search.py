@@ -714,6 +714,14 @@ async def test_all_providers_fail_gives_provider_failed_status(
 
     meta = payload["brokerMetadata"]
     assert meta["resultStatus"] == "provider_failed"
+    coverage = payload["coverageSummary"]
+    assert "semantic_scholar" in coverage["providersAttempted"]
+    assert "core" in coverage["providersAttempted"]
+    assert coverage["providersFailed"] == ["semantic_scholar", "core"]
+    assert coverage["likelyCompleteness"] == "incomplete"
+    failure = payload["failureSummary"]
+    assert failure["fallbackAttempted"] is True
+    assert failure["recommendedNextAction"] == "retry_or_pivot"
     # Hint must mention plural providers and not suggest query broadening.
     hint = meta["nextStepHint"]
     assert "resultStatus='provider_failed'" in hint
@@ -1205,9 +1213,55 @@ async def test_broker_metadata_result_quality_strong_for_semantic_scholar(
 
     payload = _payload(await server.call_tool("search_papers", {"query": "transformers"}))
     broker_meta = payload["brokerMetadata"]
+    paper = payload["data"][0]
 
     assert broker_meta["resultQuality"] == "strong"
     assert broker_meta["bulkSearchIsProviderPivot"] is False
+    assert payload["coverageSummary"]["providersSucceeded"] == ["semantic_scholar"]
+    assert payload["coverageSummary"]["likelyCompleteness"] == "partial"
+    assert payload.get("failureSummary") is None
+    assert paper["sourceType"] == "scholarly_article"
+    assert paper["verificationStatus"] == "verified_metadata"
+    assert paper["accessStatus"] == "access_unverified"
+    assert paper.get("canonicalUrl") is None
+    assert paper["confidence"] == "medium"
+    assert paper["abstractObserved"] is False
+
+
+@pytest.mark.asyncio
+async def test_search_papers_adds_first_pass_trust_metadata_for_arxiv_records(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ArxivClient:
+        async def search(self, **kwargs: Any) -> dict:
+            return {
+                "totalResults": 1,
+                "entries": [
+                    {
+                        "paperId": "arxiv-2401.12345",
+                        "title": "Habitat connectivity for listed species",
+                        "abstract": "A preprint about corridor design.",
+                        "url": "https://arxiv.org/abs/2401.12345",
+                        "source": "arxiv",
+                    }
+                ],
+            }
+
+    monkeypatch.setattr(server, "enable_core", False)
+    monkeypatch.setattr(server, "enable_semantic_scholar", False)
+    monkeypatch.setattr(server, "enable_arxiv", True)
+    monkeypatch.setattr(server, "arxiv_client", ArxivClient())
+
+    payload = _payload(await server.call_tool("search_papers", {"query": "habitat connectivity"}))
+    paper = payload["data"][0]
+
+    assert payload["brokerMetadata"]["providerUsed"] == "arxiv"
+    assert paper["sourceType"] == "repository_record"
+    assert paper["verificationStatus"] == "verified_metadata"
+    assert paper["accessStatus"] == "abstract_only"
+    assert paper["canonicalUrl"] == "https://arxiv.org/abs/2401.12345"
+    assert paper["retrievedUrl"] == "https://arxiv.org/abs/2401.12345"
+    assert paper["abstractObserved"] is True
 
 
 @pytest.mark.asyncio

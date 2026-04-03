@@ -16,11 +16,17 @@ def test_core_response_to_merged_preserves_total_and_limit() -> None:
         limit=1,
     )
 
-    assert result == {
-        "total": 10,
-        "offset": 0,
-        "data": [{"paperId": "1", "title": "One", "url": "https://example.com/1"}],
-    }
+    assert result["total"] == 10
+    assert result["offset"] == 0
+    assert len(result["data"]) == 1
+    assert result["data"][0]["paperId"] == "1"
+    assert result["data"][0]["title"] == "One"
+    assert result["data"][0]["url"] == "https://example.com/1"
+    assert result["data"][0]["sourceType"] == "repository_record"
+    assert result["data"][0]["verificationStatus"] == "verified_metadata"
+    assert result["data"][0]["accessStatus"] == "access_unverified"
+    assert result["data"][0]["canonicalUrl"] == "https://example.com/1"
+    assert result["data"][0]["retrievedUrl"] == "https://example.com/1"
 
 
 def test_core_result_to_paper_prefers_doi_url_and_normalizes_metadata() -> None:
@@ -39,27 +45,28 @@ def test_core_result_to_paper_prefers_doi_url_and_normalizes_metadata() -> None:
         }
     )
 
-    assert paper == {
-        "paperId": "42",
-        "title": "Example paper",
-        "abstract": "Example abstract",
-        "year": 2023,
-        "authors": [{"name": "Author One"}, {"name": "Author Two"}],
-        "citationCount": 7,
-        "referenceCount": None,
-        "influentialCitationCount": None,
-        "venue": "Journal A, Journal B",
-        "publicationTypes": ["article"],
-        "publicationDate": "2023-05-01",
-        "url": "https://doi.org/10.1000/example-doi",
-        "pdfUrl": "https://downloads.example/paper.pdf",
-        "source": "core",
-        "sourceId": "42",
-        "canonicalId": "10.1000/example-doi",
-        "recommendedExpansionId": "10.1000/example-doi",
-        "expansionIdStatus": "portable",
-        "scholarResultId": None,
-    }
+    assert paper is not None
+    assert paper["paperId"] == "42"
+    assert paper["title"] == "Example paper"
+    assert paper["abstract"] == "Example abstract"
+    assert paper["year"] == 2023
+    assert paper["authors"] == [{"name": "Author One"}, {"name": "Author Two"}]
+    assert paper["citationCount"] == 7
+    assert paper["venue"] == "Journal A, Journal B"
+    assert paper["publicationTypes"] == ["article"]
+    assert paper["publicationDate"] == "2023-05-01"
+    assert paper["url"] == "https://doi.org/10.1000/example-doi"
+    assert paper["pdfUrl"] == "https://downloads.example/paper.pdf"
+    assert paper["source"] == "core"
+    assert paper["sourceId"] == "42"
+    assert paper["canonicalId"] == "10.1000/example-doi"
+    assert paper["recommendedExpansionId"] == "10.1000/example-doi"
+    assert paper["expansionIdStatus"] == "portable"
+    assert paper["sourceType"] is None
+    assert paper["verificationStatus"] is None
+    assert paper["accessStatus"] is None
+    assert paper["canonicalUrl"] is None
+    assert paper["retrievedUrl"] is None
 
 
 def test_core_result_to_paper_wraps_scalar_document_type_in_list() -> None:

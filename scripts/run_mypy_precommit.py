@@ -7,7 +7,8 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-MYPY_BASE_COMMAND = ["-m", "mypy", "--config-file", "pyproject.toml", "--no-incremental"]
+MYPY_BASE_COMMAND = ["-m", "mypy", "--config-file", "pyproject.toml"]
+NO_INCREMENTAL_FLAG = "--no-incremental"
 
 
 def _repo_root() -> Path:
@@ -34,8 +35,20 @@ def _python_targets(filenames: Sequence[str]) -> list[str]:
     return [filename for filename in filenames if filename.endswith(".py")]
 
 
-def build_mypy_command(filenames: Sequence[str]) -> list[str]:
-    command = [str(_repo_venv_python()), *MYPY_BASE_COMMAND]
+def _split_precommit_args(argv: Sequence[str]) -> tuple[list[str], list[str]]:
+    passthrough_flags: list[str] = []
+    filenames: list[str] = []
+    for arg in argv:
+        if arg == NO_INCREMENTAL_FLAG:
+            passthrough_flags.append(arg)
+            continue
+        filenames.append(arg)
+    return passthrough_flags, filenames
+
+
+def build_mypy_command(argv: Sequence[str]) -> list[str]:
+    passthrough_flags, filenames = _split_precommit_args(argv)
+    command = [str(_repo_venv_python()), *MYPY_BASE_COMMAND, *passthrough_flags]
     if _requires_full_run(filenames):
         return command
 
@@ -47,9 +60,9 @@ def build_mypy_command(filenames: Sequence[str]) -> list[str]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    filenames = list(sys.argv[1:] if argv is None else argv)
+    args = list(sys.argv[1:] if argv is None else argv)
     completed = subprocess.run(  # nosec B603
-        build_mypy_command(filenames),
+        build_mypy_command(args),
         check=False,
         cwd=_repo_root(),
     )

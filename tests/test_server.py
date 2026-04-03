@@ -90,8 +90,8 @@ def test_streamable_http_app_handles_initialize_and_tool_call(
             "id": 2,
             "method": "tools/call",
             "params": {
-                "name": "search_papers_match",
-                "arguments": {"query": "transformers"},
+                "name": "resolve_reference",
+                "arguments": {"reference": "transformers"},
             },
         }
         call_response = client.post(
@@ -104,15 +104,15 @@ def test_streamable_http_app_handles_initialize_and_tool_call(
     assert init_response.status_code == 200
     assert initialized_response.status_code == 202
     instructions = init_payload["result"]["instructions"]
-    assert "pagination.nextCursor" in instructions
-    assert "opaque" in instructions
-    assert "do not derive, edit, or fabricate" in instructions
+    assert "research" in instructions
+    assert "follow_up_research" in instructions
+    assert "resolve_reference" in instructions
+    assert "inspect_source" in instructions
     assert call_response.status_code == 200
     structured = call_payload["result"]["structuredContent"]
-    assert structured["paperId"] == "match-1"
-    assert structured["title"] == "Best match"
-    assert "agentHints" in structured
-    assert "resourceUris" in structured
+    assert structured["status"] in {"resolved", "multiple_candidates", "no_match", "regulatory_primary_source"}
+    assert structured["resolutionType"]
+    assert "nextActions" in structured
     assert call_payload["result"]["isError"] is False
 
 
@@ -129,17 +129,16 @@ async def test_fastmcp_client_returns_structured_tool_output(
         tools = await client.list_tools()
         tool_map = {tool.name: tool for tool in tools}
         result = await client.call_tool(
-            "search_papers_match",
-            {"query": "transformers"},
+            "resolve_reference",
+            {"reference": "transformers"},
         )
 
-    assert result.data["paperId"] == "match-1"
-    assert result.data["title"] == "Best match"
-    assert "agentHints" in result.data
-    assert "resourceUris" in result.data
-    assert tool_map["search_papers"].annotations.readOnlyHint is True
-    assert tool_map["search_papers"].annotations.idempotentHint is True
-    assert tool_map["search_papers"].annotations.openWorldHint is True
+    assert result.data["resolutionType"]
+    assert result.data["status"] in {"resolved", "multiple_candidates", "no_match", "regulatory_primary_source"}
+    assert "nextActions" in result.data
+    assert tool_map["research"].annotations.readOnlyHint is True
+    assert tool_map["research"].annotations.idempotentHint is True
+    assert tool_map["research"].annotations.openWorldHint is True
 
 
 @pytest.mark.asyncio
@@ -162,13 +161,13 @@ async def test_fastmcp_match_tool_unwraps_wrapped_payload(
 
     async with Client(server.app) as client:
         result = await client.call_tool(
-            "search_papers_match",
-            {"query": "wrapped match"},
+            "resolve_reference",
+            {"reference": "wrapped match"},
         )
 
-    assert result.data["paperId"] == "wrapped-1"
-    assert result.data["title"] == "Wrapped best match"
-    assert "data" not in result.data
+    best_match = result.data["bestMatch"]
+    assert best_match["paper"]["paperId"] == "wrapped-1"
+    assert best_match["paper"]["title"] == "Wrapped best match"
 
 
 @pytest.mark.asyncio
@@ -205,30 +204,16 @@ async def test_fastmcp_resource_and_prompt_support_agent_onboarding() -> None:
     assert any(prompt.name == "triage_literature" for prompt in prompts)
     assert any(prompt.name == "plan_citation_chase" for prompt in prompts)
     assert any(prompt.name == "refine_query" for prompt in prompts)
-    assert "search_papers_bulk" in guide[0].text
-    assert "enrich_paper" in guide[0].text
-    assert "Quick literature discovery" in guide[0].text
-    assert "search_papers_smart" in guide[0].text
-    assert "resolve_citation" in guide[0].text
+    assert "research" in guide[0].text
+    assert "follow_up_research" in guide[0].text
+    assert "resolve_reference" in guide[0].text
+    assert "inspect_source" in guide[0].text
     assert "searchSessionId" in guide[0].text
-    assert "cited-by expansion" in guide[0].text
-    assert "Known-item lookup" in guide[0].text
-    assert "search_snippets" in guide[0].text
-    assert "paper.recommendedExpansionId" in guide[0].text
-    assert "paper.expansionIdStatus" in guide[0].text
-    assert "affiliation, coauthor, venue, or" in guide[0].text
-    assert "outside the indexed paper surface" in guide[0].text
-    assert "pagination.nextCursor" in plan.messages[0].content.text
-    assert "known-item lookup" in plan.messages[0].content.text
-    assert "search_papers_smart" in plan.messages[0].content.text
-    assert "resolve_citation" in plan.messages[0].content.text
-    assert "ask_result_set" in plan.messages[0].content.text
-    assert "get_paper_citations for cited-by expansion" in plan.messages[0].content.text
-    assert "paper.expansionIdStatus is not_portable" in plan.messages[0].content.text
-    assert "search_snippets only as a special-purpose recovery tool" in (plan.messages[0].content.text)
-    assert "empty degraded response rather than a raw 4xx/5xx" in (plan.messages[0].content.text)
+    assert "trust" in guide[0].text.lower()
+    assert "research" in plan.messages[0].content.text
+    assert "resolve_reference" in plan.messages[0].content.text
+    assert "follow_up_research" in plan.messages[0].content.text
     assert "Mode: feature_probe." in feature_plan.messages[0].content.text
-    assert "short smoke baseline" in feature_plan.messages[0].content.text
     assert "Probe the OpenAlex author workflow UX" in (feature_plan.messages[0].content.text)
     assert "GitHub Copilot coding agent" in feature_plan.messages[0].content.text
 
@@ -236,28 +221,12 @@ async def test_fastmcp_resource_and_prompt_support_agent_onboarding() -> None:
 def test_tool_descriptions_include_workflow_guidance() -> None:
     from paper_chaser_mcp.tools import TOOL_DESCRIPTIONS
 
-    assert "quick literature discovery" in TOOL_DESCRIPTIONS["search_papers"]
-    assert "exhaustive retrieval" in TOOL_DESCRIPTIONS["search_papers_bulk"]
-    assert "prefer search_papers or search_papers_semantic_scholar" in (TOOL_DESCRIPTIONS["search_papers_bulk"].lower())
-    assert "Known-item lookup" in TOOL_DESCRIPTIONS["search_papers_match"]
-    assert "fuzzy Semantic Scholar title search" in TOOL_DESCRIPTIONS["search_papers_match"]
-    assert "citation repair" in TOOL_DESCRIPTIONS["resolve_citation"].lower()
-    assert "alternatives" in TOOL_DESCRIPTIONS["resolve_citation"]
-    assert "Known-item lookup" in TOOL_DESCRIPTIONS["get_paper_details"]
-    assert "cite this paper (cited by)" in TOOL_DESCRIPTIONS["get_paper_citations"]
-    assert "references this paper cites" in TOOL_DESCRIPTIONS["get_paper_references"]
-    assert "author-centric workflow" in TOOL_DESCRIPTIONS["get_author_papers"].lower()
-    assert "paper.recommendedExpansionId" in TOOL_DESCRIPTIONS["get_paper_authors"]
-    assert "expansionIdStatus is not_portable" in TOOL_DESCRIPTIONS["get_paper_authors"]
-    assert "Semantic Scholar authorId" in TOOL_DESCRIPTIONS["get_author_info"]
-    assert "affiliation, coauthor, venue, or" in TOOL_DESCRIPTIONS["search_authors"]
-    assert "special-purpose recovery tool" in TOOL_DESCRIPTIONS["search_snippets"].lower()
-    assert "empty result with retry guidance" in TOOL_DESCRIPTIONS["search_snippets"]
-    assert "Supported inputs are query, limit, and year" in TOOL_DESCRIPTIONS["search_papers_core"]
-    assert "Supported inputs are query, limit, and year" in TOOL_DESCRIPTIONS["search_papers_arxiv"]
-    assert "fields, year, venue, publicationDateOrYear" in TOOL_DESCRIPTIONS["search_papers_semantic_scholar"]
-    assert "OpenAlex only" in TOOL_DESCRIPTIONS["search_papers_openalex"]
-    assert "OpenAlex cursor pagination" in TOOL_DESCRIPTIONS["search_papers_openalex_bulk"]
+    assert "default guided entry point" in TOOL_DESCRIPTIONS["research"].lower()
+    assert "trust-graded" in TOOL_DESCRIPTIONS["research"].lower()
+    assert "grounded follow-up" in TOOL_DESCRIPTIONS["follow_up_research"].lower()
+    assert "best match" in TOOL_DESCRIPTIONS["resolve_reference"].lower()
+    assert "source id" in TOOL_DESCRIPTIONS["inspect_source"].lower()
+    assert "runtime" in TOOL_DESCRIPTIONS["get_runtime_status"].lower()
     assert "abstract_inverted_index" in TOOL_DESCRIPTIONS["get_paper_details_openalex"]
     assert "cited_by_api_url" in TOOL_DESCRIPTIONS["get_paper_citations_openalex"]
     assert "batched OpenAlex ID lookups" in TOOL_DESCRIPTIONS["get_paper_references_openalex"]
@@ -377,8 +346,13 @@ def test_github_copilot_instructions_align_with_repo_workflow_docs() -> None:
     assert "GitHub cloud coding agent" in instructions
     assert "docs/golden-paths.md" in instructions
     assert "docs/agent-handoff.md" in instructions
-    assert "search_papers` for quick literature discovery" in instructions
-    assert "search_papers_bulk` for exhaustive or paginated retrieval" in instructions
+    assert "research` for discovery, literature review, known-item recovery" in instructions
+    assert "follow_up_research` for one grounded follow-up" in instructions
+    assert "resolve_reference` for DOI/arXiv/URL/citation/reference cleanup" in instructions
+    assert "search_papers_bulk` is not a generic" in instructions
+    assert "PAPER_CHASER_TOOL_PROFILE=expert" in instructions
+    assert "unverifiedLeads" in instructions
+    assert "verifiedFindings" in instructions
     assert "not a generic" in instructions
     assert "provider-specific tool contracts honest" in instructions
     assert "OpenAlex" in instructions
@@ -419,24 +393,19 @@ async def test_agent_workflow_resource_mentions_pivots_and_provider_contracts() 
         guide = await client.read_resource("guide://paper-chaser/agent-workflows")
 
     guide_text = guide[0].text
+    assert "research" in guide_text
+    assert "follow_up_research" in guide_text
+    assert "resolve_reference" in guide_text
+    assert "inspect_source" in guide_text
+    assert "get_runtime_status" in guide_text
+    assert "searchSessionId" in guide_text
+    assert "trustSummary" in guide_text
+    assert "abstains" in guide_text or "abstain" in guide_text
+    assert "Expert/operator-only fallback" in guide_text
     assert "search_papers_smart" in guide_text
-    assert "resolve_citation" in guide_text
-    assert "ask_result_set" in guide_text
-    assert "resourceUris" in guide_text
-    assert "Provider-specific tool contracts" in guide_text
-    assert "expose only `query`, `limit`, and `year`" in guide_text
-    assert "Semantic Scholar pivot, not another page" in guide_text
-    assert "NOT relevance-ranked" in guide_text
-    assert "retrievalNote" in guide_text
-    assert "citationCount:desc" in guide_text
-    assert "For small targeted pages" in guide_text
-    assert "paper.recommendedExpansionId" in guide_text
-    assert "paper.expansionIdStatus" in guide_text
-    assert "Common-name author disambiguation" in guide_text
-    assert "Outside-paper outputs" in guide_text
-    assert "OpenAlex-specific workflows" in guide_text
-    assert "Agentic UX review loop" in guide_text
-    assert "feature-specific probe" in guide_text
+    assert "get_provider_diagnostics" in guide_text
+    assert "pagination.nextCursor" in guide_text
+    assert "code, docs, or both" in guide_text
 
 
 @pytest.mark.asyncio
@@ -450,18 +419,16 @@ async def test_plan_prompt_mentions_continuation_vs_pivot_and_schema_limits() ->
         )
 
     prompt_text = plan.messages[0].content.text
+    assert "research" in prompt_text
+    assert "resolve_reference" in prompt_text
+    assert "follow_up_research" in prompt_text
+    assert "inspect_source" in prompt_text
+    assert "Treat abstentions and clarification requests as real outputs" in prompt_text
+    assert "Only fall back to the expert surface" in prompt_text
     assert "search_papers_smart" in prompt_text
-    assert "resolve_citation" in prompt_text
     assert "searchSessionId" in prompt_text
-    assert "closest continuation path only when the workflow is already aligned" in (prompt_text)
-    assert "NOT relevance-ranked" in prompt_text
-    assert "retrievalNote" in prompt_text
-    assert "citationCount:desc" in prompt_text
-    assert "paper.expansionIdStatus is not_portable" in prompt_text
-    assert "Semantic Scholar pivot rather than another page from the same provider" in (prompt_text)
-    assert "only support query, limit, and year" in prompt_text
-    assert "prefer search_papers or search_papers_semantic_scholar" in prompt_text
-    assert "outside the indexed paper surface" in prompt_text
-    assert "affiliation, coauthor, venue, or topic clues" in prompt_text
+    assert "search_papers_bulk" in prompt_text
+    assert "For regulatory work, prefer the guided path first" in prompt_text
+    assert "pagination.nextCursor as opaque" in prompt_text
     assert "Mode: smoke." in prompt_text
     assert "GitHub Copilot coding agent" in prompt_text

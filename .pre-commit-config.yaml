@@ -17,11 +17,19 @@ repos:
         types_or: [text]
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.12.9
+    rev: v0.15.9
     hooks:
       - id: ruff-format
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: python scripts/run_mypy_precommit.py
+        language: system
+        files: ^(paper_chaser_mcp/.*\.py|tests/.*\.py|pyproject\.toml)$
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -51,7 +59,7 @@ repos:
           - validate-pyproject-schema-store[all]
 
   - repo: https://github.com/python-jsonschema/check-jsonschema
-    rev: 0.37.0
+    rev: 0.37.1
     hooks:
       - id: check-github-workflows
         files: ^\.github/workflows/.*\.(yml|yaml)$
@@ -59,23 +67,23 @@ repos:
         files: ^\.github/dependabot\.ya?ml$
 
   - repo: https://github.com/rhysd/actionlint
-    rev: v1.7.11
+    rev: v1.7.12
     hooks:
       - id: actionlint
         files: ^\.github/workflows/.*\.(yml|yaml)$
         exclude: ^\.github/workflows/.*\.lock\.yml$
 
   - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.24.2
+    rev: v8.30.0
     hooks:
       - id: gitleaks
 
   - repo: https://github.com/crate-ci/typos
-    rev: v1.44.0
+    rev: v1.45.0
     hooks:
       - id: typos
         types_or: [text]
-        exclude: ^(\.github/workflows/test-scholar-search\.lock\.yml|infra/.*\.json)$
+        exclude: ^(\.github/workflows/test-scholar-search\.lock\.yml|infra/.*\.json|docs/pr-prep/.*\.(diff|txt))$
 
   - repo: https://github.com/shellcheck-py/shellcheck-py
     rev: v0.11.0.1
@@ -84,14 +92,14 @@ repos:
         types_or: [shell]
 
   - repo: https://github.com/PyCQA/bandit
-    rev: 1.8.6
+    rev: 1.9.4
     hooks:
       - id: bandit
         args: [-c, pyproject.toml]
         additional_dependencies: [".[toml]"]
 
   - repo: https://github.com/bridgecrewio/checkov
-    rev: 3.2.508
+    rev: 3.2.513
     hooks:
       - id: checkov
         name: checkov (bicep)
@@ -112,12 +120,6 @@ repos:
 
   - repo: local
     hooks:
-      - id: mypy
-        name: mypy
-        entry: python scripts/run_mypy_precommit.py
-        language: system
-        files: ^(paper_chaser_mcp/.*\.py|tests/.*\.py|pyproject\.toml)$
-
       # The stock hadolint docker_image hook can wedge under Docker Desktop on
       # Windows. Use a pinned image plus an explicit timeout/cleanup wrapper so
       # the hook stays enforced without hanging the whole pre-commit run.

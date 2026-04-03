@@ -152,6 +152,54 @@ def _validate_provider_order(
     return normalized_providers
 
 
+class ResearchArgs(ToolArgsModel):
+    query: str = Field(description="Natural-language research request or topic to investigate.")
+    limit: int = Field(
+        default=5,
+        description="Max evidence-bearing sources to keep in the guided result set (default 5, max 10).",
+    )
+    year: str | None = Field(default=None, description="Optional year or year range hint, e.g. 2022:2025.")
+    venue: str | None = Field(default=None, description="Optional venue hint to narrow the request.")
+    focus: str | None = Field(default=None, description="Optional focus hint to steer the research goal.")
+    latency_profile: LatencyProfile = Field(
+        default="balanced",
+        alias="latencyProfile",
+        description="Research depth profile: fast, balanced, or deep. Default is balanced.",
+    )
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def clamp_limit(cls, value: int | None) -> int:
+        return _clamp_limit(value, 5, 10)
+
+
+class FollowUpResearchArgs(ToolArgsModel):
+    search_session_id: str = Field(
+        alias="searchSessionId",
+        description="searchSessionId returned by the guided research tool.",
+    )
+    question: str = Field(description="Grounded follow-up question about the saved research result set.")
+
+
+class ResolveReferenceArgs(ToolArgsModel):
+    reference: str = Field(description="Citation, DOI, URL, title fragment, or regulatory reference to resolve.")
+
+
+class InspectSourceArgs(ToolArgsModel):
+    search_session_id: str = Field(
+        alias="searchSessionId",
+        description="searchSessionId returned by the guided research tool.",
+    )
+    source_id: str = Field(
+        alias="sourceId",
+        description="Canonical sourceId returned in the guided research sources list.",
+    )
+
+
+class GetRuntimeStatusArgs(ToolArgsModel):
+    pass
+
+
 class BasicSearchPapersArgs(ToolArgsModel):
     query: str = Field(description="Search query")
     limit: int = Field(default=10, description="Max results (default 10, max 100)")
@@ -1060,12 +1108,13 @@ class SmartSearchPapersArgs(ToolArgsModel):
         "known_item",
         "author",
         "citation",
+        "regulatory",
     ] = Field(
         default="auto",
         description=(
             "Task shape hint. Use auto unless the agent already knows whether "
             "this is discovery, literature review, known-item lookup, author "
-            "pivot, or citation chasing."
+            "pivot, citation chasing, or a regulatory primary-source workflow."
         ),
     )
     year: str | None = Field(
@@ -1317,6 +1366,11 @@ class GetCfrTextArgs(ToolArgsModel):
 
 
 TOOL_INPUT_MODELS: dict[str, type[ToolArgsModel]] = {
+    "research": ResearchArgs,
+    "follow_up_research": FollowUpResearchArgs,
+    "resolve_reference": ResolveReferenceArgs,
+    "inspect_source": InspectSourceArgs,
+    "get_runtime_status": GetRuntimeStatusArgs,
     "search_papers": SearchPapersArgs,
     "search_papers_core": MinimalProviderSearchPapersArgs,
     "search_papers_semantic_scholar": SemanticProviderSearchPapersArgs,

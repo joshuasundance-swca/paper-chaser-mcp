@@ -74,6 +74,27 @@ TITLE_STOPWORDS = {
     "to",
     "with",
 }
+REGULATORY_QUERY_TERMS = {
+    "biological opinion",
+    "cfr",
+    "code of federal regulations",
+    "critical habitat",
+    "ecos",
+    "endangered",
+    "federal register",
+    "five-year review",
+    "five year review",
+    "incidental take",
+    "listing history",
+    "proposed rule",
+    "recovery plan",
+    "regulation",
+    "regulatory history",
+    "rulemaking",
+    "section 7",
+    "species dossier",
+    "threatened",
+}
 
 VARIANT_DEDUPE_STOPWORDS = (
     TITLE_STOPWORDS
@@ -159,6 +180,23 @@ def looks_like_exact_title(query: str) -> bool:
     return len(title_like_words) >= max(2, int(len(significant_words) * 0.6))
 
 
+def detect_regulatory_intent(query: str, focus: str | None = None) -> bool:
+    """Return True when the ask is more likely a regulatory primary-source workflow."""
+
+    normalized = normalize_query(" ".join(part for part in [query, focus or ""] if part)).lower()
+    if not normalized:
+        return False
+    if any(term in normalized for term in REGULATORY_QUERY_TERMS):
+        return True
+    if re.search(r"\b\d+\s*(?:cfr|f\.?\s*r\.?)\b", normalized):
+        return True
+    if "species" in normalized and any(
+        marker in normalized for marker in {"history", "listing", "recovery", "dossier"}
+    ):
+        return True
+    return False
+
+
 async def classify_query(
     *,
     query: str,
@@ -183,13 +221,15 @@ async def classify_query(
     )
     if mode != "auto":
         planner.intent = cast(
-            Literal["discovery", "review", "known_item", "author", "citation"],
+            Literal["discovery", "review", "known_item", "author", "citation", "regulatory"],
             mode,
         )
         if mode == "review":
             planner.follow_up_mode = "claim_check"
     else:
-        if (
+        if detect_regulatory_intent(normalized, focus):
+            planner.intent = "regulatory"
+        elif (
             DOI_RE.search(normalized)
             or ARXIV_RE.search(normalized)
             or looks_like_url(normalized)

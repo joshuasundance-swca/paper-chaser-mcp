@@ -62,282 +62,47 @@ def _install_recording_enrichment(
 async def test_list_tools_returns_expected_public_contract() -> None:
     tools = await server.list_tools()
 
-    assert len(tools) == 58
+    assert len(tools) == 5
     tool_map = {tool.name: tool for tool in tools}
     assert set(tool_map) == {
-        "search_papers",
-        "search_papers_core",
-        "search_papers_semantic_scholar",
-        "search_papers_serpapi",
-        "search_papers_scholarapi",
-        "search_papers_arxiv",
-        "search_papers_openalex",
-        "search_papers_openalex_bulk",
-        "list_papers_scholarapi",
-        "search_papers_bulk",
-        "search_papers_match",
-        "resolve_citation",
-        "paper_autocomplete",
-        "paper_autocomplete_openalex",
-        "get_paper_details",
-        "get_paper_text_scholarapi",
-        "get_paper_texts_scholarapi",
-        "get_paper_pdf_scholarapi",
-        "get_paper_metadata_crossref",
-        "get_paper_open_access_unpaywall",
-        "enrich_paper",
-        "get_paper_details_openalex",
-        "get_paper_citations",
-        "get_paper_citations_openalex",
-        "get_paper_references",
-        "get_paper_references_openalex",
-        "get_paper_authors",
-        "get_author_info",
-        "get_author_info_openalex",
-        "get_author_papers",
-        "search_authors",
-        "search_authors_openalex",
-        "search_entities_openalex",
-        "search_papers_openalex_by_entity",
-        "get_author_papers_openalex",
-        "batch_get_authors",
-        "search_snippets",
-        "get_paper_recommendations",
-        "get_paper_recommendations_post",
-        "batch_get_papers",
-        "get_paper_citation_formats",
-        "search_papers_serpapi_cited_by",
-        "search_papers_serpapi_versions",
-        "get_author_profile_serpapi",
-        "get_author_articles_serpapi",
-        "get_serpapi_account_status",
-        "get_provider_diagnostics",
-        "search_species_ecos",
-        "get_species_profile_ecos",
-        "list_species_documents_ecos",
-        "get_document_text_ecos",
-        "search_federal_register",
-        "get_federal_register_document",
-        "get_cfr_text",
-        "search_papers_smart",
-        "ask_result_set",
-        "map_research_landscape",
-        "expand_research_graph",
+        "research",
+        "follow_up_research",
+        "resolve_reference",
+        "inspect_source",
+        "get_runtime_status",
     }
-    assert tool_map["search_papers"].inputSchema["required"] == ["query"]
-    assert set(tool_map["search_papers"].inputSchema["properties"]) == {
+    assert tool_map["research"].inputSchema["required"] == ["query"]
+    assert set(tool_map["research"].inputSchema["properties"]) == {
         "query",
         "limit",
-        "fields",
-        "year",
-        "venue",
-        "preferredProvider",
-        "providerOrder",
-        "publicationDateOrYear",
-        "fieldsOfStudy",
-        "publicationTypes",
-        "openAccessPdf",
-        "minCitationCount",
-    }
-    assert set(tool_map["search_papers_core"].inputSchema["properties"]) == {
-        "query",
-        "limit",
-        "year",
-    }
-    assert set(tool_map["search_papers_semantic_scholar"].inputSchema["properties"]) == {
-        "query",
-        "limit",
-        "fields",
-        "year",
-        "venue",
-        "publicationDateOrYear",
-        "fieldsOfStudy",
-        "publicationTypes",
-        "openAccessPdf",
-        "minCitationCount",
-    }
-    assert set(tool_map["search_papers_serpapi"].inputSchema["properties"]) == {
-        "query",
-        "limit",
-        "year",
-    }
-    assert set(tool_map["search_papers_scholarapi"].inputSchema["properties"]) == {
-        "query",
-        "limit",
-        "cursor",
-        "indexed_after",
-        "indexed_before",
-        "published_after",
-        "published_before",
-        "has_text",
-        "has_pdf",
-    }
-    assert set(tool_map["list_papers_scholarapi"].inputSchema["properties"]) == {
-        "query",
-        "limit",
-        "cursor",
-        "indexed_after",
-        "indexed_before",
-        "published_after",
-        "published_before",
-        "has_text",
-        "has_pdf",
-    }
-    assert set(tool_map["search_papers_arxiv"].inputSchema["properties"]) == {
-        "query",
-        "limit",
-        "year",
-    }
-    assert set(tool_map["search_papers_openalex"].inputSchema["properties"]) == {
-        "query",
-        "limit",
-        "year",
-    }
-    assert set(tool_map["paper_autocomplete_openalex"].inputSchema["properties"]) == {
-        "query",
-        "limit",
-    }
-    assert set(tool_map["search_papers_openalex_bulk"].inputSchema["properties"]) == {
-        "query",
-        "limit",
-        "year",
-        "cursor",
-    }
-    assert set(tool_map["search_entities_openalex"].inputSchema["properties"]) == {
-        "query",
-        "entityType",
-        "limit",
-        "cursor",
-    }
-    assert set(tool_map["search_papers_openalex_by_entity"].inputSchema["properties"]) == {
-        "entityType",
-        "entityId",
-        "limit",
-        "cursor",
-        "year",
-    }
-    assert set(tool_map["resolve_citation"].inputSchema["properties"]) == {
-        "citation",
-        "maxCandidates",
-        "titleHint",
-        "authorHint",
-        "yearHint",
-        "venueHint",
-        "doiHint",
-        "includeEnrichment",
-    }
-    assert set(tool_map["get_paper_details"].inputSchema["properties"]) == {
-        "paper_id",
-        "fields",
-        "includeEnrichment",
-    }
-    assert set(tool_map["get_paper_text_scholarapi"].inputSchema["properties"]) == {"paper_id"}
-    assert set(tool_map["get_paper_texts_scholarapi"].inputSchema["properties"]) == {"paper_ids"}
-    assert set(tool_map["get_paper_pdf_scholarapi"].inputSchema["properties"]) == {"paper_id"}
-    assert set(tool_map["get_paper_metadata_crossref"].inputSchema["properties"]) == {
-        "paper_id",
-        "doi",
-        "query",
-    }
-    assert set(tool_map["get_paper_open_access_unpaywall"].inputSchema["properties"]) == {
-        "paper_id",
-        "doi",
-    }
-    assert set(tool_map["enrich_paper"].inputSchema["properties"]) == {
-        "paper_id",
-        "doi",
-        "query",
-    }
-    assert set(tool_map["search_species_ecos"].inputSchema["properties"]) == {
-        "query",
-        "limit",
-        "matchMode",
-    }
-    assert set(tool_map["get_species_profile_ecos"].inputSchema["properties"]) == {
-        "species_id",
-    }
-    assert set(tool_map["list_species_documents_ecos"].inputSchema["properties"]) == {
-        "species_id",
-        "documentKinds",
-    }
-    assert set(tool_map["get_document_text_ecos"].inputSchema["properties"]) == {
-        "url",
-    }
-    search_tags = tool_map["search_papers"].meta or {}
-    semantic_tags = tool_map["search_papers_semantic_scholar"].meta or {}
-    openalex_tags = tool_map["search_papers_openalex"].meta or {}
-    scholarapi_tags = tool_map["search_papers_scholarapi"].meta or {}
-    citation_tags = tool_map["resolve_citation"].meta or {}
-    ecos_tags = tool_map["search_species_ecos"].meta or {}
-    assert set(search_tags["fastmcp"]["tags"]) == {
-        "search",
-        "brokered",
-    }
-    assert set(semantic_tags["fastmcp"]["tags"]) == {
-        "search",
-        "provider-specific",
-        "provider:semantic_scholar",
-    }
-    assert set(openalex_tags["fastmcp"]["tags"]) == {
-        "search",
-        "provider-specific",
-        "provider:openalex",
-    }
-    assert set(scholarapi_tags["fastmcp"]["tags"]) == {
-        "search",
-        "provider-specific",
-        "provider:scholarapi",
-    }
-    assert set(citation_tags["fastmcp"]["tags"]) == {
-        "citation-repair",
-        "known-item",
-        "recovery",
-    }
-    assert set(ecos_tags["fastmcp"]["tags"]) == {
-        "search",
-        "species",
-        "provider-specific",
-        "provider:ecos",
-    }
-    assert set(tool_map["search_papers_smart"].inputSchema["properties"]) == {
-        "query",
-        "limit",
-        "searchSessionId",
-        "mode",
         "year",
         "venue",
         "focus",
         "latencyProfile",
-        "providerBudget",
-        "includeEnrichment",
     }
-    assert set(tool_map["ask_result_set"].inputSchema["properties"]) == {
+    assert tool_map["follow_up_research"].inputSchema["required"] == ["searchSessionId", "question"]
+    assert set(tool_map["follow_up_research"].inputSchema["properties"]) == {
         "searchSessionId",
         "question",
-        "topK",
-        "answerMode",
-        "latencyProfile",
     }
-    assert set(tool_map["map_research_landscape"].inputSchema["properties"]) == {
+    assert tool_map["resolve_reference"].inputSchema["required"] == ["reference"]
+    assert set(tool_map["resolve_reference"].inputSchema["properties"]) == {"reference"}
+    assert tool_map["inspect_source"].inputSchema["required"] == ["searchSessionId", "sourceId"]
+    assert set(tool_map["inspect_source"].inputSchema["properties"]) == {
         "searchSessionId",
-        "maxThemes",
-        "latencyProfile",
+        "sourceId",
     }
-    assert set(tool_map["expand_research_graph"].inputSchema["properties"]) == {
-        "seedPaperIds",
-        "seedSearchSessionId",
-        "direction",
-        "hops",
-        "perSeedLimit",
-        "latencyProfile",
-    }
-    assert tool_map["batch_get_papers"].inputSchema["required"] == ["paper_ids"]
-    assert tool_map["batch_get_authors"].inputSchema["required"] == ["author_ids"]
-    post_rec_schema = tool_map["get_paper_recommendations_post"].inputSchema
-    assert "positivePaperIds" in post_rec_schema["required"]
-    citation_schema = tool_map["get_paper_citation_formats"].inputSchema
-    assert citation_schema["required"] == ["result_id"]
-    assert set(tool_map["get_provider_diagnostics"].inputSchema["properties"]) == {"includeRecentOutcomes"}
+    assert set(tool_map["get_runtime_status"].inputSchema["properties"]) == set()
+    research_tags = tool_map["research"].meta or {}
+    follow_up_tags = tool_map["follow_up_research"].meta or {}
+    resolve_tags = tool_map["resolve_reference"].meta or {}
+    inspect_tags = tool_map["inspect_source"].meta or {}
+    runtime_tags = tool_map["get_runtime_status"].meta or {}
+    assert set(research_tags["fastmcp"]["tags"]) == {"guided", "research"}
+    assert set(follow_up_tags["fastmcp"]["tags"]) == {"guided", "follow-up"}
+    assert set(resolve_tags["fastmcp"]["tags"]) == {"guided", "reference-resolution"}
+    assert set(inspect_tags["fastmcp"]["tags"]) == {"guided", "source-inspection"}
+    assert set(runtime_tags["fastmcp"]["tags"]) == {"guided", "runtime-status"}
 
 
 @pytest.mark.asyncio
@@ -490,6 +255,7 @@ def test_visible_tool_specs_hide_disabled_provider_families_when_enabled() -> No
     visible = {
         spec.name
         for spec in iter_visible_tool_specs(
+            tool_profile="expert",
             hide_disabled_tools=True,
             enabled_flags={
                 "enable_core": False,
@@ -547,6 +313,7 @@ def test_visible_tool_specs_keep_govinfo_document_when_available() -> None:
     visible = {
         spec.name
         for spec in iter_visible_tool_specs(
+            tool_profile="expert",
             hide_disabled_tools=True,
             enabled_flags={
                 "enable_federal_register": False,
@@ -564,6 +331,7 @@ def test_visible_tool_specs_keep_search_and_repair_when_any_provider_available()
     visible = {
         spec.name
         for spec in iter_visible_tool_specs(
+            tool_profile="expert",
             hide_disabled_tools=True,
             enabled_flags={
                 "enable_semantic_scholar": False,
@@ -578,6 +346,39 @@ def test_visible_tool_specs_keep_search_and_repair_when_any_provider_available()
 
     assert "search_papers" in visible
     assert "resolve_citation" in visible
+
+
+def test_visible_tool_specs_guided_profile_exposes_only_guided_tools() -> None:
+    visible = {
+        spec.name
+        for spec in iter_visible_tool_specs(
+            tool_profile="guided",
+            hide_disabled_tools=True,
+            enabled_flags={
+                "enable_core": False,
+                "enable_semantic_scholar": False,
+                "enable_arxiv": False,
+                "enable_openalex": False,
+                "enable_serpapi": False,
+                "enable_scholarapi": False,
+                "enable_crossref": False,
+                "enable_unpaywall": False,
+                "enable_ecos": False,
+                "enable_federal_register": False,
+                "enable_govinfo_cfr": False,
+                "enable_agentic": False,
+                "govinfo_available": False,
+            },
+        )
+    }
+
+    assert visible == {
+        "research",
+        "follow_up_research",
+        "resolve_reference",
+        "inspect_source",
+        "get_runtime_status",
+    }
 
 
 @pytest.mark.asyncio
@@ -1426,6 +1227,485 @@ async def test_provider_diagnostics_can_surface_non_openai_smart_provider(monkey
     assert provider_map["nvidia"]["enabled"] is False
     assert provider_map["openai"]["enabled"] is False
     assert diagnostics["providerOrder"].index("huggingface") < diagnostics["providerOrder"].index("openai")
+    runtime = diagnostics["runtimeSummary"]
+    assert runtime["smartLayerEnabled"] is True
+    assert runtime["transportMode"] == server.settings.transport
+    assert runtime["toolsHidden"] == server.settings.hide_disabled_tools
+    assert runtime["embeddingsEnabled"] is (not server.settings.disable_embeddings)
+    assert "stdio" in runtime["transportMode"]
+
+
+@pytest.mark.asyncio
+async def test_provider_diagnostics_runtime_summary_warns_on_narrow_provider_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(server, "provider_order", ["semantic_scholar"])
+
+    diagnostics = _payload(await server.call_tool("get_provider_diagnostics", {}))
+    runtime = diagnostics["runtimeSummary"]
+
+    assert runtime["providerOrderEffective"] == ["semantic_scholar"]
+    assert runtime["activeProviderSet"]
+    assert any("narrow" in warning.lower() for warning in runtime["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_provider_diagnostics_runtime_summary_warns_on_hidden_tools_and_tls_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import types
+
+    monkeypatch.setattr(server, "hide_disabled_tools", True)
+    monkeypatch.setattr(server, "ecos_client", server.ecos_client or types.SimpleNamespace())
+    monkeypatch.setattr(server.ecos_client, "verify_tls", False, raising=False)
+
+    diagnostics = _payload(await server.call_tool("get_provider_diagnostics", {}))
+    warnings = diagnostics["runtimeSummary"]["warnings"]
+
+    assert any("hidden" in warning.lower() for warning in warnings)
+    assert any("guided profile is active" in warning.lower() for warning in warnings)
+    assert any("tls verification is disabled" in warning.lower() for warning in warnings)
+
+
+@pytest.mark.asyncio
+async def test_guided_wrappers_surface_unverified_leads(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeRuntime:
+        async def search_papers_smart(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            return {
+                "searchSessionId": "ssn-guided-1",
+                "strategyMetadata": {"intent": "regulatory"},
+                "nextStepHint": "Inspect the primary source first.",
+                "structuredSources": [
+                    {
+                        "sourceId": "condor-fr",
+                        "title": "Critical Habitat Revision for California Condor",
+                        "provider": "federal_register",
+                        "sourceType": "primary_regulatory",
+                        "verificationStatus": "verified_metadata",
+                        "accessStatus": "full_text_verified",
+                        "topicalRelevance": "on_topic",
+                        "confidence": "high",
+                        "isPrimarySource": True,
+                    }
+                ],
+                "candidateLeads": [
+                    {
+                        "sourceId": "polar-bear-fr",
+                        "title": "Designation of Critical Habitat for Polar Bear",
+                        "provider": "federal_register",
+                        "sourceType": "primary_regulatory",
+                        "verificationStatus": "verified_metadata",
+                        "accessStatus": "full_text_verified",
+                        "topicalRelevance": "off_topic",
+                        "confidence": "medium",
+                        "isPrimarySource": True,
+                        "note": "Filtered from verified timeline.",
+                    }
+                ],
+                "evidenceGaps": [],
+                "coverageSummary": {"searchMode": "regulatory_primary_source"},
+                "failureSummary": None,
+                "clarification": None,
+                "regulatoryTimeline": {"events": []},
+            }
+
+        async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            return {
+                "searchSessionId": "ssn-guided-1",
+                "answerStatus": "abstained",
+                "answer": None,
+                "evidence": [],
+                "unsupportedAsks": ["What evaluation tradeoffs show up here?"],
+                "followUpQuestions": [],
+                "structuredSources": [],
+                "candidateLeads": [
+                    {
+                        "sourceId": "lead-1",
+                        "title": "Materials Design with OpenFOAM",
+                        "provider": "semantic_scholar",
+                        "sourceType": "scholarly_article",
+                        "verificationStatus": "verified_metadata",
+                        "accessStatus": "access_unverified",
+                        "topicalRelevance": "off_topic",
+                        "confidence": "medium",
+                        "isPrimarySource": False,
+                    }
+                ],
+                "evidenceGaps": ["Grounded follow-up abstained."],
+                "coverageSummary": {"searchMode": "grounded_follow_up"},
+                "failureSummary": None,
+            }
+
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    research = _payload(await server.call_tool("research", {"query": "regulatory history of california condor"}))
+    follow_up = _payload(
+        await server.call_tool(
+            "follow_up_research",
+            {
+                "searchSessionId": "ssn-guided-1",
+                "question": "What evaluation tradeoffs show up here?",
+            },
+        )
+    )
+
+    assert research["unverifiedLeads"][0]["sourceId"] == "polar-bear-fr"
+    assert research["unverifiedLeads"][0]["topicalRelevance"] == "off_topic"
+    assert research["verifiedFindings"]
+    assert "failureSummary" in research
+    assert "resultMeaning" in research
+    assert "candidateLeads" not in research
+    assert "findings" not in research
+    assert "failure" not in research
+    assert follow_up["unverifiedLeads"][0]["sourceId"] == "lead-1"
+    assert follow_up["unverifiedLeads"][0]["topicalRelevance"] == "off_topic"
+    assert "failureSummary" in follow_up
+
+
+@pytest.mark.asyncio
+async def test_inspect_source_surfaces_guided_v2_source_fields() -> None:
+    record = server.workspace_registry.save_result_set(
+        source_tool="research",
+        search_session_id="ssn-guided-inspect",
+        query="test query",
+        payload={
+            "structuredSources": [
+                {
+                    "sourceId": "src-1",
+                    "title": "Habitat Connectivity for Listed Species",
+                    "provider": "arxiv",
+                    "sourceType": "repository_record",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "abstract_only",
+                    "topicalRelevance": "on_topic",
+                    "confidence": "medium",
+                    "isPrimarySource": False,
+                    "canonicalUrl": "https://arxiv.org/abs/2401.12345",
+                    "retrievedUrl": "https://arxiv.org/abs/2401.12345",
+                    "fullTextObserved": False,
+                    "abstractObserved": True,
+                    "openAccessRoute": "repository_open_access",
+                    "citationText": "arXiv:2401.12345",
+                    "citation": {
+                        "authors": ["Ada Lovelace"],
+                        "year": "2024",
+                        "title": "Habitat Connectivity for Listed Species",
+                        "journalOrPublisher": "arXiv",
+                        "doi": None,
+                        "url": "https://arxiv.org/abs/2401.12345",
+                        "sourceType": "repository_record",
+                        "confidence": "medium",
+                    },
+                }
+            ]
+        },
+    )
+    assert record.search_session_id == "ssn-guided-inspect"
+
+    payload = _payload(
+        await server.call_tool(
+            "inspect_source",
+            {"searchSessionId": "ssn-guided-inspect", "sourceId": "src-1"},
+        )
+    )
+
+    source = payload["source"]
+    assert source["fullTextObserved"] is False
+    assert source["abstractObserved"] is True
+    assert source["openAccessRoute"] == "repository_open_access"
+    assert source["citationText"] == "arXiv:2401.12345"
+    assert source["citation"]["authors"] == ["Ada Lovelace"]
+    assert all("get_paper_" not in item for item in payload["directReadRecommendations"])
+
+
+@pytest.mark.asyncio
+async def test_follow_up_research_answers_from_saved_session_metadata_when_regulatory_session_abstained(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRuntime:
+        async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
+            raise AssertionError(f"ask_result_set should not run for session introspection: {kwargs!r}")
+
+    record = server.workspace_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-follow-up-regulatory",
+        query="Regulatory history of the gray wolf delisting in the contiguous United States",
+        payload={
+            "searchSessionId": "ssn-follow-up-regulatory",
+            "structuredSources": [],
+            "candidateLeads": [
+                {
+                    "sourceId": "2026-05678",
+                    "title": (
+                        "Endangered and Threatened Wildlife and Plants; Designation of Critical "
+                        "Habitat for 22 Species in the Commonwealth of the Northern Mariana Islands "
+                        "and the Territory of Guam"
+                    ),
+                    "provider": "federal_register",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "access_unverified",
+                    "topicalRelevance": "off_topic",
+                    "confidence": "medium",
+                    "isPrimarySource": True,
+                    "canonicalUrl": "https://www.federalregister.gov/documents/2026/03/24/2026-05678/example",
+                    "retrievedUrl": "https://www.federalregister.gov/documents/2026/03/24/2026-05678/example",
+                    "fullTextObserved": False,
+                    "abstractObserved": False,
+                    "openAccessRoute": "non_oa_or_unconfirmed",
+                    "citationText": "2026-05678",
+                    "note": "Filtered from verified regulatory timeline because it did not match the anchored subject.",
+                }
+            ],
+            "evidenceGaps": [
+                (
+                    "No primary-source regulatory timeline could be reconstructed from the currently "
+                    "enabled regulatory providers."
+                ),
+                "Filtered 5 Federal Register hit(s) that did not match the anchored regulatory subject.",
+                "No ECOS species dossier match was found for the query.",
+            ],
+            "coverageSummary": {
+                "providersAttempted": ["ecos", "federal_register"],
+                "providersSucceeded": ["federal_register"],
+                "providersFailed": [],
+                "providersZeroResults": ["ecos"],
+                "likelyCompleteness": "unknown",
+                "searchMode": "regulatory_primary_source",
+                "summaryLine": (
+                    "2 provider(s) searched, 0 failed, 1 returned zero results, likely completeness: unknown."
+                ),
+            },
+            "failureSummary": {
+                "outcome": "no_failure",
+                "whatStillWorked": (
+                    "No provider failures were recorded, but the evidence was not strong enough to ground a result."
+                ),
+                "fallbackAttempted": False,
+                "completenessImpact": (
+                    "No primary-source regulatory timeline could be reconstructed from the currently "
+                    "enabled regulatory providers."
+                ),
+                "recommendedNextAction": "research",
+            },
+        },
+    )
+    assert record.search_session_id == "ssn-follow-up-regulatory"
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(
+        await server.call_tool(
+            "follow_up_research",
+            {
+                "searchSessionId": "ssn-follow-up-regulatory",
+                "question": (
+                    "Which providers were searched, and what specific evidence gap prevented a grounded answer?"
+                ),
+            },
+        )
+    )
+
+    assert payload["answerStatus"] == "answered"
+    assert "ecos, federal_register" in payload["answer"]
+    assert "No primary-source regulatory timeline could be reconstructed" in payload["answer"]
+    assert payload["coverage"]["searchMode"] == "regulatory_primary_source"
+    assert payload["evidenceGaps"][0].startswith("No primary-source regulatory timeline")
+    assert payload["unverifiedLeads"][0]["sourceId"] == "2026-05678"
+
+
+@pytest.mark.asyncio
+async def test_follow_up_research_uses_saved_unverified_leads_for_source_overview_when_no_sources_exist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRuntime:
+        async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
+            raise AssertionError(f"ask_result_set should not run for session source overview: {kwargs!r}")
+
+    record = server.workspace_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-follow-up-leads",
+        query="Regulatory history of the gray wolf delisting in the contiguous United States",
+        payload={
+            "searchSessionId": "ssn-follow-up-leads",
+            "structuredSources": [],
+            "candidateLeads": [
+                {
+                    "sourceId": "2026-05678",
+                    "title": (
+                        "Endangered and Threatened Wildlife and Plants; Designation of Critical "
+                        "Habitat for 22 Species in the Commonwealth of the Northern Mariana Islands "
+                        "and the Territory of Guam"
+                    ),
+                    "provider": "federal_register",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "access_unverified",
+                    "topicalRelevance": "off_topic",
+                    "confidence": "medium",
+                    "isPrimarySource": True,
+                },
+                {
+                    "sourceId": "2025-19732",
+                    "title": (
+                        "Endangered and Threatened Wildlife and Plants; Review of Species That Are "
+                        "Candidates for Listing as Endangered or Threatened; Annual Notification of "
+                        "Findings on Resubmitted Petitions; Annual Description of Progress on "
+                        "Listing Actions"
+                    ),
+                    "provider": "federal_register",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "access_unverified",
+                    "topicalRelevance": "off_topic",
+                    "confidence": "medium",
+                    "isPrimarySource": True,
+                },
+            ],
+            "evidenceGaps": [
+                (
+                    "No primary-source regulatory timeline could be reconstructed from the currently "
+                    "enabled regulatory providers."
+                )
+            ],
+            "coverageSummary": {
+                "providersAttempted": ["ecos", "federal_register"],
+                "providersSucceeded": ["federal_register"],
+                "providersZeroResults": ["ecos"],
+                "likelyCompleteness": "unknown",
+                "searchMode": "regulatory_primary_source",
+            },
+        },
+    )
+    assert record.search_session_id == "ssn-follow-up-leads"
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(
+        await server.call_tool(
+            "follow_up_research",
+            {
+                "searchSessionId": "ssn-follow-up-leads",
+                "question": "What records or source leads were found in this session?",
+            },
+        )
+    )
+
+    assert payload["answerStatus"] == "answered"
+    assert payload["answer"].startswith("Saved source leads included:")
+    assert "Designation of Critical Habitat for 22 Species" in payload["answer"]
+    assert "Annual Notification of Findings on Resubmitted Petitions" in payload["answer"]
+
+
+@pytest.mark.asyncio
+async def test_follow_up_research_answers_from_saved_session_metadata_when_partial_session_has_verified_findings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRuntime:
+        async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
+            raise AssertionError(f"ask_result_set should not run for session introspection: {kwargs!r}")
+
+    record = server.workspace_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-follow-up-partial",
+        query="Recent overview of retrieval-augmented generation evaluation methods for scholarly QA",
+        payload={
+            "searchSessionId": "ssn-follow-up-partial",
+            "verifiedFindings": ["Ragas: Automated Evaluation of Retrieval Augmented Generation"],
+            "structuredSources": [
+                {
+                    "sourceId": "2309.15217",
+                    "title": "Ragas: Automated Evaluation of Retrieval Augmented Generation",
+                    "provider": "arxiv",
+                    "sourceType": "repository_record",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "full_text_verified",
+                    "topicalRelevance": "on_topic",
+                    "confidence": "medium",
+                    "isPrimarySource": False,
+                    "canonicalUrl": "https://arxiv.org/abs/2309.15217v2",
+                    "retrievedUrl": "https://arxiv.org/pdf/2309.15217v2",
+                    "fullTextObserved": True,
+                    "abstractObserved": True,
+                    "openAccessRoute": "repository_open_access",
+                    "citationText": "2309.15217",
+                    "note": "Ragas matched the overview request.",
+                }
+            ],
+            "candidateLeads": [
+                {
+                    "sourceId": "2411.18583",
+                    "title": (
+                        "Automated Literature Review Using NLP Techniques and LLM-Based Retrieval-Augmented Generation"
+                    ),
+                    "provider": "arxiv",
+                    "sourceType": "repository_record",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "full_text_verified",
+                    "topicalRelevance": "weak_match",
+                    "confidence": "medium",
+                    "isPrimarySource": False,
+                    "canonicalUrl": "https://arxiv.org/abs/2411.18583v1",
+                    "retrievedUrl": "https://arxiv.org/pdf/2411.18583v1",
+                    "fullTextObserved": True,
+                    "abstractObserved": True,
+                    "openAccessRoute": "repository_open_access",
+                    "citationText": "2411.18583",
+                    "note": "Useful but weaker match.",
+                }
+            ],
+            "evidenceGaps": [
+                (
+                    "Smart provider 'huggingface' fell back to deterministic mode; inspect "
+                    "providerOutcomes before trusting planning or expansion quality."
+                )
+            ],
+            "coverageSummary": {
+                "providersAttempted": ["scholarapi", "semantic_scholar", "openalex", "arxiv", "core"],
+                "providersSucceeded": ["arxiv", "openalex"],
+                "providersFailed": ["core"],
+                "providersZeroResults": ["semantic_scholar"],
+                "likelyCompleteness": "partial",
+                "searchMode": "smart_literature_review",
+                "summaryLine": (
+                    "5 provider(s) searched, 1 failed, 1 returned zero results, likely completeness: partial."
+                ),
+            },
+            "failureSummary": {
+                "outcome": "fallback_success",
+                "whatFailed": "One or more smart-search providers or provider-side stages failed.",
+                "whatStillWorked": "The smart workflow returned the strongest available partial result set.",
+                "fallbackAttempted": True,
+                "fallbackMode": "smart_provider_fallback",
+                "primaryPathFailureReason": "core",
+                "completenessImpact": "Coverage may be partial because these providers or stages failed: core.",
+                "recommendedNextAction": "review_partial_results",
+            },
+        },
+    )
+    assert record.search_session_id == "ssn-follow-up-partial"
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(
+        await server.call_tool(
+            "follow_up_research",
+            {
+                "searchSessionId": "ssn-follow-up-partial",
+                "question": (
+                    "Which provider failure made completeness partial, and what was the strongest verified finding?"
+                ),
+            },
+        )
+    )
+
+    assert payload["answerStatus"] == "answered"
+    assert "Failed providers: core." in payload["answer"]
+    assert (
+        "The strongest verified finding in the saved session was: Ragas: Automated Evaluation "
+        "of Retrieval Augmented Generation."
+    ) in payload["answer"]
+    assert payload["failureSummary"]["primaryPathFailureReason"] == "core"
+    assert payload["verifiedFindings"][0]["claim"] == "Ragas: Automated Evaluation of Retrieval Augmented Generation"
 
 
 @pytest.mark.asyncio

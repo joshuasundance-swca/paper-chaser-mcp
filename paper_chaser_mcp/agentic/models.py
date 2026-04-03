@@ -6,7 +6,8 @@ from typing import Any, Literal
 
 from pydantic import Field
 
-from ..models.common import ApiModel, Paper
+from ..models.common import ApiModel, CitationRecord, CoverageSummary, FailureSummary, OpenAccessRoute, Paper
+from ..models.regulations import RegulatoryTimeline
 
 
 class AgentHints(ApiModel):
@@ -133,6 +134,32 @@ class SearchStrategyMetadata(ApiModel):
     )
 
 
+class StructuredSourceRecord(ApiModel):
+    """Trust-graded source record for smart responses."""
+
+    source_id: str | None = Field(default=None, alias="sourceId")
+    title: str | None = None
+    provider: str | None = None
+    source_type: str | None = Field(default=None, alias="sourceType")
+    verification_status: str | None = Field(default=None, alias="verificationStatus")
+    access_status: str | None = Field(default=None, alias="accessStatus")
+    topical_relevance: Literal["on_topic", "weak_match", "off_topic"] | None = Field(
+        default=None,
+        alias="topicalRelevance",
+    )
+    confidence: str | None = None
+    is_primary_source: bool | None = Field(default=None, alias="isPrimarySource")
+    canonical_url: str | None = Field(default=None, alias="canonicalUrl")
+    retrieved_url: str | None = Field(default=None, alias="retrievedUrl")
+    full_text_observed: bool | None = Field(default=None, alias="fullTextObserved")
+    abstract_observed: bool | None = Field(default=None, alias="abstractObserved")
+    open_access_route: OpenAccessRoute | None = Field(default=None, alias="openAccessRoute")
+    citation_text: str | None = Field(default=None, alias="citationText")
+    citation: CitationRecord | None = None
+    date: str | None = None
+    note: str | None = None
+
+
 class ScoreBreakdown(ApiModel):
     """Scoring signals behind a smart-ranked hit."""
 
@@ -199,6 +226,10 @@ class SmartPaperHit(ApiModel):
         default_factory=list,
         alias="retrievedBy",
     )
+    topical_relevance: Literal["on_topic", "weak_match", "off_topic"] | None = Field(
+        default=None,
+        alias="topicalRelevance",
+    )
     score_breakdown: ScoreBreakdown = Field(
         default_factory=ScoreBreakdown,
         alias="scoreBreakdown",
@@ -219,6 +250,14 @@ class SmartSearchResponse(ApiModel):
         default_factory=list,
         alias="resourceUris",
     )
+    verified_findings: list[str] = Field(default_factory=list, alias="verifiedFindings")
+    likely_unverified: list[str] = Field(default_factory=list, alias="likelyUnverified")
+    candidate_leads: list[StructuredSourceRecord] = Field(default_factory=list, alias="candidateLeads")
+    evidence_gaps: list[str] = Field(default_factory=list, alias="evidenceGaps")
+    structured_sources: list[StructuredSourceRecord] = Field(default_factory=list, alias="structuredSources")
+    coverage_summary: CoverageSummary | None = Field(default=None, alias="coverageSummary")
+    failure_summary: FailureSummary | None = Field(default=None, alias="failureSummary")
+    regulatory_timeline: RegulatoryTimeline | None = Field(default=None, alias="regulatoryTimeline")
     clarification: Clarification | None = None
 
 
@@ -234,7 +273,11 @@ class EvidenceItem(ApiModel):
 class AskResultSetResponse(ApiModel):
     """Grounded answer over a saved result set."""
 
-    answer: str
+    answer: str | None = None
+    answer_status: Literal["answered", "abstained", "insufficient_evidence"] = Field(
+        default="answered",
+        alias="answerStatus",
+    )
     evidence: list[EvidenceItem] = Field(default_factory=list)
     unsupported_asks: list[str] = Field(
         default_factory=list,
@@ -251,6 +294,13 @@ class AskResultSetResponse(ApiModel):
         default_factory=list,
         alias="resourceUris",
     )
+    verified_findings: list[str] = Field(default_factory=list, alias="verifiedFindings")
+    likely_unverified: list[str] = Field(default_factory=list, alias="likelyUnverified")
+    candidate_leads: list[StructuredSourceRecord] = Field(default_factory=list, alias="candidateLeads")
+    evidence_gaps: list[str] = Field(default_factory=list, alias="evidenceGaps")
+    structured_sources: list[StructuredSourceRecord] = Field(default_factory=list, alias="structuredSources")
+    coverage_summary: CoverageSummary | None = Field(default=None, alias="coverageSummary")
+    failure_summary: FailureSummary | None = Field(default=None, alias="failureSummary")
 
 
 class LandscapeTheme(ApiModel):
@@ -288,6 +338,13 @@ class LandscapeResponse(ApiModel):
         default_factory=list,
         alias="resourceUris",
     )
+    verified_findings: list[str] = Field(default_factory=list, alias="verifiedFindings")
+    likely_unverified: list[str] = Field(default_factory=list, alias="likelyUnverified")
+    candidate_leads: list[StructuredSourceRecord] = Field(default_factory=list, alias="candidateLeads")
+    evidence_gaps: list[str] = Field(default_factory=list, alias="evidenceGaps")
+    structured_sources: list[StructuredSourceRecord] = Field(default_factory=list, alias="structuredSources")
+    coverage_summary: CoverageSummary | None = Field(default=None, alias="coverageSummary")
+    failure_summary: FailureSummary | None = Field(default=None, alias="failureSummary")
 
 
 class GraphNode(ApiModel):
@@ -336,6 +393,7 @@ class PlannerDecision(ApiModel):
         "known_item",
         "author",
         "citation",
+        "regulatory",
     ] = "discovery"
     constraints: dict[str, str] = Field(default_factory=dict)
     seed_identifiers: list[str] = Field(
