@@ -1,0 +1,21 @@
+{
+  "scenarios": [
+    {
+      "name": "azure-openai-planner-live",
+      "family": "planner",
+      "itemId": "planner_pfas_review_001",
+      "env": {
+        "PAPER_CHASER_ENABLE_AGENTIC": "true",
+        "PAPER_CHASER_AGENTIC_PROVIDER": "azure-openai",
+        "PAPER_CHASER_PLANNER_MODEL": "gpt-5.4-mini",
+        "PAPER_CHASER_GUIDED_RESEARCH_LATENCY_PROFILE": "balanced",
+        "PAPER_CHASER_GUIDED_FOLLOW_UP_LATENCY_PROFILE": "balanced"
+      }
+    },
+    {
+      "name": "guided-runtime-default",
+      "family": "runtime",
+      "env": {}
+    }
+  ]
+}

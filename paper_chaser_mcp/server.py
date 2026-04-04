@@ -2,6 +2,8 @@
 
 import json
 import logging
+import os
+import time
 from contextlib import asynccontextmanager
 from inspect import Parameter, Signature
 from typing import Any, Literal, cast
@@ -46,6 +48,7 @@ from .constants import (
 )
 from .dispatch import dispatch_tool
 from .enrichment import PaperEnrichmentService
+from .eval_curation import maybe_capture_eval_candidate
 from .models import dump_jsonable
 from .parsing import _arxiv_id_from_url, _text
 from .provider_runtime import ProviderDiagnosticsRegistry
@@ -429,7 +432,8 @@ async def _execute_tool(
     *,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    return await dispatch_tool(
+    started = time.perf_counter()
+    result = await dispatch_tool(
         name,
         arguments,
         client=client,
@@ -472,6 +476,17 @@ async def _execute_tool(
         guided_escalation_allow_paid_providers=settings.guided_escalation_allow_paid_providers,
         ctx=ctx,
     )
+    duration_ms = int((time.perf_counter() - started) * 1000)
+    maybe_capture_eval_candidate(
+        workspace_registry=workspace_registry,
+        tool_name=name,
+        arguments=arguments,
+        result=result,
+        run_id=os.environ.get("PAPER_CHASER_EVAL_RUN_ID"),
+        batch_id=os.environ.get("PAPER_CHASER_EVAL_BATCH_ID"),
+        duration_ms=duration_ms,
+    )
+    return result
 
 
 settings = AppSettings.from_env()
@@ -575,6 +590,7 @@ provider_bundle = resolve_provider_bundle(
 workspace_registry = WorkspaceRegistry(
     ttl_seconds=settings.session_ttl_seconds,
     enable_trace_log=settings.enable_agentic_trace_log,
+    eval_trace_path=(settings.eval_trace_path if settings.enable_eval_trace_capture else None),
     index_backend=settings.agentic_index_backend,
     similarity_fn=provider_bundle.similarity,
     async_batched_similarity_fn=provider_bundle.abatched_similarity,

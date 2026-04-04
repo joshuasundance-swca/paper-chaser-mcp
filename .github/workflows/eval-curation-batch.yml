@@ -1,0 +1,149 @@
+name: Eval Curation Batch
+
+on:
+  schedule:
+    - cron: '17 9 * * 1'
+  workflow_dispatch:
+    inputs:
+      scenario_file:
+        description: Expert scenario file to execute.
+        required: true
+        default: tests/fixtures/evals/expert-batch.sample.json
+        type: string
+      latency_profile:
+        description: Guided latency profile used by guided fallbacks during the batch.
+        required: true
+        default: balanced
+        type: choice
+        options:
+          - fast
+          - balanced
+          - deep
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: '3.14'
+
+jobs:
+  expert-batch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      SCENARIO_FILE: ${{ github.event.inputs.scenario_file || 'tests/fixtures/evals/expert-batch.sample.json' }}
+      BATCH_LATENCY_PROFILE: ${{ github.event.inputs.latency_profile || 'balanced' }}
+      PAPER_CHASER_ENABLE_AGENTIC: 'true'
+      PAPER_CHASER_AGENTIC_PROVIDER: azure-openai
+      PAPER_CHASER_TOOL_PROFILE: expert
+      AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+      AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+      AZURE_OPENAI_API_VERSION: ${{ secrets.AZURE_OPENAI_API_VERSION }}
+      AZURE_OPENAI_PLANNER_DEPLOYMENT: ${{ secrets.AZURE_OPENAI_PLANNER_DEPLOYMENT }}
+      AZURE_OPENAI_SYNTHESIS_DEPLOYMENT: ${{ secrets.AZURE_OPENAI_SYNTHESIS_DEPLOYMENT }}
+      SEMANTIC_SCHOLAR_API_KEY: ${{ secrets.SEMANTIC_SCHOLAR_API_KEY }}
+      OPENALEX_API_KEY: ${{ secrets.OPENALEX_API_KEY }}
+      OPENALEX_MAILTO: ${{ secrets.OPENALEX_MAILTO }}
+      CORE_API_KEY: ${{ secrets.CORE_API_KEY }}
+      SCHOLARAPI_API_KEY: ${{ secrets.SCHOLARAPI_API_KEY }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[all]"
+
+      - name: Check expert batch prerequisites
+        id: prereqs
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in AZURE_OPENAI_API_KEY AZURE_OPENAI_ENDPOINT AZURE_OPENAI_PLANNER_DEPLOYMENT AZURE_OPENAI_SYNTHESIS_DEPLOYMENT; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Expert batch skipped because required secrets are missing: ${missing[*]}" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run expert eval batch
+        if: steps.prereqs.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/eval-curation
+          export PAPER_CHASER_GUIDED_RESEARCH_LATENCY_PROFILE="$BATCH_LATENCY_PROFILE"
+          export PAPER_CHASER_GUIDED_FOLLOW_UP_LATENCY_PROFILE="$BATCH_LATENCY_PROFILE"
+          python scripts/run_expert_eval_batch.py \
+            --scenario-file "$SCENARIO_FILE" \
+            --output build/eval-curation/expert-batch-report.json \
+            --capture-path build/eval-curation/captured-events.jsonl \
+            --review-queue-output build/eval-curation/review-queue.jsonl \
+            --batch-summary-output build/eval-curation/batch-summary.json \
+            --batch-ledger-output build/eval-curation/batch-ledger.csv
+
+      - name: Summarize generated review queue
+        if: steps.prereqs.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          review_queue = Path("build/eval-curation/review-queue.jsonl")
+          captured = Path("build/eval-curation/captured-events.jsonl")
+          report = Path("build/eval-curation/expert-batch-report.json")
+            summary = Path("build/eval-curation/batch-summary.json")
+
+          queue_rows = [json.loads(line) for line in review_queue.read_text(encoding="utf-8").splitlines() if line.strip()]
+          captured_rows = [json.loads(line) for line in captured.read_text(encoding="utf-8").splitlines() if line.strip()]
+          report_payload = json.loads(report.read_text(encoding="utf-8"))
+            summary_payload = json.loads(summary.read_text(encoding="utf-8"))
+
+          runs = report_payload.get("runs") or []
+            print(f"batch id: {summary_payload.get('batchId')}")
+          print(f"expert runs: {len(runs)}")
+          print(f"captured events: {len(captured_rows)}")
+          print(f"review queue rows: {len(queue_rows)}")
+            print(f"total duration ms: {summary_payload.get('totalDurationMs')}")
+          if queue_rows:
+              families = sorted({row.get("review", {}).get("task_family") for row in queue_rows})
+              print(f"task families: {', '.join(family for family in families if family)}")
+          PY
+          {
+            echo "### Eval Curation Batch"
+            echo
+            echo "Artifacts generated under build/eval-curation/:"
+            echo "- expert-batch-report.json"
+            echo "- captured-events.jsonl"
+            echo "- review-queue.jsonl"
+            echo "- batch-summary.json"
+            echo "- batch-ledger.csv"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload curation artifacts
+        if: steps.prereqs.outputs.ready == 'true'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: eval-curation-batch-${{ github.run_id }}
+          path: build/eval-curation/
+          if-no-files-found: error

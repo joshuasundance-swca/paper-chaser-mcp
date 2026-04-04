@@ -1,4 +1,5 @@
 import importlib
+import json
 from typing import Any
 
 import pytest
@@ -52,6 +53,57 @@ def test_run_server_uses_http_transport_settings() -> None:
             "path": "/custom-mcp",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_preserves_result_and_captures_eval_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    trace_path = tmp_path / "captured-events.jsonl"
+    registry = server.WorkspaceRegistry(
+        ttl_seconds=1800,
+        enable_trace_log=False,
+        eval_trace_path=str(trace_path),
+    )
+
+    async def fake_dispatch_tool(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "searchSessionId": "ssn_execute_tool",
+            "intent": "discovery",
+            "status": "succeeded",
+            "summary": "Captured through _execute_tool.",
+            "sources": [{"sourceId": "source-1", "title": "Paper", "provider": "openalex"}],
+            "executionProvenance": {
+                "executionMode": "guided_research",
+                "serverPolicyApplied": "quality_first",
+                "passesRun": 1,
+                "passModes": ["auto"],
+            },
+            "resultState": {
+                "status": "succeeded",
+                "groundedness": "grounded",
+                "hasInspectableSources": True,
+                "canAnswerFollowUp": True,
+                "bestNextInternalAction": "follow_up_research",
+                "missingEvidenceType": "none",
+            },
+        }
+
+    monkeypatch.setattr(server, "dispatch_tool", fake_dispatch_tool)
+    monkeypatch.setattr(server, "workspace_registry", registry)
+    monkeypatch.setenv("PAPER_CHASER_EVAL_RUN_ID", "run_server_test")
+    monkeypatch.setenv("PAPER_CHASER_EVAL_BATCH_ID", "batch_server_test")
+
+    result = await server._execute_tool("research", {"query": "PFAS remediation"})
+
+    assert result["searchSessionId"] == "ssn_execute_tool"
+    payload = json.loads(trace_path.read_text(encoding="utf-8").strip())
+    assert payload["runId"] == "run_server_test"
+    assert payload["batchId"] == "batch_server_test"
+    assert payload["durationMs"] >= 0
+    assert payload["payload"]["tool"] == "research"
+    assert payload["payload"]["output"]["searchSessionId"] == "ssn_execute_tool"
 
 
 def test_streamable_http_app_handles_initialize_and_tool_call(

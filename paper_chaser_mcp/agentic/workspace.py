@@ -12,6 +12,7 @@ import uuid
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from ..renderers.resources import (
@@ -149,6 +150,7 @@ class WorkspaceRegistry:
         *,
         ttl_seconds: int = 1800,
         enable_trace_log: bool = False,
+        eval_trace_path: str | None = None,
         index_backend: str = "memory",
         similarity_fn: Callable[[str, str], float] | None = None,
         async_batched_similarity_fn: Callable[[str, list[str]], Awaitable[list[float]]] | None = None,
@@ -163,6 +165,7 @@ class WorkspaceRegistry:
     ) -> None:
         self._ttl_seconds = ttl_seconds
         self._enable_trace_log = enable_trace_log
+        self._eval_trace_path = Path(eval_trace_path) if eval_trace_path else None
         self._index_backend = index_backend
         self._similarity_fn = similarity_fn
         self._async_batched_similarity_fn = async_batched_similarity_fn
@@ -366,6 +369,44 @@ class WorkspaceRegistry:
         record.trace.append(event)
         if self._enable_trace_log:
             logger.info("agentic-trace %s", json.dumps(event, sort_keys=True))
+
+    def capture_eval_event(
+        self,
+        *,
+        event_type: str,
+        payload: dict[str, Any],
+        search_session_id: str | None = None,
+        run_id: str | None = None,
+        batch_id: str | None = None,
+        duration_ms: int | None = None,
+    ) -> dict[str, Any]:
+        """Persist a compact eval-candidate event for later review or promotion."""
+        event = {
+            "eventId": f"evt_{uuid.uuid4().hex[:12]}",
+            "timestamp": int(_now() * 1000),
+            "eventType": event_type,
+            "searchSessionId": search_session_id,
+            "runId": run_id,
+            "batchId": batch_id,
+            "durationMs": duration_ms,
+            "payload": payload,
+        }
+        if search_session_id:
+            try:
+                self.record_trace(
+                    search_session_id,
+                    step=f"eval:{event_type}",
+                    payload=payload,
+                )
+            except SearchSessionError:
+                pass
+        if self._enable_trace_log:
+            logger.info("eval-candidate %s", json.dumps(event, sort_keys=True))
+        if self._eval_trace_path is not None:
+            self._eval_trace_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._eval_trace_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event, sort_keys=True) + "\n")
+        return event
 
     def find_paper(self, paper_id: str) -> dict[str, Any] | None:
         """Find a paper payload by any known identifier across active sessions."""

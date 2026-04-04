@@ -174,6 +174,8 @@ class AppSettings(BaseModel):
     agentic_index_backend: AgenticIndexBackend = "memory"
     session_ttl_seconds: int = 1800
     enable_agentic_trace_log: bool = False
+    enable_eval_trace_capture: bool = False
+    eval_trace_path: str | None = None
     crossref_timeout_seconds: float = 30.0
     unpaywall_timeout_seconds: float = 30.0
     ecos_timeout_seconds: float = 30.0
@@ -355,6 +357,12 @@ class AppSettings(BaseModel):
                 "PAPER_CHASER_ENABLE_AGENTIC_TRACE_LOG",
                 False,
             ),
+            enable_eval_trace_capture=_parse_env_bool(
+                env,
+                "PAPER_CHASER_ENABLE_EVAL_TRACE_CAPTURE",
+                False,
+            ),
+            eval_trace_path=_parse_optional_string(env, "PAPER_CHASER_EVAL_TRACE_PATH"),
             crossref_timeout_seconds=_parse_positive_float(
                 env,
                 "CROSSREF_TIMEOUT_SECONDS",
@@ -460,6 +468,12 @@ class AppSettings(BaseModel):
                 "Guided research uses a server-owned quality-first policy: "
                 f"research={self.guided_research_latency_profile}, follow_up={self.guided_follow_up_latency_profile}, "
                 f"paid providers {'enabled' if self.guided_allow_paid_providers else 'disabled'} when available."
+            )
+        if self.enable_eval_trace_capture and not self.eval_trace_path:
+            warnings.append(
+                "Eval trace capture is enabled without PAPER_CHASER_EVAL_TRACE_PATH, "
+                "so captured events will only be emitted to logs unless the runtime "
+                "injects a file sink."
             )
         return warnings
 

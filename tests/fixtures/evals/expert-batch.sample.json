@@ -1,0 +1,21 @@
+{
+  "scenarios": [
+    {
+      "name": "smart_search",
+      "tool": "search_papers_smart",
+      "arguments": {
+        "query": "PFAS remediation in groundwater",
+        "latencyProfile": "balanced"
+      }
+    },
+    {
+      "name": "landscape",
+      "tool": "map_research_landscape",
+      "arguments": {
+        "searchSessionId": "$result.smart_search.searchSessionId",
+        "maxThemes": 3,
+        "latencyProfile": "balanced"
+      }
+    }
+  ]
+}

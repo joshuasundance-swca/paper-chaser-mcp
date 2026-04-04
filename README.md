@@ -263,10 +263,14 @@ Optional extras for the additive AI layer:
 - Anthropic provider support: `pip install -e ".[ai,anthropic]"`
 - Google provider support: `pip install -e ".[ai,google]"`
 - Mistral provider support: `pip install -e ".[ai,mistral]"`
+- Azure AI Foundry eval publishing helpers: `pip install -e ".[eval-foundry]"`
+- Hugging Face eval publishing helpers: `pip install -e ".[eval-huggingface]"`
+- Both eval publishing helper surfaces: `pip install -e ".[eval]"`
 - Add `,ai-faiss` to any of the commands above if you want the optional FAISS backend.
 
 Azure OpenAI uses the same `openai` extra.
 Hugging Face uses a dedicated `huggingface` extra that installs the OpenAI-compatible SDK plus the LangChain OpenAI adapter; this repo documents it as a chat-only smart-provider path with embeddings disabled.
+The eval publishing helpers use separate extras on purpose: `eval-foundry` is for Azure AI Foundry dataset upload support, and `eval-huggingface` is for Hugging Face dataset-repo or bucket publishing support. Those extras are independent from the smart-provider chat runtime.
 
 ## Configuration
 
@@ -819,6 +823,21 @@ For maintainer orientation after the module split, start with `docs/agent-handof
 
 - [GitHub Copilot Instructions](.github/copilot-instructions.md) - repo-specific guidance for GitHub Copilot and the GitHub cloud coding agent, including workflow defaults and durable planning expectations.
 - [Agent Handoff](docs/agent-handoff.md) - current repo status, validation commands, and next recommended work for follow-on agents.
+- [LLM Selection Guide](docs/llm-selection-guide.md) - planner versus synthesis responsibilities, current smart-layer model defaults, supporting model-mediated features, and criteria for choosing LLMs in this repo.
+- [LLM Evaluation Program Plan](docs/llm-evaluation-program-plan.md) - role-based evaluation strategy, dataset-generation plan, evaluator stack, and phased rollout for rigorous LLM performance measurement in this repo.
+- [LLM Evaluation Dataset Schema](docs/llm-evaluation-dataset-schema.md) - JSONL schema, field rules, governance conventions, and storage layout for role-based evaluation seed sets and future benchmark expansion.
+- [LLM Evaluation Platform Strategy](docs/llm-evaluation-platform-strategy.md) - how to combine repo-local evals with Azure AI Foundry, Hugging Face, and live-trace active-learning loops without losing portability.
+- [LLM Evaluation Trace Promotion](docs/llm-evaluation-trace-promotion.md) - workflow and helper format for promoting reviewed live traces into durable evaluation rows.
+
+Optional live eval-candidate capture can be enabled with `PAPER_CHASER_ENABLE_EVAL_TRACE_CAPTURE=true` and `PAPER_CHASER_EVAL_TRACE_PATH=...`, then converted into a review queue with `scripts/build_eval_review_queue.py` before promotion.
+
+Portable exports for downstream evaluation and training systems are available via `scripts/export_eval_assets.py`, including Foundry-friendly eval JSONL, Hugging Face dataset JSONL, and chat-style training JSONL from review-approved traces.
+
+Service-specific publish helpers are available via `scripts/upload_foundry_eval_dataset.py` and `scripts/upload_hf_eval_assets.py` for pushing reviewed exports into a Foundry project dataset, a Hugging Face dataset repo, or a Hugging Face bucket.
+
+Expert batch curation runs can now emit `batch-summary.json` and `batch-ledger.csv` alongside the raw report, captured events, and review queue so offline drift and throughput checks do not depend on replaying the full JSONL artifacts.
+
+See `docs/llm-evaluation-integrations.md` for the current Foundry and Hugging Face integration posture, including when `hf-mount` is a good fit for a shared capture sink.
 - [Release And Publishing Plan](docs/release-publishing-plan.md) - the current release playbook for GHCR, GitHub Release assets, manual MCP Registry publication, and dormant PyPI.
 - [Guided Reset Migration Note](docs/guided-reset-migration-note.md) - breaking default-surface change, guided-vs-expert split, and client migration checklist.
 - [Paper Chaser Golden Paths](docs/golden-paths.md) - primary personas, workflow defaults, success signals, and future workflow-oriented follow-up work.

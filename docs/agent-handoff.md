@@ -38,6 +38,12 @@ next steps without re-discovering project state.
   and active/disabled provider sets. `configuredSmartProvider` is the configured
   smart bundle; `activeSmartProvider` is the latest effective execution path,
   including deterministic fallback when smart execution degrades.
+- The repo now includes a **portable eval curation funnel**. Live trace capture,
+  review-queue generation, trace promotion, portable exports, service-specific
+  publish helpers, and expert batch artifact generation are all checked in.
+- The eval capture layer now records **batch-safe offline telemetry** such as
+  `runId`, `batchId`, `durationMs`, compact provider-pathway summaries, stage
+  timings, confidence signals, and batch-level summary or ledger artifacts.
 - The current checked-in package version is `0.2.1` in both `pyproject.toml`
   and `server.json`.
 - The current coverage-gated validation baseline after the latest release-readiness pass is:
@@ -114,10 +120,27 @@ Use only when there is a concrete control need.
   Smart orchestration, trust gating, regulatory routing, and abstention logic.
 - `paper_chaser_mcp/server.py`
   FastMCP server surface, instructions, resources, prompts, and transport setup.
+- `paper_chaser_mcp/eval_curation.py`
+  Eval-candidate capture payloads, review-queue generation, and batch summary
+  or ledger helpers.
+- `paper_chaser_mcp/eval_exports.py`
+  Portable eval and training export helpers.
+- `paper_chaser_mcp/eval_publish.py`
+  Optional Foundry and Hugging Face publish helpers.
+- `paper_chaser_mcp/eval_trace_promotion.py`
+  Reviewed-trace promotion into durable eval rows.
 - `tests/test_dispatch.py`
   Guided wrapper behavior, tool visibility, and routing.
 - `tests/test_smart_tools.py`
   Smart trust/regulatory behavior and abstention semantics.
+- `tests/test_eval_curation.py`
+  Capture, review-queue, and batch-artifact coverage.
+- `tests/test_eval_exports.py`
+  Portable export coverage for Foundry, Hugging Face, and training-chat rows.
+- `tests/test_eval_publish.py`
+  Publish-helper validation coverage.
+- `tests/test_eval_trace_promotion.py`
+  Reviewed-trace promotion coverage.
 - `tests/test_prompt_corpus.py`
   Guided UX corpus expectations.
 - `tests/test_provider_benchmark_corpus.py`
@@ -145,6 +168,7 @@ Good focused checks while iterating on guided contracts and docs:
 ```bash
 pytest tests/test_dispatch.py tests/test_smart_tools.py tests/test_agentic_workflow.py -q
 pytest tests/test_prompt_corpus.py tests/test_provider_benchmark_corpus.py -q
+pytest tests/test_eval_curation.py tests/test_eval_exports.py tests/test_eval_publish.py tests/test_eval_trace_promotion.py tests/test_eval_canary.py -q
 ```
 
 If `.github/workflows/test-paper-chaser.md` changes:
@@ -171,6 +195,13 @@ pytest tests/test_agentic_workflow.py -q
   assets.
 - Updated UX/benchmark fixtures and tests focused on low-context success and
   safe abstention.
+- A new eval-funnel doc set covering dataset schema, platform strategy,
+  integrations, trace promotion, and model-selection context.
+- Portable eval modules and scripts for capture, queue building, promotion,
+  export, publish validation, and expert batch execution.
+- Offline batch artifacts for eval curation: `expert-batch-report.json`,
+  `captured-events.jsonl`, `review-queue.jsonl`, `batch-summary.json`, and
+  `batch-ledger.csv`.
 
 ## Known Hotspots
 
@@ -188,6 +219,10 @@ pytest tests/test_agentic_workflow.py -q
 5. Provider-specific long-form docs are intentionally expert/operator docs.
    Do not "simplify" them by removing provider nuance, but do keep them from
    leaking into guided onboarding.
+6. The eval funnel is now broader than the first doc pass. Keep the README,
+  trace-promotion guide, integration guide, platform strategy, and this
+  handoff doc synchronized whenever batch artifacts, queue shape, or export
+  semantics change.
 
 ## Suggested Next Steps
 
