@@ -1940,8 +1940,6 @@ async def test_resolve_reference_title_only_match_with_conflicting_author_year_v
     # next actions must guide toward research or manual disambiguation
     assert any("research" in action.lower() or "conflict" in action.lower() for action in payload["nextActions"])
 
-
-
     class _FakeRuntime:
         async def search_papers_smart(self, **kwargs: object) -> dict[str, object]:
             del kwargs
