@@ -835,7 +835,11 @@ def _topical_relevance_from_signals(
 ) -> str:
     title_has_anchor = title_facet_coverage > 0 or title_anchor_coverage > 0
     body_has_anchor = query_facet_coverage > 0 or query_anchor_coverage > 0
-    if query_similarity >= 0.25 and title_has_anchor:
+    has_facet_signal = title_facet_coverage > 0 or query_facet_coverage > 0
+    # Require a multi-token phrase match (facet) for the standard threshold, or a
+    # strict majority of query terms when no phrase match exists.  A single-token
+    # title hit with low similarity is a weak signal, not grounded evidence.
+    if title_has_anchor and ((has_facet_signal and query_similarity >= 0.25) or query_similarity > 0.5):
         return "on_topic"
     if query_similarity < 0.12 or not (title_has_anchor or body_has_anchor):
         return "off_topic"
