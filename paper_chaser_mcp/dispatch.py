@@ -22,9 +22,28 @@ from .enrichment import (
     attach_enrichments_to_paper_payload,
     hydrate_paper_for_enrichment,
 )
+from .guided_semantic import (
+    build_evidence_records,
+    build_follow_up_decision,
+    build_routing_decision,
+    classify_answerability,
+    explicit_source_reference,
+)
 from .identifiers import resolve_doi_from_paper_payload
 from .models import TOOL_INPUT_MODELS, CitationFormatsResponse, RuntimeSummary, dump_jsonable
-from .models.common import CitationFormat, ExportLink
+from .models.common import (
+    AbstentionDetails,
+    CitationFormat,
+    ExportLink,
+    GuidedExecutionProvenance,
+    GuidedResultState,
+    InputNormalization,
+    MachineFailure,
+    NormalizationRepair,
+    SessionCandidate,
+    SessionResolution,
+    SourceResolution,
+)
 from .models.tools import (
     AskResultSetArgs,
     BasicSearchPapersArgs,
@@ -599,6 +618,8 @@ GUIDED_TOOLS = {
     "get_runtime_status",
 }
 
+GUIDED_POLICY_NAME = "quality_first"
+
 
 def _runtime_provider_order(
     *,
@@ -662,6 +683,12 @@ def _build_provider_diagnostics_snapshot(
     hide_disabled_tools: bool,
     session_ttl_seconds: int | None,
     embeddings_enabled: bool | None,
+    guided_research_latency_profile: str,
+    guided_follow_up_latency_profile: str,
+    guided_allow_paid_providers: bool,
+    guided_escalation_enabled: bool,
+    guided_escalation_max_passes: int,
+    guided_escalation_allow_paid_providers: bool,
     enable_core: bool,
     enable_semantic_scholar: bool,
     enable_openalex: bool,
@@ -759,6 +786,13 @@ def _build_provider_diagnostics_snapshot(
         toolsHidden=hide_disabled_tools,
         sessionTtlSeconds=session_ttl_seconds,
         embeddingsEnabled=embeddings_enabled,
+        guidedPolicy=GUIDED_POLICY_NAME,
+        guidedResearchLatencyProfile=guided_research_latency_profile,
+        guidedFollowUpLatencyProfile=guided_follow_up_latency_profile,
+        guidedAllowPaidProviders=guided_allow_paid_providers,
+        guidedEscalationEnabled=guided_escalation_enabled,
+        guidedEscalationMaxPasses=guided_escalation_max_passes,
+        guidedEscalationAllowPaidProviders=guided_escalation_allow_paid_providers,
         version=package_version_value,
         warnings=runtime_warnings,
     )
@@ -840,7 +874,16 @@ def _paper_topical_relevance(query: str, paper: dict[str, Any]) -> str:
 
 
 def _guided_source_id(candidate: dict[str, Any], *, fallback_prefix: str, index: int) -> str:
-    for key in ("sourceId", "paperId", "canonicalId", "recommendedExpansionId", "citationText", "canonicalUrl", "url"):
+    for key in (
+        "sourceId",
+        "evidenceId",
+        "paperId",
+        "canonicalId",
+        "recommendedExpansionId",
+        "citationText",
+        "canonicalUrl",
+        "url",
+    ):
         value = candidate.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
@@ -1184,6 +1227,298 @@ def _guided_infer_single_session_id(workspace_registry: Any) -> str | None:
     return _guided_unique_compatible_session_id(workspace_registry)
 
 
+def _guided_extract_search_session_id(arguments: dict[str, Any]) -> Any:
+    return next(
+        (
+            arguments.get(key)
+            for key in (
+                "searchSessionId",
+                "search_session_id",
+                "sessionId",
+                "session_id",
+                "session",
+            )
+            if arguments.get(key) is not None
+        ),
+        None,
+    )
+
+
+def _guided_extract_source_id(arguments: dict[str, Any]) -> Any:
+    return next(
+        (
+            arguments.get(key)
+            for key in ("sourceId", "source_id", "evidenceId", "evidence_id", "source", "sourceRef", "leadId", "id")
+            if arguments.get(key) is not None
+        ),
+        None,
+    )
+
+
+def _guided_extract_question(arguments: dict[str, Any]) -> Any:
+    return next(
+        (arguments.get(key) for key in ("question", "prompt", "query") if arguments.get(key) is not None),
+        None,
+    )
+
+
+def _guided_session_candidates(
+    workspace_registry: Any,
+    *,
+    require_sources: bool = False,
+    limit: int = 5,
+) -> list[SessionCandidate]:
+    now = time.time()
+    candidates: list[SessionCandidate] = []
+    for record in _guided_candidate_records(workspace_registry, require_sources=require_sources)[:limit]:
+        payload = record.payload if isinstance(record.payload, dict) else {}
+        sources = _guided_record_source_candidates(record)
+        query = str(getattr(record, "query", None) or payload.get("query") or "").strip() or None
+        summary = (
+            str(payload.get("summary") or (sources[0].get("title") if sources else "") or query or "").strip() or None
+        )
+        age_seconds = max(0, int(now - float(getattr(record, "created_at", 0.0) or 0.0)))
+        candidate = SessionCandidate(
+            searchSessionId=str(getattr(record, "search_session_id", "") or ""),
+            sourceTool=str(getattr(record, "source_tool", "") or "unknown"),
+            query=query,
+            summary=summary,
+            ageSeconds=age_seconds,
+            sourceCount=len(sources),
+        )
+        candidates.append(candidate)
+    return candidates
+
+
+def _guided_follow_up_session_resolution(
+    *,
+    arguments: dict[str, Any],
+    normalized_arguments: dict[str, Any],
+    normalization: dict[str, Any],
+    workspace_registry: Any,
+) -> dict[str, Any]:
+    requested = _guided_normalize_whitespace(_guided_extract_search_session_id(arguments))
+    resolved = _guided_normalize_whitespace(normalized_arguments.get("searchSessionId"))
+    candidates = _guided_session_candidates(workspace_registry)
+    if requested and resolved and requested == resolved:
+        mode = "provided_explicitly"
+        visible_candidates: list[SessionCandidate] = []
+    elif requested and resolved:
+        mode = "repaired_to_unique_active_session"
+        visible_candidates = []
+    elif not requested and resolved:
+        mode = "inferred_single_active_session"
+        visible_candidates = []
+    elif len(candidates) > 1:
+        mode = "ambiguous"
+        visible_candidates = candidates
+    elif requested:
+        mode = "session_unavailable"
+        visible_candidates = candidates
+    else:
+        mode = "missing"
+        visible_candidates = candidates
+    resolution = SessionResolution(
+        requestedSearchSessionId=requested,
+        resolvedSearchSessionId=resolved,
+        resolutionMode=mode,
+        warnings=list(normalization.get("warnings") or []),
+        candidates=visible_candidates,
+    )
+    return resolution.model_dump(by_alias=True, exclude_none=True)
+
+
+def _guided_inspect_session_resolution(
+    *,
+    arguments: dict[str, Any],
+    normalized_arguments: dict[str, Any],
+    normalization: dict[str, Any],
+    workspace_registry: Any,
+) -> dict[str, Any]:
+    requested = _guided_normalize_whitespace(_guided_extract_search_session_id(arguments))
+    resolved = _guided_normalize_whitespace(normalized_arguments.get("searchSessionId"))
+    normalized_source_id = _guided_normalize_whitespace(normalized_arguments.get("sourceId"))
+    source_inferred_session_id, _ = _guided_resolve_session_id_for_source(workspace_registry, normalized_source_id)
+    candidates = _guided_session_candidates(workspace_registry, require_sources=True)
+    if requested and resolved and requested == resolved:
+        mode = "provided_explicitly"
+        visible_candidates: list[SessionCandidate] = []
+    elif requested and resolved and source_inferred_session_id and resolved == source_inferred_session_id:
+        mode = "repaired_to_source_bearing_session"
+        visible_candidates = []
+    elif requested and resolved:
+        mode = "repaired_to_unique_active_session"
+        visible_candidates = []
+    elif not requested and resolved and source_inferred_session_id and resolved == source_inferred_session_id:
+        mode = "inferred_source_bearing_session"
+        visible_candidates = []
+    elif not requested and resolved:
+        mode = "inferred_single_active_session"
+        visible_candidates = []
+    elif len(candidates) > 1:
+        mode = "ambiguous"
+        visible_candidates = candidates
+    elif requested:
+        mode = "session_unavailable"
+        visible_candidates = candidates
+    else:
+        mode = "missing"
+        visible_candidates = candidates
+    resolution = SessionResolution(
+        requestedSearchSessionId=requested,
+        resolvedSearchSessionId=resolved,
+        resolutionMode=mode,
+        warnings=list(normalization.get("warnings") or []),
+        candidates=visible_candidates,
+    )
+    return resolution.model_dump(by_alias=True, exclude_none=True)
+
+
+def _guided_source_resolution_payload(
+    *,
+    requested_source_id: str | None,
+    resolved_source_id: str | None,
+    match_type: str | None,
+    available_source_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    resolution = SourceResolution(
+        requestedSourceId=_guided_normalize_whitespace(requested_source_id),
+        resolvedSourceId=_guided_normalize_whitespace(resolved_source_id),
+        matchType=match_type,
+        availableSourceIds=available_source_ids or [],
+    )
+    return resolution.model_dump(by_alias=True, exclude_none=True)
+
+
+def _guided_execution_provenance_payload(
+    *,
+    execution_mode: str,
+    answer_source: str | None = None,
+    latency_profile_applied: str | None = None,
+    allow_paid_providers: bool | None = None,
+    provider_budget_applied: dict[str, Any] | None = None,
+    strategy_metadata: dict[str, Any] | None = None,
+    escalation_attempted: bool = False,
+    escalation_reason: str | None = None,
+    passes_run: int = 0,
+    pass_modes: list[str] | None = None,
+) -> dict[str, Any]:
+    metadata = strategy_metadata if isinstance(strategy_metadata, dict) else {}
+    configured_provider = _guided_normalize_whitespace(metadata.get("configuredSmartProvider")) or None
+    active_provider = _guided_normalize_whitespace(metadata.get("activeSmartProvider")) or None
+    latency_profile = latency_profile_applied or _guided_normalize_whitespace(metadata.get("latencyProfile")) or None
+    budget_payload = provider_budget_applied or cast(dict[str, Any], metadata.get("providerBudgetApplied") or {})
+    deterministic_fallback_used = bool(
+        active_provider == "deterministic" and configured_provider not in {None, "deterministic"}
+    )
+    provenance = GuidedExecutionProvenance(
+        executionMode=execution_mode,
+        answerSource=answer_source,
+        serverPolicyApplied=GUIDED_POLICY_NAME,
+        latencyProfileApplied=latency_profile,
+        allowPaidProviders=allow_paid_providers,
+        providerBudgetApplied=budget_payload,
+        configuredSmartProvider=configured_provider,
+        activeSmartProvider=active_provider,
+        deterministicFallbackUsed=deterministic_fallback_used,
+        escalationAttempted=escalation_attempted,
+        escalationReason=escalation_reason,
+        passesRun=passes_run,
+        passModes=pass_modes or [],
+    )
+    return provenance.model_dump(by_alias=True, exclude_none=True)
+
+
+def _guided_abstention_details_payload(
+    *,
+    status: str,
+    sources: list[dict[str, Any]],
+    evidence_gaps: list[str],
+    trust_summary: dict[str, Any],
+) -> dict[str, Any] | None:
+    if status not in {"abstained", "needs_disambiguation", "insufficient_evidence"}:
+        return None
+    category = _guided_missing_evidence_type(status=status, evidence_gaps=evidence_gaps, sources=sources)
+    if category == "anchor_missing":
+        refinement_hints = ["Add a specific title, DOI, species name, agency, venue, or year range."]
+    elif category == "off_topic_only":
+        refinement_hints = ["Tighten the query to the exact topic or anchored subject you need."]
+    elif category == "provider_gap":
+        refinement_hints = [
+            "Retry later or compare get_runtime_status if provider behavior differs across environments.",
+        ]
+    elif sources:
+        refinement_hints = ["Inspect the returned sources before treating the result as settled."]
+    else:
+        refinement_hints = ["Narrow the request so the server can recover a stronger initial anchor."]
+    details = AbstentionDetails(
+        category=category,
+        reason=(
+            evidence_gaps[0] if evidence_gaps else "The current evidence was not strong enough to ground an answer."
+        ),
+        inspectableSourceCount=len(sources),
+        onTopicSourceCount=int(trust_summary.get("onTopicSourceCount") or 0),
+        weakMatchCount=int(trust_summary.get("weakMatchCount") or 0),
+        offTopicCount=int(trust_summary.get("offTopicCount") or 0),
+        canInspectSources=bool(sources),
+        refinementHints=refinement_hints,
+    )
+    return details.model_dump(by_alias=True, exclude_none=True)
+
+
+def _guided_provider_budget_payload(*, allow_paid_providers: bool) -> dict[str, Any]:
+    return {"allowPaidProviders": bool(allow_paid_providers)}
+
+
+def _guided_strategy_metadata_from_runs(smart_runs: list[dict[str, Any]]) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for smart in smart_runs:
+        metadata = smart.get("strategyMetadata")
+        if not isinstance(metadata, dict):
+            continue
+        for field in (
+            "intent",
+            "intentConfidence",
+            "routingConfidence",
+            "intentRationale",
+            "anchorType",
+            "anchoredSubject",
+            "providerPlan",
+            "providersUsed",
+            "configuredSmartProvider",
+            "activeSmartProvider",
+            "providerBudgetApplied",
+            "latencyProfile",
+        ):
+            value = metadata.get(field)
+            if value not in (None, "", [], {}) and field not in merged:
+                merged[field] = value
+    return merged
+
+
+def _guided_should_escalate_research(
+    *,
+    intent: str,
+    status: str,
+    sources: list[dict[str, Any]],
+    verified_findings: list[dict[str, Any]],
+    clarification: dict[str, Any] | None,
+    pass_modes: list[str],
+    max_passes: int,
+) -> bool:
+    if clarification is not None:
+        return False
+    if len(pass_modes) >= max_passes:
+        return False
+    if intent in {"known_item", "mixed", "regulatory"}:
+        return False
+    if verified_findings:
+        return False
+    if sources:
+        return False
+    return status in {"abstained", "partial"} and "review" not in pass_modes
+
+
 def _guided_normalize_research_arguments(arguments: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     normalized_args = dict(arguments)
     repairs: list[dict[str, str]] = []
@@ -1252,24 +1587,13 @@ def _guided_normalize_follow_up_arguments(
     workspace_registry: Any,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     normalized_args = dict(arguments)
+    for alias in ("search_session_id", "sessionId", "session_id", "session", "prompt", "query"):
+        normalized_args.pop(alias, None)
     repairs: list[dict[str, str]] = []
     warnings: list[str] = []
 
-    raw_search_session_id = next(
-        (
-            arguments.get(key)
-            for key in (
-                "searchSessionId",
-                "search_session_id",
-                "sessionId",
-                "session_id",
-                "session",
-            )
-            if arguments.get(key) is not None
-        ),
-        None,
-    )
-    normalized_search_session_id = _guided_normalize_whitespace(raw_search_session_id)
+    raw_search_session_id = _guided_extract_search_session_id(arguments)
+    normalized_search_session_id: str | None = _guided_normalize_whitespace(raw_search_session_id)
     if normalized_search_session_id and not _guided_session_exists(
         workspace_registry=workspace_registry,
         search_session_id=normalized_search_session_id,
@@ -1281,6 +1605,11 @@ def _guided_normalize_follow_up_arguments(
                 f"'{normalized_search_session_id}' was unavailable; using active session '{inferred_id}'."
             )
             normalized_search_session_id = inferred_id
+        else:
+            warnings.append(
+                f"searchSessionId '{normalized_search_session_id}' was unavailable and could not be repaired safely."
+            )
+            normalized_search_session_id = None
     if not normalized_search_session_id:
         inferred_id = _guided_infer_single_session_id(workspace_registry)
         if inferred_id is not None:
@@ -1299,10 +1628,7 @@ def _guided_normalize_follow_up_arguments(
         reason="session_id_normalization",
     )
 
-    raw_question = next(
-        (arguments.get(key) for key in ("question", "prompt", "query") if arguments.get(key) is not None),
-        None,
-    )
+    raw_question = _guided_extract_question(arguments)
     normalized_question = _guided_normalize_whitespace(raw_question)
     normalized_args["question"] = normalized_question
     _guided_note_repair(
@@ -1330,24 +1656,26 @@ def _guided_normalize_inspect_arguments(
     workspace_registry: Any,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     normalized_args = dict(arguments)
+    for alias in (
+        "search_session_id",
+        "sessionId",
+        "session_id",
+        "session",
+        "source_id",
+        "source",
+        "sourceRef",
+        "evidenceId",
+        "evidence_id",
+        "leadId",
+        "lead_id",
+        "id",
+    ):
+        normalized_args.pop(alias, None)
     repairs: list[dict[str, str]] = []
     warnings: list[str] = []
 
-    raw_search_session_id = next(
-        (
-            arguments.get(key)
-            for key in (
-                "searchSessionId",
-                "search_session_id",
-                "sessionId",
-                "session_id",
-                "session",
-            )
-            if arguments.get(key) is not None
-        ),
-        None,
-    )
-    normalized_search_session_id = _guided_normalize_whitespace(raw_search_session_id)
+    raw_search_session_id = _guided_extract_search_session_id(arguments)
+    normalized_search_session_id: str | None = _guided_normalize_whitespace(raw_search_session_id)
     if normalized_search_session_id and not _guided_session_exists(
         workspace_registry=workspace_registry,
         search_session_id=normalized_search_session_id,
@@ -1359,6 +1687,11 @@ def _guided_normalize_inspect_arguments(
                 f"'{normalized_search_session_id}' was unavailable; using active session '{inferred_id}'."
             )
             normalized_search_session_id = inferred_id
+        else:
+            warnings.append(
+                f"searchSessionId '{normalized_search_session_id}' was unavailable and could not be repaired safely."
+            )
+            normalized_search_session_id = None
     if not normalized_search_session_id:
         inferred_id = _guided_infer_single_session_id(workspace_registry)
         if inferred_id is not None:
@@ -1377,14 +1710,7 @@ def _guided_normalize_inspect_arguments(
         reason="session_id_normalization",
     )
 
-    raw_source_id = next(
-        (
-            arguments.get(key)
-            for key in ("sourceId", "source_id", "source", "sourceRef", "id")
-            if arguments.get(key) is not None
-        ),
-        None,
-    )
+    raw_source_id = _guided_extract_source_id(arguments)
     normalized_source_id = _guided_normalize_whitespace(raw_source_id)
     if not normalized_search_session_id:
         inferred_session_id, _ = _guided_resolve_session_id_for_source(workspace_registry, normalized_source_id)
@@ -1434,10 +1760,17 @@ def _guided_normalization_payload(normalization: dict[str, Any]) -> dict[str, An
     warnings = [warning for warning in normalization.get("warnings") or [] if isinstance(warning, str) and warning]
     if not repairs and not warnings:
         return None
-    payload = dict(normalization)
-    payload["repairs"] = repairs
-    payload["warnings"] = warnings
-    return payload
+    payload = InputNormalization.model_validate(
+        {
+            **normalization,
+            "repairs": [
+                NormalizationRepair.model_validate(repair).model_dump(by_alias=True, exclude_none=True)
+                for repair in repairs
+            ],
+            "warnings": warnings,
+        }
+    )
+    return payload.model_dump(by_alias=True, exclude_none=True)
 
 
 def _guided_is_known_item_query(query: str) -> bool:
@@ -1477,6 +1810,8 @@ def _guided_merge_coverage_summaries(*coverages: dict[str, Any] | None) -> dict[
     usable = [coverage for coverage in coverages if isinstance(coverage, dict)]
     if not usable:
         return None
+    if len(usable) == 1:
+        return dict(usable[0])
 
     def _merge_list(field: str) -> list[Any]:
         merged: list[Any] = []
@@ -1490,10 +1825,17 @@ def _guided_merge_coverage_summaries(*coverages: dict[str, Any] | None) -> dict[
                 merged.append(item)
         return merged
 
-    likely_completeness = "none"
-    for candidate in ("complete", "partial", "unknown", "incomplete", "none"):
+    likely_completeness = "unknown"
+    for candidate, normalized_value in (
+        ("incomplete", "incomplete"),
+        ("partial", "partial"),
+        ("likely_complete", "likely_complete"),
+        ("complete", "likely_complete"),
+        ("unknown", "unknown"),
+        ("none", "unknown"),
+    ):
         if any(str(coverage.get("likelyCompleteness") or "") == candidate for coverage in usable):
-            likely_completeness = candidate
+            likely_completeness = normalized_value
             break
 
     merged: dict[str, Any] = {
@@ -1788,6 +2130,7 @@ def _guided_machine_failure_payload(
     search_session_id: str | None,
     error: Exception,
     normalization: dict[str, Any] | None = None,
+    execution_provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     evidence_gaps = ["Smart runtime returned an invalid or unstructured result payload, so guided output was degraded."]
     failure_summary = _guided_failure_summary(
@@ -1836,14 +2179,16 @@ def _guided_machine_failure_payload(
             evidence_gaps=evidence_gaps,
             search_session_id=search_session_id,
         ),
-        "machineFailure": {
-            "category": "smart_runtime_structural_failure",
-            "errorType": type(error).__name__,
-            "error": str(error),
-            "retryable": True,
-            "bestNextInternalAction": "research",
-        },
+        "machineFailure": MachineFailure(
+            category="smart_runtime_structural_failure",
+            errorType=type(error).__name__,
+            error=str(error),
+            retryable=True,
+            bestNextInternalAction="research",
+        ).model_dump(by_alias=True, exclude_none=True),
     }
+    if execution_provenance is not None:
+        payload["executionProvenance"] = execution_provenance
     normalization_payload = _guided_normalization_payload(normalization or {})
     if normalization_payload is not None:
         payload["inputNormalization"] = normalization_payload
@@ -1943,26 +2288,35 @@ def _guided_result_state(
         groundedness = "insufficient_evidence"
     else:
         groundedness = "unknown"
-    return {
-        "status": normalized_status,
-        "groundedness": groundedness,
-        "hasInspectableSources": has_sources,
-        "canAnswerFollowUp": bool(search_session_id),
-        "bestNextInternalAction": _guided_best_next_internal_action(
+    state = GuidedResultState(
+        status=normalized_status,
+        groundedness=groundedness,
+        hasInspectableSources=has_sources,
+        canAnswerFollowUp=bool(search_session_id),
+        bestNextInternalAction=_guided_best_next_internal_action(
             status=normalized_status,
             has_sources=has_sources,
             search_session_id=search_session_id,
         ),
-        "missingEvidenceType": _guided_missing_evidence_type(
+        missingEvidenceType=_guided_missing_evidence_type(
             status=normalized_status,
             evidence_gaps=evidence_gaps,
             sources=sources,
         ),
-    }
+    )
+    return state.model_dump(by_alias=True, exclude_none=True)
 
 
 def _guided_record_source_candidates(record: Any) -> list[dict[str, Any]]:
     payload = record.payload if isinstance(record.payload, dict) else {}
+    evidence_sources = [
+        _guided_source_record_from_structured_source(source, index=index)
+        for index, source in enumerate(payload.get("evidence") or [], start=1)
+        if isinstance(source, dict)
+    ]
+    if evidence_sources:
+        return _guided_dedupe_source_records(evidence_sources)
+
     explicit_sources = [source for source in payload.get("sources") or [] if isinstance(source, dict)]
     if explicit_sources:
         return _guided_dedupe_source_records(explicit_sources)
@@ -1974,6 +2328,14 @@ def _guided_record_source_candidates(record: Any) -> list[dict[str, Any]]:
     ]
     if structured_sources:
         return _guided_dedupe_source_records(structured_sources)
+
+    lead_sources = [
+        _guided_source_record_from_structured_source(source, index=index)
+        for index, source in enumerate(payload.get("leads") or [], start=1)
+        if isinstance(source, dict)
+    ]
+    if lead_sources:
+        return _guided_dedupe_source_records(lead_sources)
 
     query = str(record.query or payload.get("query") or "")
     paper_sources = [
@@ -2026,6 +2388,7 @@ def _find_record_source_with_resolution(
     for source in sources:
         for candidate in (
             source.get("sourceId"),
+            source.get("sourceAlias"),
             source.get("citationText"),
             source.get("canonicalUrl"),
             source.get("retrievedUrl"),
@@ -2060,38 +2423,18 @@ def _find_record_source(
     if not normalized_search_session_id:
         return None
     record = workspace_registry.get(normalized_search_session_id)
-    payload = record.payload if isinstance(record.payload, dict) else {}
     normalized_source_id = _guided_normalize_whitespace(source_id)
     if not normalized_source_id:
         return None
-    for source in payload.get("sources") or []:
-        if isinstance(source, dict) and normalized_source_id in {
-            _guided_normalize_whitespace(source.get("sourceId")),
-            _guided_normalize_whitespace(source.get("sourceAlias")),
-        }:
-            return source
-    for source in payload.get("structuredSources") or []:
-        if not isinstance(source, dict):
-            continue
+    for source in _guided_record_source_candidates(record):
         candidate_ids = {
             _guided_normalize_whitespace(source.get("sourceId")),
             _guided_normalize_whitespace(source.get("citationText")),
             _guided_normalize_whitespace(source.get("canonicalUrl")),
+            _guided_normalize_whitespace(source.get("retrievedUrl")),
         }
         if normalized_source_id in candidate_ids:
-            return _guided_source_record_from_structured_source(source, index=1)
-    for index, paper in enumerate(record.papers, start=1):
-        if not isinstance(paper, dict):
-            continue
-        candidate_ids = {
-            _guided_normalize_whitespace(paper.get("paperId")),
-            _guided_normalize_whitespace(paper.get("sourceId")),
-            _guided_normalize_whitespace(paper.get("canonicalId")),
-            _guided_normalize_whitespace(paper.get("recommendedExpansionId")),
-        }
-        if normalized_source_id in candidate_ids:
-            query = str(record.query or payload.get("query") or "")
-            return _guided_source_record_from_paper(query, paper, index=index)
+            return source
     return None
 
 
@@ -2125,6 +2468,60 @@ def _guided_follow_up_status(status: str | None) -> str:
     if normalized == "insufficient_evidence":
         return "partial"
     return "partial"
+
+
+def _guided_contract_fields(
+    *,
+    query: str,
+    intent: str,
+    status: str,
+    sources: list[dict[str, Any]],
+    unverified_leads: list[dict[str, Any]],
+    evidence_gaps: list[str],
+    coverage_summary: dict[str, Any] | None,
+    strategy_metadata: dict[str, Any] | None,
+    timeline: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    evidence, leads = build_evidence_records(sources=sources, leads=unverified_leads)
+    routing_summary = build_routing_decision(
+        query=query,
+        intent=intent,
+        strategy_metadata=strategy_metadata,
+        coverage_summary=coverage_summary,
+    ).model_dump(by_alias=True)
+    result_status = _guided_follow_up_status(status)
+    return {
+        "resultStatus": result_status,
+        "answerability": classify_answerability(
+            status=status,
+            evidence=evidence,
+            leads=leads,
+            evidence_gaps=evidence_gaps,
+        ),
+        "routingSummary": {
+            "intent": routing_summary["intent"],
+            "decisionConfidence": routing_summary["confidence"],
+            "rationale": routing_summary["rationale"],
+            "anchorType": ((routing_summary.get("anchor") or {}).get("anchorType")),
+            "anchorValue": ((routing_summary.get("anchor") or {}).get("anchorValue")),
+            "providerPlan": list((routing_summary.get("providerPlan") or {}).get("providers") or []),
+            "requiredPrimarySources": list(((routing_summary.get("anchor") or {}).get("requiredPrimarySources") or [])),
+            "successCriteria": list(((routing_summary.get("anchor") or {}).get("successCriteria") or [])),
+            "providersAttempted": list((coverage_summary or {}).get("providersAttempted") or []),
+            "providersMatched": list((coverage_summary or {}).get("providersSucceeded") or []),
+            "providersFailed": list((coverage_summary or {}).get("providersFailed") or []),
+            "providersNotAttempted": [
+                provider
+                for provider in list((routing_summary.get("providerPlan") or {}).get("providers") or [])
+                if provider not in list((coverage_summary or {}).get("providersAttempted") or [])
+            ],
+            "whyPartial": evidence_gaps[0] if evidence_gaps and result_status != "succeeded" else None,
+        },
+        "coverageSummary": coverage_summary,
+        "evidence": evidence,
+        "leads": leads,
+        "timeline": timeline,
+    }
 
 
 def _guided_session_findings(payload: dict[str, Any], sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2172,7 +2569,13 @@ def _guided_session_state(
     except Exception:
         return None
     payload = record.payload if isinstance(record.payload, dict) else {}
-    sources = [source for source in payload.get("sources") or [] if isinstance(source, dict)]
+    sources = [
+        _guided_source_record_from_structured_source(source, index=index)
+        for index, source in enumerate(payload.get("evidence") or [], start=1)
+        if isinstance(source, dict)
+    ]
+    if not sources:
+        sources = [source for source in payload.get("sources") or [] if isinstance(source, dict)]
     if not sources:
         sources = [
             _guided_source_record_from_structured_source(source, index=index)
@@ -2187,6 +2590,12 @@ def _guided_session_state(
             if isinstance(paper, dict)
         ]
     unverified_leads = [lead for lead in payload.get("unverifiedLeads") or [] if isinstance(lead, dict)]
+    if not unverified_leads:
+        unverified_leads = [
+            _guided_source_record_from_structured_source(source, index=index)
+            for index, source in enumerate(payload.get("leads") or [], start=1)
+            if isinstance(source, dict)
+        ]
     if not unverified_leads:
         unverified_leads = [
             _guided_source_record_from_structured_source(source, index=index)
@@ -2205,6 +2614,8 @@ def _guided_session_state(
     )
     return {
         "searchSessionId": record.search_session_id,
+        "query": str(record.query or payload.get("query") or ""),
+        "intent": str(payload.get("intent") or payload.get("strategyMetadata", {}).get("intent") or "discovery"),
         "status": status,
         "sources": sources,
         "unverifiedLeads": unverified_leads,
@@ -2228,6 +2639,15 @@ def _guided_session_state(
             status=status,
             has_sources=bool(sources),
         ),
+        "strategyMetadata": cast(
+            dict[str, Any] | None,
+            payload.get("strategyMetadata") or record.metadata.get("strategyMetadata"),
+        ),
+        "routingSummary": cast(
+            dict[str, Any] | None,
+            payload.get("routingSummary") or record.metadata.get("routingSummary"),
+        ),
+        "timeline": cast(dict[str, Any] | None, payload.get("timeline") or payload.get("regulatoryTimeline")),
         "resultState": payload.get("resultState")
         or _guided_result_state(
             status=status,
@@ -2337,26 +2757,13 @@ def _guided_follow_up_introspection_facets(question: str) -> set[str]:
         )
     ):
         facets.add("source_overview")
-    if re.search(r"\bsource(?:\s*id)?\b", text):
+    if explicit_source_reference(question):
         facets.add("specific_source")
     return facets
 
 
 def _guided_extract_source_reference_from_question(question: str) -> str | None:
-    normalized_question = _guided_normalize_whitespace(question)
-    if not normalized_question:
-        return None
-    patterns = (
-        re.compile(r"\bsource(?:\s*id)?\s*[:=]?\s*['\"]?(?P<id>[A-Za-z0-9._:/#-]{2,})['\"]?", re.IGNORECASE),
-        re.compile(r"\binspect\s+source\s+['\"]?(?P<id>[A-Za-z0-9._:/#-]{2,})['\"]?", re.IGNORECASE),
-    )
-    for pattern in patterns:
-        match = pattern.search(normalized_question)
-        if match:
-            candidate = _guided_normalize_whitespace(match.group("id"))
-            if candidate:
-                return candidate
-    return None
+    return explicit_source_reference(question)
 
 
 def _guided_is_usable_answer_text(value: Any) -> bool:
@@ -2371,12 +2778,6 @@ def _guided_select_follow_up_source(question: str, sources: list[dict[str, Any]]
         return None
     if len(sources) == 1:
         return sources[0]
-
-    normalized_question = _guided_normalize_whitespace(question).lower()
-    for source in sources:
-        title = _guided_normalize_whitespace(source.get("title")).lower()
-        if title and title in normalized_question:
-            return source
 
     source_reference = _guided_extract_source_reference_from_question(question)
     if source_reference:
@@ -2395,6 +2796,10 @@ def _guided_source_metadata_answers(question: str, sources: list[dict[str, Any]]
         return []
 
     normalized_question = _guided_normalize_whitespace(question).lower()
+    is_source_overview_question = any(
+        marker in normalized_question
+        for marker in ("which sources", "what sources", "which records", "what records", "which documents")
+    )
     raw_citation = source.get("citation")
     citation: dict[str, Any] = cast(dict[str, Any], raw_citation) if isinstance(raw_citation, dict) else {}
     answers: list[str] = []
@@ -2421,7 +2826,9 @@ def _guided_source_metadata_answers(question: str, sources: list[dict[str, Any]]
         if year:
             answers.append(f"Publication year listed for this source: {year}.")
 
-    if any(marker in normalized_question for marker in ("title", "which paper", "which source", "what paper")):
+    if not is_source_overview_question and any(
+        marker in normalized_question for marker in ("title", "which paper", "which source", "what paper")
+    ):
         title = str(source.get("title") or source.get("sourceId") or "").strip()
         if title:
             answers.append(f"Matched source title: {title}.")
@@ -2445,9 +2852,14 @@ def _answer_follow_up_from_session_state(
     ]
     sources = [source for source in session_state.get("sources") or [] if isinstance(source, dict)]
     trust_summary = cast(dict[str, Any] | None, session_state.get("trustSummary")) or {}
-    metadata_answers = _guided_source_metadata_answers(question, sources)
     facets = _guided_follow_up_introspection_facets(question)
-    if not facets and not metadata_answers:
+    follow_up_decision = build_follow_up_decision(
+        question=question,
+        session_state=session_state,
+        facets=facets,
+    )
+    metadata_answers = _guided_source_metadata_answers(question, sources)
+    if not facets and not metadata_answers and not follow_up_decision.answer_from_session:
         return None
 
     answer_parts.extend(metadata_answers)
@@ -2534,19 +2946,31 @@ def _answer_follow_up_from_session_state(
             answer_parts.append(result_meaning)
 
     if "source_overview" in facets:
-        if sources:
+        selected_evidence_ids = set(follow_up_decision.selected_evidence_ids)
+        selected_sources = [
+            source
+            for source in sources
+            if str(source.get("sourceId") or source.get("sourceAlias") or "").strip() in selected_evidence_ids
+        ] or sources
+        if selected_sources:
             source_titles = [
                 str(source.get("title") or source.get("sourceId") or "").strip()
-                for source in sources[:3]
+                for source in selected_sources[:3]
                 if str(source.get("title") or source.get("sourceId") or "").strip()
             ]
             if source_titles:
                 answer_parts.append("Saved sources included: " + "; ".join(source_titles) + ".")
         else:
             unverified_leads = [lead for lead in session_state.get("unverifiedLeads") or [] if isinstance(lead, dict)]
+            selected_lead_ids = set(follow_up_decision.selected_lead_ids)
+            selected_leads = [
+                lead
+                for lead in unverified_leads
+                if str(lead.get("sourceId") or lead.get("sourceAlias") or "").strip() in selected_lead_ids
+            ] or unverified_leads
             lead_titles = [
                 str(lead.get("title") or lead.get("sourceId") or "").strip()
-                for lead in unverified_leads[:3]
+                for lead in selected_leads[:3]
                 if str(lead.get("title") or lead.get("sourceId") or "").strip()
             ]
             if lead_titles:
@@ -2566,8 +2990,10 @@ def _answer_follow_up_from_session_state(
                 for candidate in sources + session_leads
                 if (
                     lower_reference == _guided_normalize_whitespace(candidate.get("sourceId")).lower()
-                    or lower_reference in _guided_normalize_whitespace(candidate.get("title")).lower()
-                    or lower_reference in _guided_normalize_whitespace(candidate.get("canonicalUrl")).lower()
+                    or lower_reference == _guided_normalize_whitespace(candidate.get("sourceAlias")).lower()
+                    or lower_reference == _guided_normalize_whitespace(candidate.get("citationText")).lower()
+                    or lower_reference == _guided_normalize_whitespace(candidate.get("canonicalUrl")).lower()
+                    or lower_reference == _guided_normalize_whitespace(candidate.get("retrievedUrl")).lower()
                 )
             ]
             if len(source_matches) == 1:
@@ -2596,6 +3022,8 @@ def _answer_follow_up_from_session_state(
         "answerStatus": "answered",
         "answer": " ".join(answer_parts),
         "evidence": [],
+        "selectedEvidenceIds": follow_up_decision.selected_evidence_ids,
+        "selectedLeadIds": follow_up_decision.selected_lead_ids,
         "unsupportedAsks": [],
         "followUpQuestions": [],
         "verifiedFindings": session_state["verifiedFindings"],
@@ -2607,12 +3035,27 @@ def _answer_follow_up_from_session_state(
         "failureSummary": session_state["failureSummary"],
         "resultMeaning": session_state["resultMeaning"],
         "nextActions": session_state["nextActions"],
-        "resultState": session_state.get("resultState")
-        or _guided_result_state(
+        "resultState": _guided_result_state(
             status="answered",
             sources=sources,
             evidence_gaps=evidence_gaps,
             search_session_id=str(session_state.get("searchSessionId") or ""),
+        ),
+        **_guided_contract_fields(
+            query=str(session_state.get("query") or ""),
+            intent=str(session_state.get("intent") or "discovery"),
+            status="answered",
+            sources=sources,
+            unverified_leads=cast(list[dict[str, Any]], session_state.get("unverifiedLeads") or []),
+            evidence_gaps=evidence_gaps,
+            coverage_summary=coverage,
+            strategy_metadata=cast(dict[str, Any] | None, session_state.get("strategyMetadata")),
+            timeline=cast(dict[str, Any] | None, session_state.get("timeline")),
+        ),
+        "executionProvenance": _guided_execution_provenance_payload(
+            execution_mode="session_introspection",
+            answer_source="saved_session_metadata",
+            passes_run=0,
         ),
     }
 
@@ -2653,6 +3096,12 @@ async def dispatch_tool(
     hide_disabled_tools: bool = False,
     session_ttl_seconds: int | None = None,
     embeddings_enabled: bool | None = None,
+    guided_research_latency_profile: str = "deep",
+    guided_follow_up_latency_profile: str = "deep",
+    guided_allow_paid_providers: bool = True,
+    guided_escalation_enabled: bool = True,
+    guided_escalation_max_passes: int = 2,
+    guided_escalation_allow_paid_providers: bool = True,
     ctx: Any = None,
     allow_elicitation: bool = True,
 ) -> dict[str, Any]:
@@ -2703,6 +3152,12 @@ async def dispatch_tool(
             hide_disabled_tools=hide_disabled_tools,
             session_ttl_seconds=session_ttl_seconds,
             embeddings_enabled=embeddings_enabled,
+            guided_research_latency_profile=guided_research_latency_profile,
+            guided_follow_up_latency_profile=guided_follow_up_latency_profile,
+            guided_allow_paid_providers=guided_allow_paid_providers,
+            guided_escalation_enabled=guided_escalation_enabled,
+            guided_escalation_max_passes=guided_escalation_max_passes,
+            guided_escalation_allow_paid_providers=guided_escalation_allow_paid_providers,
             ctx=ctx,
             allow_elicitation=allow_elicitation,
         )
@@ -2719,6 +3174,12 @@ async def dispatch_tool(
             hide_disabled_tools=hide_disabled_tools,
             session_ttl_seconds=session_ttl_seconds,
             embeddings_enabled=embeddings_enabled,
+            guided_research_latency_profile=guided_research_latency_profile,
+            guided_follow_up_latency_profile=guided_follow_up_latency_profile,
+            guided_allow_paid_providers=guided_allow_paid_providers,
+            guided_escalation_enabled=guided_escalation_enabled,
+            guided_escalation_max_passes=guided_escalation_max_passes,
+            guided_escalation_allow_paid_providers=guided_escalation_allow_paid_providers,
             enable_core=enable_core,
             enable_semantic_scholar=enable_semantic_scholar,
             enable_openalex=enable_openalex,
@@ -2813,13 +3274,14 @@ async def dispatch_tool(
             unverified_leads = _guided_unverified_leads_from_sources(sources)
             evidence_gaps: list[str] = []
             status = "succeeded" if paper is not None else ("partial" if resolved.get("alternatives") else "abstained")
+            trust_summary = _guided_trust_summary(sources, evidence_gaps)
             failure_summary = _guided_failure_summary(
                 failure_summary=None,
                 status=status,
                 sources=sources,
                 evidence_gaps=evidence_gaps,
             )
-            return {
+            response = {
                 "intent": intent,
                 "status": status,
                 "searchSessionId": resolved.get("searchSessionId"),
@@ -2832,7 +3294,7 @@ async def dispatch_tool(
                 "sources": sources,
                 "unverifiedLeads": unverified_leads,
                 "evidenceGaps": evidence_gaps,
-                "trustSummary": _guided_trust_summary(sources, evidence_gaps),
+                "trustSummary": trust_summary,
                 "coverage": None,
                 "failureSummary": failure_summary,
                 "resultMeaning": _guided_result_meaning(
@@ -2855,107 +3317,191 @@ async def dispatch_tool(
                     evidence_gaps=evidence_gaps,
                     search_session_id=cast(str | None, resolved.get("searchSessionId")),
                 ),
+                "executionProvenance": _guided_execution_provenance_payload(
+                    execution_mode="reference_resolution",
+                    answer_source="resolve_reference",
+                    passes_run=1,
+                ),
                 "inputNormalization": _guided_normalization_payload(research_normalization),
             }
+            response.update(
+                _guided_contract_fields(
+                    query=research_args.query,
+                    intent=intent,
+                    status=status,
+                    sources=sources,
+                    unverified_leads=unverified_leads,
+                    evidence_gaps=evidence_gaps,
+                    coverage_summary=None,
+                    strategy_metadata=None,
+                )
+            )
+            abstention_details = _guided_abstention_details_payload(
+                status=status,
+                sources=sources,
+                evidence_gaps=evidence_gaps,
+                trust_summary=trust_summary,
+            )
+            if abstention_details is not None:
+                response["abstentionDetails"] = abstention_details
+            return response
 
         if agentic_runtime is not None:
+            initial_provider_budget = _guided_provider_budget_payload(
+                allow_paid_providers=guided_allow_paid_providers,
+            )
             smart_request = {
                 "query": research_args.query,
                 "limit": research_args.limit,
                 "year": research_args.year,
                 "venue": research_args.venue,
                 "focus": research_args.focus,
-                "latencyProfile": research_args.latency_profile,
-                "providerBudget": {"allowPaidProviders": False},
+                "latencyProfile": guided_research_latency_profile,
+                "providerBudget": initial_provider_budget,
             }
             smart_runs: list[dict[str, Any]] = []
+            pass_modes: list[str] = []
+            escalation_attempted = False
+            escalation_reason: str | None = None
+
+            async def _run_guided_smart_pass(pass_mode: str, provider_budget: dict[str, Any]) -> None:
+                smart = await _dispatch_internal(
+                    "search_papers_smart",
+                    {
+                        **smart_request,
+                        "mode": pass_mode,
+                        "providerBudget": provider_budget,
+                    },
+                )
+                if not isinstance(smart, dict):
+                    raise ValueError("search_papers_smart returned a non-object payload.")
+                smart_runs.append(smart)
+                pass_modes.append(pass_mode)
+
+            def _summarize_guided_smart_runs() -> dict[str, Any]:
+                sources = _guided_dedupe_source_records(
+                    [
+                        _guided_source_record_from_structured_source(source, index=index)
+                        for smart in smart_runs
+                        for index, source in enumerate(smart.get("structuredSources") or [], start=1)
+                        if isinstance(source, dict)
+                    ]
+                )
+                verified_findings = _guided_findings_from_sources(sources)
+                evidence_gaps = list(
+                    dict.fromkeys(
+                        str(gap).strip()
+                        for smart in smart_runs
+                        for gap in (smart.get("evidenceGaps") or [])
+                        if str(gap).strip()
+                    )
+                )
+                unverified_leads = _guided_dedupe_source_records(
+                    [
+                        _guided_source_record_from_structured_source(source, index=index)
+                        for smart in smart_runs
+                        for index, source in enumerate(smart.get("candidateLeads") or [], start=1)
+                        if isinstance(source, dict)
+                    ]
+                ) or _guided_unverified_leads_from_sources(sources)
+                merged_coverage = _guided_merge_coverage_summaries(
+                    *(cast(dict[str, Any] | None, smart.get("coverageSummary")) for smart in smart_runs)
+                )
+                merged_failure_summary = _guided_merge_failure_summaries(
+                    *(cast(dict[str, Any] | None, smart.get("failureSummary")) for smart in smart_runs)
+                )
+                clarification = next(
+                    (
+                        smart.get("clarification")
+                        for smart in smart_runs
+                        if isinstance(smart.get("clarification"), dict)
+                    ),
+                    None,
+                )
+                derived_intent = (
+                    "mixed"
+                    if intent == "mixed"
+                    else str(smart_runs[0].get("strategyMetadata", {}).get("intent") or intent)
+                )
+                status_intent = (
+                    "regulatory"
+                    if derived_intent == "mixed" and any(source.get("isPrimarySource") for source in sources)
+                    else derived_intent
+                )
+                status = _guided_research_status(
+                    intent=status_intent,
+                    sources=sources,
+                    findings=verified_findings,
+                    unverified_leads_count=len(unverified_leads),
+                    coverage_summary=merged_coverage,
+                    failure_summary=merged_failure_summary,
+                    clarification=cast(dict[str, Any] | None, clarification),
+                )
+                return {
+                    "sources": sources,
+                    "verifiedFindings": verified_findings,
+                    "evidenceGaps": evidence_gaps,
+                    "unverifiedLeads": unverified_leads,
+                    "coverage": merged_coverage,
+                    "failureSummary": merged_failure_summary,
+                    "clarification": clarification,
+                    "derivedIntent": derived_intent,
+                    "status": status,
+                }
+
             try:
                 if intent == "mixed":
-                    smart_runs.append(
-                        await _dispatch_internal(
-                            "search_papers_smart",
-                            {
-                                **smart_request,
-                                "mode": "regulatory",
-                            },
-                        )
-                    )
-                    smart_runs.append(
-                        await _dispatch_internal(
-                            "search_papers_smart",
-                            {
-                                **smart_request,
-                                "mode": "review",
-                            },
-                        )
-                    )
+                    await _run_guided_smart_pass("regulatory", initial_provider_budget)
+                    await _run_guided_smart_pass("review", initial_provider_budget)
                 else:
-                    smart_runs.append(
-                        await _dispatch_internal(
-                            "search_papers_smart",
-                            {
-                                **smart_request,
-                                "mode": "regulatory" if intent == "regulatory" else "auto",
-                            },
-                        )
+                    await _run_guided_smart_pass(
+                        "regulatory" if intent == "regulatory" else "auto",
+                        initial_provider_budget,
                     )
-                if any(not isinstance(smart, dict) for smart in smart_runs):
-                    raise ValueError("search_papers_smart returned a non-object payload.")
+                smart_summary = _summarize_guided_smart_runs()
+                if guided_escalation_enabled and _guided_should_escalate_research(
+                    intent=intent,
+                    status=str(smart_summary["status"]),
+                    sources=cast(list[dict[str, Any]], smart_summary["sources"]),
+                    verified_findings=cast(list[dict[str, Any]], smart_summary["verifiedFindings"]),
+                    clarification=cast(dict[str, Any] | None, smart_summary["clarification"]),
+                    pass_modes=pass_modes,
+                    max_passes=guided_escalation_max_passes,
+                ):
+                    escalation_attempted = True
+                    escalation_reason = "no_trustworthy_sources_after_initial_pass"
+                    await _run_guided_smart_pass(
+                        "review",
+                        _guided_provider_budget_payload(
+                            allow_paid_providers=guided_escalation_allow_paid_providers,
+                        ),
+                    )
+                    smart_summary = _summarize_guided_smart_runs()
             except Exception as error:
                 return _guided_machine_failure_payload(
                     search_session_id=None,
                     error=error,
                     normalization=research_normalization,
+                    execution_provenance=_guided_execution_provenance_payload(
+                        execution_mode="guided_research",
+                        latency_profile_applied=guided_research_latency_profile,
+                        allow_paid_providers=guided_allow_paid_providers,
+                        provider_budget_applied=initial_provider_budget,
+                        escalation_attempted=escalation_attempted,
+                        escalation_reason=escalation_reason,
+                        passes_run=len(pass_modes),
+                        pass_modes=pass_modes,
+                    ),
                 )
 
-            sources = _guided_dedupe_source_records(
-                [
-                    _guided_source_record_from_structured_source(source, index=index)
-                    for smart in smart_runs
-                    for index, source in enumerate(smart.get("structuredSources") or [], start=1)
-                    if isinstance(source, dict)
-                ]
-            )
-            verified_findings = _guided_findings_from_sources(sources)
-            evidence_gaps = list(
-                dict.fromkeys(
-                    str(gap).strip()
-                    for smart in smart_runs
-                    for gap in (smart.get("evidenceGaps") or [])
-                    if str(gap).strip()
-                )
-            )
-            unverified_leads = _guided_dedupe_source_records(
-                [
-                    _guided_source_record_from_structured_source(source, index=index)
-                    for smart in smart_runs
-                    for index, source in enumerate(smart.get("candidateLeads") or [], start=1)
-                    if isinstance(source, dict)
-                ]
-            ) or _guided_unverified_leads_from_sources(sources)
-            merged_coverage = _guided_merge_coverage_summaries(
-                *(cast(dict[str, Any] | None, smart.get("coverageSummary")) for smart in smart_runs)
-            )
-            merged_failure_summary = _guided_merge_failure_summaries(
-                *(cast(dict[str, Any] | None, smart.get("failureSummary")) for smart in smart_runs)
-            )
-            derived_intent = (
-                "mixed" if intent == "mixed" else str(smart_runs[0].get("strategyMetadata", {}).get("intent") or intent)
-            )
-            status_intent = (
-                "regulatory"
-                if derived_intent == "mixed" and any(source.get("isPrimarySource") for source in sources)
-                else derived_intent
-            )
-            status = _guided_research_status(
-                intent=status_intent,
-                sources=sources,
-                findings=verified_findings,
-                unverified_leads_count=len(unverified_leads),
-                coverage_summary=merged_coverage,
-                failure_summary=merged_failure_summary,
-                clarification=cast(dict[str, Any] | None, smart_runs[0].get("clarification")),
-            )
+            sources = cast(list[dict[str, Any]], smart_summary["sources"])
+            verified_findings = cast(list[dict[str, Any]], smart_summary["verifiedFindings"])
+            evidence_gaps = cast(list[str], smart_summary["evidenceGaps"])
+            unverified_leads = cast(list[dict[str, Any]], smart_summary["unverifiedLeads"])
+            merged_coverage = cast(dict[str, Any] | None, smart_summary["coverage"])
+            merged_failure_summary = cast(dict[str, Any] | None, smart_summary["failureSummary"])
+            derived_intent = str(smart_summary["derivedIntent"])
+            status = str(smart_summary["status"])
             failure_summary = _guided_failure_summary(
                 failure_summary=merged_failure_summary,
                 status=status,
@@ -2963,8 +3509,17 @@ async def dispatch_tool(
                 evidence_gaps=evidence_gaps,
             )
             primary_smart = smart_runs[0]
-            search_session_id = cast(str | None, primary_smart.get("searchSessionId"))
-            return {
+            search_session_id = next(
+                (
+                    cast(str | None, smart.get("searchSessionId"))
+                    for smart in smart_runs
+                    if smart.get("searchSessionId")
+                ),
+                None,
+            )
+            trust_summary = _guided_trust_summary(sources, evidence_gaps)
+            strategy_metadata = _guided_strategy_metadata_from_runs(smart_runs)
+            response = {
                 "intent": derived_intent,
                 "status": status,
                 "searchSessionId": search_session_id,
@@ -2973,7 +3528,7 @@ async def dispatch_tool(
                 "sources": sources,
                 "unverifiedLeads": unverified_leads,
                 "evidenceGaps": evidence_gaps,
-                "trustSummary": _guided_trust_summary(sources, evidence_gaps),
+                "trustSummary": trust_summary,
                 "coverage": merged_coverage,
                 "failureSummary": failure_summary,
                 "resultMeaning": _guided_result_meaning(
@@ -2989,16 +3544,63 @@ async def dispatch_tool(
                     status=status,
                     has_sources=bool(sources),
                 ),
-                "clarification": primary_smart.get("clarification"),
-                "regulatoryTimeline": primary_smart.get("regulatoryTimeline"),
+                "clarification": smart_summary.get("clarification"),
+                "regulatoryTimeline": next(
+                    (
+                        smart.get("regulatoryTimeline")
+                        for smart in smart_runs
+                        if smart.get("regulatoryTimeline") is not None
+                    ),
+                    primary_smart.get("regulatoryTimeline"),
+                ),
                 "resultState": _guided_result_state(
                     status=status,
                     sources=sources,
                     evidence_gaps=evidence_gaps,
                     search_session_id=search_session_id,
                 ),
+                "executionProvenance": _guided_execution_provenance_payload(
+                    execution_mode=("guided_hybrid_research" if len(pass_modes) > 1 else "guided_research"),
+                    latency_profile_applied=guided_research_latency_profile,
+                    allow_paid_providers=(
+                        guided_allow_paid_providers or (escalation_attempted and guided_escalation_allow_paid_providers)
+                    ),
+                    provider_budget_applied=_guided_provider_budget_payload(
+                        allow_paid_providers=(
+                            guided_allow_paid_providers
+                            or (escalation_attempted and guided_escalation_allow_paid_providers)
+                        ),
+                    ),
+                    strategy_metadata=strategy_metadata,
+                    escalation_attempted=escalation_attempted,
+                    escalation_reason=escalation_reason,
+                    passes_run=len(pass_modes),
+                    pass_modes=pass_modes,
+                ),
                 "inputNormalization": _guided_normalization_payload(research_normalization),
             }
+            response.update(
+                _guided_contract_fields(
+                    query=research_args.query,
+                    intent=derived_intent,
+                    status=status,
+                    sources=sources,
+                    unverified_leads=unverified_leads,
+                    evidence_gaps=evidence_gaps,
+                    coverage_summary=merged_coverage,
+                    strategy_metadata=strategy_metadata,
+                    timeline=cast(dict[str, Any] | None, response.get("regulatoryTimeline")),
+                )
+            )
+            abstention_details = _guided_abstention_details_payload(
+                status=status,
+                sources=sources,
+                evidence_gaps=evidence_gaps,
+                trust_summary=trust_summary,
+            )
+            if abstention_details is not None:
+                response["abstentionDetails"] = abstention_details
+            return response
 
         raw = await _dispatch_internal(
             "search_papers",
@@ -3017,6 +3619,7 @@ async def dispatch_tool(
         verified_findings = _guided_findings_from_sources(sources)
         evidence_gaps = []
         unverified_leads = _guided_unverified_leads_from_sources(sources)
+        trust_summary = _guided_trust_summary(sources, evidence_gaps)
         status = _guided_research_status(
             intent=intent,
             sources=sources,
@@ -3032,7 +3635,7 @@ async def dispatch_tool(
             sources=sources,
             evidence_gaps=evidence_gaps,
         )
-        return {
+        response = {
             "intent": intent,
             "status": status,
             "searchSessionId": raw.get("searchSessionId"),
@@ -3041,7 +3644,7 @@ async def dispatch_tool(
             "sources": sources,
             "unverifiedLeads": unverified_leads,
             "evidenceGaps": evidence_gaps,
-            "trustSummary": _guided_trust_summary(sources, evidence_gaps),
+            "trustSummary": trust_summary,
             "coverage": raw.get("coverageSummary"),
             "failureSummary": failure_summary,
             "resultMeaning": _guided_result_meaning(
@@ -3064,12 +3667,44 @@ async def dispatch_tool(
                 evidence_gaps=evidence_gaps,
                 search_session_id=cast(str | None, raw.get("searchSessionId")),
             ),
+            "executionProvenance": _guided_execution_provenance_payload(
+                execution_mode="guided_raw_broker_fallback",
+                answer_source="search_papers",
+                passes_run=1,
+            ),
             "inputNormalization": _guided_normalization_payload(research_normalization),
         }
+        response.update(
+            _guided_contract_fields(
+                query=research_args.query,
+                intent=intent,
+                status=status,
+                sources=sources,
+                unverified_leads=unverified_leads,
+                evidence_gaps=evidence_gaps,
+                coverage_summary=cast(dict[str, Any] | None, raw.get("coverageSummary")),
+                strategy_metadata=None,
+            )
+        )
+        abstention_details = _guided_abstention_details_payload(
+            status=status,
+            sources=sources,
+            evidence_gaps=evidence_gaps,
+            trust_summary=trust_summary,
+        )
+        if abstention_details is not None:
+            response["abstentionDetails"] = abstention_details
+        return response
 
     if name == "follow_up_research":
         normalized_follow_up_arguments, follow_up_normalization = _guided_normalize_follow_up_arguments(
             arguments,
+            workspace_registry=workspace_registry,
+        )
+        session_resolution = _guided_follow_up_session_resolution(
+            arguments=arguments,
+            normalized_arguments=normalized_follow_up_arguments,
+            normalization=follow_up_normalization,
             workspace_registry=workspace_registry,
         )
         follow_up_args = cast(
@@ -3086,9 +3721,11 @@ async def dispatch_tool(
         )
         if session_answer is not None:
             session_answer["inputNormalization"] = _guided_normalization_payload(follow_up_normalization)
+            session_answer["sessionResolution"] = session_resolution
             return session_answer
         if not follow_up_args.search_session_id:
             evidence_gaps = ["A unique saved search session could not be identified for this follow-up question."]
+            trust_summary = _guided_trust_summary([], evidence_gaps)
             failure_summary = _guided_failure_summary(
                 failure_summary={
                     "outcome": "needs_clarification",
@@ -3106,7 +3743,7 @@ async def dispatch_tool(
                 sources=[],
                 evidence_gaps=evidence_gaps,
             )
-            return {
+            response = {
                 "searchSessionId": None,
                 "answerStatus": "insufficient_evidence",
                 "answer": None,
@@ -3117,7 +3754,7 @@ async def dispatch_tool(
                 "unverifiedLeads": [],
                 "verifiedFindings": [],
                 "evidenceGaps": evidence_gaps,
-                "trustSummary": _guided_trust_summary([], evidence_gaps),
+                "trustSummary": trust_summary,
                 "coverage": None,
                 "failureSummary": failure_summary,
                 "resultMeaning": _guided_result_meaning(
@@ -3138,10 +3775,27 @@ async def dispatch_tool(
                     evidence_gaps=evidence_gaps,
                     search_session_id=None,
                 ),
+                "sessionResolution": session_resolution,
+                "executionProvenance": _guided_execution_provenance_payload(
+                    execution_mode="guided_follow_up",
+                    answer_source="none",
+                    latency_profile_applied=guided_follow_up_latency_profile,
+                    passes_run=0,
+                ),
                 "inputNormalization": _guided_normalization_payload(follow_up_normalization),
             }
+            abstention_details = _guided_abstention_details_payload(
+                status="insufficient_evidence",
+                sources=[],
+                evidence_gaps=evidence_gaps,
+                trust_summary=trust_summary,
+            )
+            if abstention_details is not None:
+                response["abstentionDetails"] = abstention_details
+            return response
         if agentic_runtime is None:
             evidence_gaps = [follow_up_args.question]
+            trust_summary = _guided_trust_summary([], evidence_gaps)
             failure_summary = _guided_failure_summary(
                 failure_summary={
                     "outcome": "total_failure",
@@ -3157,7 +3811,7 @@ async def dispatch_tool(
                 sources=[],
                 evidence_gaps=evidence_gaps,
             )
-            return {
+            response = {
                 "searchSessionId": follow_up_args.search_session_id,
                 "answerStatus": "insufficient_evidence",
                 "answer": None,
@@ -3168,7 +3822,7 @@ async def dispatch_tool(
                 "unverifiedLeads": [],
                 "verifiedFindings": [],
                 "evidenceGaps": evidence_gaps,
-                "trustSummary": _guided_trust_summary([], evidence_gaps),
+                "trustSummary": trust_summary,
                 "coverage": None,
                 "failureSummary": failure_summary,
                 "resultMeaning": _guided_result_meaning(
@@ -3190,14 +3844,40 @@ async def dispatch_tool(
                     evidence_gaps=evidence_gaps,
                     search_session_id=follow_up_args.search_session_id,
                 ),
+                "sessionResolution": session_resolution,
+                "executionProvenance": _guided_execution_provenance_payload(
+                    execution_mode="guided_follow_up",
+                    answer_source="smart_runtime_unavailable",
+                    latency_profile_applied=guided_follow_up_latency_profile,
+                    passes_run=0,
+                ),
                 "inputNormalization": _guided_normalization_payload(follow_up_normalization),
             }
+            abstention_details = _guided_abstention_details_payload(
+                status="insufficient_evidence",
+                sources=[],
+                evidence_gaps=evidence_gaps,
+                trust_summary=trust_summary,
+            )
+            if abstention_details is not None:
+                response["abstentionDetails"] = abstention_details
+            return response
+        session_strategy_metadata: dict[str, Any] = {}
+        if workspace_registry is not None:
+            try:
+                session_record = workspace_registry.get(follow_up_args.search_session_id)
+                metadata = getattr(session_record, "metadata", {})
+                if isinstance(metadata, dict) and isinstance(metadata.get("strategyMetadata"), dict):
+                    session_strategy_metadata = cast(dict[str, Any], metadata.get("strategyMetadata"))
+            except Exception:
+                session_strategy_metadata = {}
         try:
             ask = await _dispatch_internal(
                 "ask_result_set",
                 {
                     "searchSessionId": follow_up_args.search_session_id,
                     "question": follow_up_args.question,
+                    "latencyProfile": guided_follow_up_latency_profile,
                 },
             )
             if not isinstance(ask, dict):
@@ -3207,8 +3887,15 @@ async def dispatch_tool(
                 search_session_id=follow_up_args.search_session_id,
                 error=error,
                 normalization=follow_up_normalization,
+                execution_provenance=_guided_execution_provenance_payload(
+                    execution_mode="guided_follow_up",
+                    answer_source="ask_result_set",
+                    latency_profile_applied=guided_follow_up_latency_profile,
+                    strategy_metadata=session_strategy_metadata,
+                    passes_run=1,
+                ),
             )
-            return {
+            response = {
                 "searchSessionId": follow_up_args.search_session_id,
                 "answerStatus": "insufficient_evidence",
                 "answer": None,
@@ -3237,9 +3924,29 @@ async def dispatch_tool(
                     search_session_id=follow_up_args.search_session_id,
                 ),
                 "machineFailure": machine_failure.get("machineFailure"),
+                "sessionResolution": session_resolution,
+                "executionProvenance": machine_failure.get("executionProvenance")
+                or _guided_execution_provenance_payload(
+                    execution_mode="guided_follow_up",
+                    answer_source="ask_result_set",
+                    latency_profile_applied=guided_follow_up_latency_profile,
+                    strategy_metadata=session_strategy_metadata,
+                    passes_run=1,
+                ),
                 "inputNormalization": machine_failure.get("inputNormalization")
                 or _guided_normalization_payload(follow_up_normalization),
             }
+            abstention_details = _guided_abstention_details_payload(
+                status="insufficient_evidence",
+                sources=[],
+                evidence_gaps=cast(list[str], machine_failure.get("evidenceGaps") or []),
+                trust_summary=cast(
+                    dict[str, Any], machine_failure.get("trustSummary") or _guided_trust_summary([], [])
+                ),
+            )
+            if abstention_details is not None:
+                response["abstentionDetails"] = abstention_details
+            return response
         sources = [
             _guided_source_record_from_structured_source(source, index=index)
             for index, source in enumerate(ask.get("structuredSources") or [], start=1)
@@ -3254,6 +3961,7 @@ async def dispatch_tool(
         answer_status = str(ask.get("answerStatus") or "answered")
         guided_status = "partial" if answer_status == "insufficient_evidence" else answer_status
         verified_findings = _guided_findings_from_sources(sources)
+        trust_summary = _guided_trust_summary(sources, evidence_gaps)
         failure_summary = _guided_failure_summary(
             failure_summary=cast(dict[str, Any] | None, ask.get("failureSummary")),
             status=guided_status,
@@ -3271,7 +3979,7 @@ async def dispatch_tool(
             "sources": sources,
             "unverifiedLeads": unverified_leads,
             "evidenceGaps": evidence_gaps,
-            "trustSummary": _guided_trust_summary(sources, evidence_gaps),
+            "trustSummary": trust_summary,
             "coverage": ask.get("coverageSummary"),
             "failureSummary": failure_summary,
             "resultMeaning": _guided_result_meaning(
@@ -3293,8 +4001,42 @@ async def dispatch_tool(
                 evidence_gaps=evidence_gaps,
                 search_session_id=follow_up_args.search_session_id,
             ),
+            "sessionResolution": session_resolution,
+            "executionProvenance": _guided_execution_provenance_payload(
+                execution_mode="guided_follow_up",
+                answer_source="ask_result_set",
+                latency_profile_applied=guided_follow_up_latency_profile,
+                strategy_metadata=session_strategy_metadata,
+                passes_run=1,
+            ),
             "inputNormalization": _guided_normalization_payload(follow_up_normalization),
         }
+        response.update(
+            _guided_contract_fields(
+                query=follow_up_args.question,
+                intent=str(
+                    (session_strategy_metadata or {}).get("intent")
+                    or (session_state or {}).get("intent")
+                    or "discovery"
+                ),
+                status=guided_status,
+                sources=sources,
+                unverified_leads=unverified_leads,
+                evidence_gaps=evidence_gaps,
+                coverage_summary=cast(dict[str, Any] | None, ask.get("coverageSummary")),
+                strategy_metadata=session_strategy_metadata,
+            )
+        )
+        response["selectedEvidenceIds"] = [
+            str(item.get("evidenceId") or "").strip()
+            for item in response.get("evidence") or []
+            if isinstance(item, dict) and str(item.get("evidenceId") or "").strip()
+        ]
+        response["selectedLeadIds"] = [
+            str(item.get("evidenceId") or "").strip()
+            for item in response.get("leads") or []
+            if isinstance(item, dict) and str(item.get("evidenceId") or "").strip()
+        ]
         session_answer = _answer_follow_up_from_session_state(
             question=follow_up_args.question,
             session_state=session_state,
@@ -3302,6 +4044,7 @@ async def dispatch_tool(
         if answer_status == "answered" and not _guided_is_usable_answer_text(ask.get("answer")):
             if session_answer is not None:
                 session_answer["inputNormalization"] = _guided_normalization_payload(follow_up_normalization)
+                session_answer["sessionResolution"] = session_resolution
                 return session_answer
             response["answerStatus"] = "insufficient_evidence"
             response["answer"] = None
@@ -3319,10 +4062,27 @@ async def dispatch_tool(
                 evidence_gaps=evidence_gaps,
                 search_session_id=follow_up_args.search_session_id,
             )
+            abstention_details = _guided_abstention_details_payload(
+                status="insufficient_evidence",
+                sources=sources,
+                evidence_gaps=evidence_gaps,
+                trust_summary=trust_summary,
+            )
+            if abstention_details is not None:
+                response["abstentionDetails"] = abstention_details
             return response
         if answer_status != "answered" and session_answer is not None:
             session_answer["inputNormalization"] = _guided_normalization_payload(follow_up_normalization)
+            session_answer["sessionResolution"] = session_resolution
             return session_answer
+        abstention_details = _guided_abstention_details_payload(
+            status=answer_status,
+            sources=sources,
+            evidence_gaps=evidence_gaps,
+            trust_summary=trust_summary,
+        )
+        if abstention_details is not None:
+            response["abstentionDetails"] = abstention_details
         return response
 
     if name == "inspect_source":
@@ -3330,12 +4090,79 @@ async def dispatch_tool(
             arguments,
             workspace_registry=workspace_registry,
         )
+        session_resolution = _guided_inspect_session_resolution(
+            arguments=arguments,
+            normalized_arguments=normalized_inspect_arguments,
+            normalization=inspect_normalization,
+            workspace_registry=workspace_registry,
+        )
         inspect_args = cast(InspectSourceArgs, TOOL_INPUT_MODELS[name].model_validate(normalized_inspect_arguments))
         if not inspect_args.search_session_id:
-            raise ValueError(
-                "inspect_source could not infer a unique searchSessionId. Provide an explicit searchSessionId from a "
-                "prior research result."
+            evidence_gaps = [
+                "inspect_source could not infer a unique searchSessionId. "
+                "Provide an explicit searchSessionId from a prior research result."
+            ]
+            trust_summary = _guided_trust_summary([], evidence_gaps)
+            failure_summary = _guided_failure_summary(
+                failure_summary={
+                    "outcome": "needs_clarification",
+                    "whatFailed": "inspect_source_session_inference",
+                    "whatStillWorked": "The server returned candidate sessions instead of selecting the wrong one.",
+                    "fallbackAttempted": False,
+                    "fallbackMode": None,
+                    "primaryPathFailureReason": "ambiguous_or_missing_search_session",
+                    "completenessImpact": evidence_gaps[0],
+                    "recommendedNextAction": "research",
+                },
+                status="needs_disambiguation",
+                sources=[],
+                evidence_gaps=evidence_gaps,
             )
+            response = {
+                "searchSessionId": None,
+                "source": None,
+                "directReadRecommendations": [],
+                "nextActions": [
+                    "Provide an explicit searchSessionId from a prior research result.",
+                    "Run research again if you need a fresh grounded session to inspect.",
+                ],
+                "failureSummary": failure_summary,
+                "resultMeaning": _guided_result_meaning(
+                    status="needs_disambiguation",
+                    verified_findings=[],
+                    evidence_gaps=evidence_gaps,
+                    coverage=None,
+                    failure_summary=failure_summary,
+                    source_count=0,
+                ),
+                "resultState": _guided_result_state(
+                    status="needs_disambiguation",
+                    sources=[],
+                    evidence_gaps=evidence_gaps,
+                    search_session_id=None,
+                ),
+                "sessionResolution": session_resolution,
+                "sourceResolution": _guided_source_resolution_payload(
+                    requested_source_id=inspect_args.source_id,
+                    resolved_source_id=None,
+                    match_type="missing_session_id",
+                ),
+                "executionProvenance": _guided_execution_provenance_payload(
+                    execution_mode="guided_source_inspection",
+                    answer_source="saved_session_source",
+                    passes_run=0,
+                ),
+                "inputNormalization": _guided_normalization_payload(inspect_normalization),
+            }
+            abstention_details = _guided_abstention_details_payload(
+                status="needs_disambiguation",
+                sources=[],
+                evidence_gaps=evidence_gaps,
+                trust_summary=trust_summary,
+            )
+            if abstention_details is not None:
+                response["abstentionDetails"] = abstention_details
+            return response
         source, match_type = _find_record_source_with_resolution(
             workspace_registry=workspace_registry,
             search_session_id=inspect_args.search_session_id,
@@ -3353,30 +4180,129 @@ async def dispatch_tool(
                     ][:8]
                 except Exception:
                     available_ids = []
-            suggestions = f" Available sourceId values: {', '.join(available_ids)}." if available_ids else ""
-            raise ValueError(
-                f"Could not find sourceId {inspect_args.source_id!r} in searchSessionId "
-                f"{inspect_args.search_session_id!r}.{suggestions}"
+            evidence_gaps = [
+                "Could not find sourceId "
+                f"{inspect_args.source_id!r} in searchSessionId "
+                f"{inspect_args.search_session_id!r}."
+            ]
+            trust_summary = _guided_trust_summary([], evidence_gaps)
+            failure_summary = _guided_failure_summary(
+                failure_summary={
+                    "outcome": "needs_clarification",
+                    "whatFailed": "inspect_source_source_resolution",
+                    "whatStillWorked": "The server returned available source IDs for explicit retry.",
+                    "fallbackAttempted": False,
+                    "fallbackMode": None,
+                    "primaryPathFailureReason": match_type,
+                    "completenessImpact": evidence_gaps[0],
+                    "recommendedNextAction": "inspect_source",
+                },
+                status="needs_disambiguation",
+                sources=[],
+                evidence_gaps=evidence_gaps,
             )
+            response = {
+                "searchSessionId": inspect_args.search_session_id,
+                "source": None,
+                "directReadRecommendations": [],
+                "nextActions": [
+                    "Provide an exact sourceId from the saved session.",
+                    "Use inspect_source again after choosing one of the available source IDs.",
+                ],
+                "failureSummary": failure_summary,
+                "resultMeaning": _guided_result_meaning(
+                    status="needs_disambiguation",
+                    verified_findings=[],
+                    evidence_gaps=evidence_gaps,
+                    coverage=None,
+                    failure_summary=failure_summary,
+                    source_count=0,
+                ),
+                "resultState": _guided_result_state(
+                    status="needs_disambiguation",
+                    sources=[],
+                    evidence_gaps=evidence_gaps,
+                    search_session_id=inspect_args.search_session_id,
+                ),
+                "sessionResolution": session_resolution,
+                "sourceResolution": _guided_source_resolution_payload(
+                    requested_source_id=inspect_args.source_id,
+                    resolved_source_id=None,
+                    match_type=match_type,
+                    available_source_ids=available_ids,
+                ),
+                "executionProvenance": _guided_execution_provenance_payload(
+                    execution_mode="guided_source_inspection",
+                    answer_source="saved_session_source",
+                    passes_run=0,
+                ),
+                "inputNormalization": _guided_normalization_payload(inspect_normalization),
+            }
+            abstention_details = _guided_abstention_details_payload(
+                status="needs_disambiguation",
+                sources=[],
+                evidence_gaps=evidence_gaps,
+                trust_summary=trust_summary,
+            )
+            if abstention_details is not None:
+                response["abstentionDetails"] = abstention_details
+            return response
+        inspect_session_state = _guided_session_state(
+            workspace_registry=workspace_registry,
+            search_session_id=inspect_args.search_session_id,
+        )
+        session_sources = (
+            [candidate for candidate in inspect_session_state.get("sources") or [] if isinstance(candidate, dict)]
+            if isinstance(inspect_session_state, dict)
+            else [source]
+        )
+        session_leads = (
+            [
+                candidate
+                for candidate in inspect_session_state.get("unverifiedLeads") or []
+                if isinstance(candidate, dict)
+            ]
+            if isinstance(inspect_session_state, dict)
+            else []
+        )
         return {
             "searchSessionId": inspect_args.search_session_id,
             "source": source,
+            "evidenceId": source.get("sourceId"),
+            "selectedEvidenceIds": [str(source.get("sourceId") or "").strip()],
             "directReadRecommendations": _direct_read_recommendations(source, tool_profile=tool_profile),
             "nextActions": _guided_next_actions(
                 search_session_id=inspect_args.search_session_id,
                 status="succeeded",
                 has_sources=True,
             ),
-            "sourceResolution": {
-                "requestedSourceId": inspect_args.source_id,
-                "resolvedSourceId": source.get("sourceId"),
-                "matchType": match_type,
-            },
+            "sessionResolution": session_resolution,
+            "sourceResolution": _guided_source_resolution_payload(
+                requested_source_id=inspect_args.source_id,
+                resolved_source_id=cast(str | None, source.get("sourceId")),
+                match_type=match_type,
+            ),
             "resultState": _guided_result_state(
                 status="succeeded",
                 sources=[source],
                 evidence_gaps=[],
                 search_session_id=inspect_args.search_session_id,
+            ),
+            "executionProvenance": _guided_execution_provenance_payload(
+                execution_mode="guided_source_inspection",
+                answer_source="saved_session_source",
+                passes_run=0,
+            ),
+            **_guided_contract_fields(
+                query=str((inspect_session_state or {}).get("query") or ""),
+                intent=str((inspect_session_state or {}).get("intent") or "discovery"),
+                status="succeeded",
+                sources=session_sources,
+                unverified_leads=session_leads,
+                evidence_gaps=[],
+                coverage_summary=cast(dict[str, Any] | None, (inspect_session_state or {}).get("coverage")),
+                strategy_metadata=cast(dict[str, Any] | None, (inspect_session_state or {}).get("strategyMetadata")),
+                timeline=cast(dict[str, Any] | None, (inspect_session_state or {}).get("timeline")),
             ),
             "inputNormalization": _guided_normalization_payload(inspect_normalization),
         }
@@ -3498,6 +4424,12 @@ async def dispatch_tool(
             hide_disabled_tools=hide_disabled_tools,
             session_ttl_seconds=session_ttl_seconds,
             embeddings_enabled=embeddings_enabled,
+            guided_research_latency_profile=guided_research_latency_profile,
+            guided_follow_up_latency_profile=guided_follow_up_latency_profile,
+            guided_allow_paid_providers=guided_allow_paid_providers,
+            guided_escalation_enabled=guided_escalation_enabled,
+            guided_escalation_max_passes=guided_escalation_max_passes,
+            guided_escalation_allow_paid_providers=guided_escalation_allow_paid_providers,
             enable_core=enable_core,
             enable_semantic_scholar=enable_semantic_scholar,
             enable_openalex=enable_openalex,

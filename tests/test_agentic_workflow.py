@@ -82,7 +82,7 @@ def test_agentic_workflow_source_and_lockfile_are_checked_in() -> None:
     assert 'research(query="graph neural networks", limit=5)' in workflow_source_content
     assert "get_runtime_status()" in workflow_source_content
     assert "follow_up_research(searchSessionId=..." in workflow_source_content
-    assert "inspect_source(searchSessionId=..., sourceId=...)" in workflow_source_content
+    assert "inspect_source(searchSessionId=..., evidenceId=...)" in workflow_source_content
     assert 'resolve_reference(reference="Rockstrom et al planetary boundaries 2009 Nature 461 472")' in (
         workflow_source_content
     )

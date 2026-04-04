@@ -26,6 +26,21 @@ __all__ = [
 ]
 
 
+def _default_selected_evidence_ids(evidence_papers: list[dict[str, Any]], *, limit: int = 3) -> list[str]:
+    selected: list[str] = []
+    seen: set[str] = set()
+    for paper in evidence_papers[:limit]:
+        if not isinstance(paper, dict):
+            continue
+        for key in ("paperId", "sourceId", "canonicalId"):
+            value = str(paper.get(key) or "").strip()
+            if value and value not in seen:
+                seen.add(value)
+                selected.append(value)
+                break
+    return selected
+
+
 class ModelProviderBundle:
     """Provider bundle with planner, synthesis, and embeddings roles."""
 
@@ -338,9 +353,13 @@ class DeterministicProviderBundle(ModelProviderBundle):
                     "Try a broader search query.",
                     "Add a method, venue, or year constraint.",
                 ],
+                "answerability": "insufficient",
+                "selectedEvidenceIds": [],
+                "selectedLeadIds": [],
                 "confidence": "low",
             }
 
+        selected_evidence_ids = _default_selected_evidence_ids(evidence_papers)
         titles: list[str] = [
             str(paper.get("title") or paper.get("paperId") or "Untitled") for paper in evidence_papers[:4]
         ]
@@ -353,6 +372,9 @@ class DeterministicProviderBundle(ModelProviderBundle):
                 ),
                 "unsupportedAsks": ([] if status != "insufficient_evidence" else [question]),
                 "followUpQuestions": ["Would you like a comparison of the top evidence papers?"],
+                "answerability": ("grounded" if status == "supported" else "limited"),
+                "selectedEvidenceIds": selected_evidence_ids[:2],
+                "selectedLeadIds": [],
                 "confidence": "medium" if status == "supported" else "low",
             }
         if answer_mode == "comparison":
@@ -360,6 +382,9 @@ class DeterministicProviderBundle(ModelProviderBundle):
                 "answer": _deterministic_comparison_answer(question, evidence_papers),
                 "unsupportedAsks": [],
                 "followUpQuestions": ["Which comparison dimension matters most: method, data, or recency?"],
+                "answerability": "grounded",
+                "selectedEvidenceIds": selected_evidence_ids,
+                "selectedLeadIds": [],
                 "confidence": "medium",
             }
         question_tokens = set(_tokenize(question))
@@ -383,6 +408,9 @@ class DeterministicProviderBundle(ModelProviderBundle):
                     "Should I map which papers support each gap?",
                     "Do you want a deeper landscape summary for this result set?",
                 ],
+                "answerability": ("grounded" if insights else "limited"),
+                "selectedEvidenceIds": selected_evidence_ids,
+                "selectedLeadIds": [],
                 "confidence": "medium" if insights else "low",
             }
         return {
@@ -396,5 +424,8 @@ class DeterministicProviderBundle(ModelProviderBundle):
                 "Would you like a claim check?",
                 "Should I map the themes in this result set?",
             ],
+            "answerability": "grounded",
+            "selectedEvidenceIds": selected_evidence_ids,
+            "selectedLeadIds": [],
             "confidence": "medium",
         }

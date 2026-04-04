@@ -9,7 +9,6 @@
         "query": "retrieval-augmented generation for coding agents",
         "limit": 5
       },
-      "latencyProfile": "balanced",
       "expected": {
         "goal": "low_context_guided_success",
         "statusAnyOf": [
@@ -37,7 +36,6 @@
       "category": "runtime_summary_truth",
       "tool": "get_runtime_status",
       "inputs": {},
-      "latencyProfile": "fast",
       "expected": {
         "goal": "runtime_truth_consistency",
         "requiresFields": [
@@ -59,9 +57,8 @@
       "category": "doi_lookup",
       "tool": "get_paper_details",
       "inputs": {
-        "paperId": "DOI:10.48550/arXiv.1706.03762"
+        "paper_id": "DOI:10.48550/arXiv.1706.03762"
       },
-      "latencyProfile": "fast",
       "expected": {
         "goal": "exact_known_item_resolution",
         "providers": [
@@ -73,11 +70,10 @@
     {
       "id": "citation_repair_attention_is_all_you_need",
       "category": "title_citation_repair",
-      "tool": "resolve_citation",
+      "tool": "resolve_reference",
       "inputs": {
-        "citation": "Attention is all you need 2017 Vaswani"
+        "reference": "Attention is all you need 2017 Vaswani"
       },
-      "latencyProfile": "balanced",
       "expected": {
         "goal": "canonical_citation_recovery"
       }
@@ -91,7 +87,6 @@
         "entityType": "institution",
         "limit": 5
       },
-      "latencyProfile": "fast",
       "expected": {
         "goal": "entity_pivot_then_work_search"
       }
@@ -99,14 +94,13 @@
     {
       "id": "broad_topical_discovery_transformer_alignment",
       "category": "broad_topical_discovery",
-      "tool": "search_papers_smart",
+      "tool": "research",
       "inputs": {
         "query": "alignment methods for multimodal transformer systems",
-        "limit": 10,
-        "latencyProfile": "balanced"
+        "limit": 5
       },
       "expected": {
-        "goal": "balanced_multi_step_discovery"
+        "goal": "guided_quality_first_discovery"
       }
     },
     {
@@ -117,7 +111,6 @@
         "searchSessionId": "ssn_fixture_placeholder",
         "question": "What evaluation tradeoffs show up here?"
       },
-      "latencyProfile": "balanced",
       "expected": {
         "goal": "safe_abstention_over_plausible_garbage",
         "answerStatusAnyOf": [
@@ -141,7 +134,6 @@
         "citesId": "9943926152122871332",
         "limit": 10
       },
-      "latencyProfile": "deep",
       "expected": {
         "goal": "guarded_citation_discovery"
       }
@@ -151,8 +143,8 @@
       "category": "smart_landscape_mapping",
       "tool": "map_research_landscape",
       "inputs": {
-        "query": "retrieval augmented generation evaluation methods",
-        "limit": 12,
+        "searchSessionId": "ssn_fixture_placeholder",
+        "maxThemes": 5,
         "latencyProfile": "deep"
       },
       "expected": {
@@ -162,11 +154,10 @@
     {
       "id": "regulatory_condor_primary_source_correctness",
       "category": "regulatory_correctness",
-      "tool": "search_papers_smart",
+      "tool": "research",
       "inputs": {
         "query": "regulatory history of California condor under 50 CFR 17.95",
-        "limit": 5,
-        "latencyProfile": "balanced"
+        "limit": 5
       },
       "expected": {
         "goal": "subject_anchored_primary_source_timeline",
@@ -247,7 +238,7 @@
       "inputs": {
         "query": "scientific literature retrieval evaluation",
         "limit": 8,
-        "latencyProfile": "balanced"
+        "latencyProfile": "deep"
       },
       "expected": {
         "goal": "smart_fallback_without_model_corruption"

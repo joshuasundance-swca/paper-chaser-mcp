@@ -81,7 +81,6 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "year",
         "venue",
         "focus",
-        "latencyProfile",
     }
     assert tool_map["follow_up_research"].inputSchema["required"] == ["question"]
     assert set(tool_map["follow_up_research"].inputSchema["properties"]) == {
@@ -106,6 +105,143 @@ async def test_list_tools_returns_expected_public_contract() -> None:
     assert set(resolve_tags["fastmcp"]["tags"]) == {"guided", "reference-resolution"}
     assert set(inspect_tags["fastmcp"]["tags"]) == {"guided", "source-inspection"}
     assert set(runtime_tags["fastmcp"]["tags"]) == {"guided", "runtime-status"}
+
+
+@pytest.mark.asyncio
+async def test_guided_research_uses_server_owned_deep_profile_and_ignores_client_latency_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_calls: list[dict[str, Any]] = []
+
+    class _FakeRuntime:
+        async def search_papers_smart(self, **kwargs: Any) -> dict[str, Any]:
+            captured_calls.append(kwargs)
+            return {
+                "searchSessionId": "ssn-guided-quality-default",
+                "strategyMetadata": {"intent": "review", "latencyProfile": kwargs.get("latencyProfile")},
+                "structuredSources": [
+                    {
+                        "sourceId": "paper-1",
+                        "title": "Quality-first guided retrieval",
+                        "provider": "semantic_scholar",
+                        "sourceType": "scholarly_article",
+                        "verificationStatus": "verified_metadata",
+                        "accessStatus": "abstract_only",
+                        "topicalRelevance": "on_topic",
+                        "confidence": "high",
+                        "isPrimarySource": False,
+                    }
+                ],
+                "candidateLeads": [],
+                "evidenceGaps": [],
+                "coverageSummary": {"searchMode": "literature_review"},
+                "failureSummary": None,
+                "clarification": None,
+            }
+
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(
+        await server.call_tool(
+            "research",
+            {
+                "query": "quality-first guided retrieval defaults",
+                "latencyProfile": "fast",
+            },
+        )
+    )
+
+    assert captured_calls
+    assert (captured_calls[0].get("latencyProfile") or captured_calls[0].get("latency_profile")) == "deep"
+    assert payload["status"] in {"succeeded", "partial"}
+
+
+@pytest.mark.asyncio
+async def test_guided_research_surfaces_evidence_contract_and_routing_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRuntime:
+        async def search_papers_smart(self, **kwargs: Any) -> dict[str, Any]:
+            del kwargs
+            return {
+                "searchSessionId": "ssn-guided-evidence-contract",
+                "strategyMetadata": {
+                    "intent": "regulatory",
+                    "anchorType": "cfr_citation",
+                    "anchoredSubject": "Northern long-eared bat",
+                    "routingConfidence": "high",
+                    "providerPlan": ["govinfo", "federal_register", "ecos"],
+                    "providersUsed": ["govinfo", "federal_register"],
+                },
+                "structuredSources": [
+                    {
+                        "sourceId": "50 CFR 17.11",
+                        "title": "50 CFR 17.11 Endangered and threatened wildlife",
+                        "provider": "govinfo",
+                        "sourceType": "primary_regulatory",
+                        "verificationStatus": "verified_primary_source",
+                        "accessStatus": "full_text_verified",
+                        "topicalRelevance": "on_topic",
+                        "confidence": "high",
+                        "isPrimarySource": True,
+                        "canonicalUrl": "https://www.govinfo.gov/example/cfr",
+                        "citation": {
+                            "title": "50 CFR 17.11",
+                            "url": "https://www.govinfo.gov/example/cfr",
+                            "sourceType": "primary_regulatory",
+                        },
+                        "date": "2024-10-01",
+                    }
+                ],
+                "candidateLeads": [
+                    {
+                        "sourceId": "2024-99999",
+                        "title": "Unrelated Federal Register notice",
+                        "provider": "federal_register",
+                        "sourceType": "primary_regulatory",
+                        "verificationStatus": "verified_metadata",
+                        "accessStatus": "access_unverified",
+                        "topicalRelevance": "off_topic",
+                        "confidence": "medium",
+                        "isPrimarySource": True,
+                        "canonicalUrl": "https://www.federalregister.gov/example",
+                        "date": "2024-02-01",
+                        "note": "Filtered because it did not match the anchored subject.",
+                    }
+                ],
+                "evidenceGaps": ["ECOS did not return a species dossier match."],
+                "coverageSummary": {
+                    "providersAttempted": ["govinfo", "federal_register", "ecos"],
+                    "providersSucceeded": ["govinfo", "federal_register"],
+                    "providersZeroResults": ["ecos"],
+                    "searchMode": "regulatory_primary_source",
+                },
+                "failureSummary": None,
+                "clarification": None,
+                "resultStatus": "succeeded",
+            }
+
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(
+        await server.call_tool(
+            "research",
+            {"query": "50 CFR 17.11 northern long-eared bat current text"},
+        )
+    )
+
+    assert payload["resultStatus"] == "succeeded"
+    assert payload["answerability"] == "grounded"
+    assert payload["routingSummary"]["intent"] == "regulatory"
+    assert payload["routingSummary"]["anchorType"] == "cfr_citation"
+    assert payload["routingSummary"]["anchorValue"] == "Northern long-eared bat"
+    assert payload["routingSummary"]["providerPlan"] == ["govinfo", "federal_register", "ecos"]
+    assert payload["coverageSummary"]["searchMode"] == "regulatory_primary_source"
+    assert [item["evidenceId"] for item in payload["evidence"]] == ["50 CFR 17.11"]
+    assert payload["evidence"][0]["whyIncluded"]
+    assert payload["leads"][0]["evidenceId"] == "2024-99999"
+    assert payload["leads"][0]["whyNotVerified"]
+    assert not any(item["evidenceId"] == "2024-99999" for item in payload["evidence"])
 
 
 @pytest.mark.asyncio
@@ -1432,7 +1568,266 @@ async def test_get_runtime_status_surfaces_configured_and_active_smart_provider(
 
     assert payload["runtimeSummary"]["configuredSmartProvider"] == "azure-openai"
     assert payload["runtimeSummary"]["activeSmartProvider"] == "deterministic"
+    assert payload["runtimeSummary"]["guidedPolicy"] == "quality_first"
+    assert payload["runtimeSummary"]["guidedResearchLatencyProfile"] == server.settings.guided_research_latency_profile
+    assert payload["runtimeSummary"]["guidedFollowUpLatencyProfile"] == server.settings.guided_follow_up_latency_profile
+    assert payload["runtimeSummary"]["guidedAllowPaidProviders"] is server.settings.guided_allow_paid_providers
     assert payload["providers"]
+
+
+@pytest.mark.asyncio
+async def test_guided_research_escalates_once_when_initial_pass_is_too_weak(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRuntime:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        async def search_papers_smart(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                return {
+                    "searchSessionId": "ssn-weak-pass",
+                    "strategyMetadata": {
+                        "intent": "review",
+                        "configuredSmartProvider": "openai",
+                        "activeSmartProvider": "deterministic",
+                        "providerBudgetApplied": {"allowPaidProviders": True},
+                    },
+                    "structuredSources": [],
+                    "candidateLeads": [],
+                    "evidenceGaps": ["Initial pass did not recover trustworthy on-topic sources."],
+                    "coverageSummary": {
+                        "providersAttempted": ["semantic_scholar"],
+                        "providersSucceeded": [],
+                        "providersFailed": [],
+                        "providersZeroResults": ["semantic_scholar"],
+                        "likelyCompleteness": "unknown",
+                        "searchMode": "literature_review",
+                    },
+                    "failureSummary": None,
+                    "clarification": None,
+                }
+            return {
+                "searchSessionId": "ssn-weak-pass",
+                "strategyMetadata": {
+                    "intent": "review",
+                    "configuredSmartProvider": "openai",
+                    "activeSmartProvider": "deterministic",
+                    "providerBudgetApplied": {"allowPaidProviders": True},
+                },
+                "structuredSources": [
+                    {
+                        "sourceId": "paper-1",
+                        "title": "Grounded review paper one",
+                        "provider": "semantic_scholar",
+                        "sourceType": "scholarly_article",
+                        "verificationStatus": "verified_metadata",
+                        "accessStatus": "abstract_only",
+                        "topicalRelevance": "on_topic",
+                        "confidence": "high",
+                        "isPrimarySource": False,
+                    },
+                    {
+                        "sourceId": "paper-2",
+                        "title": "Grounded review paper two",
+                        "provider": "openalex",
+                        "sourceType": "scholarly_article",
+                        "verificationStatus": "verified_metadata",
+                        "accessStatus": "abstract_only",
+                        "topicalRelevance": "on_topic",
+                        "confidence": "high",
+                        "isPrimarySource": False,
+                    },
+                ],
+                "candidateLeads": [],
+                "evidenceGaps": [],
+                "coverageSummary": {
+                    "providersAttempted": ["semantic_scholar", "openalex"],
+                    "providersSucceeded": ["semantic_scholar", "openalex"],
+                    "providersFailed": [],
+                    "providersZeroResults": [],
+                    "likelyCompleteness": "likely_complete",
+                    "searchMode": "literature_review",
+                },
+                "failureSummary": None,
+                "clarification": None,
+            }
+
+    runtime = _FakeRuntime()
+    monkeypatch.setattr(server, "agentic_runtime", runtime)
+
+    payload = _payload(await server.call_tool("research", {"query": "multimodal transformer alignment methods"}))
+
+    assert [call["mode"] for call in runtime.calls] == ["auto", "review"]
+    assert payload["executionProvenance"]["escalationAttempted"] is True
+    assert payload["executionProvenance"]["passesRun"] == 2
+    assert payload["executionProvenance"]["passModes"] == ["auto", "review"]
+    assert payload["executionProvenance"]["latencyProfileApplied"] == server.settings.guided_research_latency_profile
+    assert payload["status"] in {"succeeded", "partial"}
+
+
+@pytest.mark.asyncio
+async def test_follow_up_research_without_session_returns_session_candidates_and_policy_metadata() -> None:
+    isolated_registry = type(server.workspace_registry)()
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-a",
+        query="Attention Is All You Need",
+        payload={"sources": [{"sourceId": "paper-a", "title": "Attention is All you Need"}]},
+    )
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-b",
+        query="RAG",
+        payload={"sources": [{"sourceId": "paper-b", "title": "RAG Overview"}]},
+    )
+
+    original_registry = server.workspace_registry
+    server.workspace_registry = isolated_registry
+    try:
+        payload = _payload(await server.call_tool("follow_up_research", {"question": "Who wrote it?"}))
+    finally:
+        server.workspace_registry = original_registry
+
+    assert payload["answerStatus"] == "insufficient_evidence"
+    assert payload["sessionResolution"]["resolutionMode"] == "ambiguous"
+    assert len(payload["sessionResolution"]["candidates"]) == 2
+    assert payload["executionProvenance"]["latencyProfileApplied"] == server.settings.guided_follow_up_latency_profile
+    assert payload["abstentionDetails"]["category"] == "no_sources"
+
+
+@pytest.mark.asyncio
+async def test_follow_up_research_passes_server_owned_latency_profile_to_ask_result_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    isolated_registry = type(server.workspace_registry)()
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-follow-up",
+        query="Attention Is All You Need",
+        payload={"sources": [{"sourceId": "paper-a", "title": "Attention is All you Need"}]},
+    )
+
+    class _FakeRuntime:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        async def ask_result_set(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(kwargs)
+            return {
+                "answerStatus": "answered",
+                "answer": "The saved result set supports a grounded answer.",
+                "evidence": [],
+                "unsupportedAsks": [],
+                "followUpQuestions": [],
+                "structuredSources": [
+                    {
+                        "sourceId": "paper-a",
+                        "title": "Attention is All you Need",
+                        "provider": "semantic_scholar",
+                        "sourceType": "scholarly_article",
+                        "verificationStatus": "verified_metadata",
+                        "accessStatus": "abstract_only",
+                        "topicalRelevance": "on_topic",
+                        "confidence": "high",
+                        "isPrimarySource": False,
+                    }
+                ],
+                "candidateLeads": [],
+                "evidenceGaps": [],
+                "coverageSummary": {
+                    "providersAttempted": ["semantic_scholar"],
+                    "providersSucceeded": ["semantic_scholar"],
+                    "providersFailed": [],
+                    "providersZeroResults": [],
+                    "likelyCompleteness": "likely_complete",
+                    "searchMode": "grounded_follow_up",
+                },
+                "failureSummary": None,
+            }
+
+    runtime = _FakeRuntime()
+    monkeypatch.setattr(server, "agentic_runtime", runtime)
+    original_registry = server.workspace_registry
+    server.workspace_registry = isolated_registry
+    try:
+        payload = _payload(
+            await server.call_tool(
+                "follow_up_research",
+                {"searchSessionId": "ssn-follow-up", "question": "What does the saved session support?"},
+            )
+        )
+    finally:
+        server.workspace_registry = original_registry
+
+    assert runtime.calls
+    assert runtime.calls[0]["latency_profile"] == server.settings.guided_follow_up_latency_profile
+    assert payload["executionProvenance"]["latencyProfileApplied"] == server.settings.guided_follow_up_latency_profile
+    assert payload["answerStatus"] == "answered"
+
+
+@pytest.mark.asyncio
+async def test_inspect_source_returns_structured_disambiguation_when_session_is_ambiguous() -> None:
+    isolated_registry = type(server.workspace_registry)()
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-left",
+        query="Attention Is All You Need",
+        payload={"sources": [{"sourceId": "paper-shared", "title": "Attention is All you Need"}]},
+    )
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-right",
+        query="RAG",
+        payload={"sources": [{"sourceId": "paper-shared", "title": "RAG Overview"}]},
+    )
+
+    original_registry = server.workspace_registry
+    server.workspace_registry = isolated_registry
+    try:
+        payload = _payload(await server.call_tool("inspect_source", {"sourceId": "paper-shared"}))
+    finally:
+        server.workspace_registry = original_registry
+
+    assert payload["searchSessionId"] is None
+    assert payload["source"] is None
+    assert payload["sessionResolution"]["resolutionMode"] == "ambiguous"
+    assert payload["sourceResolution"]["matchType"] == "missing_session_id"
+    assert payload["resultState"]["status"] == "needs_disambiguation"
+
+
+@pytest.mark.asyncio
+async def test_inspect_source_returns_available_source_ids_when_source_is_unresolved() -> None:
+    isolated_registry = type(server.workspace_registry)()
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-source-list",
+        query="Attention Is All You Need",
+        payload={
+            "sources": [
+                {"sourceId": "paper-a", "title": "Attention is All you Need"},
+                {"sourceId": "paper-b", "title": "The Annotated Transformer"},
+            ]
+        },
+    )
+
+    original_registry = server.workspace_registry
+    server.workspace_registry = isolated_registry
+    try:
+        payload = _payload(
+            await server.call_tool(
+                "inspect_source",
+                {"searchSessionId": "ssn-source-list", "sourceId": "missing-source"},
+            )
+        )
+    finally:
+        server.workspace_registry = original_registry
+
+    assert payload["source"] is None
+    assert payload["sourceResolution"]["matchType"] == "unresolved"
+    assert set(payload["sourceResolution"]["availableSourceIds"]) == {"paper-a", "paper-b"}
+    assert payload["resultState"]["status"] == "needs_disambiguation"
 
 
 @pytest.mark.asyncio
@@ -1561,7 +1956,16 @@ async def test_guided_wrappers_surface_unverified_leads(monkeypatch: pytest.Monk
                 "failureSummary": None,
             }
 
+    isolated_registry = type(server.workspace_registry)()
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-guided-1",
+        query="regulatory history of california condor",
+        payload={"searchSessionId": "ssn-guided-1", "sources": []},
+    )
+
     monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+    monkeypatch.setattr(server, "workspace_registry", isolated_registry)
 
     research = _payload(await server.call_tool("research", {"query": "regulatory history of california condor"}))
     follow_up = _payload(
@@ -1877,6 +2281,8 @@ async def test_follow_up_research_answers_from_saved_session_metadata_when_regul
     assert payload["coverage"]["searchMode"] == "regulatory_primary_source"
     assert payload["evidenceGaps"][0].startswith("No primary-source regulatory timeline")
     assert payload["unverifiedLeads"][0]["sourceId"] == "2026-05678"
+    assert payload["resultState"]["status"] == "answered"
+    assert payload["executionProvenance"]["executionMode"] == "session_introspection"
 
 
 @pytest.mark.asyncio
@@ -2111,13 +2517,18 @@ async def test_inspect_source_requires_explicit_session_when_multiple_are_active
         payload={"sources": [{"sourceId": "paper-b", "title": "RAG Overview"}]},
     )
 
-    with pytest.raises(ValueError, match="could not infer a unique searchSessionId"):
+    payload = _payload(
         await server.call_tool(
             "inspect_source",
             {
                 "sourceId": "source-1",
             },
         )
+    )
+
+    assert payload["searchSessionId"] is None
+    assert payload["sessionResolution"]["resolutionMode"] == "ambiguous"
+    assert payload["resultState"]["status"] == "needs_disambiguation"
 
 
 @pytest.mark.asyncio
@@ -2288,6 +2699,202 @@ async def test_follow_up_research_answers_authors_and_venue_from_saved_source_me
     assert payload["answerStatus"] == "answered"
     assert "Ashish Vaswani" in payload["answer"]
     assert "Neural Information Processing Systems" in payload["answer"]
+
+
+@pytest.mark.asyncio
+async def test_follow_up_research_does_not_treat_stopwords_as_source_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRuntime:
+        async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
+            raise AssertionError(f"ask_result_set should not run for session source overview: {kwargs!r}")
+
+    isolated_registry = type(server.workspace_registry)()
+    monkeypatch.setattr(server, "workspace_registry", isolated_registry)
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-follow-up-source-overview",
+        query="Northern long-eared bat ESA status",
+        payload={
+            "searchSessionId": "ssn-follow-up-source-overview",
+            "structuredSources": [
+                {
+                    "sourceId": "50 CFR 17.11",
+                    "title": "50 CFR 17.11 Endangered and threatened wildlife",
+                    "provider": "govinfo",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_primary_source",
+                    "accessStatus": "full_text_verified",
+                    "topicalRelevance": "on_topic",
+                    "confidence": "high",
+                    "isPrimarySource": True,
+                },
+                {
+                    "sourceId": "2022-25998",
+                    "title": "Endangered Species Status for the Northern Long-Eared Bat",
+                    "provider": "federal_register",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "access_unverified",
+                    "topicalRelevance": "on_topic",
+                    "confidence": "medium",
+                    "isPrimarySource": True,
+                },
+            ],
+        },
+    )
+
+    payload = _payload(
+        await server.call_tool(
+            "follow_up_research",
+            {
+                "searchSessionId": "ssn-follow-up-source-overview",
+                "question": "Which source is the authoritative current-text source in this session?",
+            },
+        )
+    )
+
+    assert payload["answerStatus"] == "answered"
+    assert "No saved source matched 'is'" not in payload["answer"]
+    assert "Saved sources included:" in payload["answer"]
+    assert payload["selectedEvidenceIds"] == ["50 CFR 17.11", "2022-25998"]
+    assert payload["executionProvenance"]["answerSource"] == "saved_session_metadata"
+
+
+@pytest.mark.asyncio
+async def test_follow_up_research_uses_evidence_contract_records_when_sources_are_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRuntime:
+        async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
+            raise AssertionError(f"ask_result_set should not run for evidence-only session introspection: {kwargs!r}")
+
+    isolated_registry = type(server.workspace_registry)()
+    monkeypatch.setattr(server, "workspace_registry", isolated_registry)
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-follow-up-evidence-only",
+        query="50 CFR 17.11 northern long-eared bat current text",
+        payload={
+            "searchSessionId": "ssn-follow-up-evidence-only",
+            "intent": "regulatory",
+            "resultStatus": "succeeded",
+            "answerability": "grounded",
+            "routingSummary": {"intent": "regulatory", "anchorType": "cfr_citation"},
+            "evidence": [
+                {
+                    "evidenceId": "50 CFR 17.11",
+                    "title": "50 CFR 17.11 Endangered and threatened wildlife",
+                    "provider": "govinfo",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_primary_source",
+                    "accessStatus": "full_text_verified",
+                    "topicalRelevance": "on_topic",
+                    "isPrimarySource": True,
+                    "canonicalUrl": "https://www.govinfo.gov/example/cfr",
+                    "whyIncluded": "Authoritative current text for this CFR section.",
+                    "date": "2024-10-01",
+                }
+            ],
+            "leads": [
+                {
+                    "evidenceId": "2022-25998",
+                    "title": "Endangered Species Status for the Northern Long-Eared Bat",
+                    "provider": "federal_register",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "access_unverified",
+                    "topicalRelevance": "weak_match",
+                    "isPrimarySource": True,
+                    "whyIncluded": "Related but not current codified text.",
+                    "whyNotVerified": "Topical relevance was weak_match.",
+                }
+            ],
+            "evidenceGaps": [],
+            "coverageSummary": {
+                "providersAttempted": ["govinfo", "federal_register"],
+                "providersSucceeded": ["govinfo", "federal_register"],
+                "providersFailed": [],
+                "providersZeroResults": [],
+                "searchMode": "regulatory_primary_source",
+            },
+        },
+    )
+
+    payload = _payload(
+        await server.call_tool(
+            "follow_up_research",
+            {
+                "searchSessionId": "ssn-follow-up-evidence-only",
+                "question": "Which sources were found in this session?",
+            },
+        )
+    )
+
+    assert payload["answerStatus"] == "answered"
+    assert payload["answer"].startswith("Saved sources included:")
+    assert "50 CFR 17.11 Endangered and threatened wildlife" in payload["answer"]
+    assert payload["selectedEvidenceIds"] == ["50 CFR 17.11"]
+    assert payload["routingSummary"]["intent"] == "regulatory"
+    assert payload["answerability"] == "grounded"
+
+
+@pytest.mark.asyncio
+async def test_inspect_source_reads_evidence_contract_records_without_legacy_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    isolated_registry = type(server.workspace_registry)()
+    monkeypatch.setattr(server, "workspace_registry", isolated_registry)
+
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-inspect-evidence-only",
+        query="50 CFR 17.11 northern long-eared bat current text",
+        payload={
+            "searchSessionId": "ssn-inspect-evidence-only",
+            "intent": "regulatory",
+            "routingSummary": {"intent": "regulatory", "anchorType": "cfr_citation"},
+            "coverageSummary": {"searchMode": "regulatory_primary_source"},
+            "evidence": [
+                {
+                    "evidenceId": "50 CFR 17.11",
+                    "title": "50 CFR 17.11 Endangered and threatened wildlife",
+                    "provider": "govinfo",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_primary_source",
+                    "accessStatus": "full_text_verified",
+                    "topicalRelevance": "on_topic",
+                    "isPrimarySource": True,
+                    "canonicalUrl": "https://www.govinfo.gov/example/cfr",
+                    "whyIncluded": "Authoritative current text for this CFR section.",
+                }
+            ],
+            "leads": [],
+            "evidenceGaps": [],
+        },
+    )
+
+    payload = _payload(
+        await server.call_tool(
+            "inspect_source",
+            {
+                "searchSessionId": "ssn-inspect-evidence-only",
+                "sourceId": "50 CFR 17.11",
+            },
+        )
+    )
+
+    assert payload["source"]["sourceId"] == "50 CFR 17.11"
+    assert payload["evidenceId"] == "50 CFR 17.11"
+    assert payload["selectedEvidenceIds"] == ["50 CFR 17.11"]
+    assert payload["routingSummary"]["intent"] == "regulatory"
+    assert payload["coverageSummary"]["searchMode"] == "regulatory_primary_source"
+    assert payload["evidence"]
+    assert payload["evidence"][0]["evidenceId"] == "50 CFR 17.11"
 
 
 @pytest.mark.asyncio

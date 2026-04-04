@@ -23,6 +23,7 @@ from .provider_helpers import (
     _ExpansionListSchema,
     _extract_json_object,
     _filter_expansion_candidates,
+    _normalize_answer_schema_output,
     _normalize_theme_label_output,
     _normalized_embedding_text,
     _PlannerResponseSchema,
@@ -679,8 +680,9 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 model_name=self.planner_model_name,
                 response_model=_PlannerResponseSchema,
                 system_prompt=(
-                    "Plan a grounded literature-search workflow. Keep providerPlan "
-                    "limited to semantic_scholar, openalex, scholarapi, core, and arxiv. "
+                    "Plan a grounded search workflow. intent may be discovery, review, known_item, author, "
+                    "citation, or regulatory. Keep providerPlan limited to semantic_scholar, openalex, "
+                    "scholarapi, core, arxiv, ecos, federal_register, govinfo, tavily, and perplexity. "
                     "Return compact structured output only."
                 ),
                 payload={
@@ -833,8 +835,11 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 request_id=request_id,
             )
             if direct is not None:
-                parsed = direct.model_dump()
-                parsed["confidence"] = self.normalize_confidence(parsed.get("confidence"))
+                parsed = _normalize_answer_schema_output(
+                    parsed_answer=direct,
+                    evidence_papers=evidence_papers,
+                    confidence_normalizer=self.normalize_confidence,
+                )
                 self._mark_provider_used()
                 return parsed
             text_fallback = await self._aresponses_text(
@@ -842,7 +847,8 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 model_name=self.synthesis_model_name,
                 system_prompt=(
                     "Answer only from the supplied papers. If evidence is weak, say so. "
-                    "Return only JSON with keys answer, unsupportedAsks, followUpQuestions, confidence. "
+                    "Return only JSON with keys answer, unsupportedAsks, followUpQuestions, confidence, "
+                    "answerability, selectedEvidenceIds, and selectedLeadIds. "
                     "Confidence must be exactly one of: high, medium, low."
                 ),
                 payload=_build_answer_payload(question, answer_mode, evidence_papers),
@@ -852,8 +858,11 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             )
             if text_fallback:
                 json_payload = _extract_json_object(text_fallback) or text_fallback
-                parsed = _AnswerSchema.model_validate_json(json_payload).model_dump()
-                parsed["confidence"] = self.normalize_confidence(parsed.get("confidence"))
+                parsed = _normalize_answer_schema_output(
+                    parsed_answer=_AnswerSchema.model_validate_json(json_payload),
+                    evidence_papers=evidence_papers,
+                    confidence_normalizer=self.normalize_confidence,
+                )
                 self._mark_provider_used()
                 return parsed
         except Exception:
@@ -881,8 +890,9 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 model_name=self.planner_model_name,
                 response_model=_PlannerResponseSchema,
                 system_prompt=(
-                    "Plan a grounded literature-search workflow. Keep providerPlan "
-                    "limited to semantic_scholar, openalex, scholarapi, core, and arxiv. "
+                    "Plan a grounded search workflow. intent may be discovery, review, known_item, author, "
+                    "citation, or regulatory. Keep providerPlan limited to semantic_scholar, openalex, "
+                    "scholarapi, core, arxiv, ecos, federal_register, govinfo, tavily, and perplexity. "
                     "Return compact structured output only."
                 ),
                 payload={
@@ -923,9 +933,10 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 [
                     (
                         "system",
-                        "Plan a grounded literature-search workflow. Keep "
-                        "providerPlan limited to semantic_scholar, openalex, "
-                        "scholarapi, core, and arxiv. Return compact structured output only.",
+                        "Plan a grounded search workflow. intent may be discovery, review, known_item, author, "
+                        "citation, or regulatory. Keep providerPlan limited to semantic_scholar, openalex, "
+                        "scholarapi, core, arxiv, ecos, federal_register, govinfo, tavily, and perplexity. "
+                        "Return compact structured output only.",
                     ),
                     (
                         "human",
@@ -1144,7 +1155,11 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 payload=_build_answer_payload(question, answer_mode, evidence_papers),
             )
             if direct is not None:
-                parsed = direct.model_dump()
+                parsed = _normalize_answer_schema_output(
+                    parsed_answer=direct,
+                    evidence_papers=evidence_papers,
+                    confidence_normalizer=self.normalize_confidence,
+                )
                 self._mark_provider_used()
             else:
                 text_fallback = self._responses_text(
@@ -1152,7 +1167,8 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                     model_name=self.synthesis_model_name,
                     system_prompt=(
                         "Answer only from the supplied papers. If evidence is weak, say so. "
-                        "Return only JSON with keys answer, unsupportedAsks, followUpQuestions, confidence. "
+                        "Return only JSON with keys answer, unsupportedAsks, followUpQuestions, confidence, "
+                        "answerability, selectedEvidenceIds, and selectedLeadIds. "
                         "Confidence must be exactly one of: high, medium, low."
                     ),
                     payload=_build_answer_payload(question, answer_mode, evidence_papers),
@@ -1160,8 +1176,11 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 )
                 if text_fallback:
                     json_payload = _extract_json_object(text_fallback) or text_fallback
-                    parsed = _AnswerSchema.model_validate_json(json_payload).model_dump()
-                    parsed["confidence"] = self.normalize_confidence(parsed.get("confidence"))
+                    parsed = _normalize_answer_schema_output(
+                        parsed_answer=_AnswerSchema.model_validate_json(json_payload),
+                        evidence_papers=evidence_papers,
+                        confidence_normalizer=self.normalize_confidence,
+                    )
                     self._mark_provider_used()
                     return parsed
                 if not self._allow_langchain_chat_fallback():
@@ -1188,7 +1207,8 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                             "system",
                             "Answer only from the supplied papers. If evidence is "
                             "weak, say so. Confidence must be exactly one of: high, "
-                            "medium, low.",
+                            "medium, low. Include answerability, selectedEvidenceIds, "
+                            "and selectedLeadIds in the structured response.",
                         ),
                         (
                             "human",
@@ -1196,9 +1216,12 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                         ),
                     ]
                 )
-                parsed = response.model_dump()
+                parsed = _normalize_answer_schema_output(
+                    parsed_answer=response,
+                    evidence_papers=evidence_papers,
+                    confidence_normalizer=self.normalize_confidence,
+                )
                 self._mark_provider_used()
-            parsed["confidence"] = self.normalize_confidence(parsed.get("confidence"))
             if isinstance(parsed, dict):
                 return parsed
         except Exception:

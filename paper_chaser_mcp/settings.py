@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict
 
 from .models.tools import (
     DEFAULT_SEARCH_PROVIDER_ORDER,
+    LatencyProfile,
     SearchProvider,
     _normalize_provider_name,
 )
@@ -163,6 +164,12 @@ class AppSettings(BaseModel):
     synthesis_model: str = "gpt-5.4"
     embedding_model: str = "text-embedding-3-large"
     disable_embeddings: bool = True
+    guided_research_latency_profile: LatencyProfile = "deep"
+    guided_follow_up_latency_profile: LatencyProfile = "deep"
+    guided_allow_paid_providers: bool = True
+    guided_escalation_enabled: bool = True
+    guided_escalation_max_passes: int = 2
+    guided_escalation_allow_paid_providers: bool = True
     agentic_openai_timeout_seconds: float = 30.0
     agentic_index_backend: AgenticIndexBackend = "memory"
     session_ttl_seconds: int = 1800
@@ -302,6 +309,36 @@ class AppSettings(BaseModel):
                 "PAPER_CHASER_DISABLE_EMBEDDINGS",
                 True,
             ),
+            guided_research_latency_profile=cast_latency_profile(
+                env.get("PAPER_CHASER_GUIDED_RESEARCH_LATENCY_PROFILE"),
+                default="deep",
+                key="PAPER_CHASER_GUIDED_RESEARCH_LATENCY_PROFILE",
+            ),
+            guided_follow_up_latency_profile=cast_latency_profile(
+                env.get("PAPER_CHASER_GUIDED_FOLLOW_UP_LATENCY_PROFILE"),
+                default="deep",
+                key="PAPER_CHASER_GUIDED_FOLLOW_UP_LATENCY_PROFILE",
+            ),
+            guided_allow_paid_providers=_parse_env_bool(
+                env,
+                "PAPER_CHASER_GUIDED_ALLOW_PAID_PROVIDERS",
+                True,
+            ),
+            guided_escalation_enabled=_parse_env_bool(
+                env,
+                "PAPER_CHASER_GUIDED_ESCALATION_ENABLED",
+                True,
+            ),
+            guided_escalation_max_passes=_parse_positive_int(
+                env,
+                "PAPER_CHASER_GUIDED_ESCALATION_MAX_PASSES",
+                2,
+            ),
+            guided_escalation_allow_paid_providers=_parse_env_bool(
+                env,
+                "PAPER_CHASER_GUIDED_ESCALATION_ALLOW_PAID_PROVIDERS",
+                True,
+            ),
             agentic_openai_timeout_seconds=_parse_positive_float(
                 env,
                 "PAPER_CHASER_AGENTIC_OPENAI_TIMEOUT_SECONDS",
@@ -419,6 +456,11 @@ class AppSettings(BaseModel):
                 "Guided tool profile is active: list_tools exposes only the low-context "
                 "guided surface while expert tools remain internal/operator-facing."
             )
+            warnings.append(
+                "Guided research uses a server-owned quality-first policy: "
+                f"research={self.guided_research_latency_profile}, follow_up={self.guided_follow_up_latency_profile}, "
+                f"paid providers {'enabled' if self.guided_allow_paid_providers else 'disabled'} when available."
+            )
         return warnings
 
     def _provider_enabled(self, provider: SearchProvider) -> bool:
@@ -473,6 +515,22 @@ def cast_tool_profile(value: str | None) -> ToolProfile:
     if normalized in {"guided", "expert"}:
         return cast(ToolProfile, normalized)
     raise ValueError("PAPER_CHASER_TOOL_PROFILE must be one of: guided, expert")
+
+
+def cast_latency_profile(
+    value: str | None,
+    *,
+    default: LatencyProfile = "deep",
+    key: str = "latencyProfile",
+) -> LatencyProfile:
+    """Normalize a smart-workflow latency profile."""
+
+    if value is None or value == "":
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"fast", "balanced", "deep"}:
+        return cast(LatencyProfile, normalized)
+    raise ValueError(f"{key} must be one of: fast, balanced, deep")
 
 
 def cast_agentic_index_backend(value: str | None) -> AgenticIndexBackend:

@@ -13,6 +13,10 @@ guided reset.
   - `inspect_source`
   - `get_runtime_status`
 - Raw/provider-specific tools remain available through the expert profile.
+- Guided `research` no longer honors client `latencyProfile`; the server owns
+  that policy and currently applies a deep-backed quality-first path.
+- Expert smart tools now default to `latencyProfile=deep`; `balanced` is the
+  lower-latency fallback and `fast` is for smoke or debug use only.
 
 ## Why This Is Breaking
 
@@ -33,6 +37,9 @@ environments even though the server still supports those tools in expert mode.
 - Use `resolve_reference` for citation/identifier normalization.
 - Expect exact DOI, arXiv, and supported paper URLs to resolve before fuzzy citation repair.
 - Treat `abstained` and `needs_disambiguation` as intended safe outcomes.
+- Expect guided responses to surface `executionProvenance`, and expect
+  ambiguous session/source flows to return `sessionResolution` and
+  `sourceResolution` instead of raw exceptions.
 
 ### 2) Opt Into Expert Surface
 
@@ -46,16 +53,22 @@ environments even though the server still supports those tools in expert mode.
 ## Contract Changes To Handle
 
 - Guided `research` returns explicit trust and control fields:
-  - `status`: `succeeded|partial|needs_disambiguation|abstained|failed`
-  - `verifiedFindings`, `sources`, `unverifiedLeads`, `evidenceGaps`,
-    `trustSummary`, `failureSummary`, `resultMeaning`, `nextActions`
+  - `resultStatus`: `succeeded|partial|needs_disambiguation|abstained|failed`
+  - `answerability`, `routingSummary`, `coverageSummary`, `evidence`, `leads`,
+    `evidenceGaps`, `failureSummary`, `nextActions`, `executionProvenance`
 - Guided follow-up returns explicit answer gating:
   - `answerStatus`: `answered|abstained|insufficient_evidence`
   - `answer` is `null` when not safely answerable.
+  - ambiguity and reuse state are surfaced through `sessionResolution`
+- Guided source inspection now returns structured `sourceResolution` details on
+  ambiguity instead of failing with a raw `ValueError`.
 - Runtime truth is now expected to include:
   - `effectiveProfile`
   - `configuredSmartProvider`
   - `activeSmartProvider`
+  - `guidedPolicy`
+  - `guidedResearchLatencyProfile`
+  - `guidedFollowUpLatencyProfile`
   - where `activeSmartProvider` means the latest effective execution path, including deterministic fallback
   - internally consistent active/disabled provider sets.
 
@@ -63,9 +76,8 @@ environments even though the server still supports those tools in expert mode.
 
 - Validate both profile contracts in CI:
   - guided: only guided tools are advertised
-  - expert: the expert-visible surface is advertised; under default expert
-    settings with disabled-tool hiding off, that is typically the broadest
-    expert surface
+  - expert: the intended expert-visible validation subset is advertised and
+    behaves consistently with the expert docs for that workflow configuration
 - Run fixture-based acceptance checks for:
   - low-context guided success
   - safe abstention over plausible garbage

@@ -117,16 +117,22 @@ STRONG_REGULATORY_TITLE_BLOCKERS = {
     "rulemaking",
 }
 REGULATORY_QUERY_TERMS = {
+    "agency guidance",
     "biological opinion",
     "cfr",
+    "clinical decision support",
     "code of federal regulations",
     "critical habitat",
     "ecos",
     "esa",
+    "fda",
     "final rule",
+    "food and drug administration",
     "federal register",
     "five-year review",
     "five year review",
+    "guidance",
+    "guidance for industry",
     "incidental take",
     "listing status",
     "listing history",
@@ -364,6 +370,10 @@ def _strong_regulatory_signal(normalized_query: str, focus: str | None = None) -
         return True
     if re.search(r"\b\d+\s*(?:cfr|f\.?\s*r\.?)\b", combined):
         return True
+    if "guidance" in combined and any(
+        marker in combined for marker in ("fda", "food and drug administration", "agency", "guidance for industry")
+    ):
+        return True
     return bool(re.search(r"\b\d{4}-\d{4,6}\b", combined))
 
 
@@ -477,7 +487,7 @@ async def classify_query(
         heuristic_override_confidence: Literal["high", "medium", "low"] = "medium"
         heuristic_rationale = ""
         known_item_override = strong_known_item_signal or (
-            (citation_like_signal or title_like_signal) and not strong_regulatory_signal
+            (citation_like_signal or title_like_signal) and not strong_regulatory_signal and not regulatory_signal
         )
         if known_item_override:
             heuristic_override = "known_item"

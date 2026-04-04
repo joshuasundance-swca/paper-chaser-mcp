@@ -153,7 +153,13 @@ OpenAccessRoute = Literal[
     "unknown",
 ]
 LikelyCompleteness = Literal["likely_complete", "partial", "unknown", "incomplete"]
-FailureOutcome = Literal["total_failure", "partial_success", "fallback_success", "no_failure"]
+FailureOutcome = Literal[
+    "total_failure",
+    "partial_success",
+    "fallback_success",
+    "no_failure",
+    "needs_clarification",
+]
 
 
 class CitationRecord(ApiModel):
@@ -217,6 +223,111 @@ class FailureSummary(ApiModel):
     recommended_next_action: str | None = Field(default=None, alias="recommendedNextAction")
 
 
+class NormalizationRepair(ApiModel):
+    """One guided-input normalization repair applied before tool execution."""
+
+    field: str
+    from_value: str = Field(default="", alias="from")
+    to_value: str = Field(default="", alias="to")
+    reason: str
+
+
+class InputNormalization(ApiModel):
+    """Structured record of guided-input normalization and warnings."""
+
+    normalized_query: str | None = Field(default=None, alias="normalizedQuery")
+    normalized_focus: str | None = Field(default=None, alias="normalizedFocus")
+    normalized_venue: str | None = Field(default=None, alias="normalizedVenue")
+    normalized_year: str | None = Field(default=None, alias="normalizedYear")
+    normalized_search_session_id: str | None = Field(default=None, alias="normalizedSearchSessionId")
+    normalized_question: str | None = Field(default=None, alias="normalizedQuestion")
+    normalized_source_id: str | None = Field(default=None, alias="normalizedSourceId")
+    repairs: list[NormalizationRepair] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class MachineFailure(ApiModel):
+    """Structured machine-failure payload for guided wrappers."""
+
+    category: str
+    error_type: str = Field(alias="errorType")
+    error: str
+    retryable: bool = True
+    best_next_internal_action: str | None = Field(default=None, alias="bestNextInternalAction")
+
+
+class SourceResolution(ApiModel):
+    """Resolution metadata for guided source inspection."""
+
+    requested_source_id: str | None = Field(default=None, alias="requestedSourceId")
+    resolved_source_id: str | None = Field(default=None, alias="resolvedSourceId")
+    match_type: str | None = Field(default=None, alias="matchType")
+    available_source_ids: list[str] = Field(default_factory=list, alias="availableSourceIds")
+
+
+class SessionCandidate(ApiModel):
+    """Compact candidate session record used for guided disambiguation."""
+
+    search_session_id: str = Field(alias="searchSessionId")
+    source_tool: str = Field(alias="sourceTool")
+    query: str | None = None
+    summary: str | None = None
+    age_seconds: int = Field(default=0, alias="ageSeconds")
+    source_count: int = Field(default=0, alias="sourceCount")
+
+
+class SessionResolution(ApiModel):
+    """How the guided wrapper resolved or failed to resolve searchSessionId."""
+
+    requested_search_session_id: str | None = Field(default=None, alias="requestedSearchSessionId")
+    resolved_search_session_id: str | None = Field(default=None, alias="resolvedSearchSessionId")
+    resolution_mode: str = Field(alias="resolutionMode")
+    warnings: list[str] = Field(default_factory=list)
+    candidates: list[SessionCandidate] = Field(default_factory=list)
+
+
+class GuidedExecutionProvenance(ApiModel):
+    """Compact guided-facing explanation of how the server produced a result."""
+
+    execution_mode: str = Field(alias="executionMode")
+    answer_source: str | None = Field(default=None, alias="answerSource")
+    server_policy_applied: str = Field(alias="serverPolicyApplied")
+    latency_profile_applied: str | None = Field(default=None, alias="latencyProfileApplied")
+    allow_paid_providers: bool | None = Field(default=None, alias="allowPaidProviders")
+    provider_budget_applied: dict[str, Any] = Field(default_factory=dict, alias="providerBudgetApplied")
+    configured_smart_provider: str | None = Field(default=None, alias="configuredSmartProvider")
+    active_smart_provider: str | None = Field(default=None, alias="activeSmartProvider")
+    deterministic_fallback_used: bool = Field(default=False, alias="deterministicFallbackUsed")
+    escalation_attempted: bool = Field(default=False, alias="escalationAttempted")
+    escalation_reason: str | None = Field(default=None, alias="escalationReason")
+    passes_run: int = Field(default=0, alias="passesRun")
+    pass_modes: list[str] = Field(default_factory=list, alias="passModes")
+
+
+class AbstentionDetails(ApiModel):
+    """Actionable rationale for guided abstention or insufficient-evidence states."""
+
+    category: str
+    reason: str
+    inspectable_source_count: int = Field(default=0, alias="inspectableSourceCount")
+    on_topic_source_count: int = Field(default=0, alias="onTopicSourceCount")
+    weak_match_count: int = Field(default=0, alias="weakMatchCount")
+    off_topic_count: int = Field(default=0, alias="offTopicCount")
+    can_inspect_sources: bool = Field(default=False, alias="canInspectSources")
+    refinement_hints: list[str] = Field(default_factory=list, alias="refinementHints")
+
+
+class GuidedResultState(ApiModel):
+    """Compact guided-result state used by the guided wrappers."""
+
+    status: str
+    groundedness: str
+    has_inspectable_sources: bool = Field(default=False, alias="hasInspectableSources")
+    can_answer_follow_up: bool = Field(default=False, alias="canAnswerFollowUp")
+    best_next_internal_action: str = Field(alias="bestNextInternalAction")
+    missing_evidence_type: str = Field(alias="missingEvidenceType")
+
+
 class RuntimeSummary(ApiModel):
     """Effective runtime state for debugging and support."""
 
@@ -231,6 +342,16 @@ class RuntimeSummary(ApiModel):
     tools_hidden: bool = Field(default=False, alias="toolsHidden")
     session_ttl_seconds: int | None = Field(default=None, alias="sessionTtlSeconds")
     embeddings_enabled: bool | None = Field(default=None, alias="embeddingsEnabled")
+    guided_policy: str | None = Field(default=None, alias="guidedPolicy")
+    guided_research_latency_profile: str | None = Field(default=None, alias="guidedResearchLatencyProfile")
+    guided_follow_up_latency_profile: str | None = Field(default=None, alias="guidedFollowUpLatencyProfile")
+    guided_allow_paid_providers: bool | None = Field(default=None, alias="guidedAllowPaidProviders")
+    guided_escalation_enabled: bool | None = Field(default=None, alias="guidedEscalationEnabled")
+    guided_escalation_max_passes: int | None = Field(default=None, alias="guidedEscalationMaxPasses")
+    guided_escalation_allow_paid_providers: bool | None = Field(
+        default=None,
+        alias="guidedEscalationAllowPaidProviders",
+    )
     version: str | None = None
     warnings: list[str] = Field(default_factory=list)
 

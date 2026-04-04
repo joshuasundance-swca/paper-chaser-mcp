@@ -351,7 +351,8 @@ def test_github_copilot_instructions_align_with_repo_workflow_docs() -> None:
     assert "resolve_reference` for DOI/arXiv/URL/citation/reference cleanup" in instructions
     assert "search_papers_bulk` is not a generic" in instructions
     assert "PAPER_CHASER_TOOL_PROFILE=expert" in instructions
-    assert "unverifiedLeads" in instructions
+    assert "`leads` separate from `evidence`" in instructions
+    assert "Legacy `unverifiedLeads` and" in instructions
     assert "verifiedFindings" in instructions
     assert "not a generic" in instructions
     assert "provider-specific tool contracts honest" in instructions
@@ -364,7 +365,11 @@ def test_server_instructions_surface_continuation_and_schema_cues() -> None:
     instructions = server.SERVER_INSTRUCTIONS
     normalized_instructions = " ".join(instructions.split())
 
-    assert "CONCEPT-LEVEL DISCOVERY / REVIEW" in instructions
+    assert "DEFAULT GUIDED RESEARCH" in instructions
+    assert "follow_up_research" in instructions
+    assert "resolve_reference" in instructions
+    assert "inspect_source" in instructions
+    assert "guidedPolicy" in instructions
     assert "search_papers_smart" in instructions
     assert "resolve_citation" in instructions
     assert "ask_result_set" in instructions
@@ -383,6 +388,7 @@ def test_server_instructions_surface_continuation_and_schema_cues() -> None:
     assert "*_openalex tools" in instructions
     assert "agentic UX review loops" in instructions
     assert "reproduction-ready issues" in instructions
+    assert "evidence/leads/routingSummary/coverageSummary/evidenceGaps" in instructions
 
 
 @pytest.mark.asyncio
@@ -399,7 +405,8 @@ async def test_agent_workflow_resource_mentions_pivots_and_provider_contracts() 
     assert "inspect_source" in guide_text
     assert "get_runtime_status" in guide_text
     assert "searchSessionId" in guide_text
-    assert "trustSummary" in guide_text
+    assert "answerability" in guide_text
+    assert "routingSummary" in guide_text
     assert "abstains" in guide_text or "abstain" in guide_text
     assert "Expert/operator-only fallback" in guide_text
     assert "search_papers_smart" in guide_text

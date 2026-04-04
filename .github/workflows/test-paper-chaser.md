@@ -67,6 +67,13 @@ mcp-servers:
       PAPER_CHASER_ENABLE_AGENTIC: "true"
       PAPER_CHASER_TOOL_PROFILE: "${{ inputs.tool_profile }}"
       PAPER_CHASER_HIDE_DISABLED_TOOLS: "true"
+      PAPER_CHASER_DISABLE_EMBEDDINGS: "true"
+      PAPER_CHASER_GUIDED_RESEARCH_LATENCY_PROFILE: "deep"
+      PAPER_CHASER_GUIDED_FOLLOW_UP_LATENCY_PROFILE: "deep"
+      PAPER_CHASER_GUIDED_ALLOW_PAID_PROVIDERS: "true"
+      PAPER_CHASER_GUIDED_ESCALATION_ENABLED: "true"
+      PAPER_CHASER_GUIDED_ESCALATION_MAX_PASSES: "2"
+      PAPER_CHASER_GUIDED_ESCALATION_ALLOW_PAID_PROVIDERS: "true"
     allowed:
       - research
       - follow_up_research
@@ -164,7 +171,13 @@ important as functional pass/fail results.
    safe abstention over plausible garbage.
 5. Confirm expert-only tools stay intentional and clearly secondary to the
    guided path.
-6. **Critically evaluate agent UX**: identify every friction point,
+6. Confirm the guided wrappers surface actionable decision metadata such as
+  `executionProvenance`, `sessionResolution`, `sourceResolution`, and
+  `abstentionDetails`.
+7. Confirm disabled embeddings do not regress the guided contract. Embeddings
+  are intentionally off by default in this repository and that is not a defect
+  for this workflow.
+8. **Critically evaluate agent UX**: identify every friction point,
    unnecessary round trip, missing feature, confusing field name, or dead-end
    response that degrades the experience.
 
@@ -194,7 +207,8 @@ important as functional pass/fail results.
      context above. If the mode is blank for any reason, use `smoke`.
    - Call `get_runtime_status()` before deeper probes and record
      `runtimeSummary.effectiveProfile`, `configuredSmartProvider`,
-     `activeSmartProvider`, and any warnings.
+     `activeSmartProvider`, `guidedPolicy`,
+     `guidedResearchLatencyProfile`, `guidedFollowUpLatencyProfile`, and any warnings.
    - If the effective profile differs from the requested tool profile, flag it
      as a defect immediately.
    - If a focus prompt is present, note which tools or paths it most likely
@@ -207,8 +221,9 @@ important as functional pass/fail results.
 
 2. **Guided discovery** (all modes)
    - Call `research(query="graph neural networks", limit=5)`.
-   - Record `status`, `searchSessionId`, `summary`, `trustSummary`, the first
-     few `sources`, and any `unverifiedLeads`.
+   - Record `resultStatus`, `answerability`, `searchSessionId`, `summary`,
+     `routingSummary`, `coverageSummary`, the first few `evidence`, any
+     `leads`, and `executionProvenance`.
    - Verify the response gives a clear next step through `nextActions` or
      `clarification`.
    - **UX check**: Could a low-context agent understand what to do next from the
@@ -217,17 +232,18 @@ important as functional pass/fail results.
 3. **Guided grounded follow-up** (all modes)
    - Call `follow_up_research(searchSessionId=..., question="What evaluation tradeoffs or benchmark limitations show up here?")`.
    - Record `answerStatus`, the answer body if present, any unsupported asks,
-     and `nextActions`.
+  `sessionResolution`, and `nextActions`.
    - Confirm weak evidence produces an explicit abstention or
      insufficient-evidence response rather than answer-shaped filler.
    - **UX check**: Did this reduce round trips compared with dropping back into
      raw tools, or did it still require too much manual interpretation?
 
 4. **Source-level audit** (all modes)
-   - Call `inspect_source(searchSessionId=..., sourceId=...)` using one source
-     from the guided result.
+   - Call `inspect_source(searchSessionId=..., evidenceId=...)` using one source
+     from the guided result when possible. `sourceId` remains acceptable as a
+     compatibility fallback.
    - Record `verificationStatus`, `topicalRelevance`, `canonicalUrl`,
-     `retrievedUrl`, and any direct-read recommendations.
+     `retrievedUrl`, `sourceResolution`, and any direct-read recommendations.
    - **UX check**: Is it obvious how to inspect one source before citing it, or
      does the user need hidden knowledge about source ids and provenance fields?
 
@@ -244,10 +260,12 @@ important as functional pass/fail results.
    - Call `research(query="regulatory history of California condor under 50 CFR 17.95", limit=5)`.
    - Confirm the response prefers trustworthy primary-source behavior or safe
      abstention.
+   - Confirm off-topic or weak material stays in `leads` rather than grounded
+     `evidence`.
    - Unrelated wildlife notices must not appear as verified findings or
      timeline events.
-   - If `unverifiedLeads` are present, verify they are clearly separated from
-     trusted findings.
+   - If compatibility `unverifiedLeads` are present, verify they stay aligned
+     with `leads` and remain clearly separated from grounded support.
    - **UX check**: Does the response make the regulatory confidence state
      obvious, or could a low-context user mistake unverified leads for verified
      evidence?
@@ -256,6 +274,7 @@ important as functional pass/fail results.
    - Call `research(query="asdkfjhasdkjfh research paper nonsense", limit=3)`.
    - Verify the server responds cleanly with an abstention, partial, or empty
      evidence payload rather than malformed metadata or an unhelpful failure.
+   - Record `abstentionDetails` when present and verify the recovery hints are actionable.
    - **UX check**: Does the empty-result payload suggest a clear recovery path,
      or does it just stop?
 
@@ -324,6 +343,9 @@ important as functional pass/fail results.
       body contains a matching `agent-loop-key` comment for this failure. If a
       matching issue exists, add a comment with the latest repro details and
       increment the attempt counter instead of opening a duplicate.
+     - Do not file an issue just because embeddings are disabled. That default is
+       intentional for this repository unless a workflow run demonstrates a
+       concrete guided-contract failure caused by it.
     - When creating a new issue, include the following markers at the top of the
       body so the agentic loop can track convergence (no code block - paste
       these HTML comments directly into the issue body):

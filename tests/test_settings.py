@@ -82,6 +82,12 @@ def test_app_settings_serpapi_disabled_by_default() -> None:
     assert settings.crossref_mailto is None
     assert settings.unpaywall_email is None
     assert settings.disable_embeddings is True
+    assert settings.guided_research_latency_profile == "deep"
+    assert settings.guided_follow_up_latency_profile == "deep"
+    assert settings.guided_allow_paid_providers is True
+    assert settings.guided_escalation_enabled is True
+    assert settings.guided_escalation_max_passes == 2
+    assert settings.guided_escalation_allow_paid_providers is True
     assert settings.agentic_openai_timeout_seconds == 30.0
     assert settings.crossref_timeout_seconds == 30.0
     assert settings.unpaywall_timeout_seconds == 30.0
@@ -108,6 +114,26 @@ def test_app_settings_serpapi_enabled_via_env() -> None:
     )
     assert settings.enable_serpapi is True
     assert settings.serpapi_api_key == "my-api-key"
+
+
+def test_app_settings_parses_guided_policy_overrides() -> None:
+    settings = AppSettings.from_env(
+        {
+            "PAPER_CHASER_GUIDED_RESEARCH_LATENCY_PROFILE": "balanced",
+            "PAPER_CHASER_GUIDED_FOLLOW_UP_LATENCY_PROFILE": "fast",
+            "PAPER_CHASER_GUIDED_ALLOW_PAID_PROVIDERS": "false",
+            "PAPER_CHASER_GUIDED_ESCALATION_ENABLED": "false",
+            "PAPER_CHASER_GUIDED_ESCALATION_MAX_PASSES": "3",
+            "PAPER_CHASER_GUIDED_ESCALATION_ALLOW_PAID_PROVIDERS": "false",
+        }
+    )
+
+    assert settings.guided_research_latency_profile == "balanced"
+    assert settings.guided_follow_up_latency_profile == "fast"
+    assert settings.guided_allow_paid_providers is False
+    assert settings.guided_escalation_enabled is False
+    assert settings.guided_escalation_max_passes == 3
+    assert settings.guided_escalation_allow_paid_providers is False
 
 
 def test_app_settings_scholarapi_enabled_via_env() -> None:

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from paper_chaser_mcp.models.tools import TOOL_INPUT_MODELS
+
 
 def test_provider_benchmark_corpus_covers_required_scenarios() -> None:
     fixture_path = Path(__file__).parent / "fixtures" / "provider_benchmark_corpus.json"
@@ -48,3 +50,5 @@ def test_provider_benchmark_corpus_covers_required_scenarios() -> None:
         assert case["tool"]
         assert isinstance(case["inputs"], dict)
         assert isinstance(case["expected"], dict)
+        assert case["tool"] in TOOL_INPUT_MODELS
+        TOOL_INPUT_MODELS[case["tool"]].model_validate(case["inputs"])

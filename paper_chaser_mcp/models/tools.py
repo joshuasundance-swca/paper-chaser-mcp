@@ -161,11 +161,16 @@ class ResearchArgs(ToolArgsModel):
     year: str | None = Field(default=None, description="Optional year or year range hint, e.g. 2022:2025.")
     venue: str | None = Field(default=None, description="Optional venue hint to narrow the request.")
     focus: str | None = Field(default=None, description="Optional focus hint to steer the research goal.")
-    latency_profile: LatencyProfile = Field(
-        default="balanced",
-        alias="latencyProfile",
-        description="Research depth profile: fast, balanced, or deep. Default is balanced.",
-    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_deprecated_latency_profile(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        normalized.pop("latencyProfile", None)
+        normalized.pop("latency_profile", None)
+        return normalized
 
     @field_validator("limit", mode="before")
     @classmethod
@@ -1140,12 +1145,12 @@ class SmartSearchPapersArgs(ToolArgsModel):
         description="Optional subtopic, method, or application focus hint.",
     )
     latency_profile: LatencyProfile = Field(
-        default="balanced",
+        default="deep",
         alias="latencyProfile",
         description=(
-            "Latency/cost control: fast minimizes fanout and model work, "
-            "balanced preserves the current default behavior, and deep enables "
-            "controlled multi-provider expansion."
+            "Quality-first search depth control: deep is the default for the best "
+            "smart-search coverage, balanced trades a bit of quality for lower latency, "
+            "and fast is intended for smoke tests or interactive debugging only."
         ),
     )
     provider_budget: ProviderBudgetArgs | None = Field(
@@ -1187,9 +1192,12 @@ class AskResultSetArgs(ToolArgsModel):
         description="Answer style: grounded QA, claim checking, or comparison.",
     )
     latency_profile: LatencyProfile = Field(
-        default="balanced",
+        default="deep",
         alias="latencyProfile",
-        description="Latency/cost control for grounded answer synthesis.",
+        description=(
+            "Quality-first control for grounded answer synthesis. Deep is the default, "
+            "balanced lowers latency, and fast is for smoke tests only."
+        ),
     )
 
     @field_validator("top_k", mode="before")
@@ -1209,9 +1217,12 @@ class MapResearchLandscapeArgs(ToolArgsModel):
         description="Maximum number of themes to return (default 5, max 5).",
     )
     latency_profile: LatencyProfile = Field(
-        default="balanced",
+        default="deep",
         alias="latencyProfile",
-        description="Latency/cost control for theme labeling and summarization.",
+        description=(
+            "Quality-first control for theme labeling and summarization. Deep is the default, "
+            "balanced lowers latency, and fast is for smoke tests only."
+        ),
     )
 
     @field_validator("max_themes", mode="before")
@@ -1251,9 +1262,12 @@ class ExpandResearchGraphArgs(ToolArgsModel):
         description="Max frontier items to fetch per seed (default 25, max 50).",
     )
     latency_profile: LatencyProfile = Field(
-        default="balanced",
+        default="deep",
         alias="latencyProfile",
-        description="Latency/cost control for graph ranking and scoring.",
+        description=(
+            "Quality-first control for graph ranking and scoring. Deep is the default, "
+            "balanced lowers latency, and fast is for smoke tests only."
+        ),
     )
 
     @field_validator("hops", mode="before")

@@ -29,9 +29,11 @@ metadata.
 - Make **abstention safe and explicit**. Weak evidence should produce
   `abstained`, `insufficient_evidence`, or `needs_disambiguation`, not
   answer-shaped filler.
-- Keep **`unverifiedLeads` separate from verified evidence**. Weak, filtered, or
-  off-topic items may be useful for auditability, but they must not quietly
-  re-enter `verifiedFindings` or trusted summaries.
+- Keep **`leads` separate from `evidence`**. Weak, filtered, or off-topic items
+  may be useful for auditability, but they must not quietly re-enter grounded
+  evidence or trusted summaries. Legacy `unverifiedLeads` and
+  `verifiedFindings` should be treated as compatibility views, not the primary
+  contract.
 - Keep **runtime truth internally consistent**. The top-level runtime summary,
   active/disabled provider sets, and smart-provider fields must agree with the
   detailed provider rows.
