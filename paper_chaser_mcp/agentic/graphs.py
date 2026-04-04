@@ -3810,9 +3810,7 @@ def _classify_topical_relevance(
     # Require a multi-token phrase match (facet) for the standard threshold, or a
     # strict majority of query terms when no phrase match exists.  A single-token
     # title hit with low similarity is a weak signal, not grounded evidence.
-    if has_title_signal and (
-        (has_facet_signal and query_similarity >= 0.25) or query_similarity > 0.5
-    ):
+    if has_title_signal and ((has_facet_signal and query_similarity >= 0.25) or query_similarity > 0.5):
         return "on_topic"
     if query_similarity < 0.12 or not has_title_or_body_signal:
         return "off_topic"

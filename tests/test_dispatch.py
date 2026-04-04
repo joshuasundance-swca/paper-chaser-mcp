@@ -3273,49 +3273,64 @@ def test_topical_relevance_requires_facet_or_majority_coverage_for_on_topic() ->
     fn = dispatch_module._topical_relevance_from_signals  # type: ignore[attr-defined]
 
     # 1. No facet match, similarity exactly at the old threshold boundary (0.5) → weak_match
-    assert fn(
-        query_similarity=0.5,
-        title_facet_coverage=0.0,
-        title_anchor_coverage=0.5,
-        query_facet_coverage=0.0,
-        query_anchor_coverage=0.5,
-    ) == "weak_match"
+    assert (
+        fn(
+            query_similarity=0.5,
+            title_facet_coverage=0.0,
+            title_anchor_coverage=0.5,
+            query_facet_coverage=0.0,
+            query_anchor_coverage=0.5,
+        )
+        == "weak_match"
+    )
 
     # 2. No facet match, similarity strictly above the new threshold → on_topic
-    assert fn(
-        query_similarity=0.6,
-        title_facet_coverage=0.0,
-        title_anchor_coverage=0.6,
-        query_facet_coverage=0.0,
-        query_anchor_coverage=0.6,
-    ) == "on_topic"
+    assert (
+        fn(
+            query_similarity=0.6,
+            title_facet_coverage=0.0,
+            title_anchor_coverage=0.6,
+            query_facet_coverage=0.0,
+            query_anchor_coverage=0.6,
+        )
+        == "on_topic"
+    )
 
     # 3. Facet match present, standard low threshold still reaches on_topic
-    assert fn(
-        query_similarity=0.3,
-        title_facet_coverage=0.5,
-        title_anchor_coverage=0.5,
-        query_facet_coverage=0.0,
-        query_anchor_coverage=0.5,
-    ) == "on_topic"
+    assert (
+        fn(
+            query_similarity=0.3,
+            title_facet_coverage=0.5,
+            title_anchor_coverage=0.5,
+            query_facet_coverage=0.0,
+            query_anchor_coverage=0.5,
+        )
+        == "on_topic"
+    )
 
     # 4. Similarity below off_topic floor → off_topic regardless of anchor
-    assert fn(
-        query_similarity=0.1,
-        title_facet_coverage=0.0,
-        title_anchor_coverage=0.5,
-        query_facet_coverage=0.0,
-        query_anchor_coverage=0.5,
-    ) == "off_topic"
+    assert (
+        fn(
+            query_similarity=0.1,
+            title_facet_coverage=0.0,
+            title_anchor_coverage=0.5,
+            query_facet_coverage=0.0,
+            query_anchor_coverage=0.5,
+        )
+        == "off_topic"
+    )
 
     # 5. No title or body signal at all → off_topic
-    assert fn(
-        query_similarity=0.4,
-        title_facet_coverage=0.0,
-        title_anchor_coverage=0.0,
-        query_facet_coverage=0.0,
-        query_anchor_coverage=0.0,
-    ) == "off_topic"
+    assert (
+        fn(
+            query_similarity=0.4,
+            title_facet_coverage=0.0,
+            title_anchor_coverage=0.0,
+            query_facet_coverage=0.0,
+            query_anchor_coverage=0.0,
+        )
+        == "off_topic"
+    )
 
 
 def test_paper_topical_relevance_single_token_match_without_phrase_is_weak_match() -> None:
@@ -3356,9 +3371,7 @@ def test_paper_topical_relevance_full_phrase_match_is_on_topic() -> None:
             "abstract": "This paper studies temperature, precipitation, and humidity jointly.",
         },
     )
-    assert relevance == "on_topic", (
-        f"Expected 'on_topic' when full phrase tokens appear in title, got {relevance!r}"
-    )
+    assert relevance == "on_topic", f"Expected 'on_topic' when full phrase tokens appear in title, got {relevance!r}"
 
 
 @pytest.mark.asyncio
