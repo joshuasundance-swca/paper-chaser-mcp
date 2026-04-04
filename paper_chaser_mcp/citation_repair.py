@@ -1179,9 +1179,12 @@ def _classify_resolution_confidence(
         return "low"
     gap = best_score - (runner_up_score or 0.0)
     high_signal_fields = {"title", "author", "year"} & set(matched_fields)
+    key_conflicting = {"author", "year", "venue"} & set(conflicting_fields)
     if resolution_strategy.startswith("identifier") and "identifier" in matched_fields:
         return "high"
     if resolution_strategy.endswith("exact_title") and "title" in matched_fields:
+        if len(key_conflicting) >= 2:
+            return "medium"
         return "high"
     if len(high_signal_fields) >= 3 and len(conflicting_fields) <= 1:
         return "high"

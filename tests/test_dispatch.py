@@ -1886,7 +1886,62 @@ async def test_resolve_reference_semantic_scholar_url_reports_resolved_status(mo
 
 
 @pytest.mark.asyncio
-async def test_guided_wrappers_surface_unverified_leads(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_resolve_reference_title_only_match_with_conflicting_author_year_venue_is_needs_disambiguation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: resolve_reference must not report 'resolved' when author/year/venue all conflict."""
+
+    class ConflictingExactTitleClient(RecordingSemanticClient):
+        async def search_papers_match(self, **kwargs: object) -> dict:
+            self.calls.append(("search_papers_match", dict(kwargs)))
+            return {
+                "paperId": "planetary-2021",
+                "title": "Planetary Boundaries",
+                "year": 2021,
+                "venue": "Some Journal 2021",
+                "authors": [{"name": "Vincent Bellinkx"}],
+                "matchFound": True,
+                "matchStrategy": "exact_title",
+                "matchConfidence": "high",
+                "matchedFields": ["title"],
+                "conflictingFields": ["author", "year", "venue"],
+                "candidateCount": 1,
+            }
+
+        async def search_snippets(self, **kwargs: object) -> dict:
+            self.calls.append(("search_snippets", dict(kwargs)))
+            return {"data": []}
+
+        async def search_papers(self, **kwargs: object) -> dict:
+            self.calls.append(("search_papers", dict(kwargs)))
+            return {"total": 0, "offset": 0, "data": []}
+
+    semantic = ConflictingExactTitleClient()
+    monkeypatch.setattr(server, "client", semantic)
+    monkeypatch.setattr(server, "enable_semantic_scholar", True)
+    monkeypatch.setattr(server, "enable_openalex", False)
+    monkeypatch.setattr(server, "enable_core", False)
+    monkeypatch.setattr(server, "enable_arxiv", False)
+    monkeypatch.setattr(server, "enable_serpapi", False)
+
+    payload = _payload(
+        await server.call_tool(
+            "resolve_reference",
+            {"reference": "Rockstrom et al planetary boundaries 2009 Nature 461 472"},
+        )
+    )
+
+    assert payload["status"] == "needs_disambiguation", (
+        "title-only match with conflicting author/year/venue must not be 'resolved'"
+    )
+    assert payload["resolutionConfidence"] != "high", (
+        "title-only match with 3 conflicting key fields must not be high confidence"
+    )
+    # next actions must guide toward research or manual disambiguation
+    assert any("research" in action.lower() or "conflict" in action.lower() for action in payload["nextActions"])
+
+
+
     class _FakeRuntime:
         async def search_papers_smart(self, **kwargs: object) -> dict[str, object]:
             del kwargs
