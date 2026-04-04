@@ -512,6 +512,61 @@ def test_classify_resolution_confidence_identifier_match_remains_high() -> None:
     )
 
 
+def test_classify_resolution_confidence_exact_title_with_two_key_conflicts_is_medium() -> None:
+    # exact_title with 2+ conflicting key fields (author + year) must not return "high"
+    assert (
+        _classify_resolution_confidence(
+            best_score=0.88,
+            runner_up_score=0.0,
+            matched_fields=["title"],
+            conflicting_fields=["author", "year", "venue"],
+            resolution_strategy="exact_title",
+        )
+        == "medium"
+    )
+
+
+def test_classify_resolution_confidence_exact_title_with_one_key_conflict_remains_high() -> None:
+    # exact_title with only one key conflict is still allowed to be "high"
+    assert (
+        _classify_resolution_confidence(
+            best_score=0.88,
+            runner_up_score=0.0,
+            matched_fields=["title", "author"],
+            conflicting_fields=["year"],
+            resolution_strategy="exact_title",
+        )
+        == "high"
+    )
+
+
+def test_classify_resolution_confidence_exact_title_no_conflicts_is_high() -> None:
+    assert (
+        _classify_resolution_confidence(
+            best_score=0.88,
+            runner_up_score=0.0,
+            matched_fields=["title", "author", "year"],
+            conflicting_fields=[],
+            resolution_strategy="exact_title",
+        )
+        == "high"
+    )
+
+
+def test_classify_resolution_confidence_openalex_exact_title_with_two_key_conflicts_is_medium() -> None:
+    # openalex_exact_title strategy shares the same suffix check
+    assert (
+        _classify_resolution_confidence(
+            best_score=0.85,
+            runner_up_score=0.0,
+            matched_fields=["title"],
+            conflicting_fields=["author", "year"],
+            resolution_strategy="openalex_exact_title",
+        )
+        == "medium"
+    )
+
+
 def test_identifier_normalizers_cover_openalex_and_generic_url_branches() -> None:
     assert _normalize_identifier_for_openalex("doi:10.1038/nrn3241", "doi") == "10.1038/nrn3241"
     assert _normalize_identifier_for_openalex("https://openalex.org/W12345", "url") == "W12345"
@@ -519,4 +574,56 @@ def test_identifier_normalizers_cover_openalex_and_generic_url_branches() -> Non
     assert (
         _normalize_identifier_for_semantic_scholar("https://example.org/paper", "url")
         == "URL:https://example.org/paper"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_citation_exact_title_with_conflicting_author_year_venue_downgrades_confidence() -> None:
+    """Regression: exact_title match should not return high confidence when author/year/venue all conflict."""
+
+    class ConflictingExactTitleClient(RecordingSemanticClient):
+        async def search_papers_match(self, **kwargs) -> dict:
+            self.calls.append(("search_papers_match", kwargs))
+            return {
+                "paperId": "planetary-2021",
+                "title": "Planetary Boundaries",
+                "year": 2021,
+                "venue": "Some Journal 2021",
+                "authors": [{"name": "Vincent Bellinkx"}],
+                "matchFound": True,
+                "matchStrategy": "exact_title",
+                "matchConfidence": "high",
+                "matchedFields": ["title"],
+                "conflictingFields": ["author", "year", "venue"],
+                "candidateCount": 1,
+            }
+
+        async def search_snippets(self, **kwargs) -> dict:
+            self.calls.append(("search_snippets", kwargs))
+            return {"data": []}
+
+        async def search_papers(self, **kwargs) -> dict:
+            self.calls.append(("search_papers", kwargs))
+            return {"total": 0, "offset": 0, "data": []}
+
+    semantic = ConflictingExactTitleClient()
+
+    payload = await resolve_citation(
+        citation="Rockstrom et al planetary boundaries 2009 Nature 461 472",
+        max_candidates=3,
+        client=semantic,
+        enable_core=False,
+        enable_semantic_scholar=True,
+        enable_openalex=False,
+        enable_arxiv=False,
+        enable_serpapi=False,
+        core_client=None,
+        openalex_client=None,
+        arxiv_client=None,
+        serpapi_client=None,
+    )
+
+    # With author, year, and venue all conflicting, confidence must not be "high"
+    assert payload["resolutionConfidence"] != "high", (
+        "exact_title match with 3 conflicting key fields must not return high confidence"
     )

@@ -3221,7 +3221,15 @@ async def dispatch_tool(
         if parsed.looks_like_regulatory and best_match is None:
             status = "regulatory_primary_source"
         elif best_match is not None:
-            status = "resolved" if resolution_confidence in {"high", "medium"} else "multiple_candidates"
+            _key_conflict_fields = {"author", "year", "venue"}
+            _best_conflicting = list(best_match.get("conflictingFields") or []) if isinstance(best_match, dict) else []
+            _key_conflict_count = len(_key_conflict_fields & set(_best_conflicting))
+            if resolution_confidence in {"high", "medium"} and _key_conflict_count >= 2:
+                status = "needs_disambiguation"
+            elif resolution_confidence in {"high", "medium"}:
+                status = "resolved"
+            else:
+                status = "multiple_candidates"
         elif alternatives:
             status = "multiple_candidates"
         next_actions: list[str] = []
@@ -3230,6 +3238,12 @@ async def dispatch_tool(
                 "Use research for a full trust-graded regulatory pass.",
                 "If the reference points to an exact CFR citation, keep that citation in the next research query.",
                 "Inspect returned sources before treating the regulatory text as current and settled.",
+            ]
+        elif status == "needs_disambiguation":
+            next_actions = [
+                "The title matched but author, year, or venue conflicts make this result unsafe to cite directly.",
+                "Use research with the title plus author or year to find the correct paper.",
+                "Review the conflicting fields in bestMatch before treating this as a confirmed citation.",
             ]
         elif status in {"resolved", "multiple_candidates"}:
             next_actions = [
