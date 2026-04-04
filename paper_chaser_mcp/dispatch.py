@@ -3217,15 +3217,13 @@ async def dispatch_tool(
             resolution_type = "paper_identifier"
         elif looks_like_citation_query(resolve_args.reference):
             resolution_type = "citation_repair"
-        _key_conflict_fields = {"author", "year", "venue"}
-        _best_conflicting: list[str] = (
-            list(best_match.get("conflictingFields") or []) if isinstance(best_match, dict) else []
-        )
-        _key_conflict_count = len(_key_conflict_fields & set(_best_conflicting))
         status = "no_match"
         if parsed.looks_like_regulatory and best_match is None:
             status = "regulatory_primary_source"
         elif best_match is not None:
+            _key_conflict_fields = {"author", "year", "venue"}
+            _best_conflicting = list(best_match.get("conflictingFields") or []) if isinstance(best_match, dict) else []
+            _key_conflict_count = len(_key_conflict_fields & set(_best_conflicting))
             if resolution_confidence in {"high", "medium"} and _key_conflict_count >= 2:
                 status = "needs_disambiguation"
             elif resolution_confidence in {"high", "medium"}:
