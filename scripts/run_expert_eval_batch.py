@@ -44,15 +44,55 @@ def _load_dotenv(dotenv_path: Path) -> int:
     return loaded
 
 
-def _resolve_placeholders(value: Any, prior_results: dict[str, dict[str, Any]]) -> Any:
+def _prepare_batch_environment(args: argparse.Namespace) -> tuple[str, str]:
+    batch_id = _derive_batch_id(args.scenario_file)
+    run_id = _derive_run_id()
+    os.environ["PAPER_CHASER_TOOL_PROFILE"] = "expert"
+    os.environ.setdefault("PAPER_CHASER_HIDE_DISABLED_TOOLS", "false")
+    os.environ["PAPER_CHASER_EVAL_BATCH_ID"] = batch_id
+    os.environ["PAPER_CHASER_EVAL_RUN_ID"] = run_id
+    if args.capture_path:
+        os.environ["PAPER_CHASER_ENABLE_EVAL_TRACE_CAPTURE"] = "true"
+        os.environ["PAPER_CHASER_EVAL_TRACE_PATH"] = args.capture_path
+    return batch_id, run_id
+
+
+def _resolve_placeholders(value: Any, prior_results: dict[str, dict[str, Any]], *, scenario_name: str) -> Any:
     if isinstance(value, str) and value.startswith("$result."):
-        _, scenario_name, field_name = value.split(".", 2)
-        return (prior_results.get(scenario_name) or {}).get(field_name)
+        _, referenced_scenario, field_name = value.split(".", 2)
+        prior_result = prior_results.get(referenced_scenario) or {}
+        resolved = prior_result.get(field_name)
+        if resolved is None:
+            available_fields = sorted(str(key) for key in prior_result.keys())
+            available_text = ", ".join(available_fields) if available_fields else "<none>"
+            raise RuntimeError(
+                (
+                    f"Scenario '{scenario_name}' references placeholder {value!r}, but scenario "
+                    f"'{referenced_scenario}' did not produce a non-null field '{field_name}'. "
+                    f"Available fields: {available_text}."
+                )
+            )
+        return resolved
     if isinstance(value, dict):
-        return {key: _resolve_placeholders(child, prior_results) for key, child in value.items()}
+        return {
+            key: _resolve_placeholders(child, prior_results, scenario_name=scenario_name)
+            for key, child in value.items()
+        }
     if isinstance(value, list):
-        return [_resolve_placeholders(child, prior_results) for child in value]
+        return [_resolve_placeholders(child, prior_results, scenario_name=scenario_name) for child in value]
     return value
+
+
+def _raise_for_structured_tool_error(name: str, tool: str, result: Any) -> None:
+    if not isinstance(result, dict):
+        return
+    error = str(result.get("error") or "").strip()
+    if not error:
+        return
+    message = str(result.get("message") or "No message provided.").strip()
+    fallback_tools = result.get("fallbackTools") or []
+    fallback_text = f" Fallback tools: {', '.join(str(item) for item in fallback_tools)}." if fallback_tools else ""
+    raise RuntimeError(f"Scenario '{name}' using tool '{tool}' failed with {error}: {message}.{fallback_text}")
 
 
 async def _run_batch(args: argparse.Namespace) -> dict[str, Any]:
@@ -65,8 +105,9 @@ async def _run_batch(args: argparse.Namespace) -> dict[str, Any]:
     for scenario in scenarios:
         name = str(scenario.get("name") or "").strip()
         tool = str(scenario.get("tool") or "").strip()
-        arguments = _resolve_placeholders(scenario.get("arguments") or {}, prior_results)
+        arguments = _resolve_placeholders(scenario.get("arguments") or {}, prior_results, scenario_name=name)
         result = await _execute_tool(tool, arguments, ctx=None)
+        _raise_for_structured_tool_error(name, tool, result)
         prior_results[name] = result if isinstance(result, dict) else {"value": result}
         runs.append({"name": name, "tool": tool, "arguments": arguments, "result": result})
     return {"runs": runs}
@@ -118,13 +159,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     _load_dotenv(Path(args.dotenv_path))
-    batch_id = _derive_batch_id(args.scenario_file)
-    run_id = _derive_run_id()
-    os.environ["PAPER_CHASER_EVAL_BATCH_ID"] = batch_id
-    os.environ["PAPER_CHASER_EVAL_RUN_ID"] = run_id
-    if args.capture_path:
-        os.environ["PAPER_CHASER_ENABLE_EVAL_TRACE_CAPTURE"] = "true"
-        os.environ["PAPER_CHASER_EVAL_TRACE_PATH"] = args.capture_path
+    batch_id, run_id = _prepare_batch_environment(args)
     report = asyncio.run(_run_batch(args))
     generated_at = int(time.time() * 1000)
     report = {

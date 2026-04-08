@@ -1,0 +1,176 @@
+{
+  "profiles": {
+    "balanced-science-safe": {
+      "description": "Balanced cross-domain bootstrap with safe autopilot workflow handoff.",
+      "generation": {
+        "seedPreset": "balanced-science",
+        "taxonomyPreset": "balanced-science",
+        "latencyProfile": "balanced",
+        "aiPruneMode": "rewrite-or-drop",
+        "aiPruneBelowScore": 35.0,
+        "domainBalanceMode": "round-robin",
+        "domainBalanceMaxShare": 0.4,
+        "minQualityScore": 30.0,
+        "maxTopics": 25,
+        "includeOriginal": true,
+        "emitFollowUp": true
+      },
+      "workflow": {
+        "reviewMode": "yolo",
+        "autopilotPolicy": "safe",
+        "thresholds": {
+          "safeMinAverageQuality": 45.0,
+          "safeMinTopicCount": 5,
+          "safeMinFamilyCount": 4,
+          "safeMinIntentCount": 2,
+          "safeMaxFamilyShare": 0.4,
+          "safeMaxRiskWarnings": 0,
+          "safeMaxFamilyDisagreementCount": 0,
+          "safeMaxRewrittenShare": 0.35,
+          "hardBlockerMinTopicCount": 5,
+          "hardBlockerMaxFamilyShare": 0.7,
+          "hardBlockerMaxFamilyDisagreementCount": 3,
+          "hardBlockerMaxRewrittenShare": 0.5
+        },
+        "matrixPreset": ["cross-provider-lower-bound"],
+        "launchMatrixViewer": false
+      },
+      "holdoutSeedFile": "topic-seeds.holdout.sample.txt"
+    },
+    "environmental-consulting-review": {
+      "description": "Environmental consulting bootstrap with review-gated workflow handoff.",
+      "generation": {
+        "seedPreset": "environmental-consulting",
+        "taxonomyPreset": "environmental-consulting",
+        "latencyProfile": "balanced",
+        "aiPruneMode": "rewrite",
+        "aiPruneBelowScore": 35.0,
+        "domainBalanceMode": "round-robin",
+        "domainBalanceMaxShare": 0.45,
+        "minQualityScore": 30.0,
+        "maxTopics": 20,
+        "includeOriginal": true,
+        "emitFollowUp": true
+      },
+      "workflow": {
+        "reviewMode": "ui",
+        "autopilotPolicy": "review",
+        "matrixPreset": ["cross-provider-best"],
+        "launchMatrixViewer": false
+      },
+      "holdoutSeedFile": "topic-seeds.holdout.sample.txt"
+    },
+    "single-seed-exploratory-review": {
+      "description": "Single-seed exploratory bootstrap with review-gated handoff and relaxed safe thresholds for narrow runs.",
+      "generation": {
+        "taxonomyPreset": "balanced-science",
+        "latencyProfile": "balanced",
+        "aiPruneMode": "rewrite-or-drop",
+        "aiPruneBelowScore": 35.0,
+        "domainBalanceMode": "round-robin",
+        "domainBalanceMaxShare": 0.8,
+        "minQualityScore": 30.0,
+        "maxTopics": 10,
+        "includeOriginal": true,
+        "emitFollowUp": true,
+        "singleSeedDiversification": true
+      },
+      "workflow": {
+        "reviewMode": "yolo",
+        "autopilotPolicy": "review",
+        "thresholds": {
+          "safeMinAverageQuality": 45.0,
+          "safeMinTopicCount": 3,
+          "safeMinFamilyCount": 1,
+          "safeMinIntentCount": 1,
+          "safeMaxFamilyShare": 1.0,
+          "safeMaxRiskWarnings": 2,
+          "safeMaxFamilyDisagreementCount": 0,
+          "safeMaxRewrittenShare": 0.5,
+          "hardBlockerMinTopicCount": 3,
+          "hardBlockerMaxFamilyShare": 1.0,
+          "hardBlockerMaxFamilyDisagreementCount": 1,
+          "hardBlockerMaxRewrittenShare": 0.5
+        },
+        "matrixPreset": ["cross-provider-best"],
+        "launchMatrixViewer": false
+      },
+      "holdoutSeedFile": "topic-seeds.holdout.sample.txt"
+    },
+    "single-seed-exploratory-safe": {
+      "description": "Single-seed exploratory bootstrap with safe policy and relaxed blocker and warning thresholds.",
+      "generation": {
+        "taxonomyPreset": "balanced-science",
+        "latencyProfile": "balanced",
+        "aiPruneMode": "rewrite-or-drop",
+        "aiPruneBelowScore": 35.0,
+        "domainBalanceMode": "round-robin",
+        "domainBalanceMaxShare": 0.8,
+        "minQualityScore": 30.0,
+        "maxTopics": 10,
+        "includeOriginal": true,
+        "emitFollowUp": true,
+        "singleSeedDiversification": true
+      },
+      "workflow": {
+        "reviewMode": "yolo",
+        "autopilotPolicy": "safe",
+        "thresholds": {
+          "safeMinAverageQuality": 45.0,
+          "safeMinTopicCount": 3,
+          "safeMinFamilyCount": 1,
+          "safeMinIntentCount": 1,
+          "safeMaxFamilyShare": 1.0,
+          "safeMaxRiskWarnings": 5,
+          "safeMaxFamilyDisagreementCount": 0,
+          "safeMaxRewrittenShare": 0.5,
+          "hardBlockerMinTopicCount": 3,
+          "hardBlockerMaxFamilyShare": 1.0,
+          "hardBlockerMaxFamilyDisagreementCount": 1,
+          "hardBlockerMaxRewrittenShare": 0.5
+        },
+        "matrixPreset": ["cross-provider-best"],
+        "launchMatrixViewer": false
+      },
+      "holdoutSeedFile": "topic-seeds.holdout.sample.txt"
+    },
+    "single-seed-diagnostic-force": {
+      "description": "Single-seed diagnostic profile that force-launches workflow for downstream debugging.",
+      "generation": {
+        "taxonomyPreset": "balanced-science",
+        "latencyProfile": "balanced",
+        "aiPruneMode": "rewrite-or-drop",
+        "aiPruneBelowScore": 35.0,
+        "domainBalanceMode": "round-robin",
+        "domainBalanceMaxShare": 0.8,
+        "minQualityScore": 30.0,
+        "maxTopics": 10,
+        "includeOriginal": true,
+        "emitFollowUp": true,
+        "singleSeedDiversification": true
+      },
+      "workflow": {
+        "reviewMode": "yolo",
+        "autopilotPolicy": "safe",
+        "forceLaunch": true,
+        "thresholds": {
+          "safeMinAverageQuality": 45.0,
+          "safeMinTopicCount": 3,
+          "safeMinFamilyCount": 1,
+          "safeMinIntentCount": 1,
+          "safeMaxFamilyShare": 1.0,
+          "safeMaxRiskWarnings": 5,
+          "safeMaxFamilyDisagreementCount": 0,
+          "safeMaxRewrittenShare": 0.5,
+          "hardBlockerMinTopicCount": 3,
+          "hardBlockerMaxFamilyShare": 1.0,
+          "hardBlockerMaxFamilyDisagreementCount": 1,
+          "hardBlockerMaxRewrittenShare": 0.5
+        },
+        "matrixPreset": ["cross-provider-best"],
+        "launchMatrixViewer": false
+      },
+      "holdoutSeedFile": "topic-seeds.holdout.sample.txt"
+    }
+  }
+}

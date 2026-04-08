@@ -1,0 +1,245 @@
+{
+  "seedQueries": [
+    "wildfire smoke exposure and respiratory outcomes"
+  ],
+  "latencyProfile": "balanced",
+  "configuredSmartProvider": "deterministic",
+  "activeSmartProvider": "deterministic",
+  "plannerModel": "stub-planner",
+  "taxonomyPreset": "balanced-science",
+  "taxonomyFile": "C:\\Users\\Joshua.Bailey\\VSCodeProjects\\scholar-search-mcp\\tests\\fixtures\\evals\\topic-taxonomy.balanced-science.sample.json",
+  "generationWarnings": [],
+  "topics": [
+    {
+      "seedQuery": "wildfire smoke exposure and respiratory outcomes",
+      "query": "public health evidence on wildfire smoke exposure and respiratory outcomes",
+      "intent": "review",
+      "family": "health_science",
+      "tags": [
+        "review",
+        "health",
+        "public_health",
+        "epidemiology",
+        "health_science"
+      ],
+      "followUpMode": "comparison",
+      "providerPlan": [
+        "semantic-scholar",
+        "openalex"
+      ],
+      "candidateConcepts": [
+        "wildfire smoke",
+        "public health"
+      ],
+      "constraints": {},
+      "successCriteria": [
+        "identify strongest papers"
+      ],
+      "rationale": "adds public health framing",
+      "qualityScore": 86.0,
+      "qualityTier": "high",
+      "qualitySignals": [
+        "novel_from_seed",
+        "query_length_good",
+        "intent:review",
+        "non_default_intent",
+        "provider_plan",
+        "candidate_concepts",
+        "success_criteria",
+        "taxonomy_family",
+        "taxonomy_tags"
+      ],
+      "familyCrossCheck": {
+        "assignedFamily": "health_science",
+        "topCandidateFamily": "health_science",
+        "disagreement": false,
+        "candidateCount": 11,
+        "candidates": [
+          {
+            "family": "health_science",
+            "score": 4.0,
+            "matchedKeywords": [
+              "public health",
+              "exposure"
+            ],
+            "matchedTags": [
+              "health",
+              "public_health",
+              "epidemiology"
+            ],
+            "intentMatched": true
+          },
+          {
+            "family": "climate_and_resilience",
+            "score": 0.5,
+            "matchedKeywords": [],
+            "matchedTags": [],
+            "intentMatched": true
+          },
+          {
+            "family": "computer_science",
+            "score": 0.5,
+            "matchedKeywords": [],
+            "matchedTags": [],
+            "intentMatched": true
+          },
+          {
+            "family": "cultural_resources",
+            "score": 0.5,
+            "matchedKeywords": [],
+            "matchedTags": [],
+            "intentMatched": true
+          },
+          {
+            "family": "environmental_regulatory",
+            "score": 0.5,
+            "matchedKeywords": [],
+            "matchedTags": [],
+            "intentMatched": true
+          }
+        ],
+        "warning": null
+      }
+    },
+    {
+      "seedQuery": "wildfire smoke exposure and respiratory outcomes",
+      "query": "wildfire smoke exposure and respiratory outcomes",
+      "intent": "review",
+      "family": "health_science",
+      "tags": [
+        "review",
+        "health",
+        "public_health",
+        "epidemiology",
+        "health_science"
+      ],
+      "followUpMode": "comparison",
+      "providerPlan": [
+        "semantic-scholar",
+        "openalex"
+      ],
+      "candidateConcepts": [
+        "wildfire smoke",
+        "respiratory outcomes"
+      ],
+      "constraints": {},
+      "successCriteria": [
+        "identify strongest papers"
+      ],
+      "rationale": "Literal seed query.",
+      "qualityScore": 76.0,
+      "qualityTier": "high",
+      "qualitySignals": [
+        "literal_seed",
+        "query_length_good",
+        "intent:review",
+        "non_default_intent",
+        "provider_plan",
+        "candidate_concepts",
+        "success_criteria",
+        "taxonomy_family",
+        "taxonomy_tags"
+      ],
+      "familyCrossCheck": {
+        "assignedFamily": "health_science",
+        "topCandidateFamily": "health_science",
+        "disagreement": false,
+        "candidateCount": 11,
+        "candidates": [
+          {
+            "family": "health_science",
+            "score": 3.0,
+            "matchedKeywords": [
+              "exposure"
+            ],
+            "matchedTags": [
+              "health",
+              "public_health",
+              "epidemiology"
+            ],
+            "intentMatched": true
+          },
+          {
+            "family": "climate_and_resilience",
+            "score": 0.5,
+            "matchedKeywords": [],
+            "matchedTags": [],
+            "intentMatched": true
+          },
+          {
+            "family": "computer_science",
+            "score": 0.5,
+            "matchedKeywords": [],
+            "matchedTags": [],
+            "intentMatched": true
+          },
+          {
+            "family": "cultural_resources",
+            "score": 0.5,
+            "matchedKeywords": [],
+            "matchedTags": [],
+            "intentMatched": true
+          },
+          {
+            "family": "environmental_regulatory",
+            "score": 0.5,
+            "matchedKeywords": [],
+            "matchedTags": [],
+            "intentMatched": true
+          }
+        ],
+        "warning": null
+      }
+    }
+  ],
+  "pruneSummary": {
+    "mode": "off",
+    "rewritten": 0,
+    "dropped": 0,
+    "kept": 2,
+    "audit": []
+  },
+  "balanceSummary": {
+    "mode": "off",
+    "applied": false,
+    "selectedCount": 2
+  },
+  "familyCrossCheckSummary": {
+    "disagreementCount": 0,
+    "noSignalCount": 0,
+    "topicCount": 2
+  },
+  "summary": {
+    "topicCount": 2,
+    "averageQualityScore": 81.0,
+    "families": {
+      "health_science": 2
+    },
+    "intents": {
+      "review": 2
+    },
+    "qualityTiers": {
+      "high": 2
+    },
+    "familyCount": 1,
+    "intentCount": 1,
+    "maxFamilyShare": 1.0,
+    "maxIntentShare": 1.0,
+    "familyDisagreementCount": 0,
+    "rewrittenCount": 0,
+    "droppedCount": 0,
+    "rewrittenShare": 0.0
+  },
+  "hardBlockers": [
+    "topic pool contains fewer than five topics",
+    "topic pool is dominated by a single family beyond the hard blocker threshold"
+  ],
+  "riskWarnings": [
+    "topic pool is small; generated eval coverage may be too narrow",
+    "domain diversity is low; topic pool may be overfit to a narrow family set",
+    "one family dominates the pool; domain balance may be poor",
+    "one intent dominates the pool; eval routing coverage may be weak",
+    "non-discovery intents are underrepresented; known-item, review, and regulatory coverage may be weak"
+  ],
+  "reviewRecommendation": "human-review-required"
+}

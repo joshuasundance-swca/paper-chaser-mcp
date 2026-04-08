@@ -16,6 +16,36 @@
         "maxThemes": 3,
         "latencyProfile": "balanced"
       }
+    },
+    {
+      "name": "synthesis_follow_up",
+      "tool": "ask_result_set",
+      "arguments": {
+        "searchSessionId": "$result.smart_search.searchSessionId",
+        "question": "What treatment tradeoffs or evidence limits show up across the saved PFAS remediation results?",
+        "topK": 6,
+        "answerMode": "qa",
+        "latencyProfile": "balanced"
+      }
+    },
+    {
+      "name": "synthesis_comparison",
+      "tool": "ask_result_set",
+      "arguments": {
+        "searchSessionId": "$result.smart_search.searchSessionId",
+        "question": "How do the strongest PFAS remediation papers compare on treatment strategy, scalability, and evidence quality?",
+        "topK": 6,
+        "answerMode": "comparison",
+        "latencyProfile": "balanced"
+      }
+    },
+    {
+      "name": "known_item_search",
+      "tool": "search_papers_smart",
+      "arguments": {
+        "query": "Attention Is All You Need",
+        "latencyProfile": "balanced"
+      }
     }
   ]
 }

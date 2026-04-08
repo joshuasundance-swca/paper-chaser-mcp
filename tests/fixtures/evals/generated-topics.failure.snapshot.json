@@ -1,0 +1,153 @@
+{
+  "seedQueries": [
+    "PFAS remediation in groundwater"
+  ],
+  "latencyProfile": "balanced",
+  "configuredSmartProvider": "deterministic",
+  "activeSmartProvider": "deterministic",
+  "plannerModel": "stub-planner",
+  "taxonomyPreset": "balanced-science",
+  "taxonomyFile": "C:\\Users\\Joshua.Bailey\\VSCodeProjects\\scholar-search-mcp\\tests\\fixtures\\evals\\topic-taxonomy.balanced-science.sample.json",
+  "generationWarnings": [
+    "Speculative expansion failed for 'PFAS remediation in groundwater': RuntimeError; falling back to literal seed.",
+    "Planner failed for 'PFAS remediation in groundwater': RuntimeError; using discovery fallback metadata."
+  ],
+  "topics": [
+    {
+      "seedQuery": "PFAS remediation in groundwater",
+      "query": "PFAS remediation in groundwater",
+      "intent": "discovery",
+      "family": "environmental_remediation",
+      "tags": [
+        "discovery",
+        "environment",
+        "water",
+        "pfas",
+        "remediation",
+        "environmental_remediation"
+      ],
+      "followUpMode": "qa",
+      "providerPlan": [],
+      "candidateConcepts": [],
+      "constraints": {},
+      "successCriteria": [],
+      "rationale": "Planner fallback used after provider error: RuntimeError",
+      "qualityScore": 50.0,
+      "qualityTier": "medium",
+      "qualitySignals": [
+        "literal_seed",
+        "query_length_good",
+        "intent:discovery",
+        "taxonomy_family",
+        "taxonomy_tags"
+      ],
+      "familyCrossCheck": {
+        "assignedFamily": "environmental_remediation",
+        "topCandidateFamily": "environmental_remediation",
+        "disagreement": false,
+        "candidateCount": 10,
+        "candidates": [
+          {
+            "family": "environmental_remediation",
+            "score": 5.5,
+            "matchedKeywords": [
+              "pfas",
+              "groundwater",
+              "remediation"
+            ],
+            "matchedTags": [
+              "environment",
+              "water",
+              "pfas",
+              "remediation"
+            ],
+            "intentMatched": true
+          },
+          {
+            "family": "natural_resources",
+            "score": 1.0,
+            "matchedKeywords": [],
+            "matchedTags": [
+              "environment"
+            ],
+            "intentMatched": true
+          },
+          {
+            "family": "climate_and_resilience",
+            "score": 0.5,
+            "matchedKeywords": [],
+            "matchedTags": [],
+            "intentMatched": true
+          },
+          {
+            "family": "computer_science",
+            "score": 0.5,
+            "matchedKeywords": [],
+            "matchedTags": [],
+            "intentMatched": true
+          },
+          {
+            "family": "cultural_resources",
+            "score": 0.5,
+            "matchedKeywords": [],
+            "matchedTags": [],
+            "intentMatched": true
+          }
+        ],
+        "warning": null
+      }
+    }
+  ],
+  "pruneSummary": {
+    "mode": "off",
+    "rewritten": 0,
+    "dropped": 0,
+    "kept": 1,
+    "audit": []
+  },
+  "balanceSummary": {
+    "mode": "off",
+    "applied": false,
+    "selectedCount": 1
+  },
+  "familyCrossCheckSummary": {
+    "disagreementCount": 0,
+    "noSignalCount": 0,
+    "topicCount": 1
+  },
+  "summary": {
+    "topicCount": 1,
+    "averageQualityScore": 50.0,
+    "families": {
+      "environmental_remediation": 1
+    },
+    "intents": {
+      "discovery": 1
+    },
+    "qualityTiers": {
+      "medium": 1
+    },
+    "familyCount": 1,
+    "intentCount": 1,
+    "maxFamilyShare": 1.0,
+    "maxIntentShare": 1.0,
+    "familyDisagreementCount": 0,
+    "rewrittenCount": 0,
+    "droppedCount": 0,
+    "rewrittenShare": 0.0
+  },
+  "hardBlockers": [
+    "topic pool contains fewer than five topics",
+    "topic pool contains no high-quality topics",
+    "topic pool is dominated by a single family beyond the hard blocker threshold"
+  ],
+  "riskWarnings": [
+    "topic pool is small; generated eval coverage may be too narrow",
+    "domain diversity is low; topic pool may be overfit to a narrow family set",
+    "one family dominates the pool; domain balance may be poor",
+    "one intent dominates the pool; eval routing coverage may be weak",
+    "non-discovery intents are underrepresented; known-item, review, and regulatory coverage may be weak",
+    "no high-quality topics remain after ranking; human review is recommended before workflow handoff"
+  ],
+  "reviewRecommendation": "human-review-required"
+}

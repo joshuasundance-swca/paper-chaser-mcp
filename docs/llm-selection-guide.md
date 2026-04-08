@@ -76,6 +76,427 @@ The effective configured provider and the effective active provider are surfaced
 through `selection_metadata()` in `paper_chaser_mcp/agentic/provider_base.py`
 and appear in runtime-facing outputs such as `get_runtime_status`.
 
+## Bootstrapping eval traces and lower bounds
+
+The fastest way to bootstrap a useful eval set is not to start with the weakest
+model you hope might work. Start with the strongest configuration you trust,
+capture good traces, promote those traces into seed eval rows, and then run
+progressively smaller planner and synthesis models against the same seed set.
+
+That gives you two related assets:
+
+- a higher-trust trace bank for seed evals and training-style examples
+- a lower-bound matrix showing where smaller models stop preserving the same
+  observable behavior
+
+The practical sequence is:
+
+1. Run `scripts/run_eval_workflow.py` with a trusted provider and model setup in
+   `yolo` or `ui` review mode to collect traces.
+2. Promote the reviewed traces into seed datasets.
+3. Re-run the same dataset through a matrix of model ladders such as best,
+   medium, and small variants for the same provider.
+4. Inspect the matrix viewer for divergence in item status, observed intent,
+   executed tool sequence, and search-session lineage.
+
+Important interpretation rule: no observed divergence does not prove two models
+reasoned the same way. It only means the currently captured eval signals did not
+surface a meaningful difference. Two models can still converge on the same
+final answer through different retrieval paths or different hidden reasoning.
+
+The workflow wrapper supports custom matrix scenarios in the form:
+
+```text
+--matrix-scenario name|provider|planner_model|synthesis_model
+```
+
+It also supports canned presets for common ladders, currently including:
+
+- `openai-lower-bound`
+- `anthropic-lower-bound`
+- `google-lower-bound`
+- `nvidia-lower-bound`
+- `cross-provider-best`
+- `cross-provider-lower-bound`
+
+That makes it possible to run a strong-to-weak ladder such as:
+
+- `openai-best|openai|gpt-5.4-mini|gpt-5.4`
+- `openai-mid|openai|gpt-4.1-mini|gpt-4.1`
+- `openai-small|openai|gpt-4o-mini|gpt-4o-mini`
+
+Use the strongest rung to create trace-derived seeds. Use the smaller rungs to
+measure where quality drops, abstention changes, or tool routing starts to
+shift.
+
+To grow the seed corpus itself, the repo now also includes
+`scripts/generate_eval_topics.py`. That script uses the configured planner model
+to expand one or more seed asks into realistic research-topic and query
+candidates, classify likely intent, and optionally emit an expert batch scenario
+file for trace capture.
+
+It can also:
+
+- attach topic families and tags from a product-area taxonomy JSON file
+- merge and deduplicate prior generated-topic files so repeated bootstrap runs
+  accumulate a cleaner candidate pool
+- score and rank topics before trace capture so you can keep only the most
+  promising candidates
+
+Typical flow:
+
+1. Start with a few realistic user asks or product themes.
+2. Generate planner-derived topic candidates and optional batch scenarios.
+3. Run `scripts/run_eval_workflow.py` against the generated scenario file using
+  the strongest model rung you trust.
+4. Promote the stable traces into seeds.
+5. Sweep smaller model rungs against the same seeds to find lower bounds.
+
+The taxonomy file accepted by `generate_eval_topics.py` is a JSON array, or an
+object with a top-level `rules` array. Each rule may include:
+
+- `family`
+- `tags`
+- `keywords`
+- `intents`
+
+Example:
+
+```json
+{
+  "rules": [
+    {
+      "family": "environmental_remediation",
+      "tags": ["water", "pfas"],
+      "keywords": ["pfas", "groundwater", "remediation"],
+      "intents": ["discovery", "review"]
+    },
+    {
+      "family": "ml_benchmarks",
+      "tags": ["benchmark", "evaluation"],
+      "keywords": ["benchmark", "leaderboard", "evaluation"]
+    }
+  ]
+}
+```
+
+The repo also now includes a checked-in starter taxonomy at:
+
+- `tests/fixtures/evals/topic-taxonomy.sample.json`
+
+It also includes two broader preset fixtures:
+
+- `tests/fixtures/evals/topic-taxonomy.balanced-science.sample.json`
+- `tests/fixtures/evals/topic-taxonomy.environmental-consulting.sample.json`
+
+`generate_eval_topics.py` uses that file by default unless you override it with
+`--taxonomy-file`.
+
+The generator now also supports taxonomy presets directly:
+
+```text
+--taxonomy-preset balanced-science
+--taxonomy-preset environmental-consulting
+```
+
+The default preset is `balanced-science` so topic generation does not drift into
+an environment-only eval funnel when you actually want a more representative
+cross-domain pool.
+
+The repo also includes checked-in seed starter files for the same two common
+bootstrap modes:
+
+- `tests/fixtures/evals/topic-seeds.balanced-science.sample.txt`
+- `tests/fixtures/evals/topic-seeds.environmental-consulting.sample.txt`
+
+When you do not provide `--seed-query` or `--seed-file`,
+`generate_eval_topics.py` automatically falls back to the balanced-science seed
+starter so you can get a representative topic pool with a single command.
+
+Repeated bootstrap runs can be merged with:
+
+```text
+--merge-inputs prior-topics-a.json prior-topics-b.json
+```
+
+That merge step deduplicates by normalized query and prefers the current run's
+topic metadata when the same query appears in multiple files.
+
+Generated topics are also scored and ranked before output. The score reflects a
+mix of signals such as:
+
+- novelty relative to the seed ask
+- query specificity and usable length
+- planner intent richness
+- provider-plan depth
+- candidate concepts and success criteria
+- taxonomy-family and tag coverage
+
+You can filter and trim the ranked pool with:
+
+```text
+--min-quality-score 30
+--max-topics 25
+```
+
+That makes it easier to use the generator as a realistic eval-candidate funnel
+instead of a raw prompt explosion tool.
+
+For review workflows, `generate_eval_topics.py` can now also emit ranked topic
+exports in JSONL, CSV, and markdown table form:
+
+```text
+--jsonl-output ranked-topics.jsonl
+--csv-output ranked-topics.csv
+--markdown-output ranked-topics.md
+```
+
+Those exports are meant for spreadsheet review, annotation queues, or quick
+triage outside the primary JSON artifact.
+
+The repo also now includes a lightweight local topic viewer:
+
+```text
+python scripts/view_generated_topics.py --input generated-topics.json
+```
+
+That viewer shows ranked topics, families, intents, tags, quality scores, and
+quality signals so you can inspect why a topic ranked highly before sending it
+into the trace-capture workflow.
+
+For the easiest integrated path, `generate_eval_topics.py` can also launch the
+viewer directly after generation:
+
+```text
+--launch-viewer
+```
+
+That requires `--output` to be a file path so the viewer has a persisted JSON
+artifact to load.
+
+There is now also an integrated shortcut mode:
+
+```text
+--easy-button
+```
+
+That mode fills in a sensible default bundle of outputs under
+`build/eval-workflow`, enables follow-up scenario generation, raises the minimum
+quality threshold, keeps a bounded top-ranked topic set, and launches the topic
+viewer unless you instead hand off directly into the workflow.
+
+It also enables two additional optimization passes by default:
+
+- AI-assisted weak-topic rewrite or drop
+- family-aware round-robin balancing of the final topic pool
+
+One-command starter example:
+
+```text
+python scripts/generate_eval_topics.py \
+  --easy-button
+```
+
+With no explicit seeds, that command uses the balanced-science starter seed set
+and the balanced-science taxonomy preset automatically.
+
+You can also hand off directly into the full eval workflow:
+
+```text
+python scripts/generate_eval_topics.py \
+  --easy-button \
+  --launch-workflow \
+  --workflow-matrix-preset cross-provider-lower-bound \
+  --workflow-launch-matrix-viewer
+```
+
+That path generates the ranked topic pool and batch scenario first, then calls
+`run_eval_workflow.py` using the generated scenario file.
+
+There is now also a higher-level orchestration wrapper:
+
+```text
+python scripts/run_eval_autopilot.py --profile balanced-science-safe
+```
+
+That wrapper gives you one stable entrypoint for:
+
+- profile-driven topic generation
+- immutable run-bundle artifact directories
+- dry-run inspection of commands and outputs
+- exact and near-overlap holdout reporting
+- autopilot decision reporting before workflow handoff
+- per-stage logs and partial run-state persistence
+
+Each run writes a timestamped bundle containing:
+
+- generated topics in JSON, JSONL, CSV, and markdown
+- the generated expert batch scenario file
+- an autopilot JSON report and markdown memo
+- a run manifest with exact commands and output paths
+- a run-state JSON file with stage status and command outcomes
+- stage-specific logs for generation and workflow execution
+- a holdout report when the selected profile defines a holdout seed file
+- workflow artifacts when workflow handoff is allowed and executed
+
+The sample checked-in profile file is:
+
+- `tests/fixtures/evals/eval-autopilot-profiles.sample.json`
+
+The sample holdout seed file is:
+
+- `tests/fixtures/evals/topic-seeds.holdout.sample.txt`
+
+You can inspect the wrapper plan without executing generation or workflow steps:
+
+```text
+python scripts/run_eval_autopilot.py \
+  --profile balanced-science-safe \
+  --dry-run
+```
+
+The workflow handoff is now guarded. If the generated pool recommends human
+review, the workflow launch is suppressed unless you explicitly force it:
+
+```text
+--force-launch-workflow
+```
+
+This is intentional. The goal is to make it easy to automate the healthy path
+without silently normalizing risky AI-in-the-loop behavior.
+
+Profiles can now also tune the safe-policy thresholds through the profile file's
+`workflow.thresholds` object. That makes it possible to keep a conservative
+balanced-science bootstrap while defining a separate exploratory profile for
+narrower one-seed runs without changing the repository defaults.
+
+The same `workflow.thresholds` object can now also tune selected hard-blocker
+thresholds. That means exploratory profiles can relax narrow-run blockers such
+as minimum topic count or family dominance in a controlled, explicit way rather
+than being silently forced through the global defaults.
+
+The sample profile file now includes both:
+
+- a `single-seed-exploratory-safe` profile for low-friction narrow-run testing
+- a `single-seed-diagnostic-force` profile for intentionally forcing workflow
+  handoff when you are debugging downstream workflow behavior rather than
+  evaluating topic-pool quality
+
+Those narrow-run profiles also enable a dedicated single-seed diversification
+pass during topic generation. That pass asks the planner for additional review,
+regulatory, and methods-oriented variants so one-seed runs have a better chance
+of producing more than one intent or thematic angle.
+
+The generator now also exposes explicit knobs for the two optimization passes:
+
+```text
+--ai-prune-mode off|rewrite|rewrite-or-drop
+--ai-prune-below-score 35
+--domain-balance-mode off|round-robin
+--domain-balance-max-share 0.4
+```
+
+The pruning pass attempts to rewrite weak topics into stronger, more specific
+asks using another planner-assisted pass. In `rewrite-or-drop` mode, topics that
+still look weak after that pass are removed before workflow handoff.
+
+Every rewritten or dropped weak topic is now also recorded in `pruneSummary.audit`
+so the viewer and downstream review can show before or after state instead of
+silently changing the pool.
+
+The balancing pass prevents the final pool from becoming a pure score-ordered
+list dominated by one family. `round-robin` tries to preserve stronger topics
+while still keeping multiple families visible in the selected set.
+
+The generator also runs a planner-informed family cross-check over the final
+topics. This does not replace the assigned family, but it does surface cases
+where the assigned family disagrees with the strongest taxonomy-backed
+alternative. Those disagreements are included in each topic's
+`familyCrossCheck` field and summarized in the pool-level metadata.
+
+## AI-In-The-Loop Risks
+
+This flow is now capable of going from generated topics to workflow execution
+with very little human intervention. That is useful, but it creates clear
+failure modes.
+
+The main places it can go wrong are:
+
+- domain collapse: one family dominates the generated pool and silently narrows
+  eval coverage
+- intent collapse: almost everything becomes discovery-style retrieval and
+  under-tests known-item, review, or regulatory routing
+- low-quality prompt inflation: the LLM generates many plausible-looking but
+  weak eval asks that are still syntactically clean
+- taxonomy drift: keyword tagging pulls topics into the wrong family because of
+  shallow lexical overlap
+- automation over-trust: launching the workflow on a weak or narrow topic pool
+  can create polished but misleading artifacts
+
+To make those risks visible, the generated topic payload now includes:
+
+- `summary`
+- `riskWarnings`
+- `reviewRecommendation`
+- `pruneSummary`
+- `balanceSummary`
+- `familyCrossCheckSummary`
+- `generationWarnings`
+- `hardBlockers`
+
+The current recommendation is intentionally conservative:
+
+- `ai-assisted-ok` only when the pool looks reasonably balanced and not too weak
+- `human-review-required` when the pool is too small, too narrow, too low
+  quality, or too dominated by one intent or family
+
+That means AI-in-the-loop is supported best as an assistant and accelerator,
+not yet as a fully trusted replacement for judgment. If the pool carries risk
+warnings, the safer pattern is still:
+
+1. inspect the ranked topic viewer
+2. trim or regenerate the pool
+3. then launch the trace workflow
+
+The only time to bypass that recommendation is when you explicitly want to test
+how the downstream workflow behaves under weak or skewed generated inputs. That
+is what `--force-launch-workflow` is for.
+
+For workflow handoff there are now three autopilot policies:
+
+```text
+--workflow-autopilot-policy safe|review|blocked
+```
+
+- `review`: suppress workflow launch only when the pool recommends human review
+- `safe`: require a clean pool with stronger balance, quality, and cross-check
+  conditions before launching automatically
+- `blocked`: never auto-launch the workflow, even if `--launch-workflow` is set
+
+`safe` is the right default for low-touch automation because it refuses to hand
+off when any family cross-check disagreement or other risk warning remains.
+
+The autopilot report now also includes a workflow decision trace with the
+evaluated checks, actual values, expected thresholds, and the first failing
+reason. That decision trace is the primary diagnostic surface when a run is
+suppressed under `safe` or `review` policy.
+
+There is also now a distinct hard-blocker tier in the generated payload. Hard
+blockers represent conditions that should suppress workflow handoff regardless
+of the softer review recommendation unless you explicitly force the run.
+
+The current hard blockers include cases such as:
+
+- too few surviving topics
+- no high-quality topics remaining
+- a single family dominating beyond the hard threshold
+- too much family cross-check disagreement
+- too high a rewritten-topic share
+
+The pruning flow is also now stricter about semantic drift. Rewrites are only
+accepted when the inferred intent is preserved; otherwise the candidate rewrite
+is rejected and recorded in the prune audit trail.
+
 ## Planner role
 
 ### What the planner is responsible for

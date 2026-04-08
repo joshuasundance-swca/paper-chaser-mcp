@@ -1,7 +1,8 @@
 """Paper Chaser MCP package entrypoint."""
 
+from .server import main
+
 __version__ = "0.1.2"
 
-from .server import main
 
 __all__ = ["main"]
