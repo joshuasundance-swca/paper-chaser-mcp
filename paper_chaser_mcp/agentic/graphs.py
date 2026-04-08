@@ -3806,7 +3806,11 @@ def _classify_topical_relevance(
 ) -> Literal["on_topic", "weak_match", "off_topic"]:
     has_title_signal = (title_facet_coverage > 0.0) or (title_anchor_coverage > 0.0)
     has_title_or_body_signal = has_title_signal or (query_facet_coverage > 0.0) or (query_anchor_coverage > 0.0)
-    if query_similarity >= 0.25 and has_title_signal:
+    has_facet_signal = (title_facet_coverage > 0.0) or (query_facet_coverage > 0.0)
+    # Require a multi-token phrase match (facet) for the standard threshold, or a
+    # strict majority of query terms when no phrase match exists.  A single-token
+    # title hit with low similarity is a weak signal, not grounded evidence.
+    if has_title_signal and ((has_facet_signal and query_similarity >= 0.25) or query_similarity > 0.5):
         return "on_topic"
     if query_similarity < 0.12 or not has_title_or_body_signal:
         return "off_topic"

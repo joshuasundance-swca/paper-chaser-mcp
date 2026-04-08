@@ -3253,3 +3253,180 @@ async def test_smart_tools_return_structured_feature_errors_when_disabled() -> N
     assert payload["error"] == "FEATURE_NOT_CONFIGURED"
     assert "fallbackTools" in payload
     assert payload["agentHints"]["nextToolCandidates"]
+
+
+# ---------------------------------------------------------------------------
+# Topical-relevance classification — regression for single-token-only matches
+# ---------------------------------------------------------------------------
+
+
+def test_topical_relevance_requires_facet_or_majority_coverage_for_on_topic() -> None:
+    """_topical_relevance_from_signals must not classify a paper as on_topic when
+    the only signal is a single-token title hit and similarity ≤ 0.5.
+
+    Before the fix, `query_similarity >= 0.25 and title_has_anchor` was sufficient,
+    so a query where one out of two distinctive terms matched the title (50 % coverage,
+    no phrase match) would produce "on_topic" — admitting it as grounded evidence.
+    The tightened rule requires either a multi-token facet phrase match plus the low
+    threshold, or a strict majority (> 0.5) of distinctive terms without a phrase match.
+    """
+    fn = dispatch_module._topical_relevance_from_signals  # type: ignore[attr-defined]
+
+    # 1. No facet match, similarity exactly at the old threshold boundary (0.5) → weak_match
+    assert (
+        fn(
+            query_similarity=0.5,
+            title_facet_coverage=0.0,
+            title_anchor_coverage=0.5,
+            query_facet_coverage=0.0,
+            query_anchor_coverage=0.5,
+        )
+        == "weak_match"
+    )
+
+    # 2. No facet match, similarity strictly above the new threshold → on_topic
+    assert (
+        fn(
+            query_similarity=0.6,
+            title_facet_coverage=0.0,
+            title_anchor_coverage=0.6,
+            query_facet_coverage=0.0,
+            query_anchor_coverage=0.6,
+        )
+        == "on_topic"
+    )
+
+    # 3. Facet match present, standard low threshold still reaches on_topic
+    assert (
+        fn(
+            query_similarity=0.3,
+            title_facet_coverage=0.5,
+            title_anchor_coverage=0.5,
+            query_facet_coverage=0.0,
+            query_anchor_coverage=0.5,
+        )
+        == "on_topic"
+    )
+
+    # 4. Similarity below off_topic floor → off_topic regardless of anchor
+    assert (
+        fn(
+            query_similarity=0.1,
+            title_facet_coverage=0.0,
+            title_anchor_coverage=0.5,
+            query_facet_coverage=0.0,
+            query_anchor_coverage=0.5,
+        )
+        == "off_topic"
+    )
+
+    # 5. No title or body signal at all → off_topic
+    assert (
+        fn(
+            query_similarity=0.4,
+            title_facet_coverage=0.0,
+            title_anchor_coverage=0.0,
+            query_facet_coverage=0.0,
+            query_anchor_coverage=0.0,
+        )
+        == "off_topic"
+    )
+
+
+def test_paper_topical_relevance_single_token_match_without_phrase_is_weak_match() -> None:
+    """A paper whose title contains only one of two distinctive query terms, without
+    the multi-token query phrase appearing anywhere, must be classified as
+    'weak_match', not 'on_topic'.
+
+    This is the guided-research false-grounding regression: a query such as
+    'temperature precipitation humidity' should not classify a paper titled
+    'A Study of Temperature Effects' as on_topic because 'temperature' is the
+    only match and no facet phrase is present.
+    """
+    fn = dispatch_module._paper_topical_relevance  # type: ignore[attr-defined]
+
+    # Two distinctive terms; only one matches the title — no phrase match.
+    relevance = fn(
+        "temperature precipitation humidity",
+        {
+            "title": "A Study of Temperature Effects",
+            "abstract": "We examine how temperature influences regional climate.",
+        },
+    )
+    assert relevance == "weak_match", (
+        f"Expected 'weak_match' for single-term title hit without phrase match, got {relevance!r}"
+    )
+
+
+def test_paper_topical_relevance_full_phrase_match_is_on_topic() -> None:
+    """When the query's multi-token facet phrase appears in the paper title,
+    even moderate similarity must still reach on_topic.
+    """
+    fn = dispatch_module._paper_topical_relevance  # type: ignore[attr-defined]
+
+    relevance = fn(
+        "temperature precipitation humidity",
+        {
+            "title": "Temperature Precipitation and Humidity Interactions",
+            "abstract": "This paper studies temperature, precipitation, and humidity jointly.",
+        },
+    )
+    assert relevance == "on_topic", f"Expected 'on_topic' when full phrase tokens appear in title, got {relevance!r}"
+
+
+@pytest.mark.asyncio
+async def test_guided_research_raw_broker_does_not_ground_single_term_match_as_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Via the raw-broker fallback path (no agentic_runtime), the guided research
+    tool must not place a paper in the evidence array when only one distinctive
+    query term matches the title and no multi-token phrase is present.
+
+    The paper should appear in leads, and the evidence array must be empty.
+    """
+
+    class _MinimalSemanticClient:
+        async def search_papers(self, **_: Any) -> dict[str, Any]:
+            return {
+                "total": 1,
+                "offset": 0,
+                "data": [
+                    {
+                        "paperId": "paper-temp-1",
+                        "title": "A Study of Temperature Effects",
+                        "abstract": "We examine how temperature influences regional climate.",
+                        "publicationDate": "2022-01-01",
+                        "citationCount": 10,
+                    }
+                ],
+            }
+
+    original_runtime = server.agentic_runtime
+    original_client = server.client
+    monkeypatch.setattr(server, "agentic_runtime", None)
+    monkeypatch.setattr(server, "client", _MinimalSemanticClient())
+    monkeypatch.setattr(server, "enable_semantic_scholar", True)
+    monkeypatch.setattr(server, "enable_core", False)
+    monkeypatch.setattr(server, "enable_arxiv", False)
+
+    try:
+        payload = _payload(
+            await server.call_tool(
+                "research",
+                {"query": "temperature precipitation humidity", "limit": 3},
+            )
+        )
+    finally:
+        server.agentic_runtime = original_runtime
+        server.client = original_client
+
+    evidence = payload.get("evidence", [])
+    leads = payload.get("leads", [])
+
+    assert evidence == [], (
+        f"Expected empty evidence when only one distinctive term matches the title "
+        f"(no phrase match), but got: {evidence}"
+    )
+    assert any(lead.get("evidenceId") == "paper-temp-1" for lead in leads), (
+        "Expected the partial-match paper to appear in leads, but it was not found there."
+    )
