@@ -1099,6 +1099,435 @@ async def test_search_papers_smart_regulatory_agency_guidance_routes_authority_f
 
 
 @pytest.mark.asyncio
+async def test_search_papers_smart_broad_agency_guidance_ranks_lifecycle_documents_ahead_of_off_target_hits() -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+
+    class FailingEcosClient:
+        async def search_species(self, *, query: str, limit: int = 10, match_mode: str = "auto") -> dict[str, Any]:
+            raise AssertionError(
+                f"ECOS should not be queried for broad FDA guidance discovery: {query}, {limit}, {match_mode}"
+            )
+
+    class FakeFederalRegisterClient:
+        async def search_documents(self, *, query: str, limit: int = 10, **kwargs: Any) -> dict[str, Any]:
+            del limit, kwargs
+            assert "fda" in query.lower()
+            return {
+                "total": 3,
+                "data": [
+                    {
+                        "documentNumber": "2024-11001",
+                        "title": (
+                            "Marketing Submission Recommendations for a Predetermined Change Control Plan for "
+                            "Artificial Intelligence-Enabled Device Software Functions"
+                        ),
+                        "documentType": "NOTICE",
+                        "publicationDate": "2024-12-04",
+                        "citation": "89 FR 96645",
+                        "htmlUrl": "https://www.federalregister.gov/d/2024-11001",
+                    },
+                    {
+                        "documentNumber": "2019-00123",
+                        "title": (
+                            "Proposed Regulatory Framework for Modifications to Artificial Intelligence/"
+                            "Machine Learning-Based Software as a Medical Device"
+                        ),
+                        "documentType": "NOTICE",
+                        "publicationDate": "2019-04-02",
+                        "citation": "84 FR 12789",
+                        "htmlUrl": "https://www.federalregister.gov/d/2019-00123",
+                    },
+                    {
+                        "documentNumber": "2022-11111",
+                        "title": "Clinical Decision Support Software Guidance for Industry and FDA Staff",
+                        "documentType": "NOTICE",
+                        "publicationDate": "2022-09-28",
+                        "citation": "87 FR 59000",
+                        "htmlUrl": "https://www.federalregister.gov/d/2022-11111",
+                    },
+                ],
+            }
+
+    class FakeGovInfoClient:
+        async def search_federal_register_documents(self, *, query: str, limit: int = 10) -> dict[str, Any]:
+            del limit
+            assert "fda" in query.lower()
+            return {
+                "total": 3,
+                "data": [
+                    {
+                        "title": (
+                            "Marketing Submission Recommendations for a Predetermined Change Control Plan for "
+                            "Artificial Intelligence-Enabled Device Software Functions"
+                        ),
+                        "documentNumber": "2024-11001",
+                        "citation": "89 FR 96645",
+                        "publicationDate": "2024-12-04",
+                        "sourceUrl": "https://www.govinfo.gov/app/details/FR-2024-12-04/2024-11001",
+                        "verificationStatus": "verified_metadata",
+                        "note": "GovInfo agency guidance hit.",
+                    },
+                    {
+                        "title": (
+                            "Proposed Regulatory Framework for Modifications to Artificial Intelligence/"
+                            "Machine Learning-Based Software as a Medical Device"
+                        ),
+                        "documentNumber": "2019-00123",
+                        "citation": "84 FR 12789",
+                        "publicationDate": "2019-04-02",
+                        "sourceUrl": "https://www.govinfo.gov/app/details/FR-2019-04-02/2019-00123",
+                        "verificationStatus": "verified_metadata",
+                        "note": "GovInfo agency guidance hit.",
+                    },
+                    {
+                        "title": "Clinical Decision Support Software Guidance for Industry and FDA Staff",
+                        "documentNumber": "2022-11111",
+                        "citation": "87 FR 59000",
+                        "publicationDate": "2022-09-28",
+                        "sourceUrl": "https://www.govinfo.gov/app/details/FR-2022-09-28/2022-11111",
+                        "verificationStatus": "verified_metadata",
+                        "note": "GovInfo agency guidance hit.",
+                    },
+                ],
+            }
+
+    _, runtime = _deterministic_runtime(
+        semantic=semantic,
+        openalex=openalex,
+        ecos=FailingEcosClient(),
+        federal_register=FakeFederalRegisterClient(),
+        govinfo=FakeGovInfoClient(),
+        enable_ecos=True,
+        enable_federal_register=True,
+        enable_govinfo_cfr=True,
+    )
+
+    payload = await runtime.search_papers_smart(
+        query=(
+            "What recent FDA guidance or discussion documents are most relevant to lifecycle management of "
+            "AI or machine-learning-enabled medical devices?"
+        ),
+        limit=5,
+    )
+
+    titles = [source["title"] for source in payload["structuredSources"]]
+    lead_titles = [lead["title"] for lead in payload["candidateLeads"]]
+
+    assert payload["strategyMetadata"]["intent"] == "regulatory"
+    assert payload["strategyMetadata"]["anchorType"] == "agency_guidance_title"
+    assert "ecos" not in payload["coverageSummary"]["providersAttempted"]
+    assert titles[0].startswith("Marketing Submission Recommendations for a Predetermined Change Control Plan")
+    assert any("Proposed Regulatory Framework" in title for title in titles)
+    assert "Clinical Decision Support Software Guidance for Industry and FDA Staff" not in titles
+    assert "Clinical Decision Support Software Guidance for Industry and FDA Staff" in lead_titles
+
+
+@pytest.mark.asyncio
+async def test_search_papers_smart_broad_epa_guidance_uses_generic_anchor_scoring() -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+
+    class FailingEcosClient:
+        async def search_species(self, *, query: str, limit: int = 10, match_mode: str = "auto") -> dict[str, Any]:
+            raise AssertionError(
+                f"ECOS should not be queried for broad EPA guidance discovery: {query}, {limit}, {match_mode}"
+            )
+
+    class FakeFederalRegisterClient:
+        async def search_documents(self, *, query: str, limit: int = 10, **kwargs: Any) -> dict[str, Any]:
+            del limit, kwargs
+            assert "epa" in query.lower()
+            return {
+                "total": 3,
+                "data": [
+                    {
+                        "documentNumber": "2024-31001",
+                        "title": "Drinking Water Health Advisories for PFAS and PFOA",
+                        "documentType": "NOTICE",
+                        "publicationDate": "2024-05-01",
+                        "citation": "89 FR 31001",
+                        "htmlUrl": "https://www.federalregister.gov/d/2024-31001",
+                    },
+                    {
+                        "documentNumber": "2023-28002",
+                        "title": "PFAS Strategic Roadmap Policy Update",
+                        "documentType": "NOTICE",
+                        "publicationDate": "2023-06-15",
+                        "citation": "88 FR 28002",
+                        "htmlUrl": "https://www.federalregister.gov/d/2023-28002",
+                    },
+                    {
+                        "documentNumber": "2022-14003",
+                        "title": "Air Emissions Guidance for Stationary Sources",
+                        "documentType": "NOTICE",
+                        "publicationDate": "2022-02-03",
+                        "citation": "87 FR 14003",
+                        "htmlUrl": "https://www.federalregister.gov/d/2022-14003",
+                    },
+                ],
+            }
+
+    class FakeGovInfoClient:
+        async def search_federal_register_documents(self, *, query: str, limit: int = 10) -> dict[str, Any]:
+            del limit
+            assert "epa" in query.lower()
+            return {
+                "total": 3,
+                "data": [
+                    {
+                        "title": "Drinking Water Health Advisories for PFAS and PFOA",
+                        "documentNumber": "2024-31001",
+                        "citation": "89 FR 31001",
+                        "publicationDate": "2024-05-01",
+                        "sourceUrl": "https://www.govinfo.gov/app/details/FR-2024-05-01/2024-31001",
+                        "verificationStatus": "verified_metadata",
+                        "note": "GovInfo agency guidance hit.",
+                    },
+                    {
+                        "title": "PFAS Strategic Roadmap Policy Update",
+                        "documentNumber": "2023-28002",
+                        "citation": "88 FR 28002",
+                        "publicationDate": "2023-06-15",
+                        "sourceUrl": "https://www.govinfo.gov/app/details/FR-2023-06-15/2023-28002",
+                        "verificationStatus": "verified_metadata",
+                        "note": "GovInfo agency guidance hit.",
+                    },
+                    {
+                        "title": "Air Emissions Guidance for Stationary Sources",
+                        "documentNumber": "2022-14003",
+                        "citation": "87 FR 14003",
+                        "publicationDate": "2022-02-03",
+                        "sourceUrl": "https://www.govinfo.gov/app/details/FR-2022-02-03/2022-14003",
+                        "verificationStatus": "verified_metadata",
+                        "note": "GovInfo agency guidance hit.",
+                    },
+                ],
+            }
+
+    _, runtime = _deterministic_runtime(
+        semantic=semantic,
+        openalex=openalex,
+        ecos=FailingEcosClient(),
+        federal_register=FakeFederalRegisterClient(),
+        govinfo=FakeGovInfoClient(),
+        enable_ecos=True,
+        enable_federal_register=True,
+        enable_govinfo_cfr=True,
+    )
+
+    payload = await runtime.search_papers_smart(
+        query="What recent EPA guidance or policy documents are most relevant to PFAS in drinking water?",
+        limit=5,
+    )
+
+    titles = [source["title"] for source in payload["structuredSources"]]
+    lead_titles = [lead["title"] for lead in payload["candidateLeads"]]
+
+    assert payload["strategyMetadata"]["intent"] == "regulatory"
+    assert payload["strategyMetadata"]["anchorType"] == "agency_guidance_title"
+    assert "ecos" not in payload["coverageSummary"]["providersAttempted"]
+    assert titles[0] == "Drinking Water Health Advisories for PFAS and PFOA"
+    assert "PFAS Strategic Roadmap Policy Update" in titles
+    assert "Air Emissions Guidance for Stationary Sources" not in titles
+    assert "Air Emissions Guidance for Stationary Sources" in lead_titles
+
+
+@pytest.mark.asyncio
+async def test_search_papers_smart_broad_pfas_discovery_does_not_route_to_known_item() -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+
+    async def semantic_search(**kwargs: object) -> dict[str, Any]:
+        semantic.calls.append(("search_papers", dict(kwargs)))
+        return {
+            "total": 1,
+            "offset": 0,
+            "data": [
+                {
+                    "paperId": "pfas-remediation-review",
+                    "title": "Field-deployable PFAS remediation methods for soils and groundwater",
+                    "abstract": "Compares adsorption, soil washing, stabilization, and thermal treatment.",
+                    "year": 2024,
+                    "source": "semantic_scholar",
+                }
+            ],
+        }
+
+    async def empty_openalex_search(**kwargs: object) -> dict[str, Any]:
+        openalex.calls.append(("search", dict(kwargs)))
+        return {"total": 0, "offset": 0, "data": []}
+
+    semantic.search_papers = semantic_search  # type: ignore[method-assign]
+    openalex.search = empty_openalex_search  # type: ignore[method-assign]
+
+    _, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
+
+    payload = await runtime.search_papers_smart(
+        query=(
+            "What is the current evidence on PFAS remediation in soils and groundwater, especially for "
+            "field-deployable methods?"
+        ),
+        limit=5,
+    )
+
+    assert payload["strategyMetadata"]["intent"] in {"discovery", "review"}
+    assert payload["strategyMetadata"]["intent"] != "known_item"
+    assert payload["results"]
+
+
+@pytest.mark.asyncio
+async def test_search_papers_smart_regulatory_pfas_filters_collateral_rules_from_grounded_evidence() -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+
+    class FakeFederalRegisterClient:
+        async def search_documents(self, *, query: str, limit: int = 10, **kwargs: Any) -> dict[str, Any]:
+            del limit, kwargs
+            assert "pfas" in query.lower()
+            return {
+                "total": 3,
+                "data": [
+                    {
+                        "documentNumber": "2024-22013",
+                        "title": "Designation of PFOA and PFOS as Hazardous Substances",
+                        "documentType": "RULE",
+                        "publicationDate": "2024-05-08",
+                        "citation": "89 FR 39214",
+                        "htmlUrl": "https://www.federalregister.gov/d/2024-22013",
+                        "abstract": "PFAS hazardous-substances action under CERCLA.",
+                    },
+                    {
+                        "documentNumber": "2024-12001",
+                        "title": "National Primary Drinking Water Regulations for Lead and Copper",
+                        "documentType": "RULE",
+                        "publicationDate": "2024-02-01",
+                        "citation": "89 FR 12001",
+                        "htmlUrl": "https://www.federalregister.gov/d/2024-12001",
+                        "abstract": "Updates lead and copper requirements for drinking water systems.",
+                    },
+                    {
+                        "documentNumber": "2024-13002",
+                        "title": "Vessel Incidental Discharge National Standards of Performance",
+                        "documentType": "RULE",
+                        "publicationDate": "2024-03-01",
+                        "citation": "89 FR 13002",
+                        "htmlUrl": "https://www.federalregister.gov/d/2024-13002",
+                        "abstract": "Discharge standards for vessels.",
+                    },
+                ],
+            }
+
+    _, runtime = _deterministic_runtime(
+        semantic=semantic,
+        openalex=openalex,
+        federal_register=FakeFederalRegisterClient(),
+        enable_federal_register=True,
+        enable_govinfo_cfr=False,
+        enable_ecos=False,
+    )
+
+    payload = await runtime.search_papers_smart(
+        query="What recent U.S. federal regulatory actions address PFAS in drinking water and hazardous substances?",
+        limit=5,
+        mode="regulatory",
+    )
+
+    titles = [source["title"] for source in payload["structuredSources"]]
+    lead_titles = [lead["title"] for lead in payload["candidateLeads"]]
+
+    assert "Designation of PFOA and PFOS as Hazardous Substances" in titles
+    assert "National Primary Drinking Water Regulations for Lead and Copper" not in titles
+    assert "Vessel Incidental Discharge National Standards of Performance" not in titles
+    assert "National Primary Drinking Water Regulations for Lead and Copper" in lead_titles
+    assert "Vessel Incidental Discharge National Standards of Performance" in lead_titles
+
+
+@pytest.mark.asyncio
+async def test_search_papers_smart_initial_retrieval_blends_focus_for_broad_environmental_query() -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+
+    async def semantic_search(**kwargs: object) -> dict[str, Any]:
+        semantic.calls.append(("search_papers", dict(kwargs)))
+        return {
+            "total": 1,
+            "offset": 0,
+            "data": [
+                {
+                    "paperId": "wetland-1",
+                    "title": "Coastal marsh wetland restoration and climate resilience",
+                    "year": 2024,
+                    "source": "semantic_scholar",
+                }
+            ],
+        }
+
+    async def empty_openalex_search(**kwargs: object) -> dict[str, Any]:
+        openalex.calls.append(("search", dict(kwargs)))
+        return {"total": 0, "offset": 0, "data": []}
+
+    semantic.search_papers = semantic_search  # type: ignore[method-assign]
+    openalex.search = empty_openalex_search  # type: ignore[method-assign]
+
+    _, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
+
+    await runtime.search_papers_smart(
+        query="What are the most effective wetland restoration strategies for improving climate resilience?",
+        focus="prioritize coastal marsh field studies and management guidance relevant to restoration practitioners",
+        limit=5,
+    )
+
+    first_query = str(semantic.calls[0][1].get("query") or "")
+    assert "coastal" in first_query.lower()
+    assert "marsh" in first_query.lower()
+
+
+@pytest.mark.asyncio
+async def test_search_papers_smart_initial_retrieval_blends_focus_for_broad_fire_management_query() -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+
+    async def semantic_search(**kwargs: object) -> dict[str, Any]:
+        semantic.calls.append(("search_papers", dict(kwargs)))
+        return {
+            "total": 1,
+            "offset": 0,
+            "data": [
+                {
+                    "paperId": "fire-1",
+                    "title": "Prescribed fire and mechanical thinning for wildfire risk and biodiversity",
+                    "year": 2023,
+                    "source": "semantic_scholar",
+                }
+            ],
+        }
+
+    async def empty_openalex_search(**kwargs: object) -> dict[str, Any]:
+        openalex.calls.append(("search", dict(kwargs)))
+        return {"total": 0, "offset": 0, "data": []}
+
+    semantic.search_papers = semantic_search  # type: ignore[method-assign]
+    openalex.search = empty_openalex_search  # type: ignore[method-assign]
+
+    _, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
+
+    await runtime.search_papers_smart(
+        query=(
+            "What does recent evidence say about prescribed fire versus mechanical thinning for reducing wildfire risk?"
+        ),
+        focus=(
+            "prefer reviews meta-analyses and field studies relevant to retaining biodiversity in western U.S. forests"
+        ),
+        limit=5,
+    )
+
+    first_query = str(semantic.calls[0][1].get("query") or "")
+    assert "biodiversity" in first_query.lower()
+    assert "forests" in first_query.lower()
+
+
+@pytest.mark.asyncio
 async def test_search_papers_smart_include_enrichment_enriches_final_hits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

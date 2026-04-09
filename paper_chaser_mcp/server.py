@@ -193,6 +193,10 @@ reproduction-ready issues that can guide code changes and documentation updates.
 Pagination rule: treat pagination.nextCursor as opaque — pass it back exactly as
 returned, do not derive, edit, or fabricate it, and do not reuse it across a
 different tool or query flow.
+For repo-local eval bootstrap or workflow QA work, prefer the checked-in
+scripts (`scripts/generate_eval_topics.py`, `scripts/run_eval_autopilot.py`,
+and `scripts/run_eval_workflow.py`) so runs stay reproducible and emit the
+expected bundle artifacts.
 """.strip()
 
 GUIDED_SERVER_INSTRUCTIONS = """
@@ -265,9 +269,24 @@ AGENT_WORKFLOW_GUIDE = """
   `get_species_profile_ecos`, and `list_species_documents_ecos`.
 - Expert runtime debugging lives under `get_provider_diagnostics`.
 
+## Repo-local eval bootstrap
+
+- When the task is repo-local eval generation or workflow QA rather than an
+    end-user research answer, prefer the checked-in scripts over improvised tool
+    loops: `scripts/generate_eval_topics.py`, `scripts/run_eval_autopilot.py`,
+    and `scripts/run_eval_workflow.py`.
+- Use the checked-in autopilot profiles for narrow one-seed experiments instead
+    of editing thresholds ad hoc. The exploratory profiles are meant to make
+    small-run behavior explicit and reproducible.
+- Prefer single-seed diversification when you need broader one-seed coverage;
+    it asks the planner for review, regulatory, and methods-oriented variants
+    rather than relying only on looser workflow gating.
+
 ## Safety habits
 
 - Prefer guided tools unless a concrete expert-only need is present.
+- Expect guided summaries to lead with a short recommendation first, then use
+    evidence, leads, and provenance for the audit trail.
 - Reuse `searchSessionId` instead of rephrasing the same question into multiple
   raw tools.
 - Treat `pagination.nextCursor` as opaque whenever you are on an expert paginated
@@ -842,6 +861,10 @@ def plan_paper_chaser_search(
         "For regulatory work, prefer the guided path first; if you need exact primary-source "
         "control, pivot into search_federal_register, get_federal_register_document, get_cfr_text, "
         "or the ECOS tools. "
+        "If your goal is repo-local eval bootstrap or workflow QA instead of answering an end-user "
+        "research ask, prefer scripts/generate_eval_topics.py, scripts/run_eval_autopilot.py, and "
+        "scripts/run_eval_workflow.py so the run stays reproducible and produces the expected bundle "
+        "artifacts. "
         "If you uncover a defect or confusing UX, summarize the exact tool calls, "
         "expected vs actual behavior, and whether the best follow-up is a code "
         "change, a documentation update, or both so the result can turn into an "

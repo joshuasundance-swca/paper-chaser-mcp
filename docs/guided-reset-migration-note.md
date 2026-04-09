@@ -56,10 +56,14 @@ environments even though the server still supports those tools in expert mode.
   - `resultStatus`: `succeeded|partial|needs_disambiguation|abstained|failed`
   - `answerability`, `routingSummary`, `coverageSummary`, `evidence`, `leads`,
     `evidenceGaps`, `failureSummary`, `nextActions`, `executionProvenance`
+  - `summary` now leads with a short recommendation-first statement when the
+    server has a clear top result.
 - Guided follow-up returns explicit answer gating:
   - `answerStatus`: `answered|abstained|insufficient_evidence`
   - `answer` is `null` when not safely answerable.
   - ambiguity and reuse state are surfaced through `sessionResolution`
+  - saved-session introspection can classify mixed source sets into on-topic,
+    weaker, and off-target groups when the stored metadata is sufficient
 - Guided source inspection now returns structured `sourceResolution` details on
   ambiguity instead of failing with a raw `ValueError`.
 - Runtime truth is now expected to include:

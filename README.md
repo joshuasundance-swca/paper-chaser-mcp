@@ -48,13 +48,18 @@ be hard to misuse and explicit about trust.
   with a server-owned quality-first policy for guided use.
 - **Grounded follow-up**: `follow_up_research` answers against one saved
   `searchSessionId`; if you omit it, the server only infers a session when the
-  choice is unique.
+  choice is unique. Saved-session follow-up can classify mixed source sets into
+  on-topic evidence, weaker context, and off-target leads when the stored
+  metadata is already sufficient.
 - **Decision metadata**: guided responses surface `executionProvenance`, and
   ambiguous follow-up or source-inspection flows return structured
   `sessionResolution` / `sourceResolution` payloads instead of opaque errors.
 - **Reference-first recovery**: `resolve_reference` handles DOI/arXiv/URL,
   citation fragments, and regulatory-style references, and exact DOI/arXiv/
   paper-URL inputs resolve as exact anchors rather than falling through to fuzzy repair.
+- **Compact top-level answer**: guided `research` leads with a short
+  recommendation-first `summary`, while keeping the structured evidence,
+  leads, and provenance fields available below it.
 - **Source auditability**: `inspect_source` exposes one `sourceId` with
   provenance, trust state, and direct-read next steps; omitted `searchSessionId`
   is only accepted when one compatible saved session exists.
@@ -141,6 +146,7 @@ follow_up_research(searchSessionId="...", question="What evaluation tradeoffs sh
 → inspect answerStatus
 → if answered: use answer + evidence
 → if abstained/insufficient_evidence: use nextActions and inspect_source
+→ mixed saved sessions can still answer relevance-triage questions such as which items are on-topic vs off-target
 → if you omit searchSessionId and multiple saved sessions exist: provide it explicitly
 ```
 
@@ -210,6 +216,11 @@ Treat these as the main guided contracts:
 | `answerStatus` | `follow_up_research` | `answered`, `abstained`, `insufficient_evidence` |
 | `evidenceId` | `evidence[*]` | Pass to `inspect_source` for per-source provenance checks |
 | `runtimeSummary` | `get_runtime_status` and expert diagnostics | Confirm effective profile, smart provider state, and warnings |
+
+For broad agency-guidance discovery, guided routing stays on the
+regulatory primary-source path. Off-topic authority documents may still appear
+as `leads`, but they should not displace more relevant query-anchored guidance
+or policy documents from the top-level recommendation.
 
 ## Deferred export design
 
@@ -823,7 +834,7 @@ For maintainer orientation after the module split, start with `docs/agent-handof
 
 - [GitHub Copilot Instructions](.github/copilot-instructions.md) - repo-specific guidance for GitHub Copilot and the GitHub cloud coding agent, including workflow defaults and durable planning expectations.
 - [Agent Handoff](docs/agent-handoff.md) - current repo status, validation commands, and next recommended work for follow-on agents.
-- [LLM Selection Guide](docs/llm-selection-guide.md) - planner versus synthesis responsibilities, current smart-layer model defaults, supporting model-mediated features, and criteria for choosing LLMs in this repo.
+- [LLM Selection Guide](docs/llm-selection-guide.md) - planner versus synthesis responsibilities, current smart-layer model defaults, the eval-bootstrap funnel around `generate_eval_topics.py` and `run_eval_autopilot.py`, and criteria for choosing LLMs in this repo.
 - [LLM Evaluation Program Plan](docs/llm-evaluation-program-plan.md) - role-based evaluation strategy, dataset-generation plan, evaluator stack, and phased rollout for rigorous LLM performance measurement in this repo.
 - [LLM Evaluation Dataset Schema](docs/llm-evaluation-dataset-schema.md) - JSONL schema, field rules, governance conventions, and storage layout for role-based evaluation seed sets and future benchmark expansion.
 - [LLM Evaluation Platform Strategy](docs/llm-evaluation-platform-strategy.md) - how to combine repo-local evals with Azure AI Foundry, Hugging Face, and live-trace active-learning loops without losing portability.
@@ -836,6 +847,14 @@ Portable exports for downstream evaluation and training systems are available vi
 Service-specific publish helpers are available via `scripts/upload_foundry_eval_dataset.py` and `scripts/upload_hf_eval_assets.py` for pushing reviewed exports into a Foundry project dataset, a Hugging Face dataset repo, or a Hugging Face bucket.
 
 Expert batch curation runs can now emit `batch-summary.json` and `batch-ledger.csv` alongside the raw report, captured events, and review queue so offline drift and throughput checks do not depend on replaying the full JSONL artifacts.
+
+For repo-local eval bootstrap, the current top-level workflow is:
+
+- `scripts/generate_eval_topics.py` for planner-led topic generation, taxonomy assignment, ranking, pruning, balancing, and scenario emission
+- `scripts/run_eval_autopilot.py` for profile-driven generation, immutable run bundles, holdout checks, and guarded workflow handoff
+- `scripts/run_eval_workflow.py` for expert batch capture, review or promotion, dataset splitting, and live provider-matrix evaluation
+
+The checked-in autopilot sample profiles now include balanced-science defaults plus narrow-run profiles such as `single-seed-exploratory-review`, `single-seed-exploratory-safe`, and `single-seed-diagnostic-force`. Those narrow-run profiles can enable single-seed diversification so one-seed runs ask the planner for additional review, regulatory, and methods-oriented variants instead of depending only on looser workflow thresholds.
 
 See `docs/llm-evaluation-integrations.md` for the current Foundry and Hugging Face integration posture, including when `hf-mount` is a good fit for a shared capture sink.
 - [Release And Publishing Plan](docs/release-publishing-plan.md) - the current release playbook for GHCR, GitHub Release assets, manual MCP Registry publication, and dormant PyPI.

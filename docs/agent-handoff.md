@@ -22,6 +22,10 @@ next steps without re-discovering project state.
 - Guided follow-up is now **abstention-safe**. `follow_up_research` returns
   `answerStatus=answered|abstained|insufficient_evidence` and should not emit
   answer-shaped filler when evidence is weak.
+- Guided follow-up is also **stateful over mixed saved sessions**. When saved
+  metadata is strong enough, it can classify sources and leads into on-topic,
+  weaker, and off-target groups instead of immediately deferring to a fresh
+  retrieval or a metadata-free abstention.
 - Guided execution policy is now **server-owned and quality-first**. Guided
   `research` ignores client `latencyProfile`, uses the configured guided
   defaults from `settings.py`, and can run one bounded review escalation when
@@ -33,6 +37,9 @@ next steps without re-discovering project state.
   build a trustworthy primary-source trail or return
   `needs_disambiguation` / `abstained`; unrelated wildlife notices should not
   appear in grounded `evidence` or timeline events.
+- Broad agency-guidance prompts now stay on the regulatory path, prefer the most
+  relevant query-anchored guidance or policy documents in the top summary, and
+  retain weaker authority hits as leads rather than silently drifting into known-item recovery.
 - Runtime reporting is now **internally truthful**. `get_runtime_status` and
   expert diagnostics should agree on `effectiveProfile`, smart-provider state,
   and active/disabled provider sets. `configuredSmartProvider` is the configured
@@ -41,6 +48,13 @@ next steps without re-discovering project state.
 - The repo now includes a **portable eval curation funnel**. Live trace capture,
   review-queue generation, trace promotion, portable exports, service-specific
   publish helpers, and expert batch artifact generation are all checked in.
+- The repo now also includes a **profile-driven eval bootstrap path**.
+  `scripts/generate_eval_topics.py`, `scripts/run_eval_autopilot.py`, and
+  `scripts/run_eval_workflow.py` support ranked topic generation, immutable run
+  bundles, guarded workflow handoff, and exploratory single-seed review loops.
+- Narrow-run eval profiles can now use **single-seed diversification** to ask
+  the planner for review, regulatory, and methods-oriented variants instead of
+  depending only on looser workflow thresholds.
 - The eval capture layer now records **batch-safe offline telemetry** such as
   `runId`, `batchId`, `durationMs`, compact provider-pathway summaries, stage
   timings, confidence signals, and batch-level summary or ledger artifacts.
@@ -202,6 +216,9 @@ pytest tests/test_agentic_workflow.py -q
 - Offline batch artifacts for eval curation: `expert-batch-report.json`,
   `captured-events.jsonl`, `review-queue.jsonl`, `batch-summary.json`, and
   `batch-ledger.csv`.
+- Profile-driven eval bootstrap artifacts and wrappers for ranked topic
+  generation, autopilot review gating, immutable run bundles, and exploratory
+  single-seed profiles.
 
 ## Known Hotspots
 
@@ -223,6 +240,10 @@ pytest tests/test_agentic_workflow.py -q
   trace-promotion guide, integration guide, platform strategy, and this
   handoff doc synchronized whenever batch artifacts, queue shape, or export
   semantics change.
+7. The current narrow-run exploratory blocker is family cross-check
+  disagreement. Single-seed diversification improved coverage in live runs,
+  but valid review or policy pivots can still be blocked by cross-check
+  thresholds before workflow handoff.
 
 ## Suggested Next Steps
 
@@ -237,6 +258,9 @@ pytest tests/test_agentic_workflow.py -q
    flipping the default experience back to raw/smart-first.
 5. For release work, follow `docs/release-publishing-plan.md`; do not rely on
    stale branch/tag instructions from older notes.
+6. Calibrate family cross-check disagreement handling for exploratory one-seed
+  runs so valid review or policy pivots are not over-penalized once topic
+  count and family coverage improve.
 
 ## Ready Handoff Prompt
 

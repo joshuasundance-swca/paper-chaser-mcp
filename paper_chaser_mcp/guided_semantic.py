@@ -303,6 +303,22 @@ def build_follow_up_decision(
             ]
         )
 
+    if not selected_evidence_ids and not selected_lead_ids and "relevance_triage" in facets:
+        selected_evidence_ids.extend(
+            [
+                str(source.get("sourceId") or source.get("sourceAlias") or "").strip()
+                for source in sources[:5]
+                if str(source.get("sourceId") or source.get("sourceAlias") or "").strip()
+            ]
+        )
+        selected_lead_ids.extend(
+            [
+                str(lead.get("sourceId") or lead.get("sourceAlias") or "").strip()
+                for lead in leads[:5]
+                if str(lead.get("sourceId") or lead.get("sourceAlias") or "").strip()
+            ]
+        )
+
     return FollowUpDecision(
         answerFromSession=bool(facets or selected_evidence_ids or selected_lead_ids),
         selectedEvidenceIds=selected_evidence_ids,
@@ -345,7 +361,7 @@ def _default_provider_plan_for_anchor(anchor_type: str | None, intent: str) -> l
     if anchor_type in {"species_common_name", "species_scientific_name"}:
         return ["ecos", "federal_register", "govinfo"]
     if anchor_type == "agency_guidance_title":
-        return ["tavily", "perplexity"]
+        return ["govinfo", "federal_register"]
     if intent == "regulatory":
         return ["ecos", "federal_register", "govinfo"]
     return []
@@ -359,7 +375,7 @@ def _required_primary_sources(anchor_type: str | None) -> list[str]:
     if anchor_type in {"species_common_name", "species_scientific_name"}:
         return ["ecos"]
     if anchor_type == "agency_guidance_title":
-        return ["agency_primary_source"]
+        return ["govinfo", "federal_register"]
     return []
 
 

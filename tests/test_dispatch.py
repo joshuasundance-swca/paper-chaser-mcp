@@ -2339,6 +2339,330 @@ async def test_follow_up_research_answers_from_saved_session_metadata_when_regul
 
 
 @pytest.mark.asyncio
+async def test_follow_up_research_classifies_saved_sources_and_leads_for_relevance_triage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRuntime:
+        async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
+            raise AssertionError(f"ask_result_set should not run for saved-session triage: {kwargs!r}")
+
+    record = server.workspace_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-follow-up-triage",
+        query="FDA AI/ML lifecycle guidance documents",
+        payload={
+            "searchSessionId": "ssn-follow-up-triage",
+            "structuredSources": [
+                {
+                    "sourceId": "pcp-guidance",
+                    "title": (
+                        "Marketing Submission Recommendations for a Predetermined Change Control Plan for "
+                        "Artificial Intelligence-Enabled Device Software Functions"
+                    ),
+                    "provider": "govinfo",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "access_unverified",
+                    "topicalRelevance": "on_topic",
+                    "confidence": "high",
+                    "isPrimarySource": True,
+                },
+                {
+                    "sourceId": "framework-paper",
+                    "title": (
+                        "Proposed Regulatory Framework for Modifications to Artificial Intelligence/"
+                        "Machine Learning-Based Software as a Medical Device"
+                    ),
+                    "provider": "federal_register",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "access_unverified",
+                    "topicalRelevance": "on_topic",
+                    "confidence": "medium",
+                    "isPrimarySource": True,
+                },
+            ],
+            "candidateLeads": [
+                {
+                    "sourceId": "cds-guidance",
+                    "title": "Clinical Decision Support Software Guidance for Industry and FDA Staff",
+                    "provider": "govinfo",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "access_unverified",
+                    "topicalRelevance": "off_topic",
+                    "confidence": "medium",
+                    "isPrimarySource": True,
+                    "note": (
+                        "Filtered from grounded evidence because it did not match the requested AI/ML lifecycle scope."
+                    ),
+                }
+            ],
+            "evidenceGaps": ["Some returned agency records were filtered as off-topic to preserve precision."],
+            "coverageSummary": {
+                "providersAttempted": ["govinfo", "federal_register"],
+                "providersSucceeded": ["govinfo", "federal_register"],
+                "providersFailed": [],
+                "providersZeroResults": [],
+                "likelyCompleteness": "partial",
+                "searchMode": "regulatory_primary_source",
+            },
+        },
+    )
+    assert record.search_session_id == "ssn-follow-up-triage"
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(
+        await server.call_tool(
+            "follow_up_research",
+            {
+                "searchSessionId": "ssn-follow-up-triage",
+                "question": (
+                    "Which of these are actual FDA AI/ML lifecycle guidance documents, and which are off-target?"
+                ),
+            },
+        )
+    )
+
+    assert payload["answerStatus"] == "answered"
+    assert "Predetermined Change Control Plan" in payload["answer"]
+    assert "Proposed Regulatory Framework" in payload["answer"]
+    assert "Clinical Decision Support Software Guidance" in payload["answer"]
+    assert "off-target" in payload["answer"].lower()
+    assert payload["selectedLeadIds"] == ["cds-guidance"]
+    assert payload["executionProvenance"]["executionMode"] == "session_introspection"
+
+
+@pytest.mark.asyncio
+async def test_guided_research_summary_leads_with_top_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeRuntime:
+        async def search_papers_smart(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            return {
+                "searchSessionId": "ssn-summary-guided",
+                "strategyMetadata": {"intent": "regulatory"},
+                "structuredSources": [
+                    {
+                        "sourceId": "pcp-guidance",
+                        "title": (
+                            "Marketing Submission Recommendations for a Predetermined Change Control Plan for "
+                            "Artificial Intelligence-Enabled Device Software Functions"
+                        ),
+                        "provider": "govinfo",
+                        "sourceType": "primary_regulatory",
+                        "verificationStatus": "verified_metadata",
+                        "accessStatus": "access_unverified",
+                        "topicalRelevance": "on_topic",
+                        "confidence": "high",
+                        "isPrimarySource": True,
+                    }
+                ],
+                "candidateLeads": [],
+                "evidenceGaps": [],
+                "coverageSummary": {"searchMode": "regulatory_primary_source"},
+                "failureSummary": None,
+                "clarification": None,
+                "regulatoryTimeline": {"events": []},
+            }
+
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(
+        await server.call_tool(
+            "research",
+            {"query": "recent FDA AI/ML lifecycle guidance documents"},
+        )
+    )
+
+    assert payload["summary"].startswith("Top result:")
+    assert "Predetermined Change Control Plan" in payload["summary"]
+
+
+@pytest.mark.asyncio
+async def test_follow_up_research_uses_question_shaped_answer_mode_over_saved_claim_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeRuntime:
+        async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
+            captured.update(kwargs)
+            return {
+                "searchSessionId": "ssn-follow-up-mode",
+                "answerStatus": "answered",
+                "answer": "Validation limitations were summarized from the saved evidence.",
+                "evidence": [],
+                "unsupportedAsks": [],
+                "followUpQuestions": [],
+                "structuredSources": [],
+                "candidateLeads": [],
+                "evidenceGaps": [],
+                "coverageSummary": {"searchMode": "grounded_follow_up"},
+                "failureSummary": None,
+            }
+
+    record = server.workspace_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-follow-up-mode",
+        query="freshwater eDNA biodiversity monitoring",
+        metadata={"strategyMetadata": {"followUpMode": "claim_check"}},
+        payload={
+            "searchSessionId": "ssn-follow-up-mode",
+            "structuredSources": [
+                {
+                    "sourceId": "edna-review",
+                    "title": "Freshwater eDNA validation for biodiversity monitoring",
+                    "provider": "semantic_scholar",
+                    "sourceType": "scholarly_article",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "abstract_only",
+                    "topicalRelevance": "on_topic",
+                    "confidence": "medium",
+                    "isPrimarySource": False,
+                }
+            ],
+        },
+    )
+    assert record.search_session_id == "ssn-follow-up-mode"
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(
+        await server.call_tool(
+            "follow_up_research",
+            {
+                "searchSessionId": "ssn-follow-up-mode",
+                "question": "What limitations or validation issues appear most often in the returned evidence?",
+            },
+        )
+    )
+
+    assert payload["answerStatus"] == "answered"
+    assert captured.get("answerMode", captured.get("answer_mode")) == "qa"
+
+
+@pytest.mark.asyncio
+async def test_follow_up_research_relevance_triage_answers_weak_matches_versus_off_topic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRuntime:
+        async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
+            raise AssertionError(f"ask_result_set should not run for saved-session relevance triage: {kwargs!r}")
+
+    record = server.workspace_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-follow-up-weak-vs-offtopic",
+        query="remote sensing algal blooms freshwater lakes",
+        payload={
+            "searchSessionId": "ssn-follow-up-weak-vs-offtopic",
+            "structuredSources": [
+                {
+                    "sourceId": "remote-review",
+                    "title": "Remote sensing for mapping algal blooms in freshwater lakes: a review",
+                    "provider": "semantic_scholar",
+                    "sourceType": "scholarly_article",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "abstract_only",
+                    "topicalRelevance": "weak_match",
+                    "confidence": "medium",
+                    "isPrimarySource": False,
+                }
+            ],
+            "candidateLeads": [
+                {
+                    "sourceId": "shellfish-safety",
+                    "title": "Shellfish safety surveillance guidance",
+                    "provider": "govinfo",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "access_unverified",
+                    "topicalRelevance": "off_topic",
+                    "confidence": "medium",
+                    "isPrimarySource": True,
+                }
+            ],
+        },
+    )
+    assert record.search_session_id == "ssn-follow-up-weak-vs-offtopic"
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(
+        await server.call_tool(
+            "follow_up_research",
+            {
+                "searchSessionId": "ssn-follow-up-weak-vs-offtopic",
+                "question": (
+                    "Which returned items were treated as weak matches versus off-topic, based on the saved evidence?"
+                ),
+            },
+        )
+    )
+
+    assert payload["answerStatus"] == "answered"
+    assert "Remote sensing for mapping algal blooms" in payload["answer"]
+    assert "Shellfish safety surveillance guidance" in payload["answer"]
+    assert "weaker" in payload["answer"].lower() or "weak" in payload["answer"].lower()
+
+
+@pytest.mark.asyncio
+async def test_follow_up_research_execution_provenance_uses_live_runtime_provider_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _ProviderBundle:
+        def selection_metadata(self) -> dict[str, Any]:
+            return {
+                "configuredSmartProvider": "openai",
+                "activeSmartProvider": "deterministic",
+                "plannerModel": "openai:deterministic-planner",
+                "plannerModelSource": "deterministic",
+                "synthesisModel": "openai:deterministic-synthesizer",
+                "synthesisModelSource": "deterministic",
+            }
+
+    class _FakeRuntime:
+        def __init__(self) -> None:
+            self._provider_bundle = _ProviderBundle()
+
+        async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            return {
+                "searchSessionId": "ssn-follow-up-runtime-provider",
+                "answerStatus": "answered",
+                "answer": "Grounded answer.",
+                "evidence": [],
+                "unsupportedAsks": [],
+                "followUpQuestions": [],
+                "structuredSources": [],
+                "candidateLeads": [],
+                "evidenceGaps": [],
+                "coverageSummary": {"searchMode": "grounded_follow_up"},
+                "failureSummary": None,
+            }
+
+    record = server.workspace_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-follow-up-runtime-provider",
+        query="environmental follow-up",
+        metadata={"strategyMetadata": {"configuredSmartProvider": "openai", "activeSmartProvider": "openai"}},
+        payload={"searchSessionId": "ssn-follow-up-runtime-provider", "structuredSources": []},
+    )
+    assert record.search_session_id == "ssn-follow-up-runtime-provider"
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(
+        await server.call_tool(
+            "follow_up_research",
+            {
+                "searchSessionId": "ssn-follow-up-runtime-provider",
+                "question": "What do the saved sources say?",
+            },
+        )
+    )
+
+    assert payload["executionProvenance"]["configuredSmartProvider"] == "openai"
+    assert payload["executionProvenance"]["activeSmartProvider"] == "deterministic"
+
+
+@pytest.mark.asyncio
 async def test_follow_up_research_uses_saved_unverified_leads_for_source_overview_when_no_sources_exist(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

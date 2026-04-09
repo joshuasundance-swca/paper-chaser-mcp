@@ -63,7 +63,9 @@ from .planner import (
     combine_variants,
     dedupe_variants,
     detect_literature_intent,
+    detect_regulatory_intent,
     grounded_expansion_candidates,
+    normalize_query,
     query_facets,
     query_terms,
     speculative_expansion_candidates,
@@ -217,6 +219,56 @@ _AGENCY_AUTHORITY_TERMS = {
     "hhs",
     "nih",
     "usda",
+}
+_AGENCY_GUIDANCE_QUERY_NOISE_TERMS = {
+    "actual",
+    "agency",
+    "document",
+    "documents",
+    "drug",
+    "food",
+    "guidance",
+    "industry",
+    "management",
+    "most",
+    "policy",
+    "recent",
+    "relevant",
+    "staff",
+    "what",
+}
+_AGENCY_GUIDANCE_DOCUMENT_TERMS = {
+    "advisories",
+    "advisory",
+    "guidance",
+    "guideline",
+    "guidelines",
+    "notice",
+    "notices",
+    "policies",
+    "policy",
+    "recommendation",
+    "recommendations",
+    "roadmap",
+}
+_AGENCY_GUIDANCE_DISCUSSION_TERMS = {
+    "concept",
+    "concepts",
+    "discussion",
+    "framework",
+    "proposal",
+    "proposals",
+    "proposed",
+}
+_REGULATORY_QUERY_NOISE_TERMS = {
+    "address",
+    "actions",
+    "current",
+    "federal",
+    "recent",
+    "states",
+    "united",
+    "what",
 }
 _SPECIES_QUERY_NOISE_TERMS = {
     "about",
@@ -502,6 +554,19 @@ class AgenticRuntime:
             request_outcomes=provider_outcomes,
             request_id=request_id,
         )
+        if (
+            mode == "auto"
+            and planner.intent == "known_item"
+            and (
+                detect_regulatory_intent(normalized_query, focus)
+                or _is_agency_guidance_query(normalized_query)
+                or _is_species_regulatory_query(normalized_query)
+            )
+        ):
+            planner.intent = "regulatory"
+            planner.intent_source = "heuristic_override"
+            planner.intent_confidence = "high"
+            planner.intent_rationale = "Regulatory guardrails overrode a title-like known-item classification."
         normalization_warnings, repaired_inputs = _normalization_metadata(query, normalized_query)
         _finish_stage("planning", planning_started)
         await self._emit_smart_search_status(
@@ -549,6 +614,8 @@ class AgenticRuntime:
                 ctx=ctx,
             )
             if regulatory_result.get("structuredSources"):
+                return regulatory_result
+            if _is_agency_guidance_query(normalized_query):
                 return regulatory_result
 
             recovered_anchor, _ = await self._resolve_known_item(normalized_query)
@@ -664,9 +731,14 @@ class AgenticRuntime:
                 f"'{_truncate_text(normalized_query, limit=96)}'."
             ),
         )
+        initial_retrieval_query = _initial_retrieval_query_text(
+            normalized_query=normalized_query,
+            focus=focus,
+            intent=planner.intent,
+        )
         first_retrieval_started = time.perf_counter()
         first_batch = await retrieve_variant(
-            variant=normalized_query,
+            variant=initial_retrieval_query,
             variant_source="from_input",
             intent=planner.intent,
             year=year,
@@ -2026,7 +2098,14 @@ class AgenticRuntime:
 
         cfr_request = _parse_cfr_request(query)
         cfr_citation = _format_cfr_citation(cfr_request)
-        anchored_subject_terms: set[str] = set()
+        anchored_subject_terms: set[str] = (
+            _agency_guidance_subject_terms(query) if agency_guidance_mode else _regulatory_query_subject_terms(query)
+        )
+        agency_priority_terms: set[str] = (
+            _agency_guidance_priority_terms(query) if agency_guidance_mode else _regulatory_query_priority_terms(query)
+        )
+        agency_facet_terms: list[set[str]] = _agency_guidance_facet_terms(query) if agency_guidance_mode else []
+        prefer_recent_guidance = agency_guidance_mode and _guidance_query_prefers_recency(query)
         filtered_document_count = 0
         species_anchor_type: str | None = None
 
@@ -2042,8 +2121,43 @@ class AgenticRuntime:
                 documents = list(govinfo_search.get("data") or [])
                 if documents:
                     succeeded.append("govinfo")
-                    for document in documents[:limit]:
+                    ranked_documents = _rank_regulatory_documents(
+                        documents,
+                        subject_terms=anchored_subject_terms,
+                        priority_terms=agency_priority_terms,
+                        facet_terms=agency_facet_terms,
+                        prefer_guidance=True,
+                        prefer_recent=prefer_recent_guidance,
+                    )
+                    for document in ranked_documents[:limit]:
                         if not isinstance(document, dict):
+                            continue
+                        if not _regulatory_document_matches_subject(
+                            document,
+                            subject_terms=anchored_subject_terms,
+                            priority_terms=agency_priority_terms,
+                            cfr_citation=None,
+                        ):
+                            filtered_document_count += 1
+                            off_topic_lead = _source_record_from_regulatory_document(
+                                document,
+                                provider="govinfo",
+                                topical_relevance="off_topic",
+                            )
+                            reason_note = (
+                                "Filtered from grounded agency-guidance evidence because it did not match the "
+                                "requested agency-guidance subject."
+                            )
+                            existing_note = off_topic_lead.note
+                            candidate_leads.append(
+                                off_topic_lead.model_copy(
+                                    update={
+                                        "note": (
+                                            f"{reason_note} {existing_note}".strip() if existing_note else reason_note
+                                        )
+                                    }
+                                )
+                            )
                             continue
                         structured_sources.append(
                             _source_record_from_regulatory_document(
@@ -2231,11 +2345,7 @@ class AgenticRuntime:
                 )
 
         if not anchored_subject_terms:
-            anchored_subject_terms = {
-                term
-                for term in query_terms(query)
-                if term not in _REGULATORY_SUBJECT_STOPWORDS and len(term) > 3 and term not in _GRAPH_GENERIC_TERMS
-            }
+            anchored_subject_terms = _regulatory_query_subject_terms(query)
         fr_query = subject or query
         if self._enable_federal_register and self._federal_register_client is not None:
             attempted.append("federal_register")
@@ -2255,6 +2365,7 @@ class AgenticRuntime:
                         if not _regulatory_document_matches_subject(
                             document,
                             subject_terms=anchored_subject_terms,
+                            priority_terms=agency_priority_terms,
                             cfr_citation=cfr_citation,
                         ):
                             filtered_document_count += 1
@@ -2370,6 +2481,7 @@ class AgenticRuntime:
                         if not _regulatory_document_matches_subject(
                             document,
                             subject_terms=anchored_subject_terms,
+                            priority_terms=agency_priority_terms,
                             cfr_citation=cfr_citation,
                         ):
                             continue
@@ -3903,6 +4015,7 @@ def _regulatory_document_matches_subject(
     document: dict[str, Any],
     *,
     subject_terms: set[str],
+    priority_terms: set[str] | None = None,
     cfr_citation: str | None,
 ) -> bool:
     title = str(document.get("title") or "")
@@ -3915,11 +4028,14 @@ def _regulatory_document_matches_subject(
     )
     document_tokens = _graph_topic_tokens(document_text)
     title_tokens = _graph_topic_tokens(title)
+    priority_overlap = len(document_tokens & set(priority_terms or set()))
 
     subject_match_required = bool(subject_terms)
     subject_title_overlap = len(subject_terms & title_tokens)
     subject_body_overlap = len(subject_terms & document_tokens)
-    subject_match = subject_title_overlap > 0 or subject_body_overlap >= 2
+    subject_match = subject_title_overlap > 0 or subject_body_overlap >= 2 or priority_overlap >= 2
+    if priority_terms:
+        subject_match = subject_match and priority_overlap > 0
 
     cfr_match = False
     cfr_expected_tokens = _cfr_tokens(cfr_citation)
@@ -3941,6 +4057,147 @@ def _regulatory_document_matches_subject(
     return True
 
 
+def _agency_guidance_subject_terms(query: str) -> set[str]:
+    normalized = re.sub(r"[-_/]+", " ", query.lower())
+    return {
+        term
+        for term in re.findall(r"[a-z0-9]{4,}", normalized)
+        if term not in _REGULATORY_SUBJECT_STOPWORDS
+        and term not in _AGENCY_GUIDANCE_QUERY_NOISE_TERMS
+        and term not in _GRAPH_GENERIC_TERMS
+        and len(term) > 3
+    }
+
+
+def _regulatory_query_subject_terms(query: str) -> set[str]:
+    normalized = re.sub(r"[-_/]+", " ", query.lower())
+    return {
+        term
+        for term in re.findall(r"[a-z0-9]{4,}", normalized)
+        if term not in _REGULATORY_SUBJECT_STOPWORDS
+        and term not in _REGULATORY_QUERY_NOISE_TERMS
+        and term not in _GRAPH_GENERIC_TERMS
+    }
+
+
+def _regulatory_query_priority_terms(query: str) -> set[str]:
+    authority_terms = {term.lower() for term in _AGENCY_AUTHORITY_TERMS if " " not in term}
+    generic_regulatory_acronyms = {
+        "cfr",
+        "esa",
+        "fr",
+        "u.s",
+        "us",
+    }
+    return {
+        token.lower()
+        for token in re.findall(r"\b[A-Z][A-Z0-9-]{2,}\b", query)
+        if token.lower() not in authority_terms and token.lower() not in generic_regulatory_acronyms
+    }
+
+
+def _agency_guidance_priority_terms(query: str) -> set[str]:
+    terms = _agency_guidance_subject_terms(query)
+    for facet in query_facets(query):
+        for token in re.findall(r"[a-z0-9]{4,}", facet.lower()):
+            if token in _GRAPH_GENERIC_TERMS or token in _AGENCY_GUIDANCE_QUERY_NOISE_TERMS:
+                continue
+            if token in _REGULATORY_SUBJECT_STOPWORDS:
+                continue
+            terms.add(token)
+    return terms
+
+
+def _agency_guidance_facet_terms(query: str) -> list[set[str]]:
+    facet_terms: list[set[str]] = []
+    for facet in query_facets(query):
+        tokens = {
+            token
+            for token in re.findall(r"[a-z0-9]{4,}", facet.lower())
+            if token not in _GRAPH_GENERIC_TERMS
+            and token not in _AGENCY_GUIDANCE_QUERY_NOISE_TERMS
+            and token not in _REGULATORY_SUBJECT_STOPWORDS
+        }
+        if len(tokens) >= 2:
+            facet_terms.append(tokens)
+    return facet_terms
+
+
+def _guidance_query_prefers_recency(query: str) -> bool:
+    lowered = query.lower()
+    return any(marker in lowered for marker in {"current", "latest", "new", "newest", "recent"})
+
+
+def _is_species_regulatory_query(query: str) -> bool:
+    lowered = query.lower()
+    regulatory_markers = {"esa", "final rule", "listing history", "listing status", "regulatory history"}
+    species_markers = {
+        "bat",
+        "bird",
+        "condor",
+        "critical habitat",
+        "endangered",
+        "habitat",
+        "listing",
+        "recovery",
+        "species",
+        "threatened",
+        "wildlife",
+    }
+    return any(marker in lowered for marker in regulatory_markers) and any(
+        marker in lowered for marker in species_markers
+    )
+
+
+def _rank_regulatory_documents(
+    documents: list[dict[str, Any]],
+    *,
+    subject_terms: set[str],
+    priority_terms: set[str],
+    facet_terms: list[set[str]],
+    prefer_guidance: bool,
+    prefer_recent: bool,
+) -> list[dict[str, Any]]:
+    def _score(document: dict[str, Any]) -> tuple[int, str]:
+        title = str(document.get("title") or "")
+        summary = str(document.get("abstract") or document.get("excerpt") or document.get("summary") or "")
+        tokens = _graph_topic_tokens(" ".join(part for part in [title, summary] if part))
+        title_tokens = _graph_topic_tokens(title)
+        overlap = len(subject_terms & tokens)
+        title_overlap = len(subject_terms & title_tokens)
+        priority_overlap = len(tokens & priority_terms)
+        facet_overlap = 0
+        for facet in facet_terms:
+            required = len(facet) if len(facet) <= 2 else 2
+            if sum(token in tokens for token in facet) >= required:
+                facet_overlap += 1
+        document_type = str(document.get("documentType") or "").lower()
+        publication_date = str(document.get("publicationDate") or "")
+        publication_year_match = re.search(r"\b(19|20)\d{2}\b", publication_date)
+        publication_year = int(publication_year_match.group(0)) if publication_year_match else 0
+        guidance_form_bonus = 8 if (tokens & _AGENCY_GUIDANCE_DOCUMENT_TERMS) else 0
+        discussion_form_penalty = 4 if (tokens & _AGENCY_GUIDANCE_DISCUSSION_TERMS) else 0
+        guidance_bonus = (
+            2 if prefer_guidance and any(token in tokens for token in {"guidance", "framework", "discussion"}) else 0
+        )
+        notice_bonus = 1 if document_type in {"notice", "rule"} else 0
+        recency_bonus = max((publication_year - 2010) * 2, 0) if prefer_recent else 0
+        score = (
+            (title_overlap * 5)
+            + (overlap * 2)
+            + (priority_overlap * 2)
+            + (facet_overlap * 3)
+            + guidance_form_bonus
+            + guidance_bonus
+            + notice_bonus
+            + recency_bonus
+            - discussion_form_penalty
+        )
+        return score, publication_date
+
+    return sorted(documents, key=_score, reverse=True)
+
+
 def _paper_text(paper: dict[str, Any]) -> str:
     authors = ", ".join(author.get("name", "") for author in (paper.get("authors") or []) if isinstance(author, dict))
     return " ".join(
@@ -3954,6 +4211,16 @@ def _paper_text(paper: dict[str, Any]) -> str:
         ]
         if part
     )
+
+
+def _initial_retrieval_query_text(*, normalized_query: str, focus: str | None, intent: IntentLabel) -> str:
+    if intent in {"known_item", "author", "citation", "regulatory"}:
+        return normalized_query
+    normalized_focus = normalize_query(str(focus or ""))
+    if not normalized_focus:
+        return normalized_query
+    combined = normalize_query(f"{normalized_query} {normalized_focus}")
+    return combined if combined.lower() != normalized_query.lower() else normalized_query
 
 
 def _truncate_text(value: str, *, limit: int = 72) -> str:

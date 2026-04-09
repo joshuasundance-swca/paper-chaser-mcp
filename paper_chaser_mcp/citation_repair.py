@@ -218,19 +218,33 @@ def looks_like_citation_query(value: str) -> bool:
     if not normalized:
         return False
     lowered = normalized.lower()
+    question_like = normalized.endswith("?") or lowered.startswith(
+        (
+            "what ",
+            "which ",
+            "how ",
+            "why ",
+            "compare ",
+            "summarize ",
+            "identify ",
+            "find ",
+            "show ",
+        )
+    )
+    word_count = len(WORD_RE.findall(normalized))
     if looks_like_paper_identifier(normalized):
         return True
     if QUOTED_RE.search(normalized):
         return True
     if "et al" in lowered:
         return True
-    if YEAR_RE.search(normalized):
+    if YEAR_RE.search(normalized) and not question_like and word_count <= 18:
         return True
     if PAGES_RE.search(normalized):
         return True
     if any(venue in lowered for venue in VENUE_HINTS):
         return True
-    if "," in normalized and len(WORD_RE.findall(normalized)) >= 4:
+    if "," in normalized and not question_like and YEAR_RE.search(normalized):
         return True
     return False
 
@@ -848,7 +862,12 @@ def _ranked_candidates(
 ) -> list[RankedCitationCandidate]:
     return sorted(
         candidate_map.values(),
-        key=lambda item: (item.score, item.author_overlap, item.title_similarity),
+        key=lambda item: (
+            item.score,
+            _publication_preference_score(item.paper),
+            item.author_overlap,
+            item.title_similarity,
+        ),
         reverse=True,
     )[:max_candidates]
 
@@ -1074,6 +1093,7 @@ def _rank_candidate(
     identifier_hit = resolution_strategy.startswith("identifier") or _identifier_hit(parsed, paper)
     snippet_alignment = _snippet_alignment(parsed, paper, snippet_text=snippet_text)
     source_confidence = _source_confidence(resolution_strategy)
+    publication_preference = _publication_preference_score(paper)
     upstream_confidence = str(paper.get("matchConfidence") or "").lower()
 
     score = 0.0
@@ -1092,6 +1112,7 @@ def _rank_candidate(
     if snippet_alignment > 0:
         score += min(snippet_alignment, 1.0) * 0.05
     score += source_confidence * 0.05
+    score += publication_preference * 0.03
     if upstream_confidence == "high":
         score += 0.25
     elif upstream_confidence == "medium":
@@ -1190,6 +1211,10 @@ def _classify_resolution_confidence(
         return "high"
     if best_score >= 0.82 and gap >= 0.12 and len(conflicting_fields) <= 1:
         return "high"
+    if "title" in matched_fields and len(key_conflicting) <= 1:
+        supporting_fields = {"author", "year", "venue", "identifier", "snippet"} & set(matched_fields)
+        if supporting_fields and best_score >= 0.5:
+            return "medium"
     if (
         resolution_strategy in {"fuzzy_search", "citation_ranked", "snippet_recovery"}
         and "title" in matched_fields
@@ -1280,10 +1305,6 @@ def _extract_author_surnames(
         surnames.append(words[0])
     if "," in text and words:
         surnames.append(words[0])
-    if citation_like and words:
-        first = words[0]
-        if len(first) >= 3 and first[0].isupper():
-            surnames.append(first)
     return _dedupe_strings([surname.lower() for surname in surnames])
 
 
@@ -1351,6 +1372,8 @@ def _extract_title_candidates(
         candidates.append(" ".join(words))
         if len(words) > 1 and words[0].lower() in author_surnames:
             candidates.append(" ".join(words[1:]))
+        if len(words) >= 6:
+            candidates.extend(" ".join(words[:-count]) for count in (1, 2) if len(words) - count >= 4)
         if len(words) > 3 and words[:2] == ["et", "al"]:
             candidates.append(" ".join(words[2:]))
         if len(words) > 3 and author_surnames and words[0].lower() in author_surnames:
@@ -1412,6 +1435,7 @@ def _title_similarity(parsed: ParsedCitation, paper: dict[str, Any]) -> float:
             best,
             SequenceMatcher(None, normalized_candidate, title).ratio(),
             _token_overlap_ratio(normalized_candidate, title),
+            _weighted_token_overlap_ratio(normalized_candidate, title),
         )
     return best
 
@@ -1511,6 +1535,31 @@ def _source_confidence(strategy: str) -> float:
     return mapping.get(strategy, 0.55)
 
 
+def _publication_preference_score(paper: dict[str, Any]) -> float:
+    publication_types_raw = paper.get("publicationTypes")
+    if isinstance(publication_types_raw, str):
+        publication_types = {publication_types_raw.lower()}
+    elif isinstance(publication_types_raw, list):
+        publication_types = {str(value).lower() for value in publication_types_raw}
+    else:
+        publication_types = set()
+    source = str(paper.get("source") or "").lower()
+    venue = normalize_citation_text(str(paper.get("venue") or "")).lower()
+    external_ids = paper.get("externalIds") or {}
+    doi = str(external_ids.get("DOI") or paper.get("doi") or "").strip()
+
+    score = 0.0
+    if doi or str(paper.get("canonicalId") or "").lower().startswith("10."):
+        score += 1.0
+    if venue and "arxiv" not in venue:
+        score += 0.6
+    if publication_types & {"journal-article", "proceedings-article", "conference", "conference-paper"}:
+        score += 0.8
+    if source == "arxiv" or "preprint" in publication_types or venue == "arxiv":
+        score -= 1.2
+    return score
+
+
 def _surname(name: str) -> str:
     words = [word.lower() for word in WORD_RE.findall(name)]
     return words[-1] if words else ""
@@ -1523,6 +1572,18 @@ def _token_overlap_ratio(left: str, right: str) -> float:
         return 0.0
     intersection = left_tokens & right_tokens
     return len(intersection) / len(left_tokens)
+
+
+def _weighted_token_overlap_ratio(left: str, right: str) -> float:
+    left_tokens = [token for token in re.findall(r"[a-z0-9]{3,}", left.lower()) if token not in GENERIC_TITLE_WORDS]
+    right_token_set = {
+        token for token in re.findall(r"[a-z0-9]{3,}", right.lower()) if token not in GENERIC_TITLE_WORDS
+    }
+    if not left_tokens or not right_token_set:
+        return 0.0
+    matched_weight = sum(max(len(token) - 2, 1) for token in left_tokens if token in right_token_set)
+    total_weight = sum(max(len(token) - 2, 1) for token in left_tokens)
+    return matched_weight / total_weight if total_weight else 0.0
 
 
 def _dedupe_strings(values: Any) -> list[str]:

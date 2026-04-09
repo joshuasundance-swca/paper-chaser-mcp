@@ -116,6 +116,17 @@ STRONG_REGULATORY_TITLE_BLOCKERS = {
     "regulatory history",
     "rulemaking",
 }
+AGENCY_REGULATORY_MARKERS = {
+    "agency",
+    "cdc",
+    "cms",
+    "epa",
+    "fda",
+    "food and drug administration",
+    "hhs",
+    "nih",
+    "usda",
+}
 REGULATORY_QUERY_TERMS = {
     "agency guidance",
     "biological opinion",
@@ -131,7 +142,6 @@ REGULATORY_QUERY_TERMS = {
     "federal register",
     "five-year review",
     "five year review",
-    "guidance",
     "guidance for industry",
     "incidental take",
     "listing status",
@@ -218,6 +228,8 @@ def looks_like_exact_title(query: str) -> bool:
     normalized = normalize_query(query)
     if not normalized or normalized.endswith("?"):
         return False
+    if detect_regulatory_intent(normalized):
+        return False
     lowered = normalized.lower()
     if any(marker in lowered for marker in STRONG_REGULATORY_TITLE_BLOCKERS):
         return False
@@ -247,6 +259,27 @@ def detect_regulatory_intent(query: str, focus: str | None = None) -> bool:
     if not normalized:
         return False
     if any(term in normalized for term in REGULATORY_QUERY_TERMS):
+        return True
+    if any(term in normalized for term in {"guidance", "policy", "policies"}) and any(
+        marker in normalized for marker in AGENCY_REGULATORY_MARKERS
+    ):
+        return True
+    if any(marker in normalized for marker in {"esa", "listing status", "listing history", "final rule"}) and any(
+        marker in normalized
+        for marker in {
+            "bat",
+            "bird",
+            "condor",
+            "habitat",
+            "listed",
+            "listing",
+            "recovery",
+            "species",
+            "status",
+            "threatened",
+            "wildlife",
+        }
+    ):
         return True
     if re.search(r"\b(?:endangered|threatened)\b", normalized) and any(
         marker in normalized
@@ -528,9 +561,10 @@ async def classify_query(
     )
     sorted_candidates = _sort_intent_candidates(intent_candidates, preferred_intent=cast(IntentLabel, planner.intent))
     planner.intent_candidates = sorted_candidates[:4]
-    planner.secondary_intents = [
-        candidate.intent for candidate in planner.intent_candidates if candidate.intent != planner.intent
-    ][:3]
+    planner.secondary_intents = cast(
+        list[IntentLabel],
+        [candidate.intent for candidate in planner.intent_candidates if candidate.intent != planner.intent][:3],
+    )
     primary_candidate = next(
         (candidate for candidate in planner.intent_candidates if candidate.intent == planner.intent),
         None,

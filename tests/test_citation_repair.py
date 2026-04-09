@@ -10,6 +10,7 @@ from paper_chaser_mcp.citation_repair import (
     _filtered_alternative_candidates,
     _normalize_identifier_for_openalex,
     _normalize_identifier_for_semantic_scholar,
+    looks_like_citation_query,
     parse_citation,
     resolve_citation,
 )
@@ -39,6 +40,31 @@ def test_parse_citation_extracts_bibliography_title_after_year() -> None:
     assert {"vaswani", "shazeer", "parmar"} <= set(parsed.author_surnames)
     assert "neurips" in parsed.venue_hints
     assert "Attention Is All You Need" in parsed.title_candidates
+
+
+def test_parse_citation_does_not_infer_first_title_token_as_author_for_noisy_title_like_query() -> None:
+    parsed = parse_citation(
+        "RAGTruth hallucination corpus trustworthy retrieval-augmented language models Wu Zhu ACL 2024"
+    )
+
+    assert "ragtruth" not in parsed.author_surnames
+    assert any(
+        candidate.lower().startswith("ragtruth")
+        and "trustworthy" in candidate.lower()
+        and "wu" not in candidate.lower()
+        and "zhu" not in candidate.lower()
+        for candidate in parsed.title_candidates
+    )
+
+
+def test_looks_like_citation_query_is_false_for_broad_environmental_discovery_question() -> None:
+    assert (
+        looks_like_citation_query(
+            "What is the current evidence on PFAS remediation in soils and groundwater, "
+            "especially for field-deployable methods?"
+        )
+        is False
+    )
 
 
 def test_filtered_alternative_candidates_drop_weak_year_only_matches() -> None:
@@ -524,6 +550,148 @@ def test_classify_resolution_confidence_exact_title_with_two_key_conflicts_is_me
         )
         == "medium"
     )
+
+
+@pytest.mark.asyncio
+async def test_resolve_citation_recovers_ragtruth_from_noisy_acl_prompt() -> None:
+    class RagTruthSemanticClient(RecordingSemanticClient):
+        async def search_papers_match(self, **kwargs) -> dict:
+            self.calls.append(("search_papers_match", kwargs))
+            query = str(kwargs["query"])
+            normalized = query.lower()
+            if (
+                "ragtruth" in normalized
+                and "trustworthy" in normalized
+                and "wu" not in normalized
+                and "zhu" not in normalized
+            ):
+                return {
+                    "paperId": "ragtruth-final",
+                    "title": (
+                        "RAGTruth: A Hallucination Corpus for Developing Trustworthy "
+                        "Retrieval-Augmented Language Models"
+                    ),
+                    "year": 2024,
+                    "venue": "ACL 2024",
+                    "authors": [
+                        {"name": "Shuai Wu"},
+                        {"name": "Yichao Zhu"},
+                    ],
+                    "externalIds": {"DOI": "10.18653/v1/2024.acl-long.123"},
+                    "matchFound": True,
+                    "matchStrategy": "fuzzy_search",
+                    "matchConfidence": "high",
+                    "matchedFields": ["title", "year", "venue"],
+                    "candidateCount": 2,
+                }
+            return {}
+
+        async def search_snippets(self, **kwargs) -> dict:
+            self.calls.append(("search_snippets", kwargs))
+            return {"data": []}
+
+        async def search_papers(self, **kwargs) -> dict:
+            self.calls.append(("search_papers", kwargs))
+            return {"total": 0, "offset": 0, "data": []}
+
+    semantic = RagTruthSemanticClient()
+
+    payload = await resolve_citation(
+        citation="RAGTruth hallucination corpus trustworthy retrieval-augmented language models Wu Zhu ACL 2024",
+        max_candidates=3,
+        client=semantic,
+        enable_core=False,
+        enable_semantic_scholar=True,
+        enable_openalex=False,
+        enable_arxiv=False,
+        enable_serpapi=False,
+        core_client=None,
+        openalex_client=None,
+        arxiv_client=None,
+        serpapi_client=None,
+    )
+
+    assert payload["bestMatch"]["paper"]["paperId"] == "ragtruth-final"
+    assert payload["resolutionConfidence"] in {"medium", "high"}
+    assert any(
+        call[0] == "search_papers_match"
+        and "wu" not in str(call[1]["query"]).lower()
+        and "zhu" not in str(call[1]["query"]).lower()
+        for call in semantic.calls
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_citation_prefers_final_publication_over_preprint_when_candidates_compete() -> None:
+    class PublicationPreferenceSemanticClient(RecordingSemanticClient):
+        async def search_papers_match(self, **kwargs) -> dict:
+            self.calls.append(("search_papers_match", kwargs))
+            return {}
+
+        async def search_snippets(self, **kwargs) -> dict:
+            self.calls.append(("search_snippets", kwargs))
+            return {"data": []}
+
+        async def search_papers(self, **kwargs) -> dict:
+            self.calls.append(("search_papers", kwargs))
+            return {
+                "total": 2,
+                "offset": 0,
+                "data": [
+                    {
+                        "paperId": "ragtruth-preprint",
+                        "title": (
+                            "RAGTruth: A Hallucination Corpus for Developing Trustworthy "
+                            "Retrieval-Augmented Language Models"
+                        ),
+                        "year": 2024,
+                        "venue": "arXiv",
+                        "source": "arxiv",
+                        "publicationTypes": ["preprint"],
+                        "authors": [
+                            {"name": "Shuai Wu"},
+                            {"name": "Yichao Zhu"},
+                        ],
+                    },
+                    {
+                        "paperId": "ragtruth-final",
+                        "title": (
+                            "RAGTruth: A Hallucination Corpus for Developing Trustworthy "
+                            "Retrieval-Augmented Language Models"
+                        ),
+                        "year": 2024,
+                        "venue": "ACL 2024",
+                        "source": "semantic_scholar",
+                        "publicationTypes": ["conference"],
+                        "canonicalId": "10.18653/v1/2024.acl-long.123",
+                        "externalIds": {"DOI": "10.18653/v1/2024.acl-long.123"},
+                        "authors": [
+                            {"name": "Shuai Wu"},
+                            {"name": "Yichao Zhu"},
+                        ],
+                    },
+                ],
+            }
+
+    semantic = PublicationPreferenceSemanticClient()
+
+    payload = await resolve_citation(
+        citation="RAGTruth A Hallucination Corpus for Developing Trustworthy Retrieval-Augmented Language Models 2024",
+        max_candidates=3,
+        client=semantic,
+        enable_core=False,
+        enable_semantic_scholar=True,
+        enable_openalex=False,
+        enable_arxiv=False,
+        enable_serpapi=False,
+        core_client=None,
+        openalex_client=None,
+        arxiv_client=None,
+        serpapi_client=None,
+    )
+
+    assert payload["bestMatch"]["paper"]["paperId"] == "ragtruth-final"
+    assert payload["alternatives"][0]["paper"]["paperId"] == "ragtruth-preprint"
 
 
 def test_classify_resolution_confidence_exact_title_with_one_key_conflict_remains_high() -> None:

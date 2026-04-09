@@ -82,3 +82,5 @@ Focused regressions should cover:
 - input normalization metadata
 - smart recovery provenance and anchor metadata
 - mixed and degraded flows that still return actionable result state
+- saved-session relevance triage over mixed evidence and leads
+- recommendation-first summaries that still preserve the full audit payload

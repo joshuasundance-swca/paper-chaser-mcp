@@ -83,6 +83,8 @@ follow_up_research(searchSessionId="...", question="What evaluation tradeoffs sh
 
 - No answer-shaped filler when evidence is weak.
 - Explicit unsupported asks and evidence gaps on abstention paths.
+- Mixed saved sessions can still answer relevance-triage questions by classifying
+  saved sources and leads into on-topic evidence, weaker context, and off-topic items.
 
 ### 3. Known-item and citation cleanup (`resolve_reference`)
 
@@ -125,6 +127,9 @@ For species/regulatory requests in `research`:
    `status=needs_disambiguation` or `abstained`, not fabricated chronology.
 4. Unrelated Federal Register hits should not appear as verified findings or
    timeline events.
+5. For broad agency-guidance prompts, expect the top guided summary to prefer
+  the most relevant query-anchored guidance or policy documents and to retain
+  weaker authority records as leads rather than grounded evidence.
 
 ## Expert fallback paths (intentional)
 
@@ -162,6 +167,27 @@ search_species_ecos(...) / list_species_documents_ecos(...)
 → get_cfr_text(...)
 ```
 
+### 4. Repo-local eval bootstrap and workflow handoff
+
+Use this when the task is evaluating planner or workflow behavior in this repo
+rather than answering an end-user research question.
+
+1. Start with `scripts/generate_eval_topics.py` for planner-led topic
+  generation, taxonomy assignment, ranking, pruning, balancing, and scenario
+  emission.
+2. Use `scripts/run_eval_autopilot.py` when you want profile-driven generation,
+  immutable run bundles, holdout reporting, and guarded workflow handoff.
+3. Use `scripts/run_eval_workflow.py` when you intentionally want expert batch
+  capture, review or promotion, dataset splitting, and live provider-matrix
+  evaluation.
+4. For narrow one-seed experiments, prefer the checked-in exploratory profiles
+  over ad hoc threshold edits. `single-seed-exploratory-review` keeps review
+  gating, `single-seed-exploratory-safe` relaxes safe-policy thresholds, and
+  `single-seed-diagnostic-force` is the explicit downstream-debugging path.
+5. Prefer single-seed diversification when you need broader one-seed coverage;
+  it asks the planner for review, regulatory, and methods-oriented variants
+  instead of relying only on looser workflow gating.
+
 ## Abstention and clarification policy
 
 - **Never hide abstention**: do not convert abstained outputs into prose
@@ -190,3 +216,6 @@ search_species_ecos(...) / list_species_documents_ecos(...)
 - Expand benchmark corpus coverage for guided abstention and clarification
   quality.
 - Continue reducing expert-only round trips for common guided workflows.
+- Keep the eval-bootstrap docs, server guidance, and sample autopilot profiles
+  synchronized whenever guarded workflow thresholds or single-seed
+  diversification behavior changes.

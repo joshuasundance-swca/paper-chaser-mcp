@@ -1433,6 +1433,26 @@ def _guided_execution_provenance_payload(
     return provenance.model_dump(by_alias=True, exclude_none=True)
 
 
+def _guided_live_strategy_metadata(
+    *,
+    agentic_runtime: Any,
+    strategy_metadata: dict[str, Any] | None = None,
+    latency_profile: str | None = None,
+) -> dict[str, Any]:
+    merged = dict(strategy_metadata or {})
+    provider_bundle = getattr(agentic_runtime, "_provider_bundle", None)
+    if provider_bundle is not None and hasattr(provider_bundle, "selection_metadata"):
+        try:
+            selection = provider_bundle.selection_metadata()
+            if isinstance(selection, dict):
+                merged.update(selection)
+        except Exception as exc:
+            merged.setdefault("selectionMetadataError", type(exc).__name__)
+    if latency_profile and not merged.get("latencyProfile"):
+        merged["latencyProfile"] = latency_profile
+    return merged
+
+
 def _guided_abstention_details_payload(
     *,
     status: str,
@@ -2201,9 +2221,18 @@ def _guided_machine_failure_payload(
 
 def _guided_summary(intent: str, status: str, findings: list[dict[str, Any]], sources: list[dict[str, Any]]) -> str:
     if findings:
-        claims = "; ".join(str(finding["claim"]) for finding in findings[:3])
-        return f"{intent.replace('_', ' ').title()} evidence grounded in {len(findings)} verified source(s): {claims}."
+        top_claim = str(findings[0].get("claim") or "").strip()
+        additional_count = max(len(findings) - 1, 0)
+        if additional_count:
+            return f"Top result: {top_claim}. Verified support includes {additional_count} additional source(s)."
+        return f"Top result: {top_claim}."
     if sources:
+        top_title = str(sources[0].get("title") or sources[0].get("sourceId") or "").strip()
+        if top_title:
+            return (
+                f"Top result: {top_title}. Evidence is still partial or mixed, "
+                "so inspect the source before relying on it."
+            )
         return (
             "The search found some source leads, but the evidence stayed too weak, off-topic, or incomplete "
             "for a grounded summary."
@@ -2742,6 +2771,25 @@ def _guided_follow_up_introspection_facets(question: str) -> set[str]:
     if any(
         marker in text
         for marker in (
+            "which of these",
+            "which are relevant",
+            "which are actual",
+            "which returned items",
+            "which are off-target",
+            "which are off-topic",
+            "which are off target",
+            "classify these",
+            "relevant versus off-target",
+            "relevant vs off-target",
+            "actual guidance",
+            "weak match",
+            "weak matches",
+        )
+    ):
+        facets.add("relevance_triage")
+    if any(
+        marker in text
+        for marker in (
             "what does this result mean",
             "result meaning",
             "what status",
@@ -2838,6 +2886,88 @@ def _guided_source_metadata_answers(question: str, sources: list[dict[str, Any]]
             answers.append(f"Matched source title: {title}.")
 
     return answers
+
+
+def _guided_relevance_triage_answers(
+    *,
+    session_state: dict[str, Any],
+    follow_up_decision: Any,
+) -> list[str]:
+    sources = [source for source in session_state.get("sources") or [] if isinstance(source, dict)]
+    leads = [lead for lead in session_state.get("unverifiedLeads") or [] if isinstance(lead, dict)]
+    selected_evidence_ids = set(follow_up_decision.selected_evidence_ids)
+    selected_lead_ids = set(follow_up_decision.selected_lead_ids)
+
+    if selected_evidence_ids:
+        sources = [
+            source
+            for source in sources
+            if str(source.get("sourceId") or source.get("sourceAlias") or "").strip() in selected_evidence_ids
+        ]
+    if selected_lead_ids:
+        leads = [
+            lead
+            for lead in leads
+            if str(lead.get("sourceId") or lead.get("sourceAlias") or "").strip() in selected_lead_ids
+        ]
+
+    strong: list[str] = []
+    weak: list[str] = []
+    off_target: list[str] = []
+    for candidate in sources + leads:
+        title = str(candidate.get("title") or candidate.get("sourceId") or "").strip()
+        if not title:
+            continue
+        provider = str(candidate.get("provider") or "unknown provider")
+        detail = f"{title} ({provider})"
+        topical_relevance = str(candidate.get("topicalRelevance") or "weak_match")
+        verification_status = str(candidate.get("verificationStatus") or "unverified")
+        is_primary = bool(candidate.get("isPrimarySource"))
+        if (
+            topical_relevance == "on_topic"
+            and verification_status in {"verified_primary_source", "verified_metadata"}
+            and is_primary
+        ):
+            strong.append(detail)
+        elif topical_relevance == "off_topic":
+            off_target.append(detail)
+        else:
+            weak.append(detail)
+
+    answers: list[str] = []
+    if strong:
+        answers.append("Strong on-topic guidance records: " + "; ".join(strong[:3]) + ".")
+    if weak:
+        answers.append("Related but weaker or less certain records: " + "; ".join(weak[:3]) + ".")
+    if off_target:
+        answers.append("Off-target records kept only as leads: " + "; ".join(off_target[:3]) + ".")
+    if not answers:
+        answers.append("The saved session did not contain enough source detail to classify relevance confidently.")
+    return answers
+
+
+def _guided_follow_up_answer_mode(question: str, session_strategy_metadata: dict[str, Any]) -> str:
+    lowered = question.lower()
+    if any(marker in lowered for marker in ("compare", "versus", "vs", "tradeoff", "tradeoffs")):
+        return "comparison"
+    if any(
+        marker in lowered
+        for marker in (
+            "limitation",
+            "limitations",
+            "validation",
+            "validated",
+            "operationally useful",
+            "most useful",
+            "practical",
+            "implementation",
+        )
+    ):
+        return "qa"
+    follow_up_mode = str(session_strategy_metadata.get("followUpMode") or "").strip().lower()
+    if follow_up_mode in {"qa", "claim_check", "comparison"}:
+        return follow_up_mode
+    return "qa"
 
 
 def _answer_follow_up_from_session_state(
@@ -2981,6 +3111,14 @@ def _answer_follow_up_from_session_state(
                 answer_parts.append("Saved source leads included: " + "; ".join(lead_titles) + ".")
             else:
                 answer_parts.append("No saved sources were available for this session.")
+
+    if "relevance_triage" in facets:
+        answer_parts.extend(
+            _guided_relevance_triage_answers(
+                session_state=session_state,
+                follow_up_decision=follow_up_decision,
+            )
+        )
 
     if "specific_source" in facets:
         source_reference = _guided_extract_source_reference_from_question(question)
@@ -3889,12 +4027,22 @@ async def dispatch_tool(
                     session_strategy_metadata = cast(dict[str, Any], metadata.get("strategyMetadata"))
             except Exception:
                 session_strategy_metadata = {}
+        follow_up_strategy_metadata = _guided_live_strategy_metadata(
+            agentic_runtime=agentic_runtime,
+            strategy_metadata=session_strategy_metadata,
+            latency_profile=guided_follow_up_latency_profile,
+        )
         try:
+            follow_up_answer_mode = _guided_follow_up_answer_mode(
+                follow_up_args.question,
+                session_strategy_metadata,
+            )
             ask = await _dispatch_internal(
                 "ask_result_set",
                 {
                     "searchSessionId": follow_up_args.search_session_id,
                     "question": follow_up_args.question,
+                    "answerMode": follow_up_answer_mode,
                     "latencyProfile": guided_follow_up_latency_profile,
                 },
             )
@@ -3909,7 +4057,7 @@ async def dispatch_tool(
                     execution_mode="guided_follow_up",
                     answer_source="ask_result_set",
                     latency_profile_applied=guided_follow_up_latency_profile,
-                    strategy_metadata=session_strategy_metadata,
+                    strategy_metadata=follow_up_strategy_metadata,
                     passes_run=1,
                 ),
             )
@@ -3948,7 +4096,7 @@ async def dispatch_tool(
                     execution_mode="guided_follow_up",
                     answer_source="ask_result_set",
                     latency_profile_applied=guided_follow_up_latency_profile,
-                    strategy_metadata=session_strategy_metadata,
+                    strategy_metadata=follow_up_strategy_metadata,
                     passes_run=1,
                 ),
                 "inputNormalization": machine_failure.get("inputNormalization")
@@ -4024,7 +4172,7 @@ async def dispatch_tool(
                 execution_mode="guided_follow_up",
                 answer_source="ask_result_set",
                 latency_profile_applied=guided_follow_up_latency_profile,
-                strategy_metadata=session_strategy_metadata,
+                strategy_metadata=follow_up_strategy_metadata,
                 passes_run=1,
             ),
             "inputNormalization": _guided_normalization_payload(follow_up_normalization),
@@ -4042,7 +4190,7 @@ async def dispatch_tool(
                 unverified_leads=unverified_leads,
                 evidence_gaps=evidence_gaps,
                 coverage_summary=cast(dict[str, Any] | None, ask.get("coverageSummary")),
-                strategy_metadata=session_strategy_metadata,
+                strategy_metadata=follow_up_strategy_metadata,
             )
         )
         response["selectedEvidenceIds"] = [
