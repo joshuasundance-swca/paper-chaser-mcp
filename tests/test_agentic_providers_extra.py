@@ -40,14 +40,16 @@ from paper_chaser_mcp.provider_runtime import (
 def _config(
     *,
     provider: str = "openai",
+    planner_model: str = "gpt-5.4-mini",
+    synthesis_model: str = "gpt-5.4",
     disable_embeddings: bool = False,
     timeout: float = 30.0,
 ) -> AgenticConfig:
     return AgenticConfig(
         enabled=True,
         provider=provider,
-        planner_model="gpt-5.4-mini",
-        synthesis_model="gpt-5.4",
+        planner_model=planner_model,
+        synthesis_model=synthesis_model,
         embedding_model="text-embedding-3-large",
         index_backend="memory",
         session_ttl_seconds=1800,
@@ -1183,6 +1185,7 @@ async def test_openai_provider_async_wrapper_and_embedding_success_paths(
 
 def test_resolve_provider_bundle_routes_additional_provider_types() -> None:
     huggingface_bundle_cls = getattr(providers_module, "HuggingFaceProviderBundle", None)
+    openrouter_bundle_cls = getattr(providers_module, "OpenRouterProviderBundle", None)
 
     azure_bundle = resolve_provider_bundle(
         _config(provider="azure-openai"),
@@ -1212,11 +1215,24 @@ def test_resolve_provider_bundle_routes_additional_provider_types() -> None:
         mistral_api_key="mistral-key",
     )
     assert huggingface_bundle_cls is not None
+    assert openrouter_bundle_cls is not None
     huggingface_bundle = resolve_provider_bundle(
         _config(provider="huggingface"),
         openai_api_key=None,
         huggingface_api_key="hf-key",
         huggingface_base_url="https://router.huggingface.co/v1",
+    )
+    openrouter_bundle = resolve_provider_bundle(
+        _config(
+            provider="openrouter",
+            planner_model="arcee-ai/trinity-mini",
+            synthesis_model="arcee-ai/trinity-large-thinking",
+        ),
+        openai_api_key=None,
+        openrouter_api_key="sk-or-test",
+        openrouter_base_url="https://openrouter.ai/api/v1",
+        openrouter_http_referer="https://example.test",
+        openrouter_title="Paper Chaser Test",
     )
 
     assert isinstance(azure_bundle, AzureOpenAIProviderBundle)
@@ -1225,6 +1241,49 @@ def test_resolve_provider_bundle_routes_additional_provider_types() -> None:
     assert isinstance(google_bundle, GoogleProviderBundle)
     assert isinstance(mistral_bundle, MistralProviderBundle)
     assert isinstance(huggingface_bundle, huggingface_bundle_cls)
+    assert isinstance(openrouter_bundle, openrouter_bundle_cls)
+
+
+def test_openrouter_provider_loaders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[dict[str, Any]] = []
+
+    class _FakeChatOpenAI:
+        def __init__(self, **kwargs: Any) -> None:
+            created.append(kwargs)
+
+    langchain_openai_module = types.ModuleType("langchain_openai")
+    langchain_openai_module.ChatOpenAI = _FakeChatOpenAI  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "langchain_openai", langchain_openai_module)
+
+    bundle_cls = getattr(providers_module, "OpenRouterProviderBundle", None)
+    assert bundle_cls is not None
+
+    bundle = bundle_cls(
+        _config(
+            provider="openrouter",
+            planner_model="arcee-ai/trinity-mini",
+            synthesis_model="arcee-ai/trinity-large-thinking",
+        ),
+        api_key="sk-or-test",
+        base_url="https://openrouter.ai/api/v1",
+        http_referer="https://example.test",
+        title="Paper Chaser Test",
+    )
+
+    planner, synthesizer = bundle._load_models()
+
+    assert planner is not None
+    assert synthesizer is not None
+    assert created[0]["model"] == "arcee-ai/trinity-mini"
+    assert created[1]["model"] == "arcee-ai/trinity-large-thinking"
+    assert created[0]["base_url"] == "https://openrouter.ai/api/v1"
+    assert created[0]["extra_body"] == {"provider": {"require_parameters": True}}
+    assert created[0]["default_headers"] == {
+        "HTTP-Referer": "https://example.test",
+        "X-OpenRouter-Title": "Paper Chaser Test",
+    }
 
 
 def test_nvidia_provider_loaders(
@@ -1414,6 +1473,18 @@ def test_provider_embedding_support_flags(bundle: Any, expected: bool) -> None:
     assert bundle.supports_embeddings() is expected
 
 
+def test_openrouter_provider_does_not_support_embeddings() -> None:
+    bundle_cls = getattr(providers_module, "OpenRouterProviderBundle", None)
+
+    assert bundle_cls is not None
+    bundle = bundle_cls(
+        _config(provider="openrouter", disable_embeddings=False),
+        api_key="sk-or-test",
+    )
+
+    assert bundle.supports_embeddings() is False
+
+
 @pytest.mark.parametrize(
     "bundle",
     [
@@ -1462,6 +1533,50 @@ def test_huggingface_provider_selection_metadata_reports_deterministic_fallback(
     assert metadata["synthesisModelSource"] == "deterministic"
     assert metadata["plannerModel"].endswith(":deterministic-planner")
     assert metadata["synthesisModel"].endswith(":deterministic-synthesizer")
+
+
+def test_openrouter_provider_selection_metadata_reports_deterministic_fallback() -> None:
+    openrouter_bundle_cls = getattr(providers_module, "OpenRouterProviderBundle", None)
+
+    assert openrouter_bundle_cls is not None
+    bundle = openrouter_bundle_cls(
+        _config(provider="openrouter"),
+        api_key=None,
+        base_url="https://openrouter.ai/api/v1",
+    )
+
+    plan = bundle.plan_search(query="author Ada Lovelace", mode="auto")
+    metadata = bundle.selection_metadata()
+
+    assert isinstance(plan, PlannerDecision)
+    assert metadata["configuredSmartProvider"] == "openrouter"
+    assert metadata["activeSmartProvider"] == "deterministic"
+    assert metadata["plannerModelSource"] == "deterministic"
+    assert metadata["synthesisModelSource"] == "deterministic"
+    assert metadata["plannerModel"].endswith(":deterministic-planner")
+    assert metadata["synthesisModel"].endswith(":deterministic-synthesizer")
+
+
+def test_openrouter_provider_selection_metadata_preserves_explicit_models() -> None:
+    openrouter_bundle_cls = getattr(providers_module, "OpenRouterProviderBundle", None)
+
+    assert openrouter_bundle_cls is not None
+    bundle = openrouter_bundle_cls(
+        _config(
+            provider="openrouter",
+            planner_model="arcee-ai/trinity-mini",
+            synthesis_model="arcee-ai/trinity-large-thinking",
+        ),
+        api_key="sk-or-test",
+        base_url="https://openrouter.ai/api/v1",
+    )
+
+    metadata = bundle.selection_metadata()
+
+    assert metadata["configuredSmartProvider"] == "openrouter"
+    assert metadata["activeSmartProvider"] == "deterministic"
+    assert bundle.planner_model_name == "arcee-ai/trinity-mini"
+    assert bundle.synthesis_model_name == "arcee-ai/trinity-large-thinking"
 
 
 @pytest.mark.asyncio

@@ -1336,7 +1336,9 @@ async def test_new_serpapi_tools_and_provider_diagnostics_route(
     assert provider_map["nvidia"]["enabled"] is False
     assert provider_map["google"]["enabled"] is False
     assert provider_map["huggingface"]["enabled"] is False
+    assert provider_map["openrouter"]["enabled"] is False
     assert "huggingface" in diagnostics["providerOrder"]
+    assert "openrouter" in diagnostics["providerOrder"]
 
 
 @pytest.mark.asyncio
@@ -1351,8 +1353,9 @@ async def test_provider_diagnostics_can_surface_non_openai_smart_provider(monkey
                     "nvidia": False,
                     "google": False,
                     "huggingface": True,
+                    "openrouter": False,
                 },
-                ["huggingface", "openai", "azure-openai", "anthropic", "nvidia", "google"],
+                ["huggingface", "openai", "azure-openai", "anthropic", "nvidia", "google", "openrouter"],
             )
 
     monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
@@ -1558,8 +1561,9 @@ async def test_get_runtime_status_surfaces_configured_and_active_smart_provider(
                     "google": False,
                     "mistral": False,
                     "huggingface": False,
+                    "openrouter": False,
                 },
-                ["azure-openai", "openai", "anthropic", "nvidia", "google", "mistral", "huggingface"],
+                ["azure-openai", "openai", "anthropic", "nvidia", "google", "mistral", "huggingface", "openrouter"],
             )
 
     monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())

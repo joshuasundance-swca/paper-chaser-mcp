@@ -400,6 +400,17 @@ def test_app_settings_parses_agentic_configuration() -> None:
             "huggingface_api_key",
             "hf-key",
         ),
+        (
+            "openrouter",
+            {
+                "OPENROUTER_API_KEY": "sk-or-test",
+                "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
+                "OPENROUTER_HTTP_REFERER": "https://example.test",
+                "OPENROUTER_TITLE": "Paper Chaser Test",
+            },
+            "openrouter_api_key",
+            "sk-or-test",
+        ),
     ],
 )
 def test_app_settings_parses_additional_agentic_providers(
@@ -423,6 +434,10 @@ def test_app_settings_parses_additional_agentic_providers(
         assert settings.azure_openai_synthesis_deployment == "azure-synthesis"
     if provider == "huggingface":
         assert settings.huggingface_base_url == "https://router.huggingface.co/v1"
+    if provider == "openrouter":
+        assert settings.openrouter_base_url == "https://openrouter.ai/api/v1"
+        assert settings.openrouter_http_referer == "https://example.test"
+        assert settings.openrouter_title == "Paper Chaser Test"
     assert settings.disable_embeddings is True
 
 
@@ -431,6 +446,7 @@ def test_app_settings_rejects_invalid_agentic_provider() -> None:
         AppSettings.from_env({"PAPER_CHASER_AGENTIC_PROVIDER": "unsupported"})
 
     assert "huggingface" in str(exc_info.value)
+    assert "openrouter" in str(exc_info.value)
 
 
 def test_agentic_config_tracks_azure_openai_model_sources() -> None:
@@ -523,6 +539,26 @@ def test_agentic_config_tracks_huggingface_provider_default_model_sources() -> N
     assert config.synthesis_model_source == "provider_default"
     assert config.planner_model != "gpt-5.4-mini"
     assert config.synthesis_model != "gpt-5.4"
+
+
+def test_agentic_config_preserves_explicit_openrouter_models() -> None:
+    settings = AppSettings.from_env(
+        {
+            "PAPER_CHASER_ENABLE_AGENTIC": "true",
+            "PAPER_CHASER_AGENTIC_PROVIDER": "openrouter",
+            "OPENROUTER_API_KEY": "sk-or-test",
+            "PAPER_CHASER_PLANNER_MODEL": "arcee-ai/trinity-mini",
+            "PAPER_CHASER_SYNTHESIS_MODEL": "arcee-ai/trinity-large-thinking",
+        }
+    )
+
+    config = AgenticConfig.from_settings(settings)
+
+    assert config.provider == "openrouter"
+    assert config.planner_model == "arcee-ai/trinity-mini"
+    assert config.synthesis_model == "arcee-ai/trinity-large-thinking"
+    assert config.planner_model_source == "configured"
+    assert config.synthesis_model_source == "configured"
 
 
 def test_run_server_logs_embedding_flag(caplog: pytest.LogCaptureFixture) -> None:

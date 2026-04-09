@@ -648,6 +648,7 @@ def _smart_runtime_provider_state(agentic_runtime: Any) -> tuple[dict[str, bool]
         "google": False,
         "mistral": False,
         "huggingface": False,
+        "openrouter": False,
     }
     smart_provider_order = [
         "openai",
@@ -657,6 +658,7 @@ def _smart_runtime_provider_state(agentic_runtime: Any) -> tuple[dict[str, bool]
         "google",
         "mistral",
         "huggingface",
+        "openrouter",
     ]
     configured_smart_provider: str | None = None
     active_smart_provider: str | None = None
@@ -773,6 +775,10 @@ def _build_provider_diagnostics_snapshot(
     if configured_smart_provider == "huggingface":
         runtime_warnings.append(
             "Hugging Face is configured as a chat-only smart provider in this repo; embeddings stay disabled."
+        )
+    if configured_smart_provider == "openrouter":
+        runtime_warnings.append(
+            "OpenRouter is configured as a chat-only smart provider in this repo; embeddings stay disabled."
         )
     runtime_summary = RuntimeSummary(
         effectiveProfile=tool_profile,

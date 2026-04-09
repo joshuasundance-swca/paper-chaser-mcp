@@ -514,6 +514,10 @@ for warning in settings.runtime_warnings():
 agentic_config = AgenticConfig.from_settings(settings)
 api_key = settings.semantic_scholar_api_key
 openai_api_key = settings.openai_api_key
+openrouter_api_key = settings.openrouter_api_key
+openrouter_base_url = settings.openrouter_base_url
+openrouter_http_referer = settings.openrouter_http_referer
+openrouter_title = settings.openrouter_title
 nvidia_api_key = settings.nvidia_api_key
 nvidia_nim_base_url = settings.nvidia_nim_base_url
 azure_openai_api_key = settings.azure_openai_api_key
@@ -604,6 +608,10 @@ provider_bundle = resolve_provider_bundle(
     mistral_api_key=mistral_api_key,
     huggingface_api_key=huggingface_api_key,
     huggingface_base_url=huggingface_base_url,
+    openrouter_api_key=openrouter_api_key,
+    openrouter_base_url=openrouter_base_url,
+    openrouter_http_referer=openrouter_http_referer,
+    openrouter_title=openrouter_title,
     provider_registry=provider_registry,
 )
 workspace_registry = WorkspaceRegistry(

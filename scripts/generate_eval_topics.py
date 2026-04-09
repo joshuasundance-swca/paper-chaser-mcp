@@ -1434,6 +1434,10 @@ async def generate_topics(args: argparse.Namespace) -> dict[str, Any]:
     provider_bundle = resolve_provider_bundle(
         config,
         openai_api_key=settings.openai_api_key,
+        openrouter_api_key=settings.openrouter_api_key,
+        openrouter_base_url=settings.openrouter_base_url,
+        openrouter_http_referer=settings.openrouter_http_referer,
+        openrouter_title=settings.openrouter_title,
         azure_openai_api_key=settings.azure_openai_api_key,
         azure_openai_endpoint=settings.azure_openai_endpoint,
         azure_openai_api_version=settings.azure_openai_api_version,

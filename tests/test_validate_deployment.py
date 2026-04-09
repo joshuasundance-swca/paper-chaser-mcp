@@ -95,10 +95,16 @@ def test_azure_container_app_bicep_wires_agentic_env_contract() -> None:
 
     assert "param azureOpenAiEndpoint string = ''" in main_text
     assert "param azureOpenAiApiVersion string = ''" in main_text
+    assert "param openRouterBaseUrl string = 'https://openrouter.ai/api/v1'" in main_text
+    assert "param openRouterHttpReferer string = ''" in main_text
+    assert "param openRouterTitle string = ''" in main_text
     assert "param nvidiaNimBaseUrl string = ''" in main_text
     assert "param huggingFaceBaseUrl string = 'https://router.huggingface.co/v1'" in main_text
     assert "azureOpenAiEndpoint: azureOpenAiEndpoint" in main_text
     assert "azureOpenAiApiVersion: azureOpenAiApiVersion" in main_text
+    assert "openRouterBaseUrl: openRouterBaseUrl" in main_text
+    assert "openRouterHttpReferer: openRouterHttpReferer" in main_text
+    assert "openRouterTitle: openRouterTitle" in main_text
     assert "nvidiaNimBaseUrl: nvidiaNimBaseUrl" in main_text
     assert "huggingFaceBaseUrl: huggingFaceBaseUrl" in main_text
     assert "azureOpenAiEndpoint: ''" not in main_text
@@ -123,6 +129,7 @@ def test_azure_container_app_bicep_wires_agentic_env_contract() -> None:
         "keyVaultGoogleApiKeySecretUri",
         "keyVaultHuggingFaceApiKeySecretUri",
         "keyVaultMistralApiKeySecretUri",
+        "keyVaultOpenRouterApiKeySecretUri",
         "enableScholarApi",
         "keyVaultScholarApiKeySecretUri",
     ):
@@ -135,6 +142,10 @@ def test_azure_container_app_bicep_wires_agentic_env_contract() -> None:
         "AZURE_OPENAI_API_KEY",
         "AZURE_OPENAI_ENDPOINT",
         "AZURE_OPENAI_API_VERSION",
+        "OPENROUTER_API_KEY",
+        "OPENROUTER_BASE_URL",
+        "OPENROUTER_HTTP_REFERER",
+        "OPENROUTER_TITLE",
         "ANTHROPIC_API_KEY",
         "GOOGLE_API_KEY",
         "HUGGINGFACE_API_KEY",

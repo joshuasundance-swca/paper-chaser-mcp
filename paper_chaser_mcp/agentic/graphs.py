@@ -391,6 +391,7 @@ class AgenticRuntime:
             "google",
             "mistral",
             "huggingface",
+            "openrouter",
         ]
         configured_provider = self._provider_bundle.configured_provider_name()
         enabled = {provider: False for provider in smart_providers}

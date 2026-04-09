@@ -30,6 +30,10 @@ def _stub_settings() -> SimpleNamespace:
         session_ttl_seconds=3600,
         enable_agentic_trace_log=False,
         openai_api_key=None,
+        openrouter_api_key=None,
+        openrouter_base_url="https://openrouter.ai/api/v1",
+        openrouter_http_referer=None,
+        openrouter_title=None,
         azure_openai_api_key=None,
         azure_openai_endpoint=None,
         azure_openai_api_version=None,
@@ -43,6 +47,91 @@ def _stub_settings() -> SimpleNamespace:
         huggingface_api_key=None,
         huggingface_base_url=None,
     )
+
+
+def test_generate_topics_forwards_openrouter_settings_to_bundle_resolution(tmp_path: Path) -> None:
+    module = _load_module()
+
+    class _Plan:
+        def __init__(self) -> None:
+            self.intent = "discovery"
+            self.follow_up_mode = "qa"
+            self.provider_plan = ["semantic-scholar"]
+            self.candidate_concepts = ["wildfire smoke"]
+            self.constraints: dict[str, str] = {}
+            self.success_criteria = ["collect relevant evidence"]
+
+    class _Bundle:
+        async def asuggest_speculative_expansions(self, **kwargs):
+            return []
+
+        async def aplan_search(self, **kwargs):
+            return _Plan()
+
+        def selection_metadata(self):
+            return {
+                "configuredSmartProvider": "openrouter",
+                "activeSmartProvider": "openrouter",
+                "plannerModel": "arcee-ai/trinity-mini",
+            }
+
+        async def aclose(self):
+            return None
+
+    captured_kwargs: dict[str, object] = {}
+
+    def _settings() -> SimpleNamespace:
+        settings = _stub_settings()
+        settings.agentic_provider = "openrouter"
+        settings.openrouter_api_key = "sk-or-test"
+        settings.openrouter_base_url = "https://openrouter.ai/api/v1"
+        settings.openrouter_http_referer = "https://example.test"
+        settings.openrouter_title = "Paper Chaser Test"
+        settings.planner_model = "arcee-ai/trinity-mini"
+        settings.synthesis_model = "arcee-ai/trinity-large-thinking"
+        return settings
+
+    def _resolve(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return _Bundle()
+
+    original_settings = module._settings_from_env
+    original_resolve = module.resolve_provider_bundle
+    try:
+        module._settings_from_env = lambda _: _settings()
+        module.resolve_provider_bundle = _resolve
+        payload = asyncio.run(
+            module.generate_topics(
+                argparse.Namespace(
+                    dotenv_path=str(tmp_path / ".env"),
+                    context_text=None,
+                    taxonomy_preset="balanced-science",
+                    taxonomy_file=None,
+                    seed_query=["wildfire smoke exposure and respiratory outcomes"],
+                    seed_file=None,
+                    seed_preset="none",
+                    max_variants=0,
+                    include_original=True,
+                    latency_profile="balanced",
+                    merge_inputs=None,
+                    min_quality_score=0.0,
+                    max_topics=1,
+                    ai_prune_mode="off",
+                    ai_prune_below_score=35.0,
+                    domain_balance_mode="off",
+                    domain_balance_max_share=0.4,
+                )
+            )
+        )
+    finally:
+        module._settings_from_env = original_settings
+        module.resolve_provider_bundle = original_resolve
+
+    assert payload["topics"]
+    assert captured_kwargs["openrouter_api_key"] == "sk-or-test"
+    assert captured_kwargs["openrouter_base_url"] == "https://openrouter.ai/api/v1"
+    assert captured_kwargs["openrouter_http_referer"] == "https://example.test"
+    assert captured_kwargs["openrouter_title"] == "Paper Chaser Test"
 
 
 def test_load_seed_queries_combines_inline_and_file_inputs(tmp_path: Path) -> None:

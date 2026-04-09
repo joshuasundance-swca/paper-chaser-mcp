@@ -26,19 +26,27 @@ Today the repo ships these agentic providers:
 - `huggingface`
 - `deterministic`
 
-OpenRouter is **not** implemented yet.
+OpenRouter is now implemented as a **chat-only smart-layer provider**.
 
-That means it is currently absent from:
+The shipped implementation adds it to:
 
 - `paper_chaser_mcp/settings.py` provider parsing and `AppSettings`
-- `paper_chaser_mcp/agentic/config.py` provider-default model selection
 - `paper_chaser_mcp/agentic/providers.py` bundle resolution
+- `paper_chaser_mcp/agentic/provider_langchain.py` as
+  `OpenRouterProviderBundle`
 - `paper_chaser_mcp/provider_runtime.py` paywalled-provider policy and
   diagnostics
 - `paper_chaser_mcp/dispatch.py` runtime provider summary ordering
 - `paper_chaser_mcp/server.py` smart-bundle construction
 - `scripts/generate_eval_topics.py` provider handoff wiring
 - local config, deployment, and IaC contracts
+
+OpenRouter is still absent from:
+
+- `paper_chaser_mcp/agentic/config.py` provider-default model selection
+  because the first shipped path preserves explicit planner and synthesis model
+  values rather than auto-swapping to checked-in OpenRouter defaults
+- embedding support and any embedding-specific OpenRouter contract
 
 So the job is not just "add one bundle class". Provider parity in this repo
 also requires config, runtime reporting, deployment scaffolding, and test
@@ -94,10 +102,10 @@ The scholarly providers still decide how paper metadata is retrieved.
 
 ## Integration Shape
 
-### Recommended approach
+### Shipped approach
 
-Add an `OpenRouterProviderBundle` as an **OpenAI-compatible smart-provider
-bundle**.
+The repo now ships `OpenRouterProviderBundle` as an **OpenAI-compatible
+smart-provider bundle** implemented on the LangChain chat-only path.
 
 The implementation should live alongside the existing OpenAI-compatible smart
 providers, and it should preserve the current fallback semantics:
@@ -108,7 +116,7 @@ providers, and it should preserve the current fallback semantics:
   unavailable dependencies, or structured-output failure paths that the bundle
   cannot safely recover from
 
-### Why not make it a pure `LangChainChatProviderBundle`?
+### Why this repo chose the LangChain chat-only path
 
 There is an existing precedent for OpenAI-compatible routers in the repo:
 Hugging Face uses `ChatOpenAI(..., base_url=...)` and stays chat-only.
@@ -124,18 +132,18 @@ The direct OpenAI-compatible bundle already owns:
 - schema-shaped planner and synthesis flows
 - the place where future embeddings would live if they are ever validated
 
-So the recommended design is:
+The implemented design is:
 
-1. Subclass `OpenAIProviderBundle` for OpenRouter.
-2. Override the OpenAI client loaders so they use OpenRouter's base URL and
-   optional attribution headers.
-3. Override the LangChain model loaders so they use an OpenAI-compatible client
-   with `base_url` set to OpenRouter.
-4. Keep embeddings disabled in phase one, even if the class inherits the
-   embedding hooks.
+1. Subclass `LangChainChatProviderBundle` for OpenRouter.
+2. Use `langchain_openai.ChatOpenAI` with `base_url` set to OpenRouter.
+3. Send optional `HTTP-Referer` and `X-OpenRouter-Title` attribution headers
+  only when configured.
+4. Keep embeddings disabled in phase one.
+5. Send OpenRouter `provider.require_parameters=true` through the chat request
+  body so schema-sensitive calls do not silently downgrade.
 
-That gives the repo the right long-term shape without pretending OpenRouter is
-identical to direct OpenAI.
+That keeps OpenRouter aligned with the repo's existing Hugging Face router
+pattern while still adding provider-specific request shaping where it matters.
 
 ### LangChain recommendation
 

@@ -21,6 +21,7 @@ AgenticProvider = Literal[
     "google",
     "mistral",
     "huggingface",
+    "openrouter",
     "deterministic",
 ]
 AgenticIndexBackend = Literal["memory", "faiss"]
@@ -115,6 +116,10 @@ class AppSettings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     openai_api_key: str | None = None
+    openrouter_api_key: str | None = None
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_http_referer: str | None = None
+    openrouter_title: str | None = None
     nvidia_api_key: str | None = None
     nvidia_nim_base_url: str | None = None
     azure_openai_api_key: str | None = None
@@ -196,6 +201,12 @@ class AppSettings(BaseModel):
         hide_disabled_tools_value = env.get("PAPER_CHASER_HIDE_DISABLED_TOOLS")
         return cls(
             openai_api_key=_parse_optional_string(env, "OPENAI_API_KEY"),
+            openrouter_api_key=_parse_optional_string(env, "OPENROUTER_API_KEY"),
+            openrouter_base_url=(
+                env.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip() or "https://openrouter.ai/api/v1"
+            ),
+            openrouter_http_referer=_parse_optional_string(env, "OPENROUTER_HTTP_REFERER"),
+            openrouter_title=_parse_optional_string(env, "OPENROUTER_TITLE"),
             nvidia_api_key=_parse_optional_string(env, "NVIDIA_API_KEY"),
             nvidia_nim_base_url=_parse_optional_string(env, "NVIDIA_NIM_BASE_URL"),
             azure_openai_api_key=_parse_optional_string(env, "AZURE_OPENAI_API_KEY"),
@@ -512,12 +523,13 @@ def cast_agentic_provider(value: str | None) -> AgenticProvider:
         "google",
         "mistral",
         "huggingface",
+        "openrouter",
         "deterministic",
     }:
         return cast(AgenticProvider, normalized)
     raise ValueError(
         "PAPER_CHASER_AGENTIC_PROVIDER must be one of: openai, azure-openai, "
-        "anthropic, nvidia, google, mistral, huggingface, deterministic"
+        "anthropic, nvidia, google, mistral, huggingface, openrouter, deterministic"
     )
 
 

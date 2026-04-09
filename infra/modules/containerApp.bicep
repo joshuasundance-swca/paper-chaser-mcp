@@ -5,6 +5,9 @@ param agenticProvider string
 param allowedOrigins string
 param azureOpenAiApiVersion string = ''
 param azureOpenAiEndpoint string = ''
+param openRouterBaseUrl string = 'https://openrouter.ai/api/v1'
+param openRouterHttpReferer string = ''
+param openRouterTitle string = ''
 param backendAuthSecretName string
 param backendAuthSecretUri string
 param containerAppName string
@@ -27,6 +30,7 @@ param keyVaultHuggingFaceApiKeySecretUri string
 param keyVaultMistralApiKeySecretUri string
 param keyVaultNvidiaApiKeySecretUri string
 param keyVaultOpenAiApiKeySecretUri string
+param keyVaultOpenRouterApiKeySecretUri string
 param keyVaultOpenAlexApiKeySecretUri string
 param keyVaultOpenAlexMailtoSecretUri string
 param keyVaultScholarApiKeySecretUri string
@@ -110,6 +114,12 @@ var secretDefinitions = concat([
     identity: managedIdentityResourceId
     keyVaultUrl: keyVaultAzureOpenAiApiKeySecretUri
     name: 'azure-openai-api-key'
+  }
+] : [], enableAgentic && agenticProvider == 'openrouter' ? [
+  {
+    identity: managedIdentityResourceId
+    keyVaultUrl: keyVaultOpenRouterApiKeySecretUri
+    name: 'openrouter-api-key'
   }
 ] : [], enableAgentic && agenticProvider == 'anthropic' ? [
   {
@@ -256,6 +266,21 @@ var containerEnv = concat([
     name: 'AZURE_OPENAI_API_VERSION'
     value: azureOpenAiApiVersion
   }
+] : [], !empty(openRouterBaseUrl) ? [
+  {
+    name: 'OPENROUTER_BASE_URL'
+    value: openRouterBaseUrl
+  }
+] : [], !empty(openRouterHttpReferer) ? [
+  {
+    name: 'OPENROUTER_HTTP_REFERER'
+    value: openRouterHttpReferer
+  }
+] : [], !empty(openRouterTitle) ? [
+  {
+    name: 'OPENROUTER_TITLE'
+    value: openRouterTitle
+  }
 ] : [], !empty(huggingFaceBaseUrl) ? [
   {
     name: 'HUGGINGFACE_BASE_URL'
@@ -331,6 +356,11 @@ var containerEnv = concat([
   {
     name: 'AZURE_OPENAI_API_KEY'
     secretRef: 'azure-openai-api-key'
+  }
+] : [], enableAgentic && agenticProvider == 'openrouter' ? [
+  {
+    name: 'OPENROUTER_API_KEY'
+    secretRef: 'openrouter-api-key'
   }
 ] : [], enableAgentic && agenticProvider == 'anthropic' ? [
   {

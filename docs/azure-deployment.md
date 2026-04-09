@@ -82,6 +82,10 @@ usage.
   The Hugging Face path also needs non-secret `huggingFaceBaseUrl`
   deployment config because it rides an OpenAI-compatible chat router.
 
+  The OpenRouter path also needs non-secret `openRouterBaseUrl` deployment
+  config and can optionally set `openRouterHttpReferer` plus
+  `openRouterTitle` for OpenRouter app attribution headers.
+
   The NVIDIA path also accepts optional non-secret `nvidiaNimBaseUrl`
   deployment config when you want to target a self-hosted NVIDIA NIM instead of
   the hosted NVIDIA API Catalog. Leave it empty for the default hosted path.
@@ -112,11 +116,15 @@ secret.
 
 The smart layer adds one provider-specific credential requirement when
 `enableAgentic=true`: `openai-api-key`, `azure-openai-api-key`,
-`anthropic-api-key`, `huggingface-api-key`, `nvidia-api-key`, `google-api-key`, or `mistral-api-key` depending on the intended provider bundle.
+`anthropic-api-key`, `huggingface-api-key`, `openrouter-api-key`, `nvidia-api-key`, `google-api-key`, or `mistral-api-key` depending on the intended provider bundle.
 For `agenticProvider=azure-openai`, also set `azureOpenAiEndpoint` and,
 optionally, `azureOpenAiApiVersion`.
 For `agenticProvider=huggingface`, also set `huggingFaceBaseUrl` when you need
 to override the default `https://router.huggingface.co/v1` router.
+For `agenticProvider=openrouter`, also set `openRouterBaseUrl` when you need
+to override the default `https://openrouter.ai/api/v1` router, and optionally
+set `openRouterHttpReferer` plus `openRouterTitle` when you want OpenRouter
+app attribution.
 For `agenticProvider=nvidia`, also set `nvidiaNimBaseUrl` when you want a
 self-hosted NVIDIA NIM endpoint instead of the hosted default.
 
@@ -185,9 +193,12 @@ Key Vault before you run a `full` deployment with CORE enabled.
 | Parameter | Default | Controls env var |
 | --- | --- | --- |
 | `enableAgentic` | `false` | `PAPER_CHASER_ENABLE_AGENTIC` |
-| `agenticProvider` | `openai` | `PAPER_CHASER_AGENTIC_PROVIDER` — supported Azure scaffold values are `openai`, `azure-openai`, `anthropic`, `nvidia`, `google`, `mistral`, `huggingface`, or `deterministic` |
+| `agenticProvider` | `openai` | `PAPER_CHASER_AGENTIC_PROVIDER` — supported Azure scaffold values are `openai`, `azure-openai`, `anthropic`, `nvidia`, `google`, `mistral`, `huggingface`, `openrouter`, or `deterministic` |
 | `azureOpenAiEndpoint` | `''` | `AZURE_OPENAI_ENDPOINT` — only injected when non-empty; used with `agenticProvider=azure-openai` |
 | `azureOpenAiApiVersion` | `''` | `AZURE_OPENAI_API_VERSION` — only injected when non-empty; used with `agenticProvider=azure-openai` |
+| `openRouterBaseUrl` | `https://openrouter.ai/api/v1` | `OPENROUTER_BASE_URL` — OpenRouter base URL; used with `agenticProvider=openrouter` |
+| `openRouterHttpReferer` | `''` | `OPENROUTER_HTTP_REFERER` — optional OpenRouter attribution header; only injected when non-empty |
+| `openRouterTitle` | `''` | `OPENROUTER_TITLE` — optional OpenRouter attribution header; only injected when non-empty |
 | `nvidiaNimBaseUrl` | `''` | `NVIDIA_NIM_BASE_URL` — only injected when non-empty; used with `agenticProvider=nvidia` for self-hosted NIMs |
 | `huggingFaceBaseUrl` | `https://router.huggingface.co/v1` | `HUGGINGFACE_BASE_URL` — OpenAI-compatible Hugging Face router base URL; used with `agenticProvider=huggingface` |
 | `plannerModel` | `gpt-5.4-mini` | `PAPER_CHASER_PLANNER_MODEL` |
@@ -200,14 +211,17 @@ Key Vault before you run a `full` deployment with CORE enabled.
 | `enableAgenticTraceLog` | `false` | `PAPER_CHASER_ENABLE_AGENTIC_TRACE_LOG` |
 
 Smart-layer provider secrets follow the same Key Vault pattern as the OpenAI setup.
-When `agenticProvider` is `openai`, `azure-openai`, `anthropic`, `nvidia`, `google`, `mistral`, or `huggingface`,
+When `agenticProvider` is `openai`, `azure-openai`, `anthropic`, `nvidia`, `google`, `mistral`, `huggingface`, or `openrouter`,
 seed the corresponding `openai-api-key`, `azure-openai-api-key`,
-`anthropic-api-key`, `nvidia-api-key`, `google-api-key`, `mistral-api-key`, or `huggingface-api-key` secret before a `full` deployment.
+`anthropic-api-key`, `nvidia-api-key`, `google-api-key`, `mistral-api-key`, `huggingface-api-key`, or `openrouter-api-key` secret before a `full` deployment.
 For Azure OpenAI, also set `azureOpenAiEndpoint` and optionally
 `azureOpenAiApiVersion`; the scaffold only exports those env vars when the
 matching Bicep params are non-empty.
 For Hugging Face, the scaffold also exports `HUGGINGFACE_BASE_URL` from the
 non-secret `huggingFaceBaseUrl` Bicep param.
+For OpenRouter, the scaffold also exports `OPENROUTER_BASE_URL`,
+`OPENROUTER_HTTP_REFERER`, and `OPENROUTER_TITLE` from non-secret Bicep
+params.
 For NVIDIA, the scaffold also exports optional `NVIDIA_NIM_BASE_URL` from the
 non-secret `nvidiaNimBaseUrl` Bicep param.
 
@@ -221,6 +235,9 @@ Effective planner/synthesis defaults by provider:
   switches to `moonshotai/Kimi-K2.5` /
   `moonshotai/Kimi-K2.5` and sends those model IDs to
   `HUGGINGFACE_BASE_URL`.
+- `openrouter`: runtime preserves explicit `plannerModel` /
+  `synthesisModel` values and sends requests to `OPENROUTER_BASE_URL`. The
+  first-pass path remains chat-only.
 - `nvidia`: if you leave `plannerModel` / `synthesisModel` on the checked-in OpenAI defaults, runtime switches to `nvidia/nemotron-3-nano-30b-a3b` / `nvidia/nemotron-3-super-120b-a12b`.
 - `google`: if you leave `plannerModel` / `synthesisModel` on the checked-in OpenAI defaults, runtime switches to `gemini-2.5-flash` / `gemini-2.5-pro`.
 - `mistral`: if you leave `plannerModel` / `synthesisModel` on the checked-in OpenAI defaults, runtime switches to `mistral-medium-latest` / `mistral-large-latest`.
@@ -255,6 +272,7 @@ names.
   `PAPER_CHASER_PLANNER_MODEL`, `PAPER_CHASER_SYNTHESIS_MODEL`,
   `PAPER_CHASER_EMBEDDING_MODEL`,
   `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION`,
+  `OPENROUTER_BASE_URL`, `OPENROUTER_HTTP_REFERER`, `OPENROUTER_TITLE`,
   `NVIDIA_NIM_BASE_URL`, and `HUGGINGFACE_BASE_URL` when the corresponding
   Bicep params are non-empty,
   `PAPER_CHASER_AGENTIC_INDEX_BACKEND`,
@@ -369,6 +387,10 @@ calls.
 - Use `agenticProvider=huggingface`, seed the `huggingface-api-key` Key Vault
   secret, and set `huggingFaceBaseUrl` when you need a non-default
   OpenAI-compatible Hugging Face router.
+- Use `agenticProvider=openrouter`, seed the `openrouter-api-key` Key Vault
+  secret, and set `openRouterBaseUrl` when you need a non-default OpenRouter
+  base URL. Optionally set `openRouterHttpReferer` and `openRouterTitle` for
+  OpenRouter app attribution headers.
 - Use `agenticProvider=nvidia` and seed the `nvidia-api-key` Key Vault secret
   when you want the LangChain-backed NVIDIA path. Set `nvidiaNimBaseUrl` when
   you want a self-hosted NIM endpoint instead of the hosted default.

@@ -37,6 +37,7 @@ __all__ = [
     "LangChainChatProviderBundle",
     "MistralProviderBundle",
     "NvidiaProviderBundle",
+    "OpenRouterProviderBundle",
 ]
 
 
@@ -976,3 +977,50 @@ class HuggingFaceProviderBundle(LangChainChatProviderBundle):
             max_retries=0,
             timeout=self._timeout_seconds,
         )
+
+
+class OpenRouterProviderBundle(LangChainChatProviderBundle):
+    """OpenRouter smart-layer adapter via OpenAI-compatible chat completions."""
+
+    def __init__(
+        self,
+        config: AgenticConfig,
+        api_key: str | None,
+        *,
+        base_url: str = "https://openrouter.ai/api/v1",
+        http_referer: str | None = None,
+        title: str | None = None,
+        provider_registry: ProviderDiagnosticsRegistry | None = None,
+    ) -> None:
+        super().__init__(
+            config,
+            provider_name="openrouter",
+            api_key=api_key,
+            provider_registry=provider_registry,
+            structured_output_method="json_schema",
+        )
+        self._base_url = base_url
+        self._http_referer = (http_referer or "").strip() or None
+        self._title = (title or "").strip() or None
+
+    def _create_chat_model(self, model_name: str) -> Any:
+        from langchain_openai import ChatOpenAI
+
+        default_headers: dict[str, str] = {}
+        if self._http_referer:
+            default_headers["HTTP-Referer"] = self._http_referer
+        if self._title:
+            default_headers["X-OpenRouter-Title"] = self._title
+
+        kwargs: dict[str, Any] = {
+            "model": model_name,
+            "api_key": SecretStr(self._api_key or ""),
+            "base_url": self._base_url,
+            "temperature": 0,
+            "max_retries": 0,
+            "timeout": self._timeout_seconds,
+            "extra_body": {"provider": {"require_parameters": True}},
+        }
+        if default_headers:
+            kwargs["default_headers"] = default_headers
+        return ChatOpenAI(**kwargs)
