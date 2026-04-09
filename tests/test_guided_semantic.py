@@ -14,6 +14,10 @@ def test_guided_semantic_models_accept_wire_aliases() -> None:
         {
             "intent": "regulatory",
             "confidence": "high",
+            "querySpecificity": "low",
+            "ambiguityLevel": "high",
+            "secondaryIntents": ["review"],
+            "retrievalHypotheses": ["northern long-eared bat conservation"],
             "rationale": "Explicit CFR citation anchored the route.",
             "anchor": {
                 "anchorType": "cfr_citation",
@@ -34,6 +38,10 @@ def test_guided_semantic_models_accept_wire_aliases() -> None:
     assert isinstance(decision.provider_plan, ProviderPlan)
     assert decision.anchor.anchor_type == "cfr_citation"
     assert decision.provider_plan.authority_first is True
+    assert decision.query_specificity == "low"
+    assert decision.ambiguity_level == "high"
+    assert decision.secondary_intents == ["review"]
+    assert decision.retrieval_hypotheses == ["northern long-eared bat conservation"]
 
 
 def test_guided_semantic_models_validate_follow_up_and_answer_contracts() -> None:

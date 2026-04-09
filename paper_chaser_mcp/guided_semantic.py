@@ -36,6 +36,16 @@ class RoutingDecision(ApiModel):
 
     intent: str = "discovery"
     confidence: Literal["high", "medium", "low"] = "medium"
+    query_specificity: Literal["high", "medium", "low"] = Field(
+        default="medium",
+        alias="querySpecificity",
+    )
+    ambiguity_level: Literal["low", "medium", "high"] = Field(
+        default="low",
+        alias="ambiguityLevel",
+    )
+    secondary_intents: list[str] = Field(default_factory=list, alias="secondaryIntents")
+    retrieval_hypotheses: list[str] = Field(default_factory=list, alias="retrievalHypotheses")
     rationale: str = ""
     anchor: RegulatoryAnchor | None = None
     provider_plan: ProviderPlan = Field(default_factory=ProviderPlan, alias="providerPlan")
@@ -134,9 +144,19 @@ def build_routing_decision(
     if confidence_value not in {"high", "medium", "low"}:
         confidence_value = "medium"
     confidence = cast(Literal["high", "medium", "low"], confidence_value)
+    query_specificity_value = str(metadata.get("querySpecificity") or "medium")
+    if query_specificity_value not in {"high", "medium", "low"}:
+        query_specificity_value = "medium"
+    ambiguity_level_value = str(metadata.get("ambiguityLevel") or "low")
+    if ambiguity_level_value not in {"low", "medium", "high"}:
+        ambiguity_level_value = "low"
     rationale = str(metadata.get("intentRationale") or "").strip()
     if not rationale:
         rationale = "Guided routing reused the smart runtime strategy metadata."
+    secondary_intents = [str(item).strip() for item in metadata.get("secondaryIntents") or [] if str(item).strip()]
+    retrieval_hypotheses = [
+        str(item).strip() for item in metadata.get("retrievalHypotheses") or [] if str(item).strip()
+    ]
     anchor = None
     if anchor_type or anchor_value or intent == "regulatory":
         anchor = RegulatoryAnchor(
@@ -149,6 +169,10 @@ def build_routing_decision(
     return RoutingDecision(
         intent=intent,
         confidence=confidence,
+        querySpecificity=cast(Literal["high", "medium", "low"], query_specificity_value),
+        ambiguityLevel=cast(Literal["low", "medium", "high"], ambiguity_level_value),
+        secondaryIntents=secondary_intents[:4],
+        retrievalHypotheses=retrieval_hypotheses[:5],
         rationale=rationale,
         anchor=anchor,
         providerPlan=ProviderPlan(

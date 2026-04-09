@@ -100,6 +100,15 @@ def paper_identity_keys(paper: dict[str, Any]) -> set[str]:
     return keys
 
 
+def _fallback_paper_identity_key(paper: dict[str, Any]) -> str:
+    """Return a stable fallback key when a paper lacks portable identifiers."""
+    title = re.sub(r"[^a-z0-9]+", " ", str(paper.get("title") or "").lower()).strip()
+    year = str(paper.get("year") or "").strip()
+    if title:
+        return f"title:{title}|year:{year}"
+    return ""
+
+
 def author_identity_keys(author: dict[str, Any]) -> set[str]:
     """Return the lookup keys that can identify an author across resources."""
     keys: set[str] = set()
@@ -832,22 +841,121 @@ class WorkspaceRegistry:
 
     def _extract_papers(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         papers: list[dict[str, Any]] = []
+        seen_keys: set[str] = set()
+
+        def add_paper(candidate: dict[str, Any]) -> None:
+            identity_keys = paper_identity_keys(candidate)
+            fallback_key = _fallback_paper_identity_key(candidate)
+            dedupe_keys = identity_keys or ({fallback_key} if fallback_key else set())
+            if not dedupe_keys or dedupe_keys & seen_keys:
+                return
+            seen_keys.update(dedupe_keys)
+            papers.append(candidate)
+
+        def year_from_source(candidate: dict[str, Any]) -> int | None:
+            for value in (
+                candidate.get("year"),
+                (candidate.get("citation") or {}).get("year") if isinstance(candidate.get("citation"), dict) else None,
+                candidate.get("date"),
+            ):
+                text = str(value or "").strip()
+                if not text:
+                    continue
+                match = re.search(r"\b(19|20)\d{2}\b", text)
+                if match:
+                    try:
+                        return int(match.group(0))
+                    except ValueError:
+                        continue
+            return None
+
+        def authors_from_source(candidate: dict[str, Any]) -> list[dict[str, Any]]:
+            citation = candidate.get("citation")
+            if not isinstance(citation, dict):
+                return []
+            authors = citation.get("authors")
+            if not isinstance(authors, list):
+                return []
+            normalized: list[dict[str, Any]] = []
+            for author in authors:
+                if isinstance(author, dict):
+                    name = str(author.get("name") or "").strip()
+                    if name:
+                        normalized.append({"name": name})
+                elif isinstance(author, str):
+                    name = author.strip()
+                    if name:
+                        normalized.append({"name": name})
+            return normalized
+
+        def paper_from_source(candidate: dict[str, Any]) -> dict[str, Any] | None:
+            source_id = str(candidate.get("sourceId") or candidate.get("evidenceId") or "").strip()
+            title = str(candidate.get("title") or candidate.get("citationText") or "").strip()
+            if not source_id and not title:
+                return None
+            citation_raw = candidate.get("citation")
+            citation: dict[str, Any] = citation_raw if isinstance(citation_raw, dict) else {}
+            summary = str(
+                candidate.get("summary")
+                or candidate.get("note")
+                or candidate.get("whyIncluded")
+                or candidate.get("whyRelevant")
+                or candidate.get("whyNotVerified")
+                or ""
+            ).strip()
+            paper: dict[str, Any] = {
+                "paperId": source_id or title,
+                "sourceId": source_id or title,
+                "canonicalId": source_id or title,
+                "title": title or source_id,
+                "abstract": str(candidate.get("excerpt") or candidate.get("abstract") or "").strip() or None,
+                "summary": summary or None,
+                "venue": str(
+                    citation.get("journalOrPublisher")
+                    or candidate.get("venue")
+                    or candidate.get("provider")
+                    or candidate.get("source")
+                    or ""
+                ).strip()
+                or None,
+                "year": year_from_source(candidate),
+                "authors": authors_from_source(candidate),
+                "source": str(candidate.get("provider") or candidate.get("source") or "").strip() or None,
+                "canonicalUrl": str(candidate.get("canonicalUrl") or "").strip() or None,
+                "retrievedUrl": str(candidate.get("retrievedUrl") or "").strip() or None,
+                "sourceType": str(candidate.get("sourceType") or "").strip() or None,
+                "verificationStatus": str(candidate.get("verificationStatus") or "").strip() or None,
+                "accessStatus": str(candidate.get("accessStatus") or "").strip() or None,
+                "topicalRelevance": str(candidate.get("topicalRelevance") or "").strip() or None,
+                "confidence": str(candidate.get("confidence") or "").strip() or None,
+            }
+            return {key: value for key, value in paper.items() if value not in (None, "", [], {})}
+
         for candidate in payload.get("data") or []:
             if isinstance(candidate, dict) and ("paperId" in candidate or "title" in candidate):
-                papers.append(candidate)
+                add_paper(candidate)
         for candidate in payload.get("results") or []:
             if isinstance(candidate, dict) and isinstance(candidate.get("paper"), dict):
-                papers.append(candidate["paper"])
+                add_paper(candidate["paper"])
         for candidate in payload.get("representativePapers") or []:
             if isinstance(candidate, dict) and ("paperId" in candidate or "title" in candidate):
-                papers.append(candidate)
+                add_paper(candidate)
         citation_candidates = [
             payload.get("bestMatch"),
             *(payload.get("alternatives") or []),
         ]
         for candidate in citation_candidates:
             if isinstance(candidate, dict) and isinstance(candidate.get("paper"), dict):
-                papers.append(candidate["paper"])
+                add_paper(candidate["paper"])
+        for key in ("evidence", "sources", "structuredSources", "leads", "candidateLeads", "unverifiedLeads"):
+            for candidate in payload.get(key) or []:
+                if not isinstance(candidate, dict):
+                    continue
+                if str(candidate.get("topicalRelevance") or "").strip().lower() == "off_topic":
+                    continue
+                paper = paper_from_source(candidate)
+                if paper is not None:
+                    add_paper(paper)
         return papers
 
     def _extract_authors(self, payload: dict[str, Any]) -> list[dict[str, Any]]:

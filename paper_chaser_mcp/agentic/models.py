@@ -97,6 +97,14 @@ class SearchStrategyMetadata(ApiModel):
         default="medium",
         alias="routingConfidence",
     )
+    query_specificity: Literal["high", "medium", "low"] = Field(
+        default="medium",
+        alias="querySpecificity",
+    )
+    ambiguity_level: Literal["low", "medium", "high"] = Field(
+        default="low",
+        alias="ambiguityLevel",
+    )
     intent_rationale: str = Field(
         default="",
         alias="intentRationale",
@@ -112,6 +120,10 @@ class SearchStrategyMetadata(ApiModel):
     query_variants_tried: list[str] = Field(
         default_factory=list,
         alias="queryVariantsTried",
+    )
+    retrieval_hypotheses: list[str] = Field(
+        default_factory=list,
+        alias="retrievalHypotheses",
     )
     accepted_expansions: list[str] = Field(
         default_factory=list,
@@ -510,6 +522,14 @@ class PlannerDecision(ApiModel):
         default="medium",
         alias="routingConfidence",
     )
+    query_specificity: Literal["high", "medium", "low"] = Field(
+        default="medium",
+        alias="querySpecificity",
+    )
+    ambiguity_level: Literal["low", "medium", "high"] = Field(
+        default="low",
+        alias="ambiguityLevel",
+    )
     intent_rationale: str = Field(
         default="",
         alias="intentRationale",
@@ -557,5 +577,6 @@ class ExpansionCandidate(ApiModel):
     """One candidate query expansion."""
 
     variant: str
-    source: Literal["from_input", "from_retrieved_evidence", "speculative"]
+    source: Literal["from_input", "from_retrieved_evidence", "speculative", "hypothesis"]
     rationale: str = ""
+    provider_plan: list[str] = Field(default_factory=list, alias="providerPlan")

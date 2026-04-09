@@ -100,9 +100,106 @@ def _compact_provider_outcomes(items: Any) -> dict[str, Any]:
     }
 
 
+def _list_of_strings(value: Any, *, limit: int | None = None) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    values = [str(item).strip() for item in value if str(item).strip()]
+    return values[:limit] if isinstance(limit, int) and limit >= 0 else values
+
+
+def _infer_prompt_family(
+    *,
+    tool_name: str,
+    intent: str,
+    query_specificity: str | None,
+    ambiguity_level: str | None,
+    pass_modes: list[str],
+) -> str:
+    if tool_name in {"follow_up_research", "ask_result_set"}:
+        return "grounded_follow_up"
+    if tool_name == "inspect_source":
+        return "source_provenance"
+    if tool_name == "get_runtime_status":
+        return "runtime_status"
+    if intent == "mixed" or ("regulatory" in pass_modes and "review" in pass_modes):
+        return "mixed_regulatory_literature"
+    if intent == "regulatory":
+        return "regulatory_primary_source"
+    if intent == "known_item":
+        return "known_item"
+    if query_specificity == "low" or ambiguity_level in {"medium", "high"}:
+        return "broad_ambiguous_literature"
+    if intent == "review":
+        return "literature_review"
+    if intent == "author":
+        return "author_lookup"
+    if intent == "citation":
+        return "citation_trace"
+    return "discovery"
+
+
+def _build_heuristic_summary(tool_name: str, arguments: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    del arguments
+    execution_provenance = _first_dict(result.get("executionProvenance"))
+    strategy_metadata = _first_dict(result.get("strategyMetadata"))
+    routing_summary = _first_dict(result.get("routingSummary"))
+    intent = str(
+        result.get("intent") or routing_summary.get("intent") or strategy_metadata.get("intent") or "discovery"
+    )
+    query_specificity = (
+        str(strategy_metadata.get("querySpecificity") or routing_summary.get("querySpecificity") or "").strip() or None
+    )
+    ambiguity_level = (
+        str(strategy_metadata.get("ambiguityLevel") or routing_summary.get("ambiguityLevel") or "").strip() or None
+    )
+    retrieval_hypotheses = _list_of_strings(
+        strategy_metadata.get("retrievalHypotheses") or routing_summary.get("retrievalHypotheses"),
+        limit=5,
+    )
+    secondary_intents = _list_of_strings(
+        strategy_metadata.get("secondaryIntents") or routing_summary.get("secondaryIntents"),
+        limit=4,
+    )
+    pass_modes = _list_of_strings(
+        routing_summary.get("passModes") or execution_provenance.get("passModes"),
+        limit=4,
+    )
+    anchored_subject = (
+        str(strategy_metadata.get("anchoredSubject") or routing_summary.get("anchorValue") or "").strip() or None
+    )
+    prompt_family = _infer_prompt_family(
+        tool_name=tool_name,
+        intent=intent,
+        query_specificity=query_specificity,
+        ambiguity_level=ambiguity_level,
+        pass_modes=pass_modes,
+    )
+    summary = {
+        "promptFamily": prompt_family,
+        "intent": intent,
+        "querySpecificity": query_specificity,
+        "ambiguityLevel": ambiguity_level,
+        "secondaryIntents": secondary_intents,
+        "retrievalHypotheses": retrieval_hypotheses,
+        "retrievalHypothesisCount": len(retrieval_hypotheses),
+        "passModes": pass_modes,
+        "anchoredSubject": anchored_subject,
+        "reviewPassReason": routing_summary.get("reviewPassReason") or strategy_metadata.get("reviewPassReason"),
+    }
+    return {key: value for key, value in summary.items() if value not in (None, "", [], {})}
+
+
+def _tags_with_prompt_family(base_tags: list[str], heuristic_summary: dict[str, Any]) -> list[str]:
+    prompt_family = str(heuristic_summary.get("promptFamily") or "").strip()
+    if prompt_family and prompt_family not in base_tags:
+        return [*base_tags, prompt_family]
+    return base_tags
+
+
 def _extract_telemetry(result: dict[str, Any]) -> dict[str, Any]:
     execution_provenance = _first_dict(result.get("executionProvenance"))
     strategy_metadata = _first_dict(result.get("strategyMetadata"))
+    routing_summary = _first_dict(result.get("routingSummary"))
     provider_outcomes = result.get("providerOutcomes")
     if not isinstance(provider_outcomes, list):
         provider_outcomes = execution_provenance.get("providerOutcomes")
@@ -120,6 +217,8 @@ def _extract_telemetry(result: dict[str, Any]) -> dict[str, Any]:
     confidence_signals = {
         "intentConfidence": strategy_metadata.get("intentConfidence"),
         "routingConfidence": strategy_metadata.get("routingConfidence"),
+        "querySpecificity": strategy_metadata.get("querySpecificity") or routing_summary.get("querySpecificity"),
+        "ambiguityLevel": strategy_metadata.get("ambiguityLevel") or routing_summary.get("ambiguityLevel"),
         "answerability": result.get("answerability"),
     }
 
@@ -139,6 +238,7 @@ def build_eval_capture_payload(
 ) -> dict[str, Any] | None:
     search_session_id = result.get("searchSessionId")
     telemetry = _extract_telemetry(result)
+    heuristic_summary = _build_heuristic_summary(tool_name, arguments, result)
     if tool_name == "research":
         sources = [item for item in result.get("sources") or [] if isinstance(item, dict)]
         return {
@@ -162,12 +262,13 @@ def build_eval_capture_payload(
                 "providerOutcomes": telemetry["providerOutcomes"],
                 "providerPathwaySummary": telemetry["providerPathwaySummary"],
                 "confidenceSignals": telemetry["confidenceSignals"],
+                "heuristicSummary": heuristic_summary,
                 "failureSummary": telemetry["failureSummary"],
                 "evidenceGaps": result.get("evidenceGaps") or [],
                 "sourceCount": len(sources),
                 "sources": [_compact_source(source) for source in sources[:8]],
             },
-            "tags": ["captured-live", "guided", "planner"],
+            "tags": _tags_with_prompt_family(["captured-live", "guided", "planner"], heuristic_summary),
         }
     if tool_name == "follow_up_research":
         sources = [item for item in result.get("sources") or [] if isinstance(item, dict)]
@@ -192,12 +293,13 @@ def build_eval_capture_payload(
                 "providerOutcomes": telemetry["providerOutcomes"],
                 "providerPathwaySummary": telemetry["providerPathwaySummary"],
                 "confidenceSignals": telemetry["confidenceSignals"],
+                "heuristicSummary": heuristic_summary,
                 "failureSummary": telemetry["failureSummary"],
                 "evidenceGaps": result.get("evidenceGaps") or [],
                 "sourceCount": len(sources),
                 "sources": [_compact_source(source) for source in sources[:8]],
             },
-            "tags": ["captured-live", "guided", "synthesis"],
+            "tags": _tags_with_prompt_family(["captured-live", "guided", "synthesis"], heuristic_summary),
         }
     if tool_name == "inspect_source":
         source = _first_dict(result.get("source"))
@@ -219,8 +321,9 @@ def build_eval_capture_payload(
                 "providerOutcomes": telemetry["providerOutcomes"],
                 "providerPathwaySummary": telemetry["providerPathwaySummary"],
                 "directReadRecommendations": _compact_recommendations(result.get("directReadRecommendations")),
+                "heuristicSummary": heuristic_summary,
             },
-            "tags": ["captured-live", "guided", "provenance"],
+            "tags": _tags_with_prompt_family(["captured-live", "guided", "provenance"], heuristic_summary),
         }
     if tool_name == "get_runtime_status":
         return {
@@ -231,8 +334,9 @@ def build_eval_capture_payload(
             "output": {
                 "runtimeSummary": result.get("runtimeSummary"),
                 "warnings": result.get("warnings") or [],
+                "heuristicSummary": heuristic_summary,
             },
-            "tags": ["captured-live", "runtime"],
+            "tags": _tags_with_prompt_family(["captured-live", "runtime"], heuristic_summary),
         }
     if tool_name == "search_papers_smart":
         structured_sources = [item for item in result.get("structuredSources") or [] if isinstance(item, dict)]
@@ -258,12 +362,16 @@ def build_eval_capture_payload(
                 "providerPathwaySummary": telemetry["providerPathwaySummary"],
                 "stageTimingsMs": telemetry["stageTimingsMs"],
                 "confidenceSignals": telemetry["confidenceSignals"],
+                "heuristicSummary": heuristic_summary,
                 "failureSummary": telemetry["failureSummary"],
                 "evidenceGaps": result.get("evidenceGaps") or [],
                 "sourceCount": len(structured_sources),
                 "sources": [_compact_source(source) for source in structured_sources[:8]],
             },
-            "tags": ["captured-live", "expert", "planner", "search_papers_smart"],
+            "tags": _tags_with_prompt_family(
+                ["captured-live", "expert", "planner", "search_papers_smart"],
+                heuristic_summary,
+            ),
         }
     if tool_name == "ask_result_set":
         evidence = [item for item in result.get("evidence") or [] if isinstance(item, dict)]
@@ -287,6 +395,7 @@ def build_eval_capture_payload(
                 "providerPathwaySummary": telemetry["providerPathwaySummary"],
                 "stageTimingsMs": telemetry["stageTimingsMs"],
                 "confidenceSignals": telemetry["confidenceSignals"],
+                "heuristicSummary": heuristic_summary,
                 "failureSummary": telemetry["failureSummary"],
                 "evidence": evidence[:8],
                 "selectedEvidenceIds": [
@@ -297,7 +406,10 @@ def build_eval_capture_payload(
                 "sourceCount": len(structured_sources),
                 "sources": [_compact_source(source) for source in structured_sources[:8]],
             },
-            "tags": ["captured-live", "expert", "synthesis", "ask_result_set"],
+            "tags": _tags_with_prompt_family(
+                ["captured-live", "expert", "synthesis", "ask_result_set"],
+                heuristic_summary,
+            ),
         }
     if tool_name == "map_research_landscape":
         themes = [item for item in result.get("themes") or [] if isinstance(item, dict)]
@@ -324,10 +436,14 @@ def build_eval_capture_payload(
                 "providerPathwaySummary": telemetry["providerPathwaySummary"],
                 "stageTimingsMs": telemetry["stageTimingsMs"],
                 "confidenceSignals": telemetry["confidenceSignals"],
+                "heuristicSummary": heuristic_summary,
                 "sourceCount": len(structured_sources),
                 "sources": [_compact_source(source) for source in structured_sources[:8]],
             },
-            "tags": ["captured-live", "expert", "misc", "map_research_landscape"],
+            "tags": _tags_with_prompt_family(
+                ["captured-live", "expert", "misc", "map_research_landscape"],
+                heuristic_summary,
+            ),
         }
     if tool_name == "expand_research_graph":
         nodes = [item for item in result.get("nodes") or [] if isinstance(item, dict)]
@@ -353,8 +469,12 @@ def build_eval_capture_payload(
                 "providerPathwaySummary": telemetry["providerPathwaySummary"],
                 "stageTimingsMs": telemetry["stageTimingsMs"],
                 "confidenceSignals": telemetry["confidenceSignals"],
+                "heuristicSummary": heuristic_summary,
             },
-            "tags": ["captured-live", "expert", "misc", "expand_research_graph"],
+            "tags": _tags_with_prompt_family(
+                ["captured-live", "expert", "misc", "expand_research_graph"],
+                heuristic_summary,
+            ),
         }
     return None
 
@@ -417,6 +537,7 @@ def build_review_queue_rows(events: list[dict[str, Any]]) -> list[dict[str, Any]
                 "reviewed_at": None,
                 "trace": {
                     "source_tool": tool_name,
+                    "prompt_family": _first_dict(output_payload.get("heuristicSummary")).get("promptFamily"),
                     "query": input_payload.get("query"),
                     "query_context": input_payload.get("query") or input_payload.get("searchSessionId"),
                     "follow_up_question": input_payload.get("question"),
@@ -427,6 +548,7 @@ def build_review_queue_rows(events: list[dict[str, Any]]) -> list[dict[str, Any]
                         "provider_pathway_summary": output_payload.get("providerPathwaySummary") or {},
                         "stage_timings_ms": output_payload.get("stageTimingsMs") or {},
                         "confidence_signals": output_payload.get("confidenceSignals") or {},
+                        "heuristic_summary": output_payload.get("heuristicSummary") or {},
                         "failure_summary": output_payload.get("failureSummary"),
                     },
                     "captured_output": output_payload,
@@ -471,10 +593,18 @@ def build_batch_summary(
         tool_counts[tool_name] = tool_counts.get(tool_name, 0) + 1
 
     task_family_counts: dict[str, int] = {}
+    prompt_family_counts: dict[str, int] = {}
     for row in queue_rows:
         review = _first_dict(row.get("review"))
         family = str(review.get("task_family") or "unknown")
         task_family_counts[family] = task_family_counts.get(family, 0) + 1
+        trace = _first_dict(row.get("trace"))
+        prompt_family = str(
+            trace.get("prompt_family")
+            or _first_dict(_first_dict(trace.get("telemetry")).get("heuristic_summary")).get("promptFamily")
+            or "unknown"
+        )
+        prompt_family_counts[prompt_family] = prompt_family_counts.get(prompt_family, 0) + 1
 
     durations = [
         int(event.get("durationMs") or 0) for event in events if isinstance(event, dict) and event.get("durationMs")
@@ -513,6 +643,7 @@ def build_batch_summary(
         "scenarioFile": scenario_file or report.get("scenarioFile"),
         "toolCounts": tool_counts,
         "taskFamilyCounts": task_family_counts,
+        "promptFamilyCounts": prompt_family_counts,
         "runCount": len(runs),
         "capturedEventCount": len(events),
         "reviewQueueRowCount": len(queue_rows),
@@ -548,6 +679,7 @@ def build_batch_ledger_rows(
                 "scenarioName": run.get("name"),
                 "tool": run.get("tool"),
                 "taskFamily": payload.get("taskFamily") or review.get("task_family"),
+                "promptFamily": _first_dict(output.get("heuristicSummary")).get("promptFamily"),
                 "searchSessionId": event.get("searchSessionId") or output.get("searchSessionId"),
                 "capturedEventId": event.get("eventId"),
                 "reviewQueueRowId": queue_row.get("trace_id"),
@@ -570,6 +702,7 @@ def write_batch_ledger_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "scenarioName",
         "tool",
         "taskFamily",
+        "promptFamily",
         "searchSessionId",
         "capturedEventId",
         "reviewQueueRowId",

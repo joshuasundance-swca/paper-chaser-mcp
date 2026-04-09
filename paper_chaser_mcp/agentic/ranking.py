@@ -6,7 +6,7 @@ import math
 import re
 import time
 from collections import defaultdict
-from typing import Any
+from typing import Any, Literal
 
 from .config import AgenticConfig
 from .planner import query_facets, query_terms
@@ -146,6 +146,9 @@ async def rerank_candidates(
     merged_candidates: list[dict[str, Any]],
     provider_bundle: ModelProviderBundle,
     candidate_concepts: list[str],
+    routing_confidence: Literal["high", "medium", "low"] = "medium",
+    query_specificity: Literal["high", "medium", "low"] = "medium",
+    ambiguity_level: Literal["low", "medium", "high"] = "low",
     candidate_pool_size: int | None = None,
     request_outcomes: list[dict[str, Any]] | None = None,
     request_id: str | None = None,
@@ -194,6 +197,9 @@ async def rerank_candidates(
     facets = query_facets(query)
     terms = query_terms(query)
     anchor_terms = [term for term in terms if term not in GENERIC_RESEARCH_TERMS]
+    broad_query_mode = query_specificity == "low" or ambiguity_level != "low" or len(facets) >= 2
+    provider_bonus_scale = 0.55 if broad_query_mode else 1.0
+    facet_penalty_scale = 0.65 if broad_query_mode else 1.0
 
     for item, paper_text, query_similarity in zip(
         merged_candidates,
@@ -236,6 +242,7 @@ async def rerank_candidates(
             default=0.0,
         )
         provider_bonus += min(max(len(item["providers"]) - 1, 0) * 0.02, 0.06)
+        provider_bonus *= provider_bonus_scale
         citation_count = paper.get("citationCount")
         citation_bonus = 0.0
         if isinstance(citation_count, int) and citation_count > 0:
@@ -271,14 +278,24 @@ async def rerank_candidates(
             facet_penalty += 0.05
         if anchor_terms and not matched_title_anchor_terms:
             facet_penalty += 0.08
+        bridge_bonus = 0.0
+        if broad_query_mode:
+            bridge_bonus += min(max(len(set(item["variants"])) - 1, 0) * 0.03, 0.09)
+            if len(set(item["variantSources"])) > 1:
+                bridge_bonus += 0.02
+            if matched_facets and len(matched_facets) < len(facets) and term_coverage >= 0.35:
+                bridge_bonus += 0.03
+            if matched_candidate_concepts and len(set(item["variants"])) >= 2:
+                bridge_bonus += 0.03
         final_score = (
             fused_rank_score
             + query_similarity
             + concept_bonus
             + provider_bonus
             + citation_bonus
+            + bridge_bonus
             - drift_penalty
-            - facet_penalty
+            - (facet_penalty * facet_penalty_scale)
         )
         item["matchedConcepts"] = matched_concepts
         item["scoreBreakdown"] = {
@@ -286,6 +303,7 @@ async def rerank_candidates(
             "querySimilarity": round(query_similarity, 6),
             "conceptCoverageBonus": round(concept_bonus, 6),
             "providerConsensusBonus": round(provider_bonus, 6),
+            "bridgeCoverageBonus": round(bridge_bonus, 6),
             "queryFacetCoverage": round(facet_coverage, 6),
             "queryTermCoverage": round(term_coverage, 6),
             "queryAnchorCoverage": round(anchor_coverage, 6),
@@ -294,7 +312,8 @@ async def rerank_candidates(
             "titleAnchorCoverage": round(title_anchor_coverage, 6),
             "citationRecencyPrior": round(citation_bonus, 6),
             "driftPenalty": round(drift_penalty, 6),
-            "queryFacetPenalty": round(facet_penalty, 6),
+            "queryFacetPenalty": round(facet_penalty * facet_penalty_scale, 6),
+            "broadQueryMode": broad_query_mode,
             "finalScore": round(final_score, 6),
         }
         item["querySimilarity"] = query_similarity

@@ -33,10 +33,18 @@ next steps without re-discovering project state.
 - Guided ambiguity handling is now **structured**. Guided wrappers surface
   `executionProvenance`, `sessionResolution`, `sourceResolution`, and
   `abstentionDetails` so clients can recover without reading exception text.
+- Guided routing summaries now surface **query specificity and bounded
+  hypotheses**. `routingSummary` can include `querySpecificity`,
+  `ambiguityLevel`, `secondaryIntents`, `retrievalHypotheses`, and blended
+  `passModes` so clients can react without reading raw smart-layer metadata.
 - Regulatory routing is now **subject-anchored**. `research` should either
   build a trustworthy primary-source trail or return
   `needs_disambiguation` / `abstained`; unrelated wildlife notices should not
   appear in grounded `evidence` or timeline events.
+- Guided hybrid regulatory requests are now **ambiguity-aware**. A request that
+  initially looks regulatory can still add a literature-review pass when the
+  regulatory smart pass reports low specificity, high ambiguity, or a review
+  secondary intent.
 - Broad agency-guidance prompts now stay on the regulatory path, prefer the most
   relevant query-anchored guidance or policy documents in the top summary, and
   retain weaker authority hits as leads rather than silently drifting into known-item recovery.
@@ -58,6 +66,10 @@ next steps without re-discovering project state.
 - The eval capture layer now records **batch-safe offline telemetry** such as
   `runId`, `batchId`, `durationMs`, compact provider-pathway summaries, stage
   timings, confidence signals, and batch-level summary or ledger artifacts.
+- Eval capture now also records **heuristic tuning context** such as prompt
+  family, query specificity, ambiguity level, retrieval-hypothesis counts, and
+  mixed-pass hints so review queues can tune routing thresholds with live traces
+  instead of static prompt assumptions.
 - The current checked-in package version is `0.2.1` in both `pyproject.toml`
   and `server.json`.
 - The current coverage-gated validation baseline after the latest release-readiness pass is:

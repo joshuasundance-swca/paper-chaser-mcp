@@ -413,6 +413,66 @@ def test_workspace_builds_sync_vector_store_and_handles_failures(
     assert registry._search_vector_store(record, query="retrieval", top_k=2) == []
 
 
+def test_workspace_indexes_guided_evidence_and_relevant_leads_for_search() -> None:
+    registry = WorkspaceRegistry(
+        ttl_seconds=1800,
+        enable_trace_log=False,
+        similarity_fn=lambda query, text: (
+            1.0 if "planetary boundaries" in text.lower() and "planetary" in query.lower() else 0.0
+        ),
+    )
+    record = registry.save_result_set(
+        source_tool="research",
+        query="planetary boundaries",
+        payload={
+            "evidence": [
+                {
+                    "evidenceId": "10.1038/461472a",
+                    "title": "A safe operating space for humanity",
+                    "citation": {
+                        "authors": ["Johan Rockstrom"],
+                        "year": "2009",
+                        "journalOrPublisher": "Nature",
+                    },
+                    "whyIncluded": "Foundational planetary boundaries framing.",
+                    "topicalRelevance": "on_topic",
+                }
+            ],
+            "candidateLeads": [
+                {
+                    "sourceId": "lead-1",
+                    "title": "Planetary boundaries in Earth system governance",
+                    "provider": "openalex",
+                    "sourceType": "repository_record",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "access_unverified",
+                    "topicalRelevance": "weak_match",
+                    "confidence": "medium",
+                }
+            ],
+            "unverifiedLeads": [
+                {
+                    "sourceId": "lead-2",
+                    "title": "Unrelated freshwater policy record",
+                    "provider": "core",
+                    "sourceType": "repository_record",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "access_unverified",
+                    "topicalRelevance": "off_topic",
+                    "confidence": "medium",
+                }
+            ],
+        },
+    )
+
+    indexed_ids = {paper.get("paperId") for paper in record.papers}
+
+    assert "10.1038/461472a" in indexed_ids
+    assert "lead-1" in indexed_ids
+    assert "lead-2" not in indexed_ids
+    assert registry.search_papers(record.search_session_id, "planetary boundaries", top_k=2)
+
+
 @pytest.mark.asyncio
 async def test_workspace_async_vector_store_paths_and_cleanup(
     monkeypatch: pytest.MonkeyPatch,

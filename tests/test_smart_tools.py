@@ -17,7 +17,7 @@ from paper_chaser_mcp.agentic.graphs import (
     _finalize_theme_label,
     _graph_frontier_scores,
 )
-from paper_chaser_mcp.agentic.models import PlannerDecision
+from paper_chaser_mcp.agentic.models import IntentCandidate, PlannerDecision
 from paper_chaser_mcp.agentic.planner import (
     classify_query,
     grounded_expansion_candidates,
@@ -1373,6 +1373,10 @@ async def test_search_papers_smart_broad_pfas_discovery_does_not_route_to_known_
 
     assert payload["strategyMetadata"]["intent"] in {"discovery", "review"}
     assert payload["strategyMetadata"]["intent"] != "known_item"
+    assert payload["strategyMetadata"]["querySpecificity"] == "low"
+    assert payload["strategyMetadata"]["ambiguityLevel"] in {"medium", "high"}
+    assert payload["strategyMetadata"]["retrievalHypotheses"]
+    assert len(payload["strategyMetadata"]["queryVariantsTried"]) >= 2
     assert payload["results"]
 
 
@@ -3617,6 +3621,48 @@ async def test_search_papers_smart_known_item_uses_openalex_autocomplete_when_ot
     assert smart["results"][0]["retrievedBy"] == ["openalex_autocomplete"]
 
 
+@pytest.mark.asyncio
+async def test_search_papers_smart_known_item_retries_parsed_title_candidates_when_raw_query_misses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    registry, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
+
+    async def fake_resolve_citation(**kwargs: object) -> dict[str, object]:
+        del kwargs
+        return {"bestMatch": None, "alternatives": [], "resolutionConfidence": "low"}
+
+    async def fake_search_papers_match(**kwargs: object) -> dict[str, object]:
+        semantic.calls.append(("search_papers_match", dict(kwargs)))
+        if kwargs.get("query") == "planetary boundaries":
+            return {
+                "paperId": "planetary-1",
+                "title": "Planetary Boundaries: Exploring the Safe Operating Space for Humanity",
+                "year": 2009,
+                "venue": "Ecology and Society",
+                "matchStrategy": "semantic_title_match",
+            }
+        return {"matchFound": False}
+
+    monkeypatch.setattr("paper_chaser_mcp.agentic.graphs.resolve_citation", fake_resolve_citation)
+    semantic.search_papers_match = fake_search_papers_match  # type: ignore[method-assign]
+
+    smart = await runtime.search_papers_smart(
+        query="Rockstrom et al. 2009 planetary boundaries Nature paper",
+        limit=5,
+        mode="known_item",
+        latency_profile="fast",
+    )
+
+    searched_queries = [call[1]["query"] for call in semantic.calls if call[0] == "search_papers_match"]
+
+    assert "Rockstrom et al. 2009 planetary boundaries Nature paper" in searched_queries
+    assert "planetary boundaries" in searched_queries
+    assert smart["results"]
+    assert smart["results"][0]["paper"]["paperId"] == "planetary-1"
+
+
 def test_grounded_comparison_answer_filters_question_echo_and_year_tokens() -> None:
     answer = _build_grounded_comparison_answer(
         question="Which results are directly about rocket launch noise or wildlife effects near launch sites?",
@@ -3857,6 +3903,148 @@ async def test_classify_query_routes_title_like_query_to_known_item() -> None:
     )
 
     assert planner.intent == "known_item"
+
+
+@pytest.mark.asyncio
+async def test_classify_query_marks_broad_multi_intent_query_as_low_specificity_and_ambiguous() -> None:
+    class _Bundle:
+        async def aplan_search(self, **kwargs: object) -> PlannerDecision:
+            return PlannerDecision(
+                intent="discovery",
+                intentCandidates=[
+                    IntentCandidate(intent="review", confidence="medium", rationale="Planner saw synthesis language."),
+                ],
+                candidateConcepts=["wetland restoration", "climate resilience", "coastal marshes"],
+                followUpMode="qa",
+            )
+
+    _, planner = await classify_query(
+        query=(
+            "What are the most effective wetland restoration strategies for "
+            "improving climate resilience in coastal marshes?"
+        ),
+        mode="auto",
+        year=None,
+        venue=None,
+        focus=None,
+        provider_bundle=_Bundle(),  # type: ignore[arg-type]
+    )
+
+    assert planner.query_specificity == "low"
+    assert planner.ambiguity_level == "high"
+    assert planner.intent_candidates[0].intent in {"discovery", "review"}
+
+
+@pytest.mark.asyncio
+async def test_retrieve_variant_preserves_explicit_provider_plan_order() -> None:
+    class _SemanticClient:
+        async def search_papers(self, **kwargs: object) -> dict[str, Any]:
+            return {
+                "total": 1,
+                "offset": 0,
+                "data": [
+                    {
+                        "paperId": "sem-1",
+                        "title": "Semantic result",
+                        "source": "semantic_scholar",
+                    }
+                ],
+            }
+
+    class _OpenAlexClient:
+        async def search(self, **kwargs: object) -> dict[str, Any]:
+            return {
+                "total": 1,
+                "offset": 0,
+                "data": [
+                    {
+                        "paperId": "oa-1",
+                        "title": "OpenAlex result",
+                        "source": "openalex",
+                    }
+                ],
+            }
+
+    class _EmptyClient:
+        async def search(self, **kwargs: object) -> dict[str, Any]:
+            return {"data": []}
+
+    batch = await retrieve_variant(
+        variant="wetland restoration climate resilience",
+        variant_source="hypothesis",
+        intent="discovery",
+        year=None,
+        venue=None,
+        enable_core=False,
+        enable_semantic_scholar=True,
+        enable_openalex=True,
+        enable_arxiv=False,
+        enable_serpapi=False,
+        enable_scholarapi=False,
+        core_client=_EmptyClient(),
+        semantic_client=_SemanticClient(),
+        openalex_client=_OpenAlexClient(),
+        scholarapi_client=None,
+        arxiv_client=_EmptyClient(),
+        serpapi_client=None,
+        provider_plan=["openalex", "semantic_scholar"],
+    )
+
+    assert batch.providers_used == ["openalex", "semantic_scholar"]
+    assert [outcome["provider"] for outcome in batch.provider_outcomes[:2]] == ["openalex", "semantic_scholar"]
+
+
+@pytest.mark.asyncio
+async def test_rerank_candidates_adds_bridge_bonus_for_broad_query_hypotheses() -> None:
+    provider_bundle = resolve_provider_bundle(
+        _deterministic_config(),
+        openai_api_key=None,
+    )
+
+    ranked = await rerank_candidates(
+        query="wetland restoration climate resilience coastal marshes",
+        merged_candidates=[
+            {
+                "paper": {
+                    "paperId": "bridge-1",
+                    "title": "Wetland restoration for climate resilience in coastal marshes",
+                    "abstract": "Integrates restoration, resilience, and marsh outcomes.",
+                    "year": 2024,
+                    "authors": [{"name": "Author One"}],
+                    "source": "openalex",
+                },
+                "providers": ["openalex"],
+                "variants": ["wetland restoration climate resilience", "coastal marshes climate resilience"],
+                "variantSources": ["hypothesis", "from_input"],
+                "providerRanks": {"openalex": 1},
+                "retrievalCount": 2,
+            },
+            {
+                "paper": {
+                    "paperId": "narrow-1",
+                    "title": "Wetland restoration interventions",
+                    "abstract": "Focuses narrowly on restoration interventions.",
+                    "year": 2024,
+                    "authors": [{"name": "Author Two"}],
+                    "source": "semantic_scholar",
+                },
+                "providers": ["semantic_scholar"],
+                "variants": ["wetland restoration interventions"],
+                "variantSources": ["from_input"],
+                "providerRanks": {"semantic_scholar": 1},
+                "retrievalCount": 1,
+            },
+        ],
+        provider_bundle=provider_bundle,
+        candidate_concepts=["wetland restoration", "climate resilience", "coastal marshes"],
+        routing_confidence="medium",
+        query_specificity="low",
+        ambiguity_level="high",
+    )
+
+    assert ranked[0]["paper"]["paperId"] == "bridge-1"
+    assert ranked[0]["scoreBreakdown"]["bridgeCoverageBonus"] > 0
+    assert ranked[0]["scoreBreakdown"]["broadQueryMode"] is True
 
 
 @pytest.mark.asyncio

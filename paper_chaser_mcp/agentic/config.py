@@ -54,6 +54,7 @@ class AgenticConfig:
     max_grounded_variants: int = 3
     max_speculative_variants: int = 3
     max_total_variants: int = 6
+    max_initial_hypotheses: int = 3
     candidate_pool_size: int = 80
     speculative_accept_min_novel_papers: int = 2
     speculative_top_pool_cutoff: int = 40
@@ -70,6 +71,7 @@ class AgenticConfig:
                 max_grounded_variants=min(self.max_grounded_variants, 1),
                 max_speculative_variants=0,
                 max_total_variants=min(self.max_total_variants, 2),
+                max_initial_hypotheses=min(self.max_initial_hypotheses, 2),
                 candidate_pool_size=min(self.candidate_pool_size, 40),
                 speculative_top_pool_cutoff=min(self.speculative_top_pool_cutoff, 20),
             )
@@ -79,6 +81,7 @@ class AgenticConfig:
                 max_grounded_variants=min(self.max_grounded_variants + 1, 4),
                 max_speculative_variants=min(self.max_speculative_variants + 1, 4),
                 max_total_variants=min(self.max_total_variants + 2, 8),
+                max_initial_hypotheses=min(self.max_initial_hypotheses + 1, 4),
                 candidate_pool_size=min(self.candidate_pool_size + 20, 120),
                 speculative_top_pool_cutoff=min(
                     self.speculative_top_pool_cutoff + 20,
@@ -90,6 +93,7 @@ class AgenticConfig:
             max_grounded_variants=min(self.max_grounded_variants, 2),
             max_speculative_variants=min(self.max_speculative_variants, 2),
             max_total_variants=min(self.max_total_variants, 4),
+            max_initial_hypotheses=min(self.max_initial_hypotheses, 3),
             candidate_pool_size=min(self.candidate_pool_size, 50),
             speculative_top_pool_cutoff=min(self.speculative_top_pool_cutoff, 30),
         )

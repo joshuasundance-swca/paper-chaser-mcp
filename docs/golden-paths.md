@@ -48,6 +48,10 @@ gh aw compile test-paper-chaser --dir .github/workflows
 2. Inspect `resultStatus`, `answerability`, `evidence`, `leads`,
   `routingSummary`, `coverageSummary`, `evidenceGaps`, `failureSummary`,
   `executionProvenance`, and `nextActions`.
+3. When `routingSummary.querySpecificity=low` or
+   `routingSummary.ambiguityLevel=medium|high`, treat
+   `routingSummary.retrievalHypotheses` as the server's bounded interpretation
+   of the broad ask rather than as final evidence.
 3. Save `searchSessionId` for follow-up steps.
 
 **Example**
@@ -130,6 +134,9 @@ For species/regulatory requests in `research`:
 5. For broad agency-guidance prompts, expect the top guided summary to prefer
   the most relevant query-anchored guidance or policy documents and to retain
   weaker authority records as leads rather than grounded evidence.
+6. For hybrid regulatory-plus-literature asks, expect guided `research` to run
+   a blended pass when routing stays low-specificity or high-ambiguity. The
+   summary and `routingSummary.passModes` should make that explicit.
 
 ## Expert fallback paths (intentional)
 

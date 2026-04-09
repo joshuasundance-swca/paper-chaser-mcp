@@ -536,7 +536,7 @@ def _filter_expansion_candidates(
 ) -> list[ExpansionCandidate]:
     variants: list[ExpansionCandidate] = []
     query_tokens = set(_tokenize(query))
-    valid_sources = {"from_input", "from_retrieved_evidence", "speculative"}
+    valid_sources = {"from_input", "from_retrieved_evidence", "speculative", "hypothesis"}
     for item in expansions[:max_variants]:
         if isinstance(item, BaseModel):
             payload = item.model_dump()

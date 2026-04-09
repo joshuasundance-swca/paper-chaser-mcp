@@ -43,6 +43,13 @@ def test_maybe_capture_eval_candidate_records_guided_research(tmp_path: Path) ->
             "intent": "discovery",
             "status": "succeeded",
             "summary": "Summary",
+            "routingSummary": {
+                "intent": "discovery",
+                "querySpecificity": "low",
+                "ambiguityLevel": "high",
+                "retrievalHypotheses": ["pfas groundwater remediation"],
+                "passModes": ["auto"],
+            },
             "sources": [{"sourceId": "source-1", "title": "Paper", "provider": "openalex"}],
             "executionProvenance": {
                 "executionMode": "guided_research",
@@ -68,6 +75,9 @@ def test_maybe_capture_eval_candidate_records_guided_research(tmp_path: Path) ->
     assert '"taskFamily": "planner"' in text
     assert '"searchSessionId": "ssn_test"' in text
     assert '"providerPathwaySummary"' in text
+    assert '"heuristicSummary"' in text
+    assert '"promptFamily": "broad_ambiguous_literature"' in text
+    assert '"querySpecificity": "low"' in text
     assert '"runId": "run_test_002"' in text
 
 
@@ -99,7 +109,13 @@ def test_maybe_capture_eval_candidate_records_expert_tool(tmp_path: Path) -> Non
             "resultStatus": "returned_results",
             "answerability": "answerable",
             "routingSummary": {"intent": "discovery"},
-            "strategyMetadata": {"intent": "discovery", "stageTimingsMs": {"planning": 18}},
+            "strategyMetadata": {
+                "intent": "discovery",
+                "stageTimingsMs": {"planning": 18},
+                "querySpecificity": "low",
+                "ambiguityLevel": "high",
+                "retrievalHypotheses": ["pfas groundwater remediation"],
+            },
             "coverageSummary": {"providersAttempted": ["semantic_scholar"]},
             "providerOutcomes": [
                 {
@@ -117,7 +133,36 @@ def test_maybe_capture_eval_candidate_records_expert_tool(tmp_path: Path) -> Non
     text = trace_path.read_text(encoding="utf-8")
     assert '"toolRole": "expert_smart_search"' in text
     assert '"stageTimingsMs": {"planning": 18}' in text
+    assert '"heuristicSummary"' in text
+    assert '"promptFamily": "broad_ambiguous_literature"' in text
     assert '"durationMs": 601' in text
+
+
+def test_build_batch_summary_counts_prompt_families() -> None:
+    events = [
+        {
+            "eventId": "evt-1",
+            "payload": {
+                "tool": "research",
+                "taskFamily": "planner",
+                "output": {"heuristicSummary": {"promptFamily": "mixed_regulatory_literature"}},
+            },
+        },
+        {
+            "eventId": "evt-2",
+            "payload": {
+                "tool": "search_papers_smart",
+                "taskFamily": "planner",
+                "output": {"heuristicSummary": {"promptFamily": "broad_ambiguous_literature"}},
+            },
+        },
+    ]
+    queue = build_review_queue_rows(events)
+
+    summary = build_batch_summary({"runs": [{"tool": "research"}, {"tool": "search_papers_smart"}]}, events, queue)
+
+    assert summary["promptFamilyCounts"]["mixed_regulatory_literature"] == 1
+    assert summary["promptFamilyCounts"]["broad_ambiguous_literature"] == 1
 
 
 def test_build_batch_summary_and_ledger_rows(tmp_path: Path) -> None:

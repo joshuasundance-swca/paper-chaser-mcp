@@ -7,7 +7,13 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from typing import Any, Callable, cast
 
-from .agentic.planner import detect_regulatory_intent, looks_like_exact_title, query_facets, query_terms
+from .agentic.planner import (
+    detect_literature_intent,
+    detect_regulatory_intent,
+    looks_like_exact_title,
+    query_facets,
+    query_terms,
+)
 from .citation_repair import looks_like_citation_query, looks_like_paper_identifier, parse_citation, resolve_citation
 from .clients.scholarapi import (
     ScholarApiError,
@@ -1055,6 +1061,15 @@ def _guided_normalize_whitespace(value: Any) -> str:
     return " ".join(str(value or "").strip().split())
 
 
+def _guided_normalize_source_locator(value: Any) -> str:
+    normalized = _guided_normalize_whitespace(value).lower().rstrip("/")
+    if not normalized:
+        return ""
+    normalized = re.sub(r"^https?://", "", normalized)
+    normalized = re.sub(r"^www\.", "", normalized)
+    return normalized
+
+
 def _guided_strip_research_prefix(query: str) -> str:
     stripped = query
     for pattern in _GUIDED_QUERY_PREFIX_PATTERNS:
@@ -1170,7 +1185,8 @@ def _guided_candidate_records(
     records: list[Any] = []
     if callable(active_records):
         try:
-            records = list(active_records(source_tools=_GUIDED_RECOVERABLE_SESSION_TOOLS))
+            active = active_records(source_tools=_GUIDED_RECOVERABLE_SESSION_TOOLS)
+            records = list(cast(Any, active)) if active is not None else []
         except Exception as exc:
             logger.debug("Failed to read active workspace records: %s", exc)
             records = []
@@ -1502,19 +1518,30 @@ def _guided_provider_budget_payload(*, allow_paid_providers: bool) -> dict[str, 
 
 def _guided_strategy_metadata_from_runs(smart_runs: list[dict[str, Any]]) -> dict[str, Any]:
     merged: dict[str, Any] = {}
+    merged_lists: dict[str, list[str]] = {
+        "providerPlan": [],
+        "providersUsed": [],
+        "secondaryIntents": [],
+        "queryVariantsTried": [],
+        "retrievalHypotheses": [],
+    }
+    confidence_rank = {"high": 3, "medium": 2, "low": 1}
+    specificity_rank = {"high": 3, "medium": 2, "low": 1}
+    ambiguity_rank = {"low": 1, "medium": 2, "high": 3}
+    routing_confidences: list[str] = []
+    intent_confidences: list[str] = []
+    query_specificities: list[str] = []
+    ambiguity_levels: list[str] = []
+
     for smart in smart_runs:
         metadata = smart.get("strategyMetadata")
         if not isinstance(metadata, dict):
             continue
         for field in (
             "intent",
-            "intentConfidence",
-            "routingConfidence",
             "intentRationale",
             "anchorType",
             "anchoredSubject",
-            "providerPlan",
-            "providersUsed",
             "configuredSmartProvider",
             "activeSmartProvider",
             "providerBudgetApplied",
@@ -1523,7 +1550,103 @@ def _guided_strategy_metadata_from_runs(smart_runs: list[dict[str, Any]]) -> dic
             value = metadata.get(field)
             if value not in (None, "", [], {}) and field not in merged:
                 merged[field] = value
+        for field in merged_lists:
+            for item in metadata.get(field) or []:
+                text = str(item).strip()
+                if text and text not in merged_lists[field]:
+                    merged_lists[field].append(text)
+
+        intent_confidence = str(metadata.get("intentConfidence") or "").strip()
+        if intent_confidence in confidence_rank:
+            intent_confidences.append(intent_confidence)
+        routing_confidence = str(metadata.get("routingConfidence") or "").strip()
+        if routing_confidence in confidence_rank:
+            routing_confidences.append(routing_confidence)
+        query_specificity = str(metadata.get("querySpecificity") or "").strip()
+        if query_specificity in specificity_rank:
+            query_specificities.append(query_specificity)
+        ambiguity_level = str(metadata.get("ambiguityLevel") or "").strip()
+        if ambiguity_level in ambiguity_rank:
+            ambiguity_levels.append(ambiguity_level)
+
+    for field, values in merged_lists.items():
+        if values:
+            merged[field] = values
+    if intent_confidences:
+        merged["intentConfidence"] = min(intent_confidences, key=lambda value: confidence_rank[value])
+    if routing_confidences:
+        merged["routingConfidence"] = min(routing_confidences, key=lambda value: confidence_rank[value])
+    if query_specificities:
+        merged["querySpecificity"] = min(query_specificities, key=lambda value: specificity_rank[value])
+    if ambiguity_levels:
+        merged["ambiguityLevel"] = max(ambiguity_levels, key=lambda value: ambiguity_rank[value])
     return merged
+
+
+def _guided_should_add_review_pass(
+    *,
+    initial_intent: str,
+    query: str,
+    focus: str | None,
+    primary_smart: dict[str, Any],
+    pass_modes: list[str],
+) -> tuple[bool, str | None]:
+    if "review" in pass_modes:
+        return False, None
+    if initial_intent == "mixed":
+        return True, "mixed_intent_query"
+    if initial_intent != "regulatory":
+        return False, None
+    if _guided_is_agency_guidance_query(query):
+        return False, None
+
+    metadata = cast(
+        dict[str, Any],
+        primary_smart.get("strategyMetadata") if isinstance(primary_smart.get("strategyMetadata"), dict) else {},
+    )
+    secondary_intents = {str(item).strip() for item in metadata.get("secondaryIntents") or [] if str(item).strip()}
+    query_specificity = str(metadata.get("querySpecificity") or "").strip()
+    ambiguity_level = str(metadata.get("ambiguityLevel") or "").strip()
+    retrieval_hypotheses = [
+        str(item).strip() for item in metadata.get("retrievalHypotheses") or [] if str(item).strip()
+    ]
+    if "review" in secondary_intents:
+        return True, "review_secondary_intent_detected"
+    if detect_literature_intent(query, focus) and (query_specificity == "low" or ambiguity_level in {"medium", "high"}):
+        return True, "broad_regulatory_query_with_literature_signal"
+    if ambiguity_level == "high" and retrieval_hypotheses:
+        return True, "ambiguous_regulatory_query_with_retrieval_hypotheses"
+    return False, None
+
+
+def _guided_review_pass_overrides(
+    *,
+    query: str,
+    focus: str | None,
+    primary_smart: dict[str, Any],
+) -> dict[str, Any]:
+    metadata = cast(
+        dict[str, Any],
+        primary_smart.get("strategyMetadata") if isinstance(primary_smart.get("strategyMetadata"), dict) else {},
+    )
+    anchored_subject = _guided_normalize_whitespace(metadata.get("anchoredSubject"))
+    existing_focus = _guided_normalize_whitespace(focus)
+    if not anchored_subject:
+        return {}
+
+    lowered_query = _guided_normalize_whitespace(query).lower()
+    lowered_focus = existing_focus.lower()
+    if anchored_subject.lower() in lowered_query or anchored_subject.lower() in lowered_focus:
+        return {}
+    merged_focus = " ".join(part for part in [existing_focus, anchored_subject] if part)
+    return {"focus": merged_focus} if merged_focus else {}
+
+
+def _guided_is_agency_guidance_query(query: str) -> bool:
+    normalized = _guided_normalize_whitespace(query).lower()
+    if "guidance" not in normalized:
+        return False
+    return any(marker in normalized for marker in ("agency", "epa", "fda", "guidance for industry"))
 
 
 def _guided_should_escalate_research(
@@ -1704,13 +1827,24 @@ def _guided_normalize_inspect_arguments(
     repairs: list[dict[str, str]] = []
     warnings: list[str] = []
 
+    raw_source_id = _guided_extract_source_id(arguments)
+    normalized_source_id = _guided_normalize_whitespace(raw_source_id)
+
     raw_search_session_id = _guided_extract_search_session_id(arguments)
     normalized_search_session_id: str | None = _guided_normalize_whitespace(raw_search_session_id)
     if normalized_search_session_id and not _guided_session_exists(
         workspace_registry=workspace_registry,
         search_session_id=normalized_search_session_id,
     ):
-        inferred_id = _guided_infer_single_session_id(workspace_registry)
+        inferred_id, _ = _guided_resolve_session_id_for_source(workspace_registry, normalized_source_id)
+        if inferred_id is not None:
+            warnings.append(
+                "searchSessionId "
+                f"'{normalized_search_session_id}' was unavailable; using source-bearing session '{inferred_id}'."
+            )
+            normalized_search_session_id = inferred_id
+        else:
+            inferred_id = _guided_infer_single_session_id(workspace_registry)
         if inferred_id is not None:
             warnings.append(
                 "searchSessionId "
@@ -1723,8 +1857,13 @@ def _guided_normalize_inspect_arguments(
             )
             normalized_search_session_id = None
     if not normalized_search_session_id:
-        inferred_id = _guided_infer_single_session_id(workspace_registry)
+        inferred_id, _ = _guided_resolve_session_id_for_source(workspace_registry, normalized_source_id)
         if inferred_id is not None:
+            normalized_search_session_id = inferred_id
+            warnings.append(f"searchSessionId was missing; inferred source-bearing session '{inferred_id}'.")
+        else:
+            inferred_id = _guided_infer_single_session_id(workspace_registry)
+        if inferred_id is not None and not normalized_search_session_id:
             normalized_search_session_id = inferred_id
             warnings.append(f"searchSessionId was missing; inferred active session '{inferred_id}'.")
         elif len(_guided_candidate_records(workspace_registry)) > 1:
@@ -1740,8 +1879,6 @@ def _guided_normalize_inspect_arguments(
         reason="session_id_normalization",
     )
 
-    raw_source_id = _guided_extract_source_id(arguments)
-    normalized_source_id = _guided_normalize_whitespace(raw_source_id)
     if not normalized_search_session_id:
         inferred_session_id, _ = _guided_resolve_session_id_for_source(workspace_registry, normalized_source_id)
         if inferred_session_id is not None:
@@ -2225,27 +2362,57 @@ def _guided_machine_failure_payload(
     return payload
 
 
-def _guided_summary(intent: str, status: str, findings: list[dict[str, Any]], sources: list[dict[str, Any]]) -> str:
+def _guided_summary(
+    intent: str,
+    status: str,
+    findings: list[dict[str, Any]],
+    sources: list[dict[str, Any]],
+    *,
+    routing_summary: dict[str, Any] | None = None,
+    pass_modes: list[str] | None = None,
+) -> str:
     if findings:
         top_claim = str(findings[0].get("claim") or "").strip()
         additional_count = max(len(findings) - 1, 0)
         if additional_count:
-            return f"Top result: {top_claim}. Verified support includes {additional_count} additional source(s)."
-        return f"Top result: {top_claim}."
-    if sources:
+            summary = f"Top result: {top_claim}. Verified support includes {additional_count} additional source(s)."
+        else:
+            summary = f"Top result: {top_claim}."
+    elif sources:
         top_title = str(sources[0].get("title") or sources[0].get("sourceId") or "").strip()
         if top_title:
-            return (
+            summary = (
                 f"Top result: {top_title}. Evidence is still partial or mixed, "
                 "so inspect the source before relying on it."
             )
-        return (
-            "The search found some source leads, but the evidence stayed too weak, off-topic, or incomplete "
-            "for a grounded summary."
+        else:
+            summary = (
+                "The search found some source leads, but the evidence stayed too weak, off-topic, or incomplete "
+                "for a grounded summary."
+            )
+    elif status == "needs_disambiguation":
+        summary = "The request needs a more specific anchor before the system can build a grounded result."
+    else:
+        summary = "No sufficiently trustworthy evidence was found for a grounded result."
+
+    notes: list[str] = []
+    routing = routing_summary if isinstance(routing_summary, dict) else {}
+    query_specificity = str(routing.get("querySpecificity") or "").strip()
+    ambiguity_level = str(routing.get("ambiguityLevel") or "").strip()
+    hypotheses = [str(item).strip() for item in routing.get("retrievalHypotheses") or [] if str(item).strip()]
+    if hypotheses:
+        hypothesis_label = "hypothesis" if len(hypotheses) == 1 else "hypotheses"
+        notes.append(
+            "The query was broad or ambiguous, so the server explored "
+            f"{len(hypotheses)} bounded retrieval {hypothesis_label}."
         )
-    if status == "needs_disambiguation":
-        return "The request needs a more specific anchor before the system can build a grounded result."
-    return "No sufficiently trustworthy evidence was found for a grounded result."
+    elif query_specificity == "low" or ambiguity_level in {"medium", "high"}:
+        notes.append("The query stayed broad or ambiguous, so the server blended nearby retrieval routes.")
+    if pass_modes and "regulatory" in pass_modes and "review" in pass_modes:
+        notes.append("This result blends regulatory and literature passes.")
+    if notes:
+        summary = f"{summary} {' '.join(dict.fromkeys(notes))}"
+    return summary
 
 
 def _guided_next_actions(
@@ -2348,33 +2515,20 @@ def _guided_result_state(
 
 def _guided_record_source_candidates(record: Any) -> list[dict[str, Any]]:
     payload = record.payload if isinstance(record.payload, dict) else {}
-    evidence_sources = [
-        _guided_source_record_from_structured_source(source, index=index)
-        for index, source in enumerate(payload.get("evidence") or [], start=1)
-        if isinstance(source, dict)
-    ]
-    if evidence_sources:
-        return _guided_dedupe_source_records(evidence_sources)
+    collected_sources: list[dict[str, Any]] = []
 
-    explicit_sources = [source for source in payload.get("sources") or [] if isinstance(source, dict)]
-    if explicit_sources:
-        return _guided_dedupe_source_records(explicit_sources)
+    for index, source in enumerate(payload.get("evidence") or [], start=1):
+        if isinstance(source, dict):
+            collected_sources.append(_guided_source_record_from_structured_source(source, index=index))
 
-    structured_sources = [
-        _guided_source_record_from_structured_source(source, index=index)
-        for index, source in enumerate(payload.get("structuredSources") or [], start=1)
-        if isinstance(source, dict)
-    ]
-    if structured_sources:
-        return _guided_dedupe_source_records(structured_sources)
+    for source in payload.get("sources") or []:
+        if isinstance(source, dict):
+            collected_sources.append(source)
 
-    lead_sources = [
-        _guided_source_record_from_structured_source(source, index=index)
-        for index, source in enumerate(payload.get("leads") or [], start=1)
-        if isinstance(source, dict)
-    ]
-    if lead_sources:
-        return _guided_dedupe_source_records(lead_sources)
+    for key in ("structuredSources", "leads", "candidateLeads", "unverifiedLeads"):
+        for index, source in enumerate(payload.get(key) or [], start=1):
+            if isinstance(source, dict):
+                collected_sources.append(_guided_source_record_from_structured_source(source, index=index))
 
     query = str(record.query or payload.get("query") or "")
     paper_sources = [
@@ -2382,7 +2536,8 @@ def _guided_record_source_candidates(record: Any) -> list[dict[str, Any]]:
         for index, paper in enumerate(getattr(record, "papers", []) or [], start=1)
         if isinstance(paper, dict)
     ]
-    return _guided_dedupe_source_records(paper_sources)
+    collected_sources.extend(paper_sources)
+    return _guided_dedupe_source_records(collected_sources)
 
 
 def _find_record_source_with_resolution(
@@ -2424,6 +2579,7 @@ def _find_record_source_with_resolution(
             return sources[index - 1], "index_alias"
 
     lowered_source_id = normalized_source_id.lower()
+    normalized_locator = _guided_normalize_source_locator(normalized_source_id)
     for source in sources:
         for candidate in (
             source.get("sourceId"),
@@ -2436,6 +2592,8 @@ def _find_record_source_with_resolution(
             normalized_candidate = _guided_normalize_whitespace(candidate).lower()
             if normalized_candidate and normalized_candidate == lowered_source_id:
                 return source, "casefold_exact"
+            if normalized_locator and _guided_normalize_source_locator(candidate) == normalized_locator:
+                return source, "normalized_locator"
 
     partial_matches = [
         source
@@ -2443,6 +2601,8 @@ def _find_record_source_with_resolution(
         if lowered_source_id in _guided_normalize_whitespace(source.get("title")).lower()
         or lowered_source_id in _guided_normalize_whitespace(source.get("canonicalUrl")).lower()
         or lowered_source_id in _guided_normalize_whitespace(source.get("citationText")).lower()
+        or (normalized_locator and normalized_locator in _guided_normalize_source_locator(source.get("canonicalUrl")))
+        or (normalized_locator and normalized_locator in _guided_normalize_source_locator(source.get("retrievedUrl")))
     ]
     if len(partial_matches) == 1:
         return partial_matches[0], "unique_partial_match"
@@ -2520,6 +2680,8 @@ def _guided_contract_fields(
     coverage_summary: dict[str, Any] | None,
     strategy_metadata: dict[str, Any] | None,
     timeline: dict[str, Any] | None = None,
+    pass_modes: list[str] | None = None,
+    review_pass_reason: str | None = None,
 ) -> dict[str, Any]:
     evidence, leads = build_evidence_records(sources=sources, leads=unverified_leads)
     routing_summary = build_routing_decision(
@@ -2543,9 +2705,15 @@ def _guided_contract_fields(
             "rationale": routing_summary["rationale"],
             "anchorType": ((routing_summary.get("anchor") or {}).get("anchorType")),
             "anchorValue": ((routing_summary.get("anchor") or {}).get("anchorValue")),
+            "querySpecificity": routing_summary.get("querySpecificity"),
+            "ambiguityLevel": routing_summary.get("ambiguityLevel"),
+            "secondaryIntents": list(routing_summary.get("secondaryIntents") or []),
+            "retrievalHypotheses": list(routing_summary.get("retrievalHypotheses") or []),
             "providerPlan": list((routing_summary.get("providerPlan") or {}).get("providers") or []),
             "requiredPrimarySources": list(((routing_summary.get("anchor") or {}).get("requiredPrimarySources") or [])),
             "successCriteria": list(((routing_summary.get("anchor") or {}).get("successCriteria") or [])),
+            "passModes": list(pass_modes or []),
+            "reviewPassReason": review_pass_reason,
             "providersAttempted": list((coverage_summary or {}).get("providersAttempted") or []),
             "providersMatched": list((coverage_summary or {}).get("providersSucceeded") or []),
             "providersFailed": list((coverage_summary or {}).get("providersFailed") or []),
@@ -3525,12 +3693,21 @@ async def dispatch_tool(
             pass_modes: list[str] = []
             escalation_attempted = False
             escalation_reason: str | None = None
+            review_pass_reason: str | None = None
 
             async def _run_guided_smart_pass(pass_mode: str, provider_budget: dict[str, Any]) -> None:
+                await _run_guided_smart_pass_with_overrides(pass_mode, provider_budget, {})
+
+            async def _run_guided_smart_pass_with_overrides(
+                pass_mode: str,
+                provider_budget: dict[str, Any],
+                overrides: dict[str, Any],
+            ) -> None:
                 smart = await _dispatch_internal(
                     "search_papers_smart",
                     {
                         **smart_request,
+                        **overrides,
                         "mode": pass_mode,
                         "providerBudget": provider_budget,
                     },
@@ -3582,7 +3759,7 @@ async def dispatch_tool(
                 )
                 derived_intent = (
                     "mixed"
-                    if intent == "mixed"
+                    if intent == "mixed" or ("regulatory" in pass_modes and "review" in pass_modes)
                     else str(smart_runs[0].get("strategyMetadata", {}).get("intent") or intent)
                 )
                 status_intent = (
@@ -3612,9 +3789,25 @@ async def dispatch_tool(
                 }
 
             try:
-                if intent == "mixed":
+                if intent in {"mixed", "regulatory"}:
                     await _run_guided_smart_pass("regulatory", initial_provider_budget)
-                    await _run_guided_smart_pass("review", initial_provider_budget)
+                    should_run_review, review_pass_reason = _guided_should_add_review_pass(
+                        initial_intent=intent,
+                        query=research_args.query,
+                        focus=research_args.focus,
+                        primary_smart=smart_runs[0],
+                        pass_modes=pass_modes,
+                    )
+                    if should_run_review:
+                        await _run_guided_smart_pass_with_overrides(
+                            "review",
+                            initial_provider_budget,
+                            _guided_review_pass_overrides(
+                                query=research_args.query,
+                                focus=research_args.focus,
+                                primary_smart=smart_runs[0],
+                            ),
+                        )
                 else:
                     await _run_guided_smart_pass(
                         "regulatory" if intent == "regulatory" else "auto",
@@ -3681,11 +3874,41 @@ async def dispatch_tool(
             )
             trust_summary = _guided_trust_summary(sources, evidence_gaps)
             strategy_metadata = _guided_strategy_metadata_from_runs(smart_runs)
+            if review_pass_reason:
+                strategy_metadata["reviewPassReason"] = review_pass_reason
+            regulatory_timeline = next(
+                (
+                    smart.get("regulatoryTimeline")
+                    for smart in smart_runs
+                    if smart.get("regulatoryTimeline") is not None
+                ),
+                primary_smart.get("regulatoryTimeline"),
+            )
+            contract_fields = _guided_contract_fields(
+                query=research_args.query,
+                intent=derived_intent,
+                status=status,
+                sources=sources,
+                unverified_leads=unverified_leads,
+                evidence_gaps=evidence_gaps,
+                coverage_summary=merged_coverage,
+                strategy_metadata=strategy_metadata,
+                timeline=cast(dict[str, Any] | None, regulatory_timeline),
+                pass_modes=pass_modes,
+                review_pass_reason=review_pass_reason,
+            )
             response = {
                 "intent": derived_intent,
                 "status": status,
                 "searchSessionId": search_session_id,
-                "summary": _guided_summary(derived_intent, status, verified_findings, sources),
+                "summary": _guided_summary(
+                    derived_intent,
+                    status,
+                    verified_findings,
+                    sources,
+                    routing_summary=cast(dict[str, Any] | None, contract_fields.get("routingSummary")),
+                    pass_modes=pass_modes,
+                ),
                 "verifiedFindings": verified_findings,
                 "sources": sources,
                 "unverifiedLeads": unverified_leads,
@@ -3707,14 +3930,7 @@ async def dispatch_tool(
                     has_sources=bool(sources),
                 ),
                 "clarification": smart_summary.get("clarification"),
-                "regulatoryTimeline": next(
-                    (
-                        smart.get("regulatoryTimeline")
-                        for smart in smart_runs
-                        if smart.get("regulatoryTimeline") is not None
-                    ),
-                    primary_smart.get("regulatoryTimeline"),
-                ),
+                "regulatoryTimeline": regulatory_timeline,
                 "resultState": _guided_result_state(
                     status=status,
                     sources=sources,
@@ -3741,19 +3957,7 @@ async def dispatch_tool(
                 ),
                 "inputNormalization": _guided_normalization_payload(research_normalization),
             }
-            response.update(
-                _guided_contract_fields(
-                    query=research_args.query,
-                    intent=derived_intent,
-                    status=status,
-                    sources=sources,
-                    unverified_leads=unverified_leads,
-                    evidence_gaps=evidence_gaps,
-                    coverage_summary=merged_coverage,
-                    strategy_metadata=strategy_metadata,
-                    timeline=cast(dict[str, Any] | None, response.get("regulatoryTimeline")),
-                )
-            )
+            response.update(contract_fields)
             abstention_details = _guided_abstention_details_payload(
                 status=status,
                 sources=sources,

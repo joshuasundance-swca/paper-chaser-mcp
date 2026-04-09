@@ -57,6 +57,23 @@ QUERY_FACET_TOKEN_ALLOWLIST = {
     "tool",
     "tools",
 }
+HYPOTHESIS_QUERY_STOPWORDS = {
+    "current",
+    "different",
+    "effective",
+    "effectiveness",
+    "especially",
+    "evidence",
+    "field",
+    "latest",
+    "methods",
+    "most",
+    "recent",
+    "research",
+    "review",
+    "studies",
+    "study",
+}
 LITERATURE_QUERY_TERMS = {
     "article",
     "citation",
@@ -336,6 +353,152 @@ def _confidence_rank(confidence: Literal["high", "medium", "low"]) -> int:
     return {"high": 3, "medium": 2, "low": 1}[confidence]
 
 
+def _query_starts_broad(query: str) -> bool:
+    lowered = normalize_query(query).lower()
+    return lowered.startswith(("what ", "which ", "how ", "compare ", "summarize ", "identify ", "find "))
+
+
+def _estimate_query_specificity(
+    *,
+    normalized_query: str,
+    focus: str | None,
+    year: str | None,
+    venue: str | None,
+) -> Literal["high", "medium", "low"]:
+    if _strong_known_item_signal(normalized_query) or _strong_regulatory_signal(normalized_query, focus):
+        return "high"
+    if looks_like_exact_title(normalized_query) or looks_like_citation_query(normalized_query):
+        return "high"
+    facets = query_facets(normalized_query)
+    terms = query_terms(normalized_query)
+    has_constraints = bool(focus or year or venue)
+    if _query_starts_broad(normalized_query) and (len(facets) >= 2 or len(terms) >= 6) and not has_constraints:
+        return "low"
+    if has_constraints and len(terms) <= 5:
+        return "high"
+    if len(terms) >= 7 or len(facets) >= 3:
+        return "low"
+    return "medium"
+
+
+def _estimate_ambiguity_level(
+    *,
+    candidates: list[IntentCandidate],
+    routing_confidence: Literal["high", "medium", "low"],
+    query_specificity: Literal["high", "medium", "low"],
+) -> Literal["low", "medium", "high"]:
+    if routing_confidence == "low":
+        return "high"
+    if len(candidates) < 2:
+        return "medium" if query_specificity == "low" else "low"
+    primary_rank = _confidence_rank(candidates[0].confidence)
+    secondary_rank = _confidence_rank(candidates[1].confidence)
+    if secondary_rank >= primary_rank:
+        return "high"
+    if primary_rank - secondary_rank == 1:
+        return "high" if query_specificity == "low" else "medium"
+    if query_specificity == "low" and secondary_rank >= 1:
+        return "medium"
+    return "low"
+
+
+def _ordered_provider_plan(base_plan: list[str], preferred_order: list[str]) -> list[str]:
+    ordered = [provider for provider in preferred_order if provider in base_plan]
+    ordered.extend(provider for provider in base_plan if provider not in ordered)
+    return ordered
+
+
+def initial_retrieval_hypotheses(
+    *,
+    normalized_query: str,
+    focus: str | None,
+    planner: PlannerDecision,
+    config: AgenticConfig,
+) -> list[ExpansionCandidate]:
+    base_query = normalize_query(" ".join(part for part in [normalized_query, focus or ""] if part))
+    if not base_query:
+        base_query = normalized_query
+    base_plan = list(planner.provider_plan)
+    candidates: list[ExpansionCandidate] = [
+        ExpansionCandidate(
+            variant=base_query,
+            source="from_input",
+            rationale="Literal user query.",
+            providerPlan=base_plan,
+        )
+    ]
+    if planner.intent in {"known_item", "author", "citation", "regulatory"}:
+        return candidates
+    if planner.query_specificity == "high" and planner.ambiguity_level == "low":
+        return candidates
+
+    preferred_plans = [
+        _ordered_provider_plan(base_plan, ["openalex", "semantic_scholar", "core", "arxiv", "scholarapi"]),
+        _ordered_provider_plan(base_plan, ["core", "openalex", "semantic_scholar", "arxiv", "scholarapi"]),
+        _ordered_provider_plan(base_plan, ["semantic_scholar", "openalex", "scholarapi", "core", "arxiv"]),
+    ]
+    hypothesis_candidates: list[ExpansionCandidate] = []
+    facets = [facet for facet in query_facets(base_query) if len(re.findall(r"[A-Za-z0-9]{3,}", facet)) >= 2]
+    if len(facets) >= 2:
+        combined_facet_query = " ".join(facets[:2])
+        hypothesis_candidates.append(
+            ExpansionCandidate(
+                variant=combined_facet_query,
+                source="hypothesis",
+                rationale="Compact multi-facet retrieval hypothesis for a broad or ambiguous ask.",
+                providerPlan=preferred_plans[0],
+            )
+        )
+        for index, facet in enumerate(facets[:2], start=1):
+            hypothesis_candidates.append(
+                ExpansionCandidate(
+                    variant=facet,
+                    source="hypothesis",
+                    rationale="Focused facet retrieval hypothesis derived from the original query.",
+                    providerPlan=preferred_plans[min(index, len(preferred_plans) - 1)],
+                )
+            )
+
+    compact_terms = [
+        term
+        for term in query_terms(base_query)
+        if term not in HYPOTHESIS_QUERY_STOPWORDS and term not in GENERIC_EVIDENCE_WORDS
+    ]
+    if compact_terms:
+        hypothesis_candidates.append(
+            ExpansionCandidate(
+                variant=" ".join(compact_terms[:6]),
+                source="hypothesis",
+                rationale="Distinctive-term retrieval hypothesis to reduce conversational drift.",
+                providerPlan=preferred_plans[1],
+            )
+        )
+
+    if planner.candidate_concepts:
+        concept_query = " ".join(dict.fromkeys(planner.candidate_concepts[:2]))
+        if concept_query:
+            hypothesis_candidates.append(
+                ExpansionCandidate(
+                    variant=concept_query,
+                    source="hypothesis",
+                    rationale="Planner-concept retrieval hypothesis for broader evidence coverage.",
+                    providerPlan=preferred_plans[2],
+                )
+            )
+
+    ordered_candidates: list[ExpansionCandidate] = []
+    seen_variants: set[str] = set()
+    for candidate in candidates + hypothesis_candidates:
+        lowered = normalize_query(candidate.variant).lower()
+        if not lowered or lowered in seen_variants:
+            continue
+        seen_variants.add(lowered)
+        ordered_candidates.append(candidate)
+        if len(ordered_candidates) >= max(config.max_initial_hypotheses, 1):
+            break
+    return ordered_candidates
+
+
 def _upsert_intent_candidate(
     *,
     candidates: list[IntentCandidate],
@@ -571,6 +734,17 @@ async def classify_query(
     )
     planner.routing_confidence = (
         primary_candidate.confidence if primary_candidate is not None else planner.intent_confidence
+    )
+    planner.query_specificity = _estimate_query_specificity(
+        normalized_query=normalized,
+        focus=focus,
+        year=year,
+        venue=venue,
+    )
+    planner.ambiguity_level = _estimate_ambiguity_level(
+        candidates=planner.intent_candidates,
+        routing_confidence=planner.routing_confidence,
+        query_specificity=planner.query_specificity,
     )
     if not planner.intent_rationale:
         planner.intent_rationale = "Intent routed from planner defaults."

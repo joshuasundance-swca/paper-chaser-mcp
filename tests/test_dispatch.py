@@ -2146,6 +2146,115 @@ async def test_guided_research_blends_regulatory_and_literature_runs(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_guided_research_adds_review_pass_for_ambiguous_regulatory_query(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeRuntime:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        async def search_papers_smart(self, **kwargs: object) -> dict[str, object]:
+            self.calls.append(dict(kwargs))
+            mode = str(kwargs.get("mode") or "auto")
+            if mode == "regulatory":
+                return {
+                    "searchSessionId": "ssn-ambiguous-mixed",
+                    "strategyMetadata": {
+                        "intent": "regulatory",
+                        "querySpecificity": "low",
+                        "ambiguityLevel": "high",
+                        "secondaryIntents": ["review"],
+                        "retrievalHypotheses": [
+                            "northern long-eared bat habitat protection",
+                            "northern long-eared bat conservation evidence",
+                        ],
+                        "anchoredSubject": "Northern long-eared bat",
+                    },
+                    "structuredSources": [
+                        {
+                            "sourceId": "nleb-fr",
+                            "title": "Endangered Species Status for the Northern Long-Eared Bat",
+                            "provider": "federal_register",
+                            "sourceType": "primary_regulatory",
+                            "verificationStatus": "verified_metadata",
+                            "accessStatus": "full_text_verified",
+                            "topicalRelevance": "on_topic",
+                            "confidence": "high",
+                            "isPrimarySource": True,
+                        }
+                    ],
+                    "candidateLeads": [],
+                    "evidenceGaps": ["Recent literature was not included in the regulatory-only pass."],
+                    "coverageSummary": {
+                        "providersAttempted": ["govinfo", "federal_register"],
+                        "providersSucceeded": ["federal_register"],
+                        "providersFailed": [],
+                        "providersZeroResults": ["govinfo"],
+                        "likelyCompleteness": "partial",
+                        "searchMode": "regulatory_primary_source",
+                    },
+                    "failureSummary": None,
+                    "clarification": None,
+                    "regulatoryTimeline": {"events": [{"title": "NLEB rule"}]},
+                }
+            if mode == "review":
+                return {
+                    "searchSessionId": "ssn-ambiguous-mixed",
+                    "strategyMetadata": {
+                        "intent": "review",
+                        "querySpecificity": "low",
+                        "ambiguityLevel": "medium",
+                        "retrievalHypotheses": ["northern long-eared bat conservation evidence"],
+                    },
+                    "structuredSources": [
+                        {
+                            "sourceId": "nleb-review",
+                            "title": "Recent peer-reviewed review of northern long-eared bat conservation",
+                            "provider": "semantic_scholar",
+                            "sourceType": "scholarly_article",
+                            "verificationStatus": "verified_metadata",
+                            "accessStatus": "abstract_only",
+                            "topicalRelevance": "on_topic",
+                            "confidence": "medium",
+                            "isPrimarySource": False,
+                        }
+                    ],
+                    "candidateLeads": [],
+                    "evidenceGaps": [],
+                    "coverageSummary": {
+                        "providersAttempted": ["semantic_scholar", "openalex"],
+                        "providersSucceeded": ["semantic_scholar"],
+                        "providersFailed": [],
+                        "providersZeroResults": ["openalex"],
+                        "likelyCompleteness": "partial",
+                        "searchMode": "smart_literature_review",
+                    },
+                    "failureSummary": None,
+                    "clarification": None,
+                }
+            raise AssertionError(f"Unexpected mode: {mode}")
+
+    runtime = _FakeRuntime()
+    monkeypatch.setattr(server, "agentic_runtime", runtime)
+
+    payload = _payload(
+        await server.call_tool(
+            "research",
+            {"query": "Northern long-eared bat ESA listing status and habitat protection"},
+        )
+    )
+
+    assert [call["mode"] for call in runtime.calls] == ["regulatory", "review"]
+    assert payload["intent"] == "mixed"
+    assert payload["routingSummary"]["querySpecificity"] == "low"
+    assert payload["routingSummary"]["ambiguityLevel"] == "high"
+    assert payload["routingSummary"]["secondaryIntents"] == ["review"]
+    assert payload["routingSummary"]["retrievalHypotheses"]
+    assert payload["routingSummary"]["passModes"] == ["regulatory", "review"]
+    assert payload["routingSummary"]["reviewPassReason"] == "review_secondary_intent_detected"
+    assert "bounded retrieval hypotheses" in payload["summary"]
+    assert "regulatory and literature passes" in payload["summary"]
+
+
+@pytest.mark.asyncio
 async def test_guided_research_abstained_without_sources_omits_inspect_source(monkeypatch: pytest.MonkeyPatch) -> None:
     class _FakeRuntime:
         async def search_papers_smart(self, **kwargs: object) -> dict[str, object]:
@@ -3276,6 +3385,117 @@ async def test_inspect_source_reads_evidence_contract_records_without_legacy_sou
     assert payload["coverageSummary"]["searchMode"] == "regulatory_primary_source"
     assert payload["evidence"]
     assert payload["evidence"][0]["evidenceId"] == "50 CFR 17.11"
+
+
+@pytest.mark.asyncio
+async def test_inspect_source_reads_candidate_and_unverified_leads_from_saved_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    isolated_registry = type(server.workspace_registry)()
+    monkeypatch.setattr(server, "workspace_registry", isolated_registry)
+
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-inspect-leads",
+        query="wetland restoration evidence",
+        payload={
+            "searchSessionId": "ssn-inspect-leads",
+            "structuredSources": [],
+            "candidateLeads": [
+                {
+                    "sourceId": "lead-candidate-1",
+                    "title": "Rewetting tradeoffs in peatland restoration",
+                    "provider": "openalex",
+                    "sourceType": "repository_record",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "access_unverified",
+                    "topicalRelevance": "weak_match",
+                    "confidence": "medium",
+                    "canonicalUrl": "https://example.org/lead-candidate-1",
+                }
+            ],
+            "unverifiedLeads": [
+                {
+                    "sourceId": "lead-unverified-1",
+                    "title": "Off-topic estuarine salinity lead",
+                    "provider": "core",
+                    "sourceType": "repository_record",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "access_unverified",
+                    "topicalRelevance": "off_topic",
+                    "confidence": "medium",
+                    "canonicalUrl": "https://example.org/lead-unverified-1",
+                }
+            ],
+        },
+    )
+
+    candidate_payload = _payload(
+        await server.call_tool(
+            "inspect_source",
+            {
+                "searchSessionId": "ssn-inspect-leads",
+                "sourceId": "lead-candidate-1",
+            },
+        )
+    )
+    unverified_payload = _payload(
+        await server.call_tool(
+            "inspect_source",
+            {
+                "searchSessionId": "ssn-inspect-leads",
+                "sourceId": "lead-unverified-1",
+            },
+        )
+    )
+
+    assert candidate_payload["source"]["sourceId"] == "lead-candidate-1"
+    assert candidate_payload["sourceResolution"]["matchType"] == "exact_id"
+    assert unverified_payload["source"]["sourceId"] == "lead-unverified-1"
+    assert unverified_payload["source"]["topicalRelevance"] == "off_topic"
+
+
+@pytest.mark.asyncio
+async def test_inspect_source_matches_normalized_locator_without_protocol(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    isolated_registry = type(server.workspace_registry)()
+    monkeypatch.setattr(server, "workspace_registry", isolated_registry)
+
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-inspect-url",
+        query="wetland restoration evidence",
+        payload={
+            "searchSessionId": "ssn-inspect-url",
+            "structuredSources": [
+                {
+                    "sourceId": "peatland-1",
+                    "title": "Peatland restoration synthesis",
+                    "provider": "openalex",
+                    "sourceType": "repository_record",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "access_unverified",
+                    "topicalRelevance": "on_topic",
+                    "confidence": "medium",
+                    "canonicalUrl": "https://www.example.org/peatland-1",
+                }
+            ],
+        },
+    )
+
+    payload = _payload(
+        await server.call_tool(
+            "inspect_source",
+            {
+                "searchSessionId": "ssn-inspect-url",
+                "sourceId": "example.org/peatland-1",
+            },
+        )
+    )
+
+    assert payload["source"]["sourceId"] == "peatland-1"
+    assert payload["sourceResolution"]["matchType"] == "normalized_locator"
 
 
 @pytest.mark.asyncio

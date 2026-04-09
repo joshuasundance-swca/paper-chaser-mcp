@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from fastmcp import Context
 
-from ..citation_repair import resolve_citation
+from ..citation_repair import parse_citation, resolve_citation
 from ..compat import build_agent_hints, build_resource_uris
 from ..enrichment import (
     PaperEnrichmentService,
@@ -65,6 +65,7 @@ from .planner import (
     detect_literature_intent,
     detect_regulatory_intent,
     grounded_expansion_candidates,
+    initial_retrieval_hypotheses,
     normalize_query,
     query_facets,
     query_terms,
@@ -722,59 +723,72 @@ class AgenticRuntime:
                 strategy_metadata["recoveryReason"] = "Regulatory retrieval returned no on-topic sources."
             return recovered
 
+        initial_candidates = initial_retrieval_hypotheses(
+            normalized_query=normalized_query,
+            focus=focus,
+            planner=planner,
+            config=profile_settings.search_config,
+        )
+        retrieval_hypotheses = [candidate.variant for candidate in initial_candidates[1:]]
+
         await self._emit_smart_search_status(
             ctx=ctx,
             request_id=request_id,
             progress=15,
             message="Running initial retrieval",
             detail=(
-                f"Searching the literal query across enabled providers for "
+                f"Searching {len(initial_candidates)} bounded initial retrieval path(s) for "
                 f"'{_truncate_text(normalized_query, limit=96)}'."
             ),
         )
-        initial_retrieval_query = _initial_retrieval_query_text(
-            normalized_query=normalized_query,
-            focus=focus,
-            intent=planner.intent,
-        )
         first_retrieval_started = time.perf_counter()
-        first_batch = await retrieve_variant(
-            variant=initial_retrieval_query,
-            variant_source="from_input",
-            intent=planner.intent,
-            year=year,
-            venue=venue,
-            enable_core=self._enable_core,
-            enable_semantic_scholar=self._enable_semantic_scholar,
-            enable_openalex=self._enable_openalex,
-            enable_scholarapi=self._enable_scholarapi,
-            enable_arxiv=self._enable_arxiv,
-            enable_serpapi=self._enable_serpapi,
-            core_client=self._core_client,
-            semantic_client=self._client,
-            openalex_client=self._openalex_client,
-            scholarapi_client=self._scholarapi_client,
-            arxiv_client=self._arxiv_client,
-            serpapi_client=self._serpapi_client,
-            provider_plan=planner.provider_plan or None,
-            widened=planner.intent == "review",
-            is_expansion=False,
-            allow_serpapi=(self._enable_serpapi and profile_settings.allow_serpapi_on_input),
-            latency_profile=latency_profile,
-            provider_registry=self._provider_registry,
-            provider_budget=budget_state,
-            request_outcomes=provider_outcomes,
-            request_id=request_id,
-        )
+        initial_tasks = [
+            asyncio.create_task(
+                retrieve_variant(
+                    variant=candidate.variant,
+                    variant_source=candidate.source,
+                    intent=planner.intent,
+                    year=year,
+                    venue=venue,
+                    enable_core=self._enable_core,
+                    enable_semantic_scholar=self._enable_semantic_scholar,
+                    enable_openalex=self._enable_openalex,
+                    enable_scholarapi=self._enable_scholarapi,
+                    enable_arxiv=self._enable_arxiv,
+                    enable_serpapi=self._enable_serpapi,
+                    core_client=self._core_client,
+                    semantic_client=self._client,
+                    openalex_client=self._openalex_client,
+                    scholarapi_client=self._scholarapi_client,
+                    arxiv_client=self._arxiv_client,
+                    serpapi_client=self._serpapi_client,
+                    provider_plan=(candidate.provider_plan or planner.provider_plan or None),
+                    widened=planner.intent == "review",
+                    is_expansion=False,
+                    allow_serpapi=(self._enable_serpapi and profile_settings.allow_serpapi_on_input),
+                    latency_profile=latency_profile,
+                    provider_registry=self._provider_registry,
+                    provider_budget=budget_state,
+                    request_outcomes=provider_outcomes,
+                    request_id=request_id,
+                )
+            )
+            for candidate in initial_candidates
+        ]
+        initial_batches = await asyncio.gather(*initial_tasks)
         _finish_stage("firstRetrieval", first_retrieval_started)
+        first_batch = initial_batches[0]
         await self._emit_smart_search_status(
             ctx=ctx,
             request_id=request_id,
             progress=30,
             message="Initial retrieval complete",
-            detail=self._describe_retrieval_batch(first_batch),
+            detail=(
+                f"Completed {len(initial_batches)} initial retrieval path(s). "
+                f"Primary path: {self._describe_retrieval_batch(first_batch)}"
+            ),
         )
-        first_pass_papers = [candidate.paper for candidate in first_batch.candidates]
+        first_pass_papers = [candidate.paper for batch in initial_batches for candidate in batch.candidates]
         if search_session_id:
             try:
                 prior_record = self._workspace_registry.get(search_session_id)
@@ -796,7 +810,7 @@ class AgenticRuntime:
             recommendation_started = time.perf_counter()
             recommendation_task = asyncio.create_task(
                 self._semantic_recommendation_candidates(
-                    seed_candidates=first_batch.candidates,
+                    seed_candidates=[candidate for batch in initial_batches for candidate in batch.candidates],
                     normalized_query=normalized_query,
                     enabled=True,
                     request_id=request_id,
@@ -843,7 +857,11 @@ class AgenticRuntime:
             config=profile_settings.search_config,
         )
 
-        expansion_variants = variants[1:]
+        initial_variant_keys = {candidate.variant.strip().lower() for candidate in initial_candidates}
+
+        expansion_variants = [
+            candidate for candidate in variants[1:] if candidate.variant.strip().lower() not in initial_variant_keys
+        ]
         grounded_variants = [
             candidate
             for candidate in dedupe_variants(
@@ -891,7 +909,7 @@ class AgenticRuntime:
                             scholarapi_client=self._scholarapi_client,
                             arxiv_client=self._arxiv_client,
                             serpapi_client=self._serpapi_client,
-                            provider_plan=planner.provider_plan or None,
+                            provider_plan=(candidate.provider_plan or planner.provider_plan or None),
                             widened=planner.intent == "review",
                             is_expansion=True,
                             allow_serpapi=(self._enable_serpapi and profile_settings.allow_serpapi_on_expansions),
@@ -951,7 +969,7 @@ class AgenticRuntime:
                         scholarapi_client=self._scholarapi_client,
                         arxiv_client=self._arxiv_client,
                         serpapi_client=self._serpapi_client,
-                        provider_plan=planner.provider_plan or None,
+                        provider_plan=(candidate.provider_plan or planner.provider_plan or None),
                         widened=planner.intent == "review",
                         is_expansion=True,
                         allow_serpapi=(self._enable_serpapi and profile_settings.allow_serpapi_on_expansions),
@@ -1014,7 +1032,7 @@ class AgenticRuntime:
                 ),
             )
 
-        all_candidates = list(first_batch.candidates)
+        all_candidates = [candidate for batch in initial_batches for candidate in batch.candidates]
         for batch in remaining_batches:
             all_candidates.extend(batch.candidates)
         all_candidates.extend(recommendation_candidates)
@@ -1026,12 +1044,18 @@ class AgenticRuntime:
             if profile_settings.use_embedding_rerank and provider_bundle.supports_embeddings()
             else self._deterministic_bundle
         )
+        candidate_pool_size = profile_settings.search_config.candidate_pool_size
+        if planner.query_specificity == "low" or planner.ambiguity_level != "low":
+            candidate_pool_size = min(candidate_pool_size + 20, 160)
         reranked = await rerank_candidates(
             query=normalized_query,
             merged_candidates=merged,
             provider_bundle=rerank_bundle,
             candidate_concepts=planner.candidate_concepts,
-            candidate_pool_size=profile_settings.search_config.candidate_pool_size,
+            routing_confidence=planner.routing_confidence,
+            query_specificity=planner.query_specificity,
+            ambiguity_level=planner.ambiguity_level,
+            candidate_pool_size=candidate_pool_size,
             request_outcomes=provider_outcomes,
             request_id=request_id,
         )
@@ -1062,7 +1086,7 @@ class AgenticRuntime:
         )
 
         providers_used = sorted(
-            {provider for batch in [first_batch, *remaining_batches] for provider in batch.providers_used}
+            {provider for batch in [*initial_batches, *remaining_batches] for provider in batch.providers_used}
             | {candidate.provider for candidate in recommendation_candidates}
         )
         provider_selection = provider_bundle.selection_metadata()
@@ -1077,10 +1101,15 @@ class AgenticRuntime:
             intentCandidates=planner.intent_candidates,
             secondaryIntents=planner.secondary_intents,
             routingConfidence=planner.routing_confidence,
+            querySpecificity=planner.query_specificity,
+            ambiguityLevel=planner.ambiguity_level,
             intentRationale=planner.intent_rationale,
             latencyProfile=latency_profile,
             normalizedQuery=normalized_query,
-            queryVariantsTried=[candidate.variant for candidate in variants],
+            queryVariantsTried=_dedupe_variants(
+                [candidate.variant for candidate in initial_candidates + expansion_variants]
+            ),
+            retrievalHypotheses=_dedupe_variants(retrieval_hypotheses),
             acceptedExpansions=_dedupe_variants(
                 [candidate.variant for candidate in grounded if candidate.variant != normalized_query]
                 + [variant for variant in accepted_speculative if variant != normalized_query]
@@ -2629,10 +2658,13 @@ class AgenticRuntime:
             intentCandidates=planner.intent_candidates,
             secondaryIntents=planner.secondary_intents,
             routingConfidence=planner.routing_confidence,
+            querySpecificity=planner.query_specificity,
+            ambiguityLevel=planner.ambiguity_level,
             intentRationale=planner.intent_rationale,
             latencyProfile=latency_profile,
             normalizedQuery=query,
             queryVariantsTried=[query],
+            retrievalHypotheses=[],
             acceptedExpansions=[],
             rejectedExpansions=[],
             speculativeExpansions=[],
@@ -2855,10 +2887,13 @@ class AgenticRuntime:
             intentCandidates=planner.intent_candidates,
             secondaryIntents=planner.secondary_intents,
             routingConfidence=planner.routing_confidence,
+            querySpecificity=planner.query_specificity,
+            ambiguityLevel=planner.ambiguity_level,
             intentRationale=planner.intent_rationale,
             latencyProfile=latency_profile,
             normalizedQuery=query,
             queryVariantsTried=[query],
+            retrievalHypotheses=[],
             acceptedExpansions=[],
             rejectedExpansions=[],
             speculativeExpansions=[],
@@ -2984,46 +3019,53 @@ class AgenticRuntime:
         if isinstance(best_match, dict) and isinstance(best_match.get("paper"), dict):
             return best_match["paper"], "citation_resolution"
 
-        try:
-            semantic_match = dump_jsonable(await self._client.search_papers_match(query=query, fields=None))
-        except Exception:
-            semantic_match = None
-        if isinstance(semantic_match, dict) and semantic_match.get("paperId"):
-            return semantic_match, str(semantic_match.get("matchStrategy") or "semantic_title_match")
+        parsed = parse_citation(query)
+        resolution_queries = _known_item_resolution_queries(query, parsed)
+
+        for candidate_query in resolution_queries:
+            try:
+                semantic_match = dump_jsonable(
+                    await self._client.search_papers_match(query=candidate_query, fields=None)
+                )
+            except Exception:
+                semantic_match = None
+            if isinstance(semantic_match, dict) and semantic_match.get("paperId"):
+                return semantic_match, str(semantic_match.get("matchStrategy") or "semantic_title_match")
 
         if self._enable_openalex and self._openalex_client is not None:
-            try:
-                autocomplete = await self._openalex_client.paper_autocomplete(query=query, limit=5)
-            except Exception:
-                autocomplete = None
-            if isinstance(autocomplete, dict):
-                for match in autocomplete.get("matches") or []:
-                    if not isinstance(match, dict):
-                        continue
-                    match_id = str(match.get("id") or "").strip()
-                    match_title = str(match.get("displayName") or "").strip()
-                    if not match_id or _known_item_title_similarity(query, match_title) < 0.72:
-                        continue
-                    paper = None
-                    try:
-                        paper = await self._openalex_client.get_paper_details(paper_id=match_id)
-                    except Exception as exc:
-                        logger.debug("OpenAlex known-item detail lookup failed for %s: %s", match_id, exc)
-                    if paper is None:
-                        continue
-                    return dump_jsonable(paper), "openalex_autocomplete"
+            for candidate_query in resolution_queries:
+                try:
+                    autocomplete = await self._openalex_client.paper_autocomplete(query=candidate_query, limit=5)
+                except Exception:
+                    autocomplete = None
+                if isinstance(autocomplete, dict):
+                    for match in autocomplete.get("matches") or []:
+                        if not isinstance(match, dict):
+                            continue
+                        match_id = str(match.get("id") or "").strip()
+                        match_title = str(match.get("displayName") or "").strip()
+                        if not match_id or _known_item_title_similarity(candidate_query, match_title) < 0.72:
+                            continue
+                        paper = None
+                        try:
+                            paper = await self._openalex_client.get_paper_details(paper_id=match_id)
+                        except Exception as exc:
+                            logger.debug("OpenAlex known-item detail lookup failed for %s: %s", match_id, exc)
+                        if paper is None:
+                            continue
+                        return dump_jsonable(paper), "openalex_autocomplete"
 
-            try:
-                openalex_search = await self._openalex_client.search(query=query, limit=3)
-            except Exception:
-                openalex_search = None
-            if isinstance(openalex_search, dict):
-                for paper in openalex_search.get("data") or []:
-                    if not isinstance(paper, dict) or not paper.get("paperId"):
-                        continue
-                    if _known_item_title_similarity(query, str(paper.get("title") or "")) < 0.58:
-                        continue
-                    return paper, "openalex_search"
+                try:
+                    openalex_search = await self._openalex_client.search(query=candidate_query, limit=3)
+                except Exception:
+                    openalex_search = None
+                if isinstance(openalex_search, dict):
+                    for paper in openalex_search.get("data") or []:
+                        if not isinstance(paper, dict) or not paper.get("paperId"):
+                            continue
+                        if _known_item_title_similarity(candidate_query, str(paper.get("title") or "")) < 0.58:
+                            continue
+                        return paper, "openalex_search"
         return None, "none"
 
     async def _fallback_known_item_search(
@@ -3128,10 +3170,13 @@ class AgenticRuntime:
             intentCandidates=planner.intent_candidates,
             secondaryIntents=planner.secondary_intents,
             routingConfidence=planner.routing_confidence,
+            querySpecificity=planner.query_specificity,
+            ambiguityLevel=planner.ambiguity_level,
             intentRationale=planner.intent_rationale,
             latencyProfile=latency_profile,
             normalizedQuery=query,
             queryVariantsTried=[query],
+            retrievalHypotheses=[],
             acceptedExpansions=[],
             rejectedExpansions=[],
             speculativeExpansions=[],
@@ -4426,6 +4471,50 @@ def _known_item_title_similarity(query: str, title: str) -> float:
     title_tokens = {token for token in normalized_title.split() if len(token) >= 3 and not token.isdigit()}
     overlap = len(query_tokens & title_tokens) / len(query_tokens) if query_tokens else 0.0
     return max(SequenceMatcher(None, normalized_query, normalized_title).ratio(), overlap)
+
+
+def _known_item_resolution_queries(query: str, parsed: Any) -> list[str]:
+    queries: list[str] = []
+    normalized_query = normalize_query(query)
+    if normalized_query:
+        queries.append(normalized_query)
+    title_candidates = list(getattr(parsed, "title_candidates", []) or [])
+    author_surnames = list(getattr(parsed, "author_surnames", []) or [])
+    venue_hints = list(getattr(parsed, "venue_hints", []) or [])
+    year = getattr(parsed, "year", None)
+
+    if title_candidates:
+        queries.extend(title_candidates[:3])
+        compact_title_words = [
+            token
+            for token in re.findall(r"[A-Za-z0-9'-]+", title_candidates[0])
+            if len(token) >= 3
+            and token.lower() not in COMMON_QUERY_WORDS
+            and token.lower() not in {"paper", "papers", "article", "articles", "study", "studies"}
+        ]
+        if len(compact_title_words) >= 2:
+            queries.append(" ".join(compact_title_words[:8]))
+        if author_surnames:
+            title_words = re.findall(r"[A-Za-z0-9'-]+", title_candidates[0])[:8]
+            if title_words:
+                queries.append(" ".join([*author_surnames[:2], *title_words]))
+        if venue_hints:
+            queries.append(f"{title_candidates[0]} {venue_hints[0]}")
+    if author_surnames and year is not None:
+        queries.append(" ".join([*author_surnames[:2], str(year)]))
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for candidate in queries:
+        normalized_candidate = normalize_query(candidate)
+        if not normalized_candidate:
+            continue
+        lowered = normalized_candidate.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        deduped.append(normalized_candidate)
+    return deduped
 
 
 def _normalization_metadata(raw_query: str, normalized_query: str) -> tuple[list[str], dict[str, Any]]:
