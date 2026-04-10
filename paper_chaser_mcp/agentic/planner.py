@@ -9,7 +9,14 @@ from urllib.parse import urlparse
 
 from ..citation_repair import looks_like_citation_query
 from .config import AgenticConfig
-from .models import ExpansionCandidate, IntentCandidate, IntentLabel, PlannerDecision
+from .models import (
+    RETRIEVAL_MODE_MIXED,
+    RETRIEVAL_MODE_TARGETED,
+    ExpansionCandidate,
+    IntentCandidate,
+    IntentLabel,
+    PlannerDecision,
+)
 from .providers import COMMON_QUERY_WORDS, ModelProviderBundle
 
 DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:A-Za-z0-9]+", re.IGNORECASE)
@@ -108,12 +115,24 @@ TITLE_STOPWORDS = {
     "with",
 }
 QUERYISH_TITLE_BLOCKERS = {
+    "aquatic",
+    "bioaccumulation",
+    "biodiversity",
+    "climate",
     "compare",
+    "contamination",
+    "ecotoxicology",
+    "ecosystem",
     "effects",
     "evidence",
+    "exposure",
     "history",
     "include",
     "listing",
+    "marine",
+    "mitigation",
+    "monitoring",
+    "pollution",
     "regulatory",
     "review",
     "status",
@@ -121,6 +140,10 @@ QUERYISH_TITLE_BLOCKERS = {
     "study",
     "survey",
     "systematic",
+    "terrestrial",
+    "toxicity",
+    "transport",
+    "trophic",
     "what",
 }
 STRONG_REGULATORY_TITLE_BLOCKERS = {
@@ -150,7 +173,9 @@ REGULATORY_QUERY_TERMS = {
     "cfr",
     "clinical decision support",
     "code of federal regulations",
+    "contaminant limit",
     "critical habitat",
+    "drinking water standard",
     "ecos",
     "esa",
     "fda",
@@ -160,14 +185,19 @@ REGULATORY_QUERY_TERMS = {
     "five-year review",
     "five year review",
     "guidance for industry",
+    "health advisory",
     "incidental take",
     "listing status",
     "listing history",
+    "maximum contaminant level",
+    "mcl",
     "proposed rule",
     "recovery plan",
     "regulation",
     "regulatory history",
     "rulemaking",
+    "safe drinking water act",
+    "sdwa",
     "section 7",
     "species dossier",
 }
@@ -261,10 +291,18 @@ def looks_like_exact_title(query: str) -> bool:
     significant_words = [word for word in words if len(word) > 2 and word.lower() not in TITLE_STOPWORDS]
     if len(significant_words) < 2:
         return False
-    if sum(word.lower() in QUERYISH_TITLE_BLOCKERS for word in significant_words) >= 3:
+    queryish_count = sum(word.lower() in QUERYISH_TITLE_BLOCKERS for word in significant_words)
+    if queryish_count >= 3:
         return False
     title_like_words = [word for word in significant_words if word[:1].isupper() or word.isupper() or "-" in word]
     if len(title_like_words) >= max(2, int(len(significant_words) * 0.45)):
+        return True
+    if (
+        queryish_count == 0
+        and not _query_starts_broad(normalized)
+        and 4 <= len(significant_words) <= 12
+        and any(word.lower() in TITLE_STOPWORDS for word in words)
+    ):
         return True
     return bool(re.search(r"\([A-Z][A-Za-z]+(?:\s+[a-z][A-Za-z-]+)+\)", stripped)) and len(significant_words) >= 6
 
@@ -358,6 +396,124 @@ def _query_starts_broad(query: str) -> bool:
     return lowered.startswith(("what ", "which ", "how ", "compare ", "summarize ", "identify ", "find "))
 
 
+def _infer_regulatory_subintent(query: str, focus: str | None = None) -> str | None:
+    normalized = normalize_query(" ".join(part for part in [query, focus or ""] if part)).lower()
+    if not normalized or not detect_regulatory_intent(query, focus):
+        return None
+    if "cfr" in normalized and any(
+        marker in normalized for marker in {"current text", "codified text", "what does", "under"}
+    ):
+        return "current_cfr_text"
+    if any(marker in normalized for marker in {"guidance", "guideline", "handbook", "manual"}):
+        return "guidance_lookup"
+    if any(
+        marker in normalized for marker in {"species dossier", "recovery plan", "critical habitat", "species profile"}
+    ):
+        return "species_dossier"
+    if any(
+        marker in normalized
+        for marker in {"history", "timeline", "rulemaking", "final rule", "proposed rule", "listing history"}
+    ):
+        return "rulemaking_history"
+    if detect_literature_intent(query, focus):
+        return "hybrid_regulatory_plus_literature"
+    return "rulemaking_history"
+
+
+def _infer_entity_card(query: str, focus: str | None = None) -> dict[str, str] | None:
+    normalized = normalize_query(" ".join(part for part in [query, focus or ""] if part))
+    lowered = normalized.lower()
+    if not normalized:
+        return None
+
+    authority_context = None
+    if "esa" in lowered or "endangered species" in lowered:
+        authority_context = "ESA"
+    elif "epa" in lowered or "safe drinking water act" in lowered or "sdwa" in lowered:
+        authority_context = "EPA/SDWA"
+    elif "fda" in lowered:
+        authority_context = "FDA"
+
+    requested_document_family = None
+    if "critical habitat" in lowered:
+        requested_document_family = "critical_habitat"
+    elif "recovery plan" in lowered:
+        requested_document_family = "recovery_plan"
+    elif any(marker in lowered for marker in {"listing", "final rule", "proposed rule", "rulemaking"}):
+        requested_document_family = "listing_rule"
+    elif "guidance" in lowered:
+        requested_document_family = "guidance"
+
+    scientific_match = re.search(r"\b([A-Z][a-z]+\s+[a-z]{3,})\b", query)
+    scientific_name = scientific_match.group(1) if scientific_match else None
+
+    common_name = None
+    subject_match = re.search(
+        r"\b(?:for|about)\s+(?:the\s+)?([a-z][a-z-]+(?:\s+[a-z][a-z-]+){0,3})\s+(?:under|with|in|on)\b",
+        lowered,
+    )
+    if subject_match:
+        candidate_subject = subject_match.group(1).strip()
+        if candidate_subject and candidate_subject not in {"the species", "species dossier", "regulatory history"}:
+            common_name = candidate_subject
+    lowered_tokens = [token for token in re.findall(r"[a-z]{3,}", lowered) if token not in REGULATORY_QUERY_TERMS]
+    species_markers = {
+        "bat",
+        "bird",
+        "condor",
+        "dolphin",
+        "fish",
+        "frog",
+        "habitat",
+        "owl",
+        "species",
+        "tortoise",
+        "wolf",
+    }
+    if common_name is None:
+        for index, token in enumerate(lowered_tokens):
+            if token in species_markers and index > 0:
+                previous = lowered_tokens[index - 1]
+                if previous not in {"the", "for", "about", "under"}:
+                    common_name = f"{previous} {token}"
+                    break
+    if common_name is None and len(lowered_tokens) >= 2 and detect_regulatory_intent(query, focus):
+        common_name = " ".join(lowered_tokens[:2])
+
+    if not any([common_name, scientific_name, authority_context, requested_document_family]):
+        return None
+    card: dict[str, str] = {}
+    if common_name:
+        card["commonName"] = common_name
+    if scientific_name:
+        card["scientificName"] = scientific_name
+    if authority_context:
+        card["authorityContext"] = authority_context
+    if requested_document_family:
+        card["requestedDocumentFamily"] = requested_document_family
+    return card
+
+
+def _looks_broad_concept_query(
+    *,
+    normalized_query: str,
+    focus: str | None,
+    year: str | None,
+    venue: str | None,
+    terms: list[str] | None = None,
+) -> bool:
+    terms = terms if terms is not None else query_terms(normalized_query)
+    has_constraints = bool(focus or year or venue)
+    queryish_term_count = sum(term in QUERYISH_TITLE_BLOCKERS for term in terms)
+    if _query_starts_broad(normalized_query) and len(terms) >= 6 and not has_constraints:
+        return True
+    if queryish_term_count >= 3 and len(terms) >= 6:
+        return True
+    if queryish_term_count >= 2 and len(terms) >= 8 and not has_constraints:
+        return True
+    return False
+
+
 def _estimate_query_specificity(
     *,
     normalized_query: str,
@@ -365,18 +521,26 @@ def _estimate_query_specificity(
     year: str | None,
     venue: str | None,
 ) -> Literal["high", "medium", "low"]:
+    terms = query_terms(normalized_query)
+    broad_concept_signal = _looks_broad_concept_query(
+        normalized_query=normalized_query,
+        focus=focus,
+        year=year,
+        venue=venue,
+        terms=terms,
+    )
     if _strong_known_item_signal(normalized_query) or _strong_regulatory_signal(normalized_query, focus):
         return "high"
-    if looks_like_exact_title(normalized_query) or looks_like_citation_query(normalized_query):
+    if not broad_concept_signal and (
+        looks_like_exact_title(normalized_query) or looks_like_citation_query(normalized_query)
+    ):
         return "high"
-    facets = query_facets(normalized_query)
-    terms = query_terms(normalized_query)
     has_constraints = bool(focus or year or venue)
-    if _query_starts_broad(normalized_query) and (len(facets) >= 2 or len(terms) >= 6) and not has_constraints:
+    if broad_concept_signal:
         return "low"
     if has_constraints and len(terms) <= 5:
         return "high"
-    if len(terms) >= 7 or len(facets) >= 3:
+    if _query_starts_broad(normalized_query) and len(terms) >= 6:
         return "low"
     return "medium"
 
@@ -429,74 +593,40 @@ def initial_retrieval_hypotheses(
     ]
     if planner.intent in {"known_item", "author", "citation", "regulatory"}:
         return candidates
-    if planner.query_specificity == "high" and planner.ambiguity_level == "low":
+    if planner.first_pass_mode == RETRIEVAL_MODE_TARGETED:
         return candidates
 
+    planner_angles = [str(angle).strip() for angle in planner.search_angles if str(angle).strip()]
+    if not planner_angles:
+        return candidates
+
+    max_extra = max(config.max_initial_hypotheses - 1, 0)
+    if planner.first_pass_mode == RETRIEVAL_MODE_MIXED:
+        planner_angles = planner_angles[: max_extra or 1]
+    else:
+        planner_angles = planner_angles[:max_extra]
+
+    seen_variants: set[str] = {base_query.lower()}
     preferred_plans = [
         _ordered_provider_plan(base_plan, ["openalex", "semantic_scholar", "core", "arxiv", "scholarapi"]),
-        _ordered_provider_plan(base_plan, ["core", "openalex", "semantic_scholar", "arxiv", "scholarapi"]),
         _ordered_provider_plan(base_plan, ["semantic_scholar", "openalex", "scholarapi", "core", "arxiv"]),
+        _ordered_provider_plan(base_plan, ["core", "openalex", "semantic_scholar", "arxiv", "scholarapi"]),
+        _ordered_provider_plan(base_plan, ["arxiv", "core", "openalex", "semantic_scholar", "scholarapi"]),
     ]
-    hypothesis_candidates: list[ExpansionCandidate] = []
-    facets = [facet for facet in query_facets(base_query) if len(re.findall(r"[A-Za-z0-9]{3,}", facet)) >= 2]
-    if len(facets) >= 2:
-        combined_facet_query = " ".join(facets[:2])
-        hypothesis_candidates.append(
-            ExpansionCandidate(
-                variant=combined_facet_query,
-                source="hypothesis",
-                rationale="Compact multi-facet retrieval hypothesis for a broad or ambiguous ask.",
-                providerPlan=preferred_plans[0],
-            )
-        )
-        for index, facet in enumerate(facets[:2], start=1):
-            hypothesis_candidates.append(
-                ExpansionCandidate(
-                    variant=facet,
-                    source="hypothesis",
-                    rationale="Focused facet retrieval hypothesis derived from the original query.",
-                    providerPlan=preferred_plans[min(index, len(preferred_plans) - 1)],
-                )
-            )
-
-    compact_terms = [
-        term
-        for term in query_terms(base_query)
-        if term not in HYPOTHESIS_QUERY_STOPWORDS and term not in GENERIC_EVIDENCE_WORDS
-    ]
-    if compact_terms:
-        hypothesis_candidates.append(
-            ExpansionCandidate(
-                variant=" ".join(compact_terms[:6]),
-                source="hypothesis",
-                rationale="Distinctive-term retrieval hypothesis to reduce conversational drift.",
-                providerPlan=preferred_plans[1],
-            )
-        )
-
-    if planner.candidate_concepts:
-        concept_query = " ".join(dict.fromkeys(planner.candidate_concepts[:2]))
-        if concept_query:
-            hypothesis_candidates.append(
-                ExpansionCandidate(
-                    variant=concept_query,
-                    source="hypothesis",
-                    rationale="Planner-concept retrieval hypothesis for broader evidence coverage.",
-                    providerPlan=preferred_plans[2],
-                )
-            )
-
-    ordered_candidates: list[ExpansionCandidate] = []
-    seen_variants: set[str] = set()
-    for candidate in candidates + hypothesis_candidates:
-        lowered = normalize_query(candidate.variant).lower()
+    for index, angle in enumerate(planner_angles):
+        lowered = normalize_query(angle).lower()
         if not lowered or lowered in seen_variants:
             continue
         seen_variants.add(lowered)
-        ordered_candidates.append(candidate)
-        if len(ordered_candidates) >= max(config.max_initial_hypotheses, 1):
-            break
-    return ordered_candidates
+        candidates.append(
+            ExpansionCandidate(
+                variant=angle,
+                source="hypothesis",
+                rationale="Planner-generated retrieval angle.",
+                providerPlan=preferred_plans[min(index, len(preferred_plans) - 1)],
+            )
+        )
+    return candidates[: max(config.max_initial_hypotheses, 1)]
 
 
 def _upsert_intent_candidate(
@@ -623,12 +753,8 @@ async def classify_query(
             rationale="Explicit mode parameter from the caller.",
         )
     else:
-        citation_like_signal = looks_like_citation_query(normalized)
-        title_like_signal = looks_like_exact_title(query)
-        literature_signal = detect_literature_intent(normalized, focus)
         strong_known_item_signal = _strong_known_item_signal(normalized)
         strong_regulatory_signal = _strong_regulatory_signal(normalized, focus)
-        regulatory_signal = detect_regulatory_intent(normalized, focus)
         if strong_known_item_signal:
             _upsert_intent_candidate(
                 candidates=intent_candidates,
@@ -637,23 +763,6 @@ async def classify_query(
                 source="heuristic",
                 rationale="Strong known-item signal (DOI, arXiv, or URL) was detected.",
             )
-        elif citation_like_signal:
-            _upsert_intent_candidate(
-                candidates=intent_candidates,
-                intent="known_item",
-                confidence="medium",
-                source="heuristic",
-                rationale="Citation-like wording suggests a known-item anchor.",
-            )
-        elif title_like_signal:
-            _upsert_intent_candidate(
-                candidates=intent_candidates,
-                intent="known_item",
-                confidence="low",
-                source="heuristic",
-                rationale="Title-like phrasing suggests a possible known-item lookup.",
-            )
-
         if strong_regulatory_signal:
             _upsert_intent_candidate(
                 candidates=intent_candidates,
@@ -662,45 +771,16 @@ async def classify_query(
                 source="heuristic",
                 rationale="Explicit regulatory citation or rulemaking marker was detected.",
             )
-        elif regulatory_signal:
-            _upsert_intent_candidate(
-                candidates=intent_candidates,
-                intent="regulatory",
-                confidence="low",
-                source="heuristic",
-                rationale="Regulatory phrasing is present but not strongly anchored.",
-            )
-        if literature_signal:
-            _upsert_intent_candidate(
-                candidates=intent_candidates,
-                intent="review",
-                confidence="low",
-                source="heuristic",
-                rationale="Literature/review language suggests synthesis intent.",
-            )
 
         heuristic_override: IntentLabel | None = None
-        heuristic_override_confidence: Literal["high", "medium", "low"] = "medium"
+        heuristic_override_confidence: Literal["high", "medium", "low"] = "high"
         heuristic_rationale = ""
-        known_item_override = strong_known_item_signal or (
-            (citation_like_signal or title_like_signal) and not strong_regulatory_signal and not regulatory_signal
-        )
-        if known_item_override:
+        if strong_known_item_signal:
             heuristic_override = "known_item"
-            heuristic_override_confidence = "high" if strong_known_item_signal else "medium"
-            heuristic_rationale = (
-                "Strong known-item signal overrode planner routing."
-                if strong_known_item_signal
-                else "Known-item guardrails (citation/title pattern) overrode planner routing."
-            )
-        elif regulatory_signal:
+            heuristic_rationale = "Strong known-item signal overrode planner routing."
+        elif strong_regulatory_signal:
             heuristic_override = "regulatory"
-            heuristic_override_confidence = "high" if strong_regulatory_signal else "medium"
-            heuristic_rationale = (
-                "Strong regulatory signal overrode planner routing."
-                if strong_regulatory_signal
-                else "Regulatory guardrails overrode planner routing."
-            )
+            heuristic_rationale = "Strong regulatory citation signal (CFR/FR reference) overrode planner routing."
 
         if heuristic_override is not None:
             if planner.intent == heuristic_override:
@@ -735,19 +815,17 @@ async def classify_query(
     planner.routing_confidence = (
         primary_candidate.confidence if primary_candidate is not None else planner.intent_confidence
     )
-    planner.query_specificity = _estimate_query_specificity(
-        normalized_query=normalized,
-        focus=focus,
-        year=year,
-        venue=venue,
-    )
-    planner.ambiguity_level = _estimate_ambiguity_level(
-        candidates=planner.intent_candidates,
-        routing_confidence=planner.routing_confidence,
-        query_specificity=planner.query_specificity,
-    )
     if not planner.intent_rationale:
         planner.intent_rationale = "Intent routed from planner defaults."
+    if planner.intent == "regulatory":
+        if not planner.regulatory_subintent:
+            planner.regulatory_subintent = _infer_regulatory_subintent(query, focus)
+        if planner.entity_card is None:
+            planner.entity_card = _infer_entity_card(query, focus)
+    if not planner.search_angles and planner.retrieval_hypotheses:
+        planner.search_angles = list(planner.retrieval_hypotheses)
+    if not planner.retrieval_hypotheses and planner.search_angles:
+        planner.retrieval_hypotheses = list(planner.search_angles)
     merged_concepts = list(planner.candidate_concepts)
     merged_concepts.extend(query_facets(normalized))
     if focus:
@@ -764,16 +842,17 @@ async def classify_query(
     return normalized, planner
 
 
-def grounded_expansion_candidates(
+async def grounded_expansion_candidates(
     *,
     original_query: str,
     papers: list[dict[str, Any]],
     config: AgenticConfig,
+    provider_bundle: ModelProviderBundle,
     focus: str | None = None,
     venue: str | None = None,
     year: str | None = None,
 ) -> list[ExpansionCandidate]:
-    """Create grounded query variants from retrieved evidence only."""
+    """Create grounded query variants from retrieved evidence via a second provider pass."""
     variants: list[ExpansionCandidate] = []
     base_query = normalize_query(original_query)
     suffixes = [item for item in [focus, venue, year] if item]
@@ -786,24 +865,12 @@ def grounded_expansion_candidates(
             )
         )
 
-    phrase_candidates = _top_evidence_phrases(papers, limit=config.max_grounded_variants * 3)
-    query_tokens = set(re.findall(r"[A-Za-z0-9]{3,}", base_query.lower()))
-    for phrase in phrase_candidates:
-        lowered_query = base_query.lower()
-        if phrase.lower() in lowered_query:
-            continue
-        phrase_tokens = set(re.findall(r"[A-Za-z0-9]{3,}", phrase.lower()))
-        if len([token for token in phrase_tokens if token not in query_tokens]) < 2:
-            continue
-        variants.append(
-            ExpansionCandidate(
-                variant=f"{base_query} {phrase}",
-                source="from_retrieved_evidence",
-                rationale=(f"Evidence from the first-pass results repeatedly mentioned '{phrase}'."),
-            )
-        )
-        if len(variants) >= config.max_grounded_variants:
-            break
+    provider_variants = await provider_bundle.asuggest_grounded_expansions(
+        query=base_query,
+        papers=papers,
+        max_variants=config.max_grounded_variants,
+    )
+    variants.extend(provider_variants)
 
     deduped: list[ExpansionCandidate] = []
     seen: set[str] = set()

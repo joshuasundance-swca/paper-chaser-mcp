@@ -10,6 +10,8 @@ def test_ux_prompt_corpus_covers_primary_benchmark_domains() -> None:
 
     assert set(payload) == {
         "environmental_science_and_ecology",
+        "environmental_science_follow_up_quality",
+        "environmental_science_inspect_rationale",
         "consulting_and_due_diligence",
         "citation_repair",
         "guided_low_context_success",
@@ -19,6 +21,8 @@ def test_ux_prompt_corpus_covers_primary_benchmark_domains() -> None:
         "cross_discipline_generalization",
     }
     assert len(payload["environmental_science_and_ecology"]) >= 10
+    assert len(payload["environmental_science_follow_up_quality"]) >= 6
+    assert len(payload["environmental_science_inspect_rationale"]) >= 6
     assert len(payload["consulting_and_due_diligence"]) >= 8
     assert len(payload["citation_repair"]) >= 8
     assert len(payload["guided_low_context_success"]) >= 8
@@ -28,6 +32,8 @@ def test_ux_prompt_corpus_covers_primary_benchmark_domains() -> None:
     assert len(payload["cross_discipline_generalization"]) >= 8
     assert any("PFAS remediation" in prompt for prompt in payload["environmental_science_and_ecology"])
     assert any("wetland restoration strategies" in prompt for prompt in payload["environmental_science_and_ecology"])
+    assert any("eDNA" in prompt for prompt in payload["environmental_science_follow_up_quality"])
+    assert any("desert tortoise" in prompt for prompt in payload["environmental_science_inspect_rationale"])
     assert any("wildfire risk mitigation" in prompt for prompt in payload["consulting_and_due_diligence"])
     assert any(
         "prescribed fire versus mechanical thinning" in prompt for prompt in payload["consulting_and_due_diligence"]

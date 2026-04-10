@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 from pydantic import Field
 
@@ -17,6 +17,21 @@ IntentLabel = Literal[
     "citation",
     "regulatory",
 ]
+
+PlannerQueryType = Literal[
+    "broad_concept",
+    "known_item",
+    "citation_repair",
+    "regulatory",
+    "author",
+    "review",
+]
+
+PlannerFirstPassMode = Literal["targeted", "broad", "mixed"]
+
+RETRIEVAL_MODE_TARGETED: Final[PlannerFirstPassMode] = "targeted"
+RETRIEVAL_MODE_BROAD: Final[PlannerFirstPassMode] = "broad"
+RETRIEVAL_MODE_MIXED: Final[PlannerFirstPassMode] = "mixed"
 
 
 class AgentHints(ApiModel):
@@ -105,6 +120,22 @@ class SearchStrategyMetadata(ApiModel):
         default="low",
         alias="ambiguityLevel",
     )
+    query_type: PlannerQueryType = Field(
+        default="broad_concept",
+        alias="queryType",
+    )
+    regulatory_subintent: str | None = Field(default=None, alias="regulatorySubintent")
+    entity_card: dict[str, Any] | None = Field(default=None, alias="entityCard")
+    breadth_estimate: int = Field(
+        default=2,
+        ge=1,
+        le=4,
+        alias="breadthEstimate",
+    )
+    first_pass_mode: PlannerFirstPassMode = Field(
+        default="targeted",
+        alias="firstPassMode",
+    )
     intent_rationale: str = Field(
         default="",
         alias="intentRationale",
@@ -124,6 +155,14 @@ class SearchStrategyMetadata(ApiModel):
     retrieval_hypotheses: list[str] = Field(
         default_factory=list,
         alias="retrievalHypotheses",
+    )
+    search_angles: list[str] = Field(
+        default_factory=list,
+        alias="searchAngles",
+    )
+    uncertainty_flags: list[str] = Field(
+        default_factory=list,
+        alias="uncertaintyFlags",
     )
     accepted_expansions: list[str] = Field(
         default_factory=list,
@@ -256,6 +295,7 @@ class StructuredSourceRecord(ApiModel):
     citation: CitationRecord | None = None
     date: str | None = None
     note: str | None = None
+    why_classified_as_weak_match: str | None = Field(default=None, alias="whyClassifiedAsWeakMatch")
     lead_reason: str | None = Field(default=None, alias="leadReason")
     why_not_verified: str | None = Field(default=None, alias="whyNotVerified")
 
@@ -412,6 +452,9 @@ class AskResultSetResponse(ApiModel):
     structured_sources: list[StructuredSourceRecord] = Field(default_factory=list, alias="structuredSources")
     coverage_summary: CoverageSummary | None = Field(default=None, alias="coverageSummary")
     failure_summary: FailureSummary | None = Field(default=None, alias="failureSummary")
+    provider_used: str = Field(default="deterministic", alias="providerUsed")
+    degradation_reason: str | None = Field(default=None, alias="degradationReason")
+    evidence_use_plan: dict[str, Any] | None = Field(default=None, alias="evidenceUsePlan")
 
 
 class LandscapeTheme(ApiModel):
@@ -530,6 +573,22 @@ class PlannerDecision(ApiModel):
         default="low",
         alias="ambiguityLevel",
     )
+    query_type: PlannerQueryType = Field(
+        default="broad_concept",
+        alias="queryType",
+    )
+    regulatory_subintent: str | None = Field(default=None, alias="regulatorySubintent")
+    entity_card: dict[str, Any] | None = Field(default=None, alias="entityCard")
+    breadth_estimate: int = Field(
+        default=2,
+        ge=1,
+        le=4,
+        alias="breadthEstimate",
+    )
+    first_pass_mode: PlannerFirstPassMode = Field(
+        default="targeted",
+        alias="firstPassMode",
+    )
     intent_rationale: str = Field(
         default="",
         alias="intentRationale",
@@ -566,6 +625,18 @@ class PlannerDecision(ApiModel):
     success_criteria: list[str] = Field(
         default_factory=list,
         alias="successCriteria",
+    )
+    search_angles: list[str] = Field(
+        default_factory=list,
+        alias="searchAngles",
+    )
+    retrieval_hypotheses: list[str] = Field(
+        default_factory=list,
+        alias="retrievalHypotheses",
+    )
+    uncertainty_flags: list[str] = Field(
+        default_factory=list,
+        alias="uncertaintyFlags",
     )
     follow_up_mode: Literal["qa", "claim_check", "comparison"] = Field(
         default="qa",

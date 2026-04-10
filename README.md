@@ -61,7 +61,7 @@ be hard to misuse and explicit about trust.
   recommendation-first `summary`, while keeping the structured evidence,
   leads, and provenance fields available below it.
 - **Source auditability**: `inspect_source` exposes one `sourceId` with
-  provenance, trust state, and direct-read next steps; omitted `searchSessionId`
+  provenance, trust state, weak-match rationale, and quality-aware direct-read next steps; omitted `searchSessionId`
   is only accepted when one compatible saved session exists.
 - **Runtime truth**: `get_runtime_status` surfaces active profile/transport and
   provider-state warnings without requiring low-level diagnostics. `configuredSmartProvider`
@@ -164,7 +164,7 @@ resolve_reference(reference="Rockstrom et al planetary boundaries 2009 Nature 46
 
 ```text
 inspect_source(searchSessionId="...", evidenceId="...")
-→ inspect verificationStatus, topicalRelevance, canonicalUrl, directReadRecommendations
+→ inspect verificationStatus, topicalRelevance, whyClassifiedAsWeakMatch, confidenceSignals, canonicalUrl, directReadRecommendations
 → if searchSessionId is omitted and inference is ambiguous, rerun with an explicit saved session id
 ```
 
@@ -205,9 +205,11 @@ Treat these as the main guided contracts:
 | `evidence` | `research`, `follow_up_research` | Canonical grounded source records for inspection and citation |
 | `leads` | `research`, `follow_up_research`, expert smart tools | Review weak, filtered, or off-topic leads without promoting them into grounded evidence |
 | `evidenceGaps` | `research`, `follow_up_research` | Treat as explicit limits on the current answer, not hidden caveats |
-| `routingSummary` | `research`, `follow_up_research` | Check intent, anchor, provider plan, and why the result is partial |
+| `routingSummary` | `research`, `follow_up_research` | Check intent, anchor, provider plan, regulatory subtype or entity card when present, and why the result is partial |
 | `coverageSummary` | `research`, `follow_up_research` | Check provider coverage and completeness before relying on synthesis |
 | `executionProvenance` | guided tools | Inspect which server policy, latency defaults, and fallback path produced the result |
+| `confidenceSignals` | `research`, `follow_up_research`, `inspect_source` | Inspect additive trust cues such as evidence quality, synthesis mode, and source-scope labels without replacing `answerability` |
+| `evidenceUsePlan` | `follow_up_research` | For synthesis-style follow-ups, inspect answer subtype, directly responsive evidence ids, unsupported parts, and retrieval sufficiency before trusting the answer |
 | `sessionResolution` | `follow_up_research`, `inspect_source` | Use when a session was inferred, repaired, missing, or ambiguous |
 | `sourceResolution` | `inspect_source` | Use when the requested source id was matched, unresolved, or needs a retry with available ids |
 | `abstentionDetails` | guided tools on weak evidence | Treat as the actionable reason and recovery hint for abstention or insufficient evidence |
@@ -221,6 +223,11 @@ For broad agency-guidance discovery, guided routing stays on the
 regulatory primary-source path. Off-topic authority documents may still appear
 as `leads`, but they should not displace more relevant query-anchored guidance
 or policy documents from the top-level recommendation.
+
+For source-level audits, treat `whyClassifiedAsWeakMatch` and
+`confidenceSignals.sourceScopeLabel` / `confidenceSignals.sourceScopeReason` as
+the primary explanation of why an authoritative record was retained as a weak
+match or off-topic lead.
 
 ## Deferred export design
 

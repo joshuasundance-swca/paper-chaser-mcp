@@ -5,9 +5,9 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter
-from typing import Any, Literal, TypeVar
+from typing import Any, Literal, TypeVar, cast
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .models import ExpansionCandidate, PlannerDecision
 
@@ -154,6 +154,8 @@ class _PlannerResponseSchema(BaseModel):
     """Structured planner response that avoids free-form object maps."""
 
     intent: Literal["discovery", "review", "known_item", "author", "citation", "regulatory"] = "discovery"
+    querySpecificity: Literal["high", "medium", "low"] = "medium"
+    ambiguityLevel: Literal["low", "medium", "high"] = "low"
     constraints: _PlannerConstraintsSchema = Field(default_factory=_PlannerConstraintsSchema)
     seedIdentifiers: list[str] = Field(default_factory=list)
     candidateConcepts: list[str] = Field(default_factory=list)
@@ -163,6 +165,12 @@ class _PlannerResponseSchema(BaseModel):
     anchorValue: str | None = None
     requiredPrimarySources: list[str] = Field(default_factory=list)
     successCriteria: list[str] = Field(default_factory=list)
+    queryType: str = Field(default="broad_concept")
+    breadthEstimate: int = Field(default=2, ge=1, le=4)
+    searchAngles: list[str] = Field(default_factory=list)
+    uncertaintyFlags: list[str] = Field(default_factory=list)
+    firstPassMode: str = Field(default="targeted")
+    retrievalHypotheses: list[str] = Field(default_factory=list)
     followUpMode: Literal["qa", "claim_check", "comparison"] = "qa"
 
     def to_planner_decision(self) -> PlannerDecision:
@@ -171,8 +179,34 @@ class _PlannerResponseSchema(BaseModel):
         anchor_type = self.anchorType if self.anchorType in _ANCHOR_TYPES else None
         required_primary = _sanitize_primary_sources(self.requiredPrimarySources)
         success_criteria = _sanitize_success_criteria(self.successCriteria)
+        query_type = cast(
+            Any,
+            {
+                "broad_concept": "broad_concept",
+                "known_item": "known_item",
+                "citation_repair": "citation_repair",
+                "regulatory": "regulatory",
+                "author": "author",
+                "review": "review",
+            }.get(self.queryType, "broad_concept"),
+        )
+        first_pass_mode = cast(
+            Any,
+            {"targeted": "targeted", "broad": "broad", "mixed": "mixed"}.get(
+                self.firstPassMode,
+                "targeted",
+            ),
+        )
+        breadth_estimate = max(1, min(4, self.breadthEstimate))
+        search_angles = [str(angle).strip() for angle in self.searchAngles if str(angle).strip()][:4]
+        retrieval_hypotheses = [
+            str(hypothesis).strip() for hypothesis in self.retrievalHypotheses if str(hypothesis).strip()
+        ][:4]
+        uncertainty_flags = [str(flag).strip() for flag in self.uncertaintyFlags if str(flag).strip()][:6]
         return PlannerDecision(
             intent=intent,
+            querySpecificity=self.querySpecificity,
+            ambiguityLevel=self.ambiguityLevel,
             constraints={key: value for key, value in self.constraints.model_dump(exclude_none=True).items() if value},
             seedIdentifiers=self.seedIdentifiers,
             candidateConcepts=self.candidateConcepts,
@@ -182,6 +216,12 @@ class _PlannerResponseSchema(BaseModel):
             anchorValue=str(self.anchorValue or "").strip() or None,
             requiredPrimarySources=required_primary,
             successCriteria=success_criteria,
+            queryType=query_type,
+            breadthEstimate=breadth_estimate,
+            searchAngles=search_angles,
+            uncertaintyFlags=uncertainty_flags,
+            firstPassMode=first_pass_mode,
+            retrievalHypotheses=retrieval_hypotheses,
             followUpMode=self.followUpMode,
         )
 
@@ -204,6 +244,47 @@ class _AnswerSchema(BaseModel):
     answerability: Literal["grounded", "limited", "insufficient"] = "limited"
     selectedEvidenceIds: list[str] = Field(default_factory=list)
     selectedLeadIds: list[str] = Field(default_factory=list)
+    citedPaperIds: list[str] = Field(default_factory=list)
+    evidenceSummary: str = Field(default="")
+    missingEvidenceDescription: str = Field(default="")
+
+    @model_validator(mode="after")
+    def _validate_answer_contract(self) -> "_AnswerSchema":
+        if self.answerability == "insufficient":
+            return self
+        answer_text = self.answer.strip()
+        has_explicit_grounding = bool(self.citedPaperIds or self.evidenceSummary.strip())
+        if has_explicit_grounding and answer_text and len(answer_text) < 100:
+            raise ValueError("answer must be at least 100 characters when answerability is not insufficient")
+        if has_explicit_grounding and answer_text and not self.evidenceSummary.strip():
+            raise ValueError("evidenceSummary is required when answer text is present")
+        return self
+
+
+class _ReviseStrategySchema(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    revised_query: str = Field(default="", alias="revisedQuery")
+    revised_intent: Literal["discovery", "review", "known_item", "author", "citation", "regulatory"] = Field(
+        default="discovery", alias="revisedIntent"
+    )
+    revised_providers: list[str] = Field(default_factory=list, alias="revisedProviders")
+    rationale: str = Field(default="")
+
+
+class _RelevanceClassificationItem(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    paper_id: str = Field(alias="paperId", default="")
+    classification: Literal["on_topic", "weak_match", "off_topic"] = "weak_match"
+    rationale: str = Field(default="")
+
+
+class _RelevanceBatchSchema(BaseModel):
+    classifications: list[_RelevanceClassificationItem] = Field(default_factory=list)
+
+
+class _AdequacyJudgmentSchema(BaseModel):
+    adequacy: Literal["succeeded", "partial", "insufficient"] = "partial"
+    reason: str = Field(default="")
 
 
 def _tokenize(text: str) -> list[str]:
@@ -482,7 +563,7 @@ def _paper_evidence_payload(papers: list[dict[str, Any]], *, limit: int) -> list
         {
             "paperId": paper.get("paperId") or paper.get("sourceId") or paper.get("canonicalId"),
             "title": paper.get("title"),
-            "abstract": paper.get("abstract"),
+            "abstract": str(paper.get("abstract") or "")[:1500] or None,
             "venue": paper.get("venue"),
             "year": paper.get("year"),
             "provider": paper.get("source") or paper.get("provider"),
@@ -519,7 +600,7 @@ def _build_answer_payload(
     answer_mode: str,
     evidence_papers: list[dict[str, Any]],
     *,
-    limit: int = 6,
+    limit: int = 12,
 ) -> dict[str, Any]:
     return {
         "question": question,
@@ -687,6 +768,22 @@ def _normalize_answer_schema_output(
     ]
     payload["selectedEvidenceIds"] = selected_evidence_ids
     payload["selectedLeadIds"] = [str(identifier).strip() for identifier in payload.get("selectedLeadIds") or []]
+    cited_paper_ids = [
+        str(identifier).strip()
+        for identifier in payload.get("citedPaperIds") or []
+        if str(identifier).strip() in valid_evidence_ids
+    ]
+    if not cited_paper_ids and selected_evidence_ids:
+        cited_paper_ids = list(selected_evidence_ids[:3])
+    payload["citedPaperIds"] = cited_paper_ids
+    answer_text = str(payload.get("answer") or "").strip()
+    if answer_text and not str(payload.get("evidenceSummary") or "").strip():
+        payload["evidenceSummary"] = answer_text.split("\n", 1)[0][:240]
+    if (
+        payload.get("answerability") == "insufficient"
+        and not str(payload.get("missingEvidenceDescription") or "").strip()
+    ):
+        payload["missingEvidenceDescription"] = "The supplied papers did not contain enough direct evidence."
     if payload.get("answerability") == "grounded" and not selected_evidence_ids and evidence_papers:
         payload["answerability"] = "limited"
     return payload

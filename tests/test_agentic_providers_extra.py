@@ -1,3 +1,4 @@
+import asyncio
 import builtins
 import sys
 import types
@@ -9,7 +10,15 @@ from pydantic import BaseModel, Field
 from paper_chaser_mcp.agentic import providers as providers_module
 from paper_chaser_mcp.agentic.config import AgenticConfig
 from paper_chaser_mcp.agentic.models import ExpansionCandidate, PlannerDecision
-from paper_chaser_mcp.agentic.provider_helpers import _ExpansionListSchema, _ExpansionSchema
+from paper_chaser_mcp.agentic.provider_helpers import (
+    _AdequacyJudgmentSchema,
+    _AnswerSchema,
+    _ExpansionListSchema,
+    _ExpansionSchema,
+    _RelevanceBatchSchema,
+    _RelevanceClassificationItem,
+    _ReviseStrategySchema,
+)
 from paper_chaser_mcp.agentic.providers import (
     COMMON_QUERY_WORDS,
     AnthropicProviderBundle,
@@ -138,10 +147,14 @@ def test_provider_helpers_and_deterministic_bundle_paths() -> None:
     }
     assert known_item.seed_identifiers == ["10.1234/example"]
     assert "scholarapi" in known_item.provider_plan
+    assert known_item.query_type == "known_item"
+    assert known_item.first_pass_mode == "targeted"
     assert author.intent == "author"
     assert citation.intent == "citation"
     assert review.intent == "review"
     assert review.follow_up_mode == "claim_check"
+    assert review.breadth_estimate >= 2
+    assert review.query_specificity == "medium"
 
     expansions = bundle.suggest_speculative_expansions(
         query="retrieval agents",
@@ -156,6 +169,29 @@ def test_provider_helpers_and_deterministic_bundle_paths() -> None:
     assert len(expansions) <= 2
     assert all(isinstance(item, ExpansionCandidate) for item in expansions)
     assert all("retrieval agents" in item.variant for item in expansions)
+
+    grounded = bundle.suggest_grounded_expansions(
+        query="retrieval agents",
+        papers=[
+            {
+                "title": "Retrieval agents use citation graphs",
+                "abstract": "Citation graphs improve retrieval grounding for agents.",
+            }
+        ],
+        max_variants=2,
+    )
+    assert grounded
+    assert grounded[0].source == "from_retrieved_evidence"
+
+    adequacy = asyncio.run(
+        bundle.aassess_result_adequacy(
+            query="retrieval agents",
+            intent="discovery",
+            verified_sources=[{"sourceId": "paper-1", "title": "Retrieval agents", "topicalRelevance": "on_topic"}],
+            evidence_gaps=["Need more breadth"],
+        )
+    )
+    assert adequacy["adequacy"] == "partial"
 
     assert bundle.label_theme(seed_terms=["graph retrieval", "grounding"], papers=[]) == "Graph Retrieval / Grounding"
     assert bundle.label_theme(seed_terms=[], papers=[{"venue": "Nature"}]) == "Nature cluster"
@@ -1833,6 +1869,29 @@ def test_azure_openai_answer_uses_native_text_fallback_before_deterministic(
     assert answer["confidence"] == "high"
 
 
+def test_openai_sync_answer_invalid_native_text_fallback_uses_deterministic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = OpenAIProviderBundle(_config(), api_key="sk-test")
+
+    monkeypatch.setattr(bundle, "_responses_parse", lambda **kwargs: None)
+    monkeypatch.setattr(
+        bundle,
+        "_responses_text",
+        lambda **kwargs: '{"answer":"The evidence suggests something important',
+    )
+    monkeypatch.setattr(bundle, "_allow_langchain_chat_fallback", lambda: False)
+
+    answer = bundle.answer_question(
+        question="What matters?",
+        evidence_papers=[{"paperId": "paper-1", "title": "Paper A"}],
+        answer_mode="qa",
+    )
+
+    assert "Paper A" in answer["answer"]
+    assert answer["confidence"] == "medium"
+
+
 @pytest.mark.asyncio
 async def test_openai_async_answer_uses_native_text_fallback_before_deterministic() -> None:
     bundle = OpenAIProviderBundle(_config(), api_key="sk-test")
@@ -1855,6 +1914,31 @@ async def test_openai_async_answer_uses_native_text_fallback_before_deterministi
     )
 
     assert answer["answer"] == "Recovered async answer"
+    assert answer["confidence"] == "medium"
+
+
+@pytest.mark.asyncio
+async def test_openai_async_answer_invalid_native_text_fallback_uses_deterministic() -> None:
+    bundle = OpenAIProviderBundle(_config(), api_key="sk-test")
+
+    async def _parse_none(**kwargs: Any) -> None:
+        del kwargs
+        return None
+
+    async def _text_invalid(**kwargs: Any) -> str:
+        del kwargs
+        return '{"answer":"The evidence suggests something important'
+
+    bundle._aresponses_parse = _parse_none  # type: ignore[method-assign]
+    bundle._aresponses_text = _text_invalid  # type: ignore[method-assign]
+
+    answer = await bundle.aanswer_question(
+        question="What matters?",
+        evidence_papers=[{"paperId": "paper-1", "title": "Paper A"}],
+        answer_mode="qa",
+    )
+
+    assert "Paper A" in answer["answer"]
     assert answer["confidence"] == "medium"
 
 
@@ -2132,3 +2216,506 @@ async def test_nvidia_provider_async_normalizes_invalid_expansion_source(
 
     assert [item.variant for item in expansions] == ["retrieval agents graphs"]
     assert expansions[0].source == "speculative"
+
+
+@pytest.mark.asyncio
+async def test_langchain_bundle_supports_grounded_expansions_relevance_and_adequacy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = AnthropicProviderBundle(_config(provider="anthropic"), api_key="sk-ant-test")
+    planner = _SequenceModel(
+        structured_responses=[
+            _ExpansionPayload(
+                expansions=[
+                    _ExpansionItem(
+                        variant="retrieval grounded agents",
+                        source="from_retrieved_evidence",
+                        rationale="Missing grounded-retrieval angle.",
+                    )
+                ]
+            )
+        ],
+        text_responses=[],
+    )
+    synthesizer = _SequenceModel(
+        structured_responses=[
+            _RelevanceBatchSchema(
+                classifications=[
+                    _RelevanceClassificationItem(
+                        paperId="paper-1",
+                        classification="on_topic",
+                        rationale="The abstract directly addresses retrieval-grounded agents.",
+                    )
+                ]
+            ),
+            _AdequacyJudgmentSchema(
+                adequacy="succeeded",
+                reason="The verified sources cover the discovery question.",
+            ),
+        ],
+        text_responses=[],
+    )
+    monkeypatch.setattr(bundle, "_load_models", lambda: (planner, synthesizer))
+
+    grounded = await bundle.asuggest_grounded_expansions(
+        query="retrieval agents",
+        papers=[{"paperId": "paper-1", "title": "Retrieval agents", "abstract": "Grounded retrieval."}],
+        max_variants=2,
+    )
+    relevance = await bundle.aclassify_relevance_batch(
+        query="retrieval agents",
+        papers=[{"paperId": "paper-1", "title": "Retrieval agents", "abstract": "Grounded retrieval."}],
+    )
+    adequacy = await bundle.aassess_result_adequacy(
+        query="retrieval agents",
+        intent="discovery",
+        verified_sources=[{"sourceId": "paper-1", "title": "Retrieval agents"}],
+        evidence_gaps=[],
+    )
+
+    assert [item.variant for item in grounded] == ["retrieval grounded agents"]
+    assert relevance["paper-1"]["classification"] == "on_topic"
+    assert "retrieval-grounded agents" in relevance["paper-1"]["rationale"]
+    assert adequacy == {
+        "adequacy": "succeeded",
+        "reason": "The verified sources cover the discovery question.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_openai_bundle_supports_grounded_expansions_relevance_adequacy_and_revision() -> None:
+    bundle = OpenAIProviderBundle(_config(), api_key="sk-test")
+
+    async def _parse(**kwargs: Any) -> Any:
+        endpoint = kwargs["endpoint"]
+        if endpoint == "responses.parse:grounded_expansions":
+            return _ExpansionListSchema(
+                expansions=[
+                    _ExpansionSchema(
+                        variant="retrieval grounded agents",
+                        source="from_retrieved_evidence",
+                        rationale="Missing grounded-retrieval angle.",
+                    )
+                ]
+            )
+        if endpoint == "responses.parse:relevance_batch":
+            return _RelevanceBatchSchema(
+                classifications=[
+                    _RelevanceClassificationItem(
+                        paperId="paper-1",
+                        classification="on_topic",
+                        rationale="The abstract directly addresses retrieval-grounded agents.",
+                    )
+                ]
+            )
+        if endpoint == "responses.parse:adequacy_judgment":
+            return _AdequacyJudgmentSchema(
+                adequacy="partial",
+                reason="The verified sources are useful but still incomplete.",
+            )
+        if endpoint == "responses.parse:revise_strategy":
+            return _ReviseStrategySchema(
+                revisedQuery="retrieval grounded agents",
+                revisedIntent="review",
+                revisedProviders=["semantic_scholar", "openalex"],
+                rationale="Broaden to a review-oriented angle.",
+            )
+        raise AssertionError(f"Unexpected endpoint: {endpoint}")
+
+    bundle._aresponses_parse = _parse  # type: ignore[method-assign]
+
+    grounded = await bundle.asuggest_grounded_expansions(
+        query="retrieval agents",
+        papers=[{"paperId": "paper-1", "title": "Retrieval agents", "abstract": "Grounded retrieval."}],
+        max_variants=2,
+    )
+    relevance = await bundle.aclassify_relevance_batch(
+        query="retrieval agents",
+        papers=[{"paperId": "paper-1", "title": "Retrieval agents", "abstract": "Grounded retrieval."}],
+    )
+    adequacy = await bundle.aassess_result_adequacy(
+        query="retrieval agents",
+        intent="discovery",
+        verified_sources=[{"sourceId": "paper-1", "title": "Retrieval agents"}],
+        evidence_gaps=["Need broader evaluation evidence"],
+    )
+    revision = await bundle.arevise_search_strategy(
+        original_query="retrieval agents",
+        original_intent="discovery",
+        tried_providers=["semantic_scholar"],
+        result_summary="Only one paper was found.",
+    )
+
+    assert [item.variant for item in grounded] == ["retrieval grounded agents"]
+    assert relevance["paper-1"]["classification"] == "on_topic"
+    assert adequacy["adequacy"] == "partial"
+    assert revision["revisedIntent"] == "review"
+    assert revision["revisedProviders"] == ["semantic_scholar", "openalex"]
+
+
+@pytest.mark.asyncio
+async def test_langchain_bundle_falls_back_for_grounded_relevance_and_adequacy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = AnthropicProviderBundle(_config(provider="anthropic"), api_key="sk-ant-test")
+    planner = _SequenceModel(structured_responses=[], text_responses=[])
+    synthesizer = _SequenceModel(structured_responses=[], text_responses=[])
+
+    async def _structured_none(**kwargs: Any) -> None:
+        del kwargs
+        return None
+
+    monkeypatch.setattr(bundle, "_load_models", lambda: (planner, synthesizer))
+    monkeypatch.setattr(bundle, "_structured_async", _structured_none)
+    monkeypatch.setattr(bundle, "_structured_from_text_async", _structured_none)
+
+    grounded = await bundle.asuggest_grounded_expansions(
+        query="retrieval agents",
+        papers=[{"title": "Retrieval agents with citation graphs", "abstract": "Citation graphs improve retrieval."}],
+        max_variants=2,
+    )
+    relevance = await bundle.aclassify_relevance_batch(
+        query="retrieval agents",
+        papers=[{"paperId": "paper-1", "title": "Retrieval agents", "abstract": "Citation graphs."}],
+    )
+    adequacy = await bundle.aassess_result_adequacy(
+        query="retrieval agents",
+        intent="discovery",
+        verified_sources=[{"sourceId": "paper-1", "title": "Retrieval agents"}],
+        evidence_gaps=["Need more breadth"],
+    )
+
+    assert grounded
+    assert relevance["paper-1"]["classification"] == "weak_match"
+    assert adequacy["adequacy"] == "partial"
+
+
+@pytest.mark.asyncio
+async def test_openai_bundle_falls_back_for_grounded_relevance_and_adequacy() -> None:
+    bundle = OpenAIProviderBundle(_config(), api_key="sk-test")
+
+    async def _parse_none(**kwargs: Any) -> None:
+        del kwargs
+        return None
+
+    bundle._aresponses_parse = _parse_none  # type: ignore[method-assign]
+
+    grounded = await bundle.asuggest_grounded_expansions(
+        query="retrieval agents",
+        papers=[{"title": "Retrieval agents with citation graphs", "abstract": "Citation graphs improve retrieval."}],
+        max_variants=2,
+    )
+    relevance = await bundle.aclassify_relevance_batch(
+        query="retrieval agents",
+        papers=[{"paperId": "paper-1", "title": "Retrieval agents", "abstract": "Citation graphs."}],
+    )
+    adequacy = await bundle.aassess_result_adequacy(
+        query="retrieval agents",
+        intent="discovery",
+        verified_sources=[{"sourceId": "paper-1", "title": "Retrieval agents"}],
+        evidence_gaps=["Need more breadth"],
+    )
+
+    assert grounded
+    assert relevance["paper-1"]["classification"] == "weak_match"
+    assert adequacy["adequacy"] == "partial"
+
+
+def test_langchain_sync_methods_use_text_fallback_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    bundle = AnthropicProviderBundle(_config(provider="anthropic"), api_key="sk-ant-test")
+    long_answer = (
+        "The supplied paper supports a grounded summary of retrieval agents, and the answer remains tied to "
+        "the saved evidence rather than making unsupported general claims about the broader literature."
+    )
+
+    def _text_fallback(**kwargs: Any) -> Any:
+        endpoint = kwargs["endpoint"]
+        if endpoint == "text:planner":
+            return _PlannerResponseSchema(
+                intent="review",
+                querySpecificity="low",
+                ambiguityLevel="medium",
+                constraints=providers_module._PlannerConstraintsSchema(),
+                seedIdentifiers=[],
+                candidateConcepts=["agents"],
+                providerPlan=["semantic_scholar"],
+                queryType="review",
+                breadthEstimate=3,
+                searchAngles=["retrieval agents evidence"],
+                uncertaintyFlags=["multiple_competing_concepts"],
+                firstPassMode="mixed",
+                retrievalHypotheses=["comparative evidence"],
+                followUpMode="claim_check",
+            )
+        if endpoint == "text:expansions":
+            return _ExpansionListSchema(
+                expansions=[_ExpansionSchema(variant="retrieval agents evidence", source="speculative")]
+            )
+        if endpoint == "text:answer":
+            return _AnswerSchema(
+                answer=long_answer,
+                unsupportedAsks=[],
+                followUpQuestions=[],
+                confidence="high",
+                answerability="grounded",
+                selectedEvidenceIds=["paper-1"],
+                citedPaperIds=["paper-1"],
+                evidenceSummary="The saved paper supports retrieval-agent grounding.",
+                missingEvidenceDescription="",
+            )
+        raise AssertionError(f"Unexpected sync endpoint: {endpoint}")
+
+    monkeypatch.setattr(bundle, "_load_models", lambda: (object(), object()))
+    monkeypatch.setattr(bundle, "_structured_sync", lambda **kwargs: None)
+    monkeypatch.setattr(bundle, "_structured_from_text_sync", _text_fallback)
+
+    plan = bundle.plan_search(query="retrieval agents", mode="auto")
+    expansions = bundle.suggest_speculative_expansions(
+        query="retrieval agents",
+        evidence_texts=["retrieval agents with grounded evidence"],
+        max_variants=2,
+    )
+    answer = bundle.answer_question(
+        question="What matters?",
+        evidence_papers=[{"paperId": "paper-1", "title": "Paper A"}],
+        answer_mode="qa",
+    )
+
+    assert plan.follow_up_mode == "claim_check"
+    assert [item.variant for item in expansions] == ["retrieval agents evidence"]
+    assert answer["answer"] == long_answer
+
+
+@pytest.mark.asyncio
+async def test_langchain_async_methods_use_text_and_deterministic_fallback_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = AnthropicProviderBundle(_config(provider="anthropic"), api_key="sk-ant-test")
+    long_answer = (
+        "The supplied paper supports a grounded summary of retrieval agents, and the answer remains tied to "
+        "the saved evidence rather than making unsupported general claims about the broader literature."
+    )
+
+    async def _structured_none(**kwargs: Any) -> None:
+        del kwargs
+        return None
+
+    async def _text_fallback(**kwargs: Any) -> Any:
+        endpoint = kwargs["endpoint"]
+        if endpoint == "text:planner":
+            return _PlannerResponseSchema(
+                intent="review",
+                querySpecificity="low",
+                ambiguityLevel="medium",
+                constraints=providers_module._PlannerConstraintsSchema(),
+                seedIdentifiers=[],
+                candidateConcepts=["agents"],
+                providerPlan=["semantic_scholar"],
+                queryType="review",
+                breadthEstimate=3,
+                searchAngles=["retrieval agents evidence"],
+                uncertaintyFlags=["multiple_competing_concepts"],
+                firstPassMode="mixed",
+                retrievalHypotheses=["comparative evidence"],
+                followUpMode="claim_check",
+            )
+        if endpoint == "text:expansions":
+            return _ExpansionListSchema(
+                expansions=[_ExpansionSchema(variant="retrieval agents evidence", source="speculative")]
+            )
+        if endpoint == "text:grounded_expansions":
+            return _ExpansionListSchema(
+                expansions=[
+                    _ExpansionSchema(
+                        variant="retrieval grounded agents",
+                        source="from_retrieved_evidence",
+                        rationale="Missing grounded angle.",
+                    )
+                ]
+            )
+        if endpoint == "text:answer":
+            return _AnswerSchema(
+                answer=long_answer,
+                unsupportedAsks=[],
+                followUpQuestions=[],
+                confidence="high",
+                answerability="grounded",
+                selectedEvidenceIds=["paper-1"],
+                citedPaperIds=["paper-1"],
+                evidenceSummary="The saved paper supports retrieval-agent grounding.",
+                missingEvidenceDescription="",
+            )
+        raise AssertionError(f"Unexpected async endpoint: {endpoint}")
+
+    monkeypatch.setattr(bundle, "_load_models", lambda: (object(), object()))
+    monkeypatch.setattr(bundle, "_structured_async", _structured_none)
+    monkeypatch.setattr(bundle, "_structured_from_text_async", _text_fallback)
+
+    plan = await bundle.aplan_search(query="retrieval agents", mode="auto")
+    expansions = await bundle.asuggest_speculative_expansions(
+        query="retrieval agents",
+        evidence_texts=["retrieval agents with grounded evidence"],
+        max_variants=2,
+    )
+    grounded = await bundle.asuggest_grounded_expansions(
+        query="retrieval agents",
+        papers=[{"paperId": "paper-1", "title": "Retrieval agents", "abstract": "Grounded retrieval."}],
+        max_variants=2,
+    )
+    answer = await bundle.aanswer_question(
+        question="What matters?",
+        evidence_papers=[{"paperId": "paper-1", "title": "Paper A"}],
+        answer_mode="qa",
+    )
+    relevance = await bundle.aclassify_relevance_batch(
+        query="retrieval agents",
+        papers=[{"paperId": "paper-1", "title": "Retrieval agents", "abstract": "Grounded retrieval."}],
+    )
+    adequacy = await bundle.aassess_result_adequacy(
+        query="retrieval agents",
+        intent="discovery",
+        verified_sources=[{"sourceId": "paper-1", "title": "Retrieval agents"}],
+        evidence_gaps=["Need more breadth"],
+    )
+
+    assert plan.query_type == "review"
+    assert [item.variant for item in expansions] == ["retrieval agents evidence"]
+    assert [item.variant for item in grounded] == ["retrieval grounded agents"]
+    assert answer["answer"] == long_answer
+    assert relevance["paper-1"]["classification"] == "weak_match"
+    assert adequacy["adequacy"] == "partial"
+
+
+def test_langchain_theme_methods_fallback_to_deterministic_when_text_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = AnthropicProviderBundle(_config(provider="anthropic"), api_key="sk-ant-test")
+    monkeypatch.setattr(bundle, "_load_models", lambda: (object(), object()))
+    monkeypatch.setattr(bundle, "_text_sync", lambda **kwargs: "")
+
+    label = bundle.label_theme(seed_terms=["retrieval", "grounding"], papers=[])
+    summary = bundle.summarize_theme(title="Retrieval", papers=[])
+
+    assert label == "Retrieval / Grounding"
+    assert "Retrieval" in summary
+
+
+@pytest.mark.asyncio
+async def test_langchain_async_theme_methods_fallback_to_deterministic_when_text_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = AnthropicProviderBundle(_config(provider="anthropic"), api_key="sk-ant-test")
+
+    async def _empty_text(**kwargs: Any) -> str:
+        del kwargs
+        return ""
+
+    monkeypatch.setattr(bundle, "_load_models", lambda: (object(), object()))
+    monkeypatch.setattr(bundle, "_text_async", _empty_text)
+
+    label = await bundle.alabel_theme(seed_terms=["retrieval", "grounding"], papers=[])
+    summary = await bundle.asummarize_theme(title="Retrieval", papers=[])
+
+    assert label == "Retrieval / Grounding"
+    assert "Retrieval" in summary
+
+
+def test_langchain_sync_expansion_methods_fallback_to_deterministic_when_both_structured_paths_are_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = AnthropicProviderBundle(_config(provider="anthropic"), api_key="sk-ant-test")
+    monkeypatch.setattr(bundle, "_load_models", lambda: (object(), object()))
+    monkeypatch.setattr(bundle, "_structured_sync", lambda **kwargs: None)
+    monkeypatch.setattr(bundle, "_structured_from_text_sync", lambda **kwargs: None)
+
+    expansions = bundle.suggest_speculative_expansions(
+        query="retrieval agents",
+        evidence_texts=["retrieval agents with citation graphs"],
+        max_variants=2,
+    )
+
+    assert expansions
+
+
+@pytest.mark.asyncio
+async def test_langchain_async_grounded_expansion_falls_back_to_deterministic_when_text_paths_are_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = AnthropicProviderBundle(_config(provider="anthropic"), api_key="sk-ant-test")
+
+    async def _none(**kwargs: Any) -> None:
+        del kwargs
+        return None
+
+    monkeypatch.setattr(bundle, "_load_models", lambda: (object(), object()))
+    monkeypatch.setattr(bundle, "_structured_async", _none)
+    monkeypatch.setattr(bundle, "_structured_from_text_async", _none)
+
+    grounded = await bundle.asuggest_grounded_expansions(
+        query="retrieval agents",
+        papers=[{"title": "Retrieval agents with citation graphs", "abstract": "Citation graphs improve retrieval."}],
+        max_variants=2,
+    )
+
+    assert grounded
+
+
+def test_langchain_sync_methods_fallback_on_exceptions(monkeypatch: pytest.MonkeyPatch) -> None:
+    bundle = AnthropicProviderBundle(_config(provider="anthropic"), api_key="sk-ant-test")
+
+    def _raise(**kwargs: Any) -> Any:
+        del kwargs
+        raise RuntimeError("provider boom")
+
+    monkeypatch.setattr(bundle, "_load_models", lambda: (object(), object()))
+    monkeypatch.setattr(bundle, "_text_sync", _raise)
+    monkeypatch.setattr(bundle, "_structured_sync", _raise)
+
+    label = bundle.label_theme(seed_terms=["retrieval", "grounding"], papers=[])
+    summary = bundle.summarize_theme(title="Retrieval", papers=[])
+    answer = bundle.answer_question(
+        question="What matters?",
+        evidence_papers=[{"title": "Paper A"}],
+        answer_mode="qa",
+    )
+
+    assert label == "Retrieval / Grounding"
+    assert "Retrieval" in summary
+    assert "Paper A" in answer["answer"]
+
+
+@pytest.mark.asyncio
+async def test_langchain_async_methods_fallback_on_exceptions(monkeypatch: pytest.MonkeyPatch) -> None:
+    bundle = AnthropicProviderBundle(_config(provider="anthropic"), api_key="sk-ant-test")
+
+    async def _raise(**kwargs: Any) -> Any:
+        del kwargs
+        raise RuntimeError("provider boom")
+
+    monkeypatch.setattr(bundle, "_load_models", lambda: (object(), object()))
+    monkeypatch.setattr(bundle, "_text_async", _raise)
+    monkeypatch.setattr(bundle, "_structured_async", _raise)
+
+    label = await bundle.alabel_theme(seed_terms=["retrieval", "grounding"], papers=[])
+    summary = await bundle.asummarize_theme(title="Retrieval", papers=[])
+    expansions = await bundle.asuggest_speculative_expansions(
+        query="retrieval agents",
+        evidence_texts=["retrieval agents with citation graphs"],
+        max_variants=2,
+    )
+    grounded = await bundle.asuggest_grounded_expansions(
+        query="retrieval agents",
+        papers=[{"title": "Retrieval agents with citation graphs", "abstract": "Citation graphs improve retrieval."}],
+        max_variants=2,
+    )
+    answer = await bundle.aanswer_question(
+        question="What matters?",
+        evidence_papers=[{"title": "Paper A"}],
+        answer_mode="qa",
+    )
+
+    assert label == "Retrieval / Grounding"
+    assert "Retrieval" in summary
+    assert expansions
+    assert grounded
+    assert "Paper A" in answer["answer"]

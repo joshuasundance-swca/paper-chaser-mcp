@@ -60,6 +60,29 @@
       },
       "holdoutSeedFile": "topic-seeds.holdout.sample.txt"
     },
+    "environmental-science-slice": {
+      "description": "Environmental-science remediation slice with review-gated autopilot handoff and environmental prompt emphasis.",
+      "generation": {
+        "seedPreset": "environmental-consulting",
+        "taxonomyPreset": "environmental-consulting",
+        "latencyProfile": "balanced",
+        "aiPruneMode": "rewrite",
+        "aiPruneBelowScore": 35.0,
+        "domainBalanceMode": "round-robin",
+        "domainBalanceMaxShare": 0.5,
+        "minQualityScore": 30.0,
+        "maxTopics": 18,
+        "includeOriginal": true,
+        "emitFollowUp": true
+      },
+      "workflow": {
+        "reviewMode": "ui",
+        "autopilotPolicy": "review",
+        "matrixPreset": ["cross-provider-best"],
+        "launchMatrixViewer": false
+      },
+      "holdoutSeedFile": "topic-seeds.holdout.sample.txt"
+    },
     "single-seed-exploratory-review": {
       "description": "Single-seed exploratory bootstrap with review-gated handoff and relaxed safe thresholds for narrow runs.",
       "generation": {

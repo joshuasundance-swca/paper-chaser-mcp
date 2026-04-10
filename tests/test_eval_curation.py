@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from paper_chaser_mcp.agentic.workspace import WorkspaceRegistry
@@ -198,3 +199,26 @@ def test_build_batch_summary_and_ledger_rows(tmp_path: Path) -> None:
     csv_text = ledger_path.read_text(encoding="utf-8")
     assert "batchId,runId,scenarioName,tool" in csv_text
     assert "evt_planner_001" in csv_text
+
+
+def test_environmental_science_eval_seed_fixture_covers_planner_synthesis_and_provenance() -> None:
+    seed_path = Path(__file__).resolve().parent / "fixtures" / "evals" / "environmental_science.seed.jsonl"
+    rows = [json.loads(line) for line in seed_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+    task_families = {row["meta"]["task_family"] for row in rows}
+
+    assert {"planner", "synthesis", "provenance"}.issubset(task_families)
+    assert any("deterministic" in json.dumps(row).lower() for row in rows)
+    assert any("desert tortoise" in json.dumps(row).lower() for row in rows)
+    assert any("pfas" in json.dumps(row).lower() for row in rows)
+
+
+def test_eval_autopilot_profiles_include_environmental_science_slice() -> None:
+    profile_path = Path(__file__).resolve().parent / "fixtures" / "evals" / "eval-autopilot-profiles.sample.json"
+    payload = json.loads(profile_path.read_text(encoding="utf-8"))
+    profile = payload["profiles"]["environmental-science-slice"]
+
+    assert profile["generation"]["seedPreset"] == "environmental-consulting"
+    assert profile["generation"]["emitFollowUp"] is True
+    assert profile["workflow"]["autopilotPolicy"] == "review"
+    assert "cross-provider-best" in profile["workflow"]["matrixPreset"]

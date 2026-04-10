@@ -1,3 +1,4 @@
+import types
 from typing import Any
 
 import pytest
@@ -59,6 +60,67 @@ def _install_recording_enrichment(
     monkeypatch.setattr(server, "openalex_client", openalex)
     monkeypatch.setattr(server, "enrichment_service", service)
     return crossref, unpaywall, openalex
+
+
+def test_guided_sources_from_fr_documents_handles_dict_and_object_inputs() -> None:
+    object_doc = types.SimpleNamespace(
+        title="Endangered Species Status for the Northern Long-Eared Bat",
+        htmlUrl="https://example.com/fr/html",
+        pdfUrl="https://example.com/fr/pdf",
+        documentNumber="2022-25998",
+        documentType="Rule",
+        publicationDate="2022-11-30",
+        citation="87 FR 73488",
+        agencies=[types.SimpleNamespace(name="Fish and Wildlife Service")],
+        cfrReferences=["50 CFR 17.11"],
+        abstract="Primary-source rule text.",
+    )
+    dict_doc = {
+        "title": "Critical Habitat Designation",
+        "bodyHtmlUrl": "https://example.com/fr/habitat",
+        "documentNumber": "2023-00001",
+        "documentType": "Notice",
+        "publicationDate": "2023-01-15",
+        "citation": "88 FR 1234",
+        "agencies": [{"name": "National Marine Fisheries Service"}],
+        "cfrReferences": ["50 CFR 226.205"],
+    }
+
+    sources = dispatch_module._guided_sources_from_fr_documents(
+        "northern long-eared bat final rule",
+        [object_doc, dict_doc],
+    )
+
+    assert len(sources) == 2
+    assert sources[0]["sourceType"] == "federal_register_rule"
+    assert sources[0]["verificationStatus"] == "verified_primary_source"
+    assert sources[0]["accessStatus"] == "full_text_verified"
+    assert "Fish and Wildlife Service" in str(sources[0]["note"])
+    assert "CFR: 50 CFR 17.11" in str(sources[0]["note"])
+    assert sources[1]["sourceType"] == "regulatory_document"
+    assert sources[1]["citationText"] == "88 FR 1234"
+
+
+def test_guided_machine_failure_payload_returns_safe_machine_readable_state() -> None:
+    payload = dispatch_module._guided_machine_failure_payload(
+        search_session_id="ssn-machine-failure",
+        error=ValueError("smart payload exploded"),
+        normalization={
+            "rawQuery": "wetland restoration",
+            "normalizedQuery": "wetland restoration climate resilience",
+            "repairedInputs": ["focus"],
+        },
+        execution_provenance={"executionMode": "guided_research", "passesRun": 1},
+    )
+
+    assert payload["status"] == "partial"
+    assert payload["searchSessionId"] == "ssn-machine-failure"
+    assert payload["machineFailure"]["category"] == "smart_runtime_structural_failure"
+    assert payload["machineFailure"]["errorType"] == "ValueError"
+    assert payload["failureSummary"]["outcome"] == "total_failure"
+    assert payload["nextActions"]
+    assert "research" in str(payload["nextActions"][0]).lower()
+    assert payload["executionProvenance"]["executionMode"] == "guided_research"
 
 
 @pytest.mark.asyncio
@@ -154,6 +216,118 @@ async def test_guided_research_uses_server_owned_deep_profile_and_ignores_client
     assert captured_calls
     assert (captured_calls[0].get("latencyProfile") or captured_calls[0].get("latency_profile")) == "deep"
     assert payload["status"] in {"succeeded", "partial"}
+
+
+@pytest.mark.asyncio
+async def test_guided_research_routes_broad_year_bearing_query_through_planner_not_reference_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Broad topical queries with an appended year should reach the planner, not the citation-repair path.
+
+    The dispatch layer should only short-circuit to resolve_reference for unambiguous hard identifiers
+    (DOI, arXiv, URL). Heuristic-only signals (title-like, year-bearing) must not override a live planner.
+    """
+    planner_calls: list[dict[str, Any]] = []
+
+    class _FakeRuntime:
+        async def search_papers_smart(self, **kwargs: Any) -> dict[str, Any]:
+            planner_calls.append(kwargs)
+            return {
+                "searchSessionId": "ssn-broad-routing",
+                "strategyMetadata": {"intent": "discovery"},
+                "structuredSources": [],
+                "candidateLeads": [],
+                "evidenceGaps": [],
+                "coverageSummary": {"searchMode": "smart_literature_review"},
+                "failureSummary": None,
+                "clarification": None,
+            }
+
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    for query in [
+        "nature-based solutions for urban stormwater management 2022",
+        "microplastic pollution monitoring in freshwater ecosystems 2022 2023",
+        "ecotoxicology of pharmaceuticals in aquatic environments 2023",
+    ]:
+        planner_calls.clear()
+        payload = _payload(await server.call_tool("research", {"query": query}))
+        assert planner_calls, f"Expected planner to be called for broad query: {query!r}"
+        assert payload.get("executionProvenance", {}).get("executionMode") != "reference_resolution", (
+            f"Broad query {query!r} was incorrectly routed to reference_resolution"
+        )
+
+
+@pytest.mark.asyncio
+async def test_guided_research_adequacy_can_promote_partial_to_succeeded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _AdequacyBundle:
+        async def aassess_result_adequacy(self, **kwargs: Any) -> dict[str, str]:
+            del kwargs
+            return {
+                "adequacy": "succeeded",
+                "reason": "The verified sources already cover the core discovery question.",
+            }
+
+    class _FakeRuntime:
+        async def search_papers_smart(self, **kwargs: Any) -> dict[str, Any]:
+            del kwargs
+            return {
+                "searchSessionId": "ssn-adequacy-promotion",
+                "strategyMetadata": {"intent": "discovery", "providersUsed": ["semantic_scholar"]},
+                "structuredSources": [
+                    {
+                        "sourceId": "paper-1",
+                        "title": "Wetland restoration improves coastal resilience",
+                        "provider": "semantic_scholar",
+                        "sourceType": "scholarly_article",
+                        "verificationStatus": "verified_metadata",
+                        "accessStatus": "abstract_only",
+                        "topicalRelevance": "on_topic",
+                        "confidence": "high",
+                        "isPrimarySource": False,
+                    },
+                    {
+                        "sourceId": "paper-2",
+                        "title": "Marsh restoration and storm buffering",
+                        "provider": "openalex",
+                        "sourceType": "scholarly_article",
+                        "verificationStatus": "verified_metadata",
+                        "accessStatus": "abstract_only",
+                        "topicalRelevance": "on_topic",
+                        "confidence": "high",
+                        "isPrimarySource": False,
+                    },
+                    {
+                        "sourceId": "paper-3",
+                        "title": "Wetland resilience outcomes after restoration",
+                        "provider": "semantic_scholar",
+                        "sourceType": "scholarly_article",
+                        "verificationStatus": "verified_metadata",
+                        "accessStatus": "abstract_only",
+                        "topicalRelevance": "on_topic",
+                        "confidence": "high",
+                        "isPrimarySource": False,
+                    },
+                ],
+                "candidateLeads": [],
+                "evidenceGaps": [],
+                "coverageSummary": {"searchMode": "smart_literature_review"},
+                "failureSummary": {"outcome": "partial_failure", "whatFailed": "One provider timed out."},
+                "clarification": None,
+            }
+
+        def _provider_bundle_for_profile(self, latency_profile: str) -> _AdequacyBundle:
+            assert latency_profile == "deep"
+            return _AdequacyBundle()
+
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(await server.call_tool("research", {"query": "wetland restoration climate resilience"}))
+
+    assert payload["status"] == "succeeded"
+    assert any("Adequacy assessment:" in gap for gap in payload["evidenceGaps"])
 
 
 @pytest.mark.asyncio
@@ -1769,6 +1943,271 @@ async def test_follow_up_research_passes_server_owned_latency_profile_to_ask_res
     assert runtime.calls[0]["latency_profile"] == server.settings.guided_follow_up_latency_profile
     assert payload["executionProvenance"]["latencyProfileApplied"] == server.settings.guided_follow_up_latency_profile
     assert payload["answerStatus"] == "answered"
+
+
+@pytest.mark.asyncio
+async def test_follow_up_research_surfaces_deterministic_synthesis_degradation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fallback_warning = (
+        "deterministic_synthesis_fallback: follow-up synthesis used a deterministic fallback; "
+        "treat the answer as a lightweight summary."
+    )
+
+    isolated_registry = type(server.workspace_registry)()
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-follow-up-det",
+        query="Attention Is All You Need",
+        payload={"sources": [{"sourceId": "paper-a", "title": "Attention is All You Need"}]},
+    )
+
+    class _FakeRuntime:
+        async def ask_result_set(self, **kwargs: Any) -> dict[str, Any]:
+            return {
+                "answerStatus": "answered",
+                "answer": "The saved result set most directly answers this through Attention Is All You Need.",
+                "providerUsed": "deterministic",
+                "degradationReason": "deterministic_synthesis_fallback",
+                "agentHints": {
+                    "nextToolCandidates": ["inspect_source"],
+                    "whyThisNextStep": "Inspect the main source.",
+                    "safeRetry": "Retry with a model-backed provider.",
+                    "warnings": [fallback_warning],
+                },
+                "evidence": [
+                    {
+                        "evidenceId": "paper-a",
+                        "paper": {"paperId": "paper-a", "title": "Attention is All You Need"},
+                        "excerpt": "Transformer paper.",
+                        "whyRelevant": "Matches the saved source.",
+                        "relevanceScore": 0.9,
+                    }
+                ],
+                "unsupportedAsks": [],
+                "followUpQuestions": [],
+                "structuredSources": [
+                    {
+                        "sourceId": "paper-a",
+                        "title": "Attention is All You Need",
+                        "provider": "semantic_scholar",
+                        "sourceType": "scholarly_article",
+                        "verificationStatus": "verified_metadata",
+                        "accessStatus": "abstract_only",
+                        "topicalRelevance": "on_topic",
+                        "confidence": "high",
+                        "isPrimarySource": False,
+                    }
+                ],
+                "candidateLeads": [],
+                "evidenceGaps": [fallback_warning],
+                "coverageSummary": {
+                    "providersAttempted": ["semantic_scholar"],
+                    "providersSucceeded": ["semantic_scholar"],
+                    "providersFailed": [],
+                    "providersZeroResults": [],
+                    "searchMode": "grounded_follow_up",
+                },
+                "failureSummary": None,
+            }
+
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+    original_registry = server.workspace_registry
+    server.workspace_registry = isolated_registry
+    try:
+        payload = _payload(
+            await server.call_tool(
+                "follow_up_research",
+                {"searchSessionId": "ssn-follow-up-det", "question": "What does the saved session support?"},
+            )
+        )
+    finally:
+        server.workspace_registry = original_registry
+
+    assert payload["answerStatus"] == "answered"
+    assert payload["providerUsed"] == "deterministic"
+    assert payload["degradationReason"] == "deterministic_synthesis_fallback"
+    assert payload["answerability"] == "limited"
+    assert any("deterministic_synthesis_fallback" in gap for gap in payload["evidenceGaps"])
+    assert payload["confidenceSignals"]["trustRevisionReason"] == "deterministic_synthesis_fallback"
+
+
+def test_answer_follow_up_from_session_state_only_answers_metadata_safe_modes() -> None:
+    session_state = {
+        "searchSessionId": "ssn-session",
+        "query": "PFAS remediation in groundwater",
+        "intent": "discovery",
+        "verifiedFindings": [],
+        "sources": [
+            {
+                "sourceId": "paper-1",
+                "title": "PFAS adsorption review",
+                "provider": "openalex",
+                "verificationStatus": "verified_metadata",
+                "topicalRelevance": "on_topic",
+            }
+        ],
+        "unverifiedLeads": [],
+        "evidenceGaps": ["Direct comparison evidence is incomplete."],
+        "trustSummary": {"verifiedSourceCount": 1, "onTopicSourceCount": 1, "weakMatchCount": 0, "offTopicCount": 0},
+        "coverage": {"providersAttempted": ["openalex"]},
+        "failureSummary": None,
+        "resultMeaning": "Saved session is still usable source by source.",
+        "nextActions": ["Inspect the saved source."],
+    }
+
+    assert (
+        dispatch_module._answer_follow_up_from_session_state(
+            question="Compare adsorption and membranes for PFAS removal.",
+            session_state=session_state,
+            response_mode="comparison",
+        )
+        is None
+    )
+
+    metadata_answer = dispatch_module._answer_follow_up_from_session_state(
+        question="Which providers were searched and what were the main gaps?",
+        session_state=session_state,
+        response_mode="metadata",
+    )
+
+    assert metadata_answer is not None
+    assert metadata_answer["executionProvenance"]["executionMode"] == "session_introspection"
+
+
+@pytest.mark.asyncio
+async def test_follow_up_research_surfaces_evidence_use_plan_for_comparison_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    isolated_registry = type(server.workspace_registry)()
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-follow-up-plan",
+        query="PFAS remediation in groundwater",
+        payload={"sources": [{"sourceId": "paper-a", "title": "PFAS adsorption review"}]},
+    )
+
+    class _FakeRuntime:
+        async def ask_result_set(self, **kwargs: Any) -> dict[str, Any]:
+            del kwargs
+            return {
+                "answerStatus": "insufficient_evidence",
+                "answer": None,
+                "providerUsed": "openai",
+                "degradationReason": None,
+                "evidenceUsePlan": {
+                    "answerSubtype": "comparison",
+                    "directlyResponsiveIds": ["paper-a"],
+                    "unsupportedComponents": [
+                        "Comparison requested, but fewer than two directly responsive sources were retrieved."
+                    ],
+                    "retrievalSufficiency": "insufficient",
+                    "confidence": "low",
+                },
+                "evidence": [
+                    {
+                        "evidenceId": "paper-a",
+                        "paper": {"paperId": "paper-a", "title": "PFAS adsorption review"},
+                        "excerpt": "PFAS adsorption review.",
+                        "whyRelevant": "Matches the saved source.",
+                        "relevanceScore": 0.62,
+                    }
+                ],
+                "unsupportedAsks": [],
+                "followUpQuestions": [],
+                "structuredSources": [
+                    {
+                        "sourceId": "paper-a",
+                        "title": "PFAS adsorption review",
+                        "provider": "openalex",
+                        "sourceType": "scholarly_article",
+                        "verificationStatus": "verified_metadata",
+                        "accessStatus": "abstract_only",
+                        "topicalRelevance": "on_topic",
+                        "confidence": "medium",
+                        "isPrimarySource": False,
+                    }
+                ],
+                "candidateLeads": [],
+                "evidenceGaps": ["Evidence use plan: insufficient direct comparison support."],
+                "coverageSummary": {
+                    "providersAttempted": ["openalex"],
+                    "providersSucceeded": ["openalex"],
+                    "providersFailed": [],
+                    "providersZeroResults": [],
+                    "searchMode": "grounded_follow_up",
+                },
+                "failureSummary": None,
+            }
+
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+    original_registry = server.workspace_registry
+    server.workspace_registry = isolated_registry
+    try:
+        payload = _payload(
+            await server.call_tool(
+                "follow_up_research",
+                {
+                    "searchSessionId": "ssn-follow-up-plan",
+                    "question": "Compare adsorption and membranes for PFAS removal.",
+                },
+            )
+        )
+    finally:
+        server.workspace_registry = original_registry
+
+    assert payload["answerStatus"] == "insufficient_evidence"
+    assert payload["evidenceUsePlan"]["answerSubtype"] == "comparison"
+    assert payload["confidenceSignals"]["evidenceUsePlanApplied"] is True
+
+
+@pytest.mark.asyncio
+async def test_inspect_source_surfaces_confidence_signals_and_scope_reason() -> None:
+    isolated_registry = type(server.workspace_registry)()
+    isolated_registry.save_result_set(
+        source_tool="research",
+        search_session_id="ssn-source-audit",
+        query="desert tortoise recovery planning",
+        payload={
+            "query": "desert tortoise recovery planning",
+            "intent": "regulatory",
+            "sources": [
+                {
+                    "sourceId": "fr-weak",
+                    "title": "Endangered and Threatened Wildlife and Plants; General Notice",
+                    "provider": "federal_register",
+                    "sourceType": "regulatory_document",
+                    "verificationStatus": "verified_primary_source",
+                    "accessStatus": "full_text_verified",
+                    "topicalRelevance": "weak_match",
+                    "whyClassifiedAsWeakMatch": (
+                        "Authoritative notice, but it does not specifically address the desert "
+                        "tortoise dossier or recovery plan."
+                    ),
+                    "canonicalUrl": "https://example.com/fr-weak",
+                    "note": "Authoritative notice, but not species-specific enough for desert tortoise planning.",
+                    "isPrimarySource": True,
+                }
+            ],
+        },
+    )
+
+    original_registry = server.workspace_registry
+    server.workspace_registry = isolated_registry
+    try:
+        payload = _payload(
+            await server.call_tool(
+                "inspect_source",
+                {"searchSessionId": "ssn-source-audit", "sourceId": "fr-weak"},
+            )
+        )
+    finally:
+        server.workspace_registry = original_registry
+
+    assert payload["source"]["whyClassifiedAsWeakMatch"].startswith("Authoritative notice")
+    assert payload["confidenceSignals"]["sourceScopeLabel"] == "authoritative_but_scope_limited"
+    assert payload["confidenceSignals"]["sourceScopeReason"].startswith("Authoritative notice")
+    assert payload["directReadRecommendations"][0].startswith("This source is only a weak match")
 
 
 @pytest.mark.asyncio

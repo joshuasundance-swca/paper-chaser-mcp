@@ -18,6 +18,7 @@ def _compact_source(source: dict[str, Any]) -> dict[str, Any]:
         "verificationStatus": source.get("verificationStatus"),
         "accessStatus": source.get("accessStatus"),
         "confidence": source.get("confidence"),
+        "whyClassifiedAsWeakMatch": source.get("whyClassifiedAsWeakMatch"),
     }
 
 
@@ -221,6 +222,10 @@ def _extract_telemetry(result: dict[str, Any]) -> dict[str, Any]:
         "ambiguityLevel": strategy_metadata.get("ambiguityLevel") or routing_summary.get("ambiguityLevel"),
         "answerability": result.get("answerability"),
     }
+    explicit_confidence_signals = _first_dict(result.get("confidenceSignals"))
+    confidence_signals.update(
+        {key: value for key, value in explicit_confidence_signals.items() if value not in (None, "", [], {})}
+    )
 
     return {
         "providerOutcomes": provider_outcomes,
@@ -320,6 +325,7 @@ def build_eval_capture_payload(
                 "stageTimingsMs": telemetry["stageTimingsMs"],
                 "providerOutcomes": telemetry["providerOutcomes"],
                 "providerPathwaySummary": telemetry["providerPathwaySummary"],
+                "confidenceSignals": telemetry["confidenceSignals"],
                 "directReadRecommendations": _compact_recommendations(result.get("directReadRecommendations")),
                 "heuristicSummary": heuristic_summary,
             },

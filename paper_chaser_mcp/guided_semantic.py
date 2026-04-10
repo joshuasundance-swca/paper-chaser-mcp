@@ -269,6 +269,8 @@ def classify_answerability(
     """Map source state into the simplified answerability ladder."""
 
     if status in {"succeeded", "answered"} and evidence:
+        if any("deterministic_synthesis_fallback" in str(gap) for gap in evidence_gaps):
+            return "limited"
         return "grounded"
     if evidence or leads or evidence_gaps:
         return "limited"

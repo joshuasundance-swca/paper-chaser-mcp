@@ -105,8 +105,10 @@ follow_up_research(searchSessionId="...", question="What evaluation tradeoffs sh
 1. Use `inspect_source` with `searchSessionId` and `sourceId` from guided
    outputs.
 2. Review provenance and trust state before citing.
-3. Follow direct-read recommendations for primary sources.
-4. If `searchSessionId` is omitted and more than one compatible session exists, provide it explicitly instead of expecting newest-session rebinding.
+3. Use `whyClassifiedAsWeakMatch` plus `confidenceSignals.sourceScopeLabel` /
+  `confidenceSignals.sourceScopeReason` to distinguish authoritative but scope-limited records from directly responsive ones.
+4. Follow direct-read recommendations for primary sources.
+5. If `searchSessionId` is omitted and more than one compatible session exists, provide it explicitly instead of expecting newest-session rebinding.
 
 **Success signals**
 

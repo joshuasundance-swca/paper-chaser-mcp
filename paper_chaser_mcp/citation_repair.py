@@ -101,6 +101,10 @@ GENERIC_TITLE_WORDS = {
 logger = logging.getLogger("paper-chaser-mcp.citation-repair")
 
 
+def _venue_hint_in_text(text: str, venue: str) -> bool:
+    return bool(re.search(rf"(?<![A-Za-z0-9-]){re.escape(venue)}(?![A-Za-z0-9-])", text))
+
+
 def _normalize_identifier_for_semantic_scholar(identifier: str, identifier_type: str | None) -> str:
     normalized = normalize_citation_text(identifier)
     if not normalized:
@@ -231,7 +235,7 @@ def looks_like_citation_query(value: str) -> bool:
             "show ",
         )
     )
-    word_count = len(WORD_RE.findall(normalized))
+    word_count = len(WORD_RE.findall(normalized)) + len(YEAR_RE.findall(normalized))
     if looks_like_paper_identifier(normalized):
         return True
     if QUOTED_RE.search(normalized):
@@ -239,10 +243,18 @@ def looks_like_citation_query(value: str) -> bool:
     if "et al" in lowered:
         return True
     if YEAR_RE.search(normalized) and not question_like and word_count <= 18:
+        hyphenated_count = len(re.findall(r"\b[A-Za-z0-9]+-[A-Za-z0-9]+\b", normalized))
+        has_bibliographic_cue = (
+            "," in normalized or "et al" in lowered or any(_venue_hint_in_text(lowered, venue) for venue in VENUE_HINTS)
+        )
+        if word_count >= 6 and not has_bibliographic_cue:
+            return False
+        if hyphenated_count >= 2 and not has_bibliographic_cue:
+            return False
         return True
     if PAGES_RE.search(normalized):
         return True
-    if any(venue in lowered for venue in VENUE_HINTS):
+    if any(_venue_hint_in_text(lowered, venue) for venue in VENUE_HINTS):
         return True
     if "," in normalized and not question_like and YEAR_RE.search(normalized):
         return True
@@ -863,12 +875,12 @@ def _ranked_candidates(
     return sorted(
         candidate_map.values(),
         key=lambda item: (
-            item.score,
-            _publication_preference_score(item.paper),
-            item.author_overlap,
-            item.title_similarity,
+            -item.score,
+            item.year_delta if item.year_delta is not None else 999,
+            -item.author_overlap,
+            -_publication_preference_score(item.paper),
+            -item.title_similarity,
         ),
-        reverse=True,
     )[:max_candidates]
 
 
@@ -1095,6 +1107,10 @@ def _rank_candidate(
     source_confidence = _source_confidence(resolution_strategy)
     publication_preference = _publication_preference_score(paper)
     upstream_confidence = str(paper.get("matchConfidence") or "").lower()
+    year_conflict = parsed.year is not None and year_delta is not None and year_delta > 1
+    author_conflict = bool(parsed.author_surnames) and author_overlap == 0
+    venue_conflict = bool(parsed.venue_hints) and not venue_overlap
+    key_conflict_count = sum(1 for conflict in (author_conflict, year_conflict, venue_conflict) if conflict)
 
     score = 0.0
     if identifier_hit:
@@ -1113,10 +1129,16 @@ def _rank_candidate(
         score += min(snippet_alignment, 1.0) * 0.05
     score += source_confidence * 0.05
     score += publication_preference * 0.03
+    upstream_bonus = 0.0
     if upstream_confidence == "high":
-        score += 0.25
+        upstream_bonus = 0.25
     elif upstream_confidence == "medium":
-        score += 0.12
+        upstream_bonus = 0.12
+    if key_conflict_count >= 2:
+        upstream_bonus = min(upstream_bonus, 0.05)
+    elif year_conflict:
+        upstream_bonus = min(upstream_bonus, 0.08)
+    score += upstream_bonus
     score = max(0.0, min(score, 1.0))
 
     matched_fields: list[str] = []
@@ -1135,7 +1157,7 @@ def _rank_candidate(
         conflicting_fields.append("author")
     if year_delta == 0:
         matched_fields.append("year")
-    elif parsed.year is not None and year_delta is not None and year_delta > 1:
+    elif year_conflict:
         conflicting_fields.append("year")
     if venue_overlap:
         matched_fields.append("venue")
@@ -1277,7 +1299,7 @@ def _extract_venue_hints(text: str, *, venue_hint: str | None) -> list[str]:
         hints.append(normalize_citation_text(venue_hint))
     lowered = text.lower()
     for venue in VENUE_HINTS:
-        if venue in lowered:
+        if _venue_hint_in_text(lowered, venue):
             hints.append(venue)
     return _dedupe_strings(hints)
 

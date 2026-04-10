@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from .config import AgenticConfig
-from .models import ExpansionCandidate, PlannerDecision
+from .models import (
+    RETRIEVAL_MODE_BROAD,
+    RETRIEVAL_MODE_MIXED,
+    RETRIEVAL_MODE_TARGETED,
+    ExpansionCandidate,
+    PlannerDecision,
+)
 from .provider_helpers import (
     COMMON_QUERY_WORDS,
     GAP_QUESTION_MARKERS,
@@ -141,6 +147,31 @@ class ModelProviderBundle:
             max_variants=max_variants,
         )
 
+    def suggest_grounded_expansions(
+        self,
+        *,
+        query: str,
+        papers: list[dict[str, Any]],
+        max_variants: int,
+    ) -> list[ExpansionCandidate]:
+        return []
+
+    async def asuggest_grounded_expansions(
+        self,
+        *,
+        query: str,
+        papers: list[dict[str, Any]],
+        max_variants: int,
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+    ) -> list[ExpansionCandidate]:
+        del request_outcomes, request_id
+        return self.suggest_grounded_expansions(
+            query=query,
+            papers=papers,
+            max_variants=max_variants,
+        )
+
     def label_theme(
         self,
         *,
@@ -250,8 +281,79 @@ class ModelProviderBundle:
     def normalize_confidence(self, value: Any) -> Literal["high", "medium", "low"]:
         return _normalize_confidence_label(value)
 
+    async def arevise_search_strategy(
+        self,
+        *,
+        original_query: str,
+        original_intent: str,
+        tried_providers: list[str],
+        result_summary: str,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Recommend a revised retrieval strategy when the first pass failed.
+
+        Returns dict with revisedQuery, revisedIntent, revisedProviders, rationale.
+        Default fallback: prefer known_item for title/citation-like queries,
+        otherwise review for regulatory and discovery for other intents.
+        """
+        # Late import to avoid circular dependency (planner → providers → provider_base).
+        from .planner import looks_like_citation_query, looks_like_exact_title  # noqa: PLC0415
+
+        if looks_like_exact_title(original_query) or looks_like_citation_query(original_query):
+            return {
+                "revisedQuery": original_query,
+                "revisedIntent": "known_item",
+                "revisedProviders": ["semantic_scholar"],
+                "rationale": (
+                    "Deterministic fallback: query looks like a paper title or citation;"
+                    " retried with semantic known-item recovery."
+                ),
+            }
+        return {
+            "revisedQuery": original_query,
+            "revisedIntent": "review" if original_intent == "regulatory" else "discovery",
+            "revisedProviders": ["semantic_scholar", "openalex"],
+            "rationale": "Deterministic fallback: retry as review/discovery.",
+        }
+
     async def aclose(self) -> None:
         """Close any provider-specific resources."""
+
+    async def aclassify_relevance_batch(
+        self,
+        *,
+        query: str,
+        papers: list[dict[str, Any]],
+        request_id: str | None = None,
+    ) -> dict[str, dict[str, str]]:
+        """Return a mapping of paperId -> classification/rationale for the batch."""
+        del query, request_id
+        return {
+            str(paper.get("paperId") or paper.get("paper_id") or ""): {
+                "classification": "weak_match",
+                "rationale": "Deterministic fallback did not run semantic relevance classification.",
+            }
+            for paper in papers
+        }
+
+    async def aassess_result_adequacy(
+        self,
+        *,
+        query: str,
+        intent: str,
+        verified_sources: list[dict[str, Any]],
+        evidence_gaps: list[str],
+        request_id: str | None = None,
+    ) -> dict[str, str]:
+        del query, request_id
+        verified_count = len(verified_sources)
+        if verified_count >= 5 and not evidence_gaps:
+            return {"adequacy": "succeeded", "reason": "Five or more verified sources covered the query."}
+        if verified_count == 0:
+            return {"adequacy": "insufficient", "reason": "No verified sources were available."}
+        if intent in {"discovery", "review"} and verified_count >= 3:
+            return {"adequacy": "partial", "reason": "Some verified evidence exists, but coverage is incomplete."}
+        return {"adequacy": "partial", "reason": "Deterministic fallback could not promote adequacy beyond partial."}
 
 
 class DeterministicProviderBundle(ModelProviderBundle):
@@ -275,29 +377,150 @@ class DeterministicProviderBundle(ModelProviderBundle):
         venue: str | None = None,
         focus: str | None = None,
     ) -> PlannerDecision:
+        from .planner import (  # noqa: PLC0415
+            _looks_broad_concept_query,
+            detect_regulatory_intent,
+            looks_like_citation_query,
+            looks_like_exact_title,
+            query_facets,
+        )
+
         normalized = query.strip()
         lowered = normalized.lower()
         inferred_intent = mode if mode != "auto" else "discovery"
+        query_type = "broad_concept"
         if any(marker in lowered for marker in ("doi", "arxiv:", "https://", "http://")):
             inferred_intent = "known_item"
+            query_type = "known_item"
+        elif detect_regulatory_intent(normalized, focus) and mode == "auto":
+            inferred_intent = "regulatory"
+            query_type = "regulatory"
         elif "author" in lowered and mode == "auto":
             inferred_intent = "author"
+            query_type = "author"
         elif any(marker in lowered for marker in ("citation", "cites", "cited by")) and mode == "auto":
             inferred_intent = "citation"
+            query_type = "citation_repair"
+        elif looks_like_citation_query(normalized) and mode == "auto":
+            inferred_intent = "known_item"
+            query_type = "citation_repair"
+        elif looks_like_exact_title(normalized) and mode == "auto":
+            inferred_intent = "known_item"
+            query_type = "known_item"
         elif any(marker in lowered for marker in ("survey", "review", "landscape")) and mode == "auto":
             inferred_intent = "review"
+            query_type = "review"
 
         concept_text = " ".join(part for part in [normalized, focus or ""] if isinstance(part, str) and part)
-        candidate_concepts = [token for token in _tokenize(concept_text) if token not in COMMON_QUERY_WORDS][:8]
+        candidate_concepts = [
+            concept
+            for concept in [*query_facets(concept_text), *[token for token in _tokenize(concept_text)]]
+            if concept not in COMMON_QUERY_WORDS
+        ][:8]
+        broad_concept_signal = _looks_broad_concept_query(
+            normalized_query=normalized,
+            focus=focus,
+            year=year,
+            venue=venue,
+        )
+        if inferred_intent in {"known_item", "author", "citation", "regulatory"}:
+            query_specificity = "high"
+            ambiguity_level = "low"
+            breadth_estimate = 1
+            first_pass_mode = RETRIEVAL_MODE_TARGETED
+        elif broad_concept_signal:
+            query_specificity = "low"
+            ambiguity_level = "high"
+            breadth_estimate = 4
+            first_pass_mode = RETRIEVAL_MODE_BROAD
+        elif inferred_intent == "review":
+            query_specificity = "medium"
+            ambiguity_level = "medium"
+            breadth_estimate = 3
+            first_pass_mode = RETRIEVAL_MODE_MIXED
+        else:
+            query_specificity = "medium"
+            ambiguity_level = "medium"
+            breadth_estimate = 2
+            first_pass_mode = RETRIEVAL_MODE_MIXED
+
+        search_angles: list[str] = []
+        if breadth_estimate > 1:
+            if len(candidate_concepts) >= 2:
+                search_angles.append(" ".join(candidate_concepts[:2]))
+            if candidate_concepts:
+                search_angles.append(str(candidate_concepts[0]))
+            if len(candidate_concepts) >= 3:
+                search_angles.append(" ".join(candidate_concepts[1:3]))
+        deduped_search_angles: list[str] = []
+        seen_angles: set[str] = {normalized.lower()}
+        for angle in search_angles:
+            cleaned = str(angle).strip()
+            lowered_angle = cleaned.lower()
+            if not cleaned or lowered_angle in seen_angles:
+                continue
+            seen_angles.add(lowered_angle)
+            deduped_search_angles.append(cleaned)
+
+        uncertainty_flags: list[str] = []
+        if broad_concept_signal:
+            uncertainty_flags.append("broad_or_multi_factor_query")
+        if year and inferred_intent == "discovery":
+            uncertainty_flags.append("year_constraint_may_or_may_not_be_central")
+        if len(candidate_concepts) >= 4:
+            uncertainty_flags.append("multiple_competing_concepts")
+
+        retrieval_hypotheses = list(deduped_search_angles) or ([normalized] if normalized else [])
         constraints = {key: value for key, value in {"year": year, "venue": venue, "focus": focus}.items() if value}
         return PlannerDecision(
             intent=inferred_intent,  # type: ignore[arg-type]
+            querySpecificity=cast(Any, query_specificity),
+            ambiguityLevel=cast(Any, ambiguity_level),
+            queryType=cast(Any, query_type),
+            breadthEstimate=breadth_estimate,
+            searchAngles=deduped_search_angles,
+            uncertaintyFlags=uncertainty_flags,
+            firstPassMode=cast(Any, first_pass_mode),
+            retrievalHypotheses=retrieval_hypotheses,
+            intentRationale=(
+                f"Deterministic planner routed the query as {inferred_intent} using lightweight local heuristics."
+            ),
             constraints=constraints,
             seedIdentifiers=_extract_seed_identifiers(normalized),
             candidateConcepts=candidate_concepts,
-            providerPlan=["semantic_scholar", "openalex", "scholarapi", "core", "arxiv"],
+            providerPlan=(
+                ["ecos", "federal_register", "govinfo"]
+                if inferred_intent == "regulatory"
+                else ["semantic_scholar", "openalex", "scholarapi", "core", "arxiv"]
+            ),
             followUpMode="claim_check" if inferred_intent == "review" else "qa",
         )
+
+    def suggest_grounded_expansions(
+        self,
+        *,
+        query: str,
+        papers: list[dict[str, Any]],
+        max_variants: int,
+    ) -> list[ExpansionCandidate]:
+        evidence_texts = [
+            " ".join(part for part in [str(paper.get("title") or ""), str(paper.get("abstract") or "")] if part)
+            for paper in papers[:8]
+        ]
+        variants: list[ExpansionCandidate] = []
+        for term in _top_terms(evidence_texts, limit=max_variants * 2):
+            if term in query.lower():
+                continue
+            variants.append(
+                ExpansionCandidate(
+                    variant=f"{query} {term}",
+                    source="from_retrieved_evidence",
+                    rationale=f"Deterministic grounded fallback expanded the query with evidence term '{term}'.",
+                )
+            )
+            if len(variants) >= max_variants:
+                break
+        return variants
 
     def suggest_speculative_expansions(
         self,

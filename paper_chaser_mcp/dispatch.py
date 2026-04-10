@@ -40,6 +40,7 @@ from .models import TOOL_INPUT_MODELS, CitationFormatsResponse, RuntimeSummary, 
 from .models.common import (
     AbstentionDetails,
     CitationFormat,
+    ConfidenceSignals,
     ExportLink,
     GuidedExecutionProvenance,
     GuidedResultState,
@@ -909,16 +910,45 @@ def _guided_source_id(candidate: dict[str, Any], *, fallback_prefix: str, index:
     return f"{fallback_prefix}-{index}"
 
 
+def _assign_verification_status(
+    *,
+    source_type: str,
+    has_doi: bool = False,
+    has_doi_resolution: bool = False,
+    full_text_observed: bool = False,
+) -> str:
+    if full_text_observed and source_type in {"regulatory_document", "primary_source", "government_document"}:
+        return "verified_primary_source"
+    if has_doi and has_doi_resolution:
+        return "verified_metadata"
+    if source_type in {"regulatory_document", "primary_source", "government_document", "federal_register_rule"}:
+        return "verified_primary_source"
+    if source_type == "scholarly_article" and has_doi:
+        return "verified_metadata"
+    return "verified_metadata"
+
+
 def _guided_source_record_from_structured_source(source: dict[str, Any], *, index: int) -> dict[str, Any]:
+    _source_type = source.get("sourceType") or "unknown"
+    _default_verification = _assign_verification_status(
+        source_type=_source_type,
+        has_doi=bool(source.get("doi") or source.get("citation", {}).get("doi")),
+        has_doi_resolution=bool(source.get("doi") or source.get("citation", {}).get("doi")),
+        full_text_observed=bool(source.get("fullTextObserved")),
+    )
+    topical_relevance = source.get("topicalRelevance") or "weak_match"
+    weak_match_reason = str(source.get("whyClassifiedAsWeakMatch") or "").strip() or None
+    if weak_match_reason is None and topical_relevance in {"weak_match", "off_topic"}:
+        weak_match_reason = str(source.get("note") or source.get("whyNotVerified") or "").strip() or None
     return {
         "sourceId": _guided_source_id(source, fallback_prefix="source", index=index),
         "sourceAlias": f"source-{index}",
         "title": source.get("title"),
         "provider": source.get("provider"),
-        "sourceType": source.get("sourceType") or "unknown",
-        "verificationStatus": source.get("verificationStatus") or "unverified",
+        "sourceType": _source_type,
+        "verificationStatus": source.get("verificationStatus") or _default_verification,
         "accessStatus": source.get("accessStatus") or "access_unverified",
-        "topicalRelevance": source.get("topicalRelevance") or "weak_match",
+        "topicalRelevance": topical_relevance,
         "confidence": source.get("confidence") or "medium",
         "isPrimarySource": bool(source.get("isPrimarySource")),
         "canonicalUrl": source.get("canonicalUrl"),
@@ -930,18 +960,28 @@ def _guided_source_record_from_structured_source(source: dict[str, Any], *, inde
         "citation": _guided_citation_from_structured_source(source),
         "date": source.get("date"),
         "note": source.get("note"),
+        "whyClassifiedAsWeakMatch": weak_match_reason,
     }
 
 
 def _guided_source_record_from_paper(query: str, paper: dict[str, Any], *, index: int) -> dict[str, Any]:
     canonical_url = paper.get("canonicalUrl") or paper.get("url") or paper.get("pdfUrl")
     source_type = paper.get("sourceType") or "scholarly_article"
-    verification_status = paper.get("verificationStatus") or "verified_metadata"
+    doi, _ = resolve_doi_from_paper_payload(paper)
+    verification_status = paper.get("verificationStatus") or _assign_verification_status(
+        source_type=str(source_type),
+        has_doi=bool(doi),
+        has_doi_resolution=bool(doi),
+        full_text_observed=bool(paper.get("fullTextObserved")),
+    )
     access_status = paper.get("accessStatus") or (
         "full_text_verified" if paper.get("fullTextObserved") else "access_unverified"
     )
     topical_relevance = _paper_topical_relevance(query, paper)
     confidence = paper.get("confidence") or ("high" if topical_relevance == "on_topic" else "medium")
+    weak_match_reason = str(paper.get("whyClassifiedAsWeakMatch") or "").strip() or None
+    if weak_match_reason is None and topical_relevance in {"weak_match", "off_topic"}:
+        weak_match_reason = str(paper.get("note") or paper.get("venue") or "").strip() or None
     return {
         "sourceId": _guided_source_id(paper, fallback_prefix="paper", index=index),
         "sourceAlias": f"source-{index}",
@@ -961,8 +1001,83 @@ def _guided_source_record_from_paper(query: str, paper: dict[str, Any], *, index
         "citationText": str(paper.get("canonicalId") or paper.get("paperId") or "") or None,
         "citation": _guided_citation_from_paper(paper, canonical_url),
         "date": paper.get("publicationDate") or paper.get("year"),
-        "note": paper.get("venue"),
+        "note": paper.get("note") or paper.get("venue"),
+        "whyClassifiedAsWeakMatch": weak_match_reason,
     }
+
+
+def _guided_sources_from_fr_documents(query: str, documents: list[Any]) -> list[dict[str, Any]]:
+    """Convert FederalRegisterDocument objects into guided source records."""
+    sources: list[dict[str, Any]] = []
+    for index, doc in enumerate(documents or [], start=1):
+        # Support both attribute-style (Pydantic model) and dict-style access
+        def _get(attr: str, default: Any = None) -> Any:
+            if isinstance(doc, dict):
+                return doc.get(attr, default)
+            return getattr(doc, attr, default)
+
+        title = _get("title")
+        if not title:
+            continue
+        html_url = _get("htmlUrl") or _get("bodyHtmlUrl")
+        pdf_url = _get("pdfUrl")
+        canonical_url = html_url or _get("govInfoLink") or pdf_url
+        doc_number = _get("documentNumber")
+        doc_type = str(_get("documentType") or "").strip()
+        pub_date = _get("publicationDate")
+        citation = _get("citation")
+        agencies_raw = _get("agencies") or []
+        agency_names = [
+            str(getattr(a, "name", None) or (a.get("name") if isinstance(a, dict) else "") or "").strip()
+            for a in agencies_raw
+        ]
+        agency_str = "; ".join(n for n in agency_names if n) or None
+        cfr_refs = _get("cfrReferences") or []
+        abstract = _get("abstract")
+
+        # Build citation text from FR citation or document number
+        citation_text = citation or (f"Fed. Reg. No. {doc_number}" if doc_number else None)
+
+        # FR documents are authoritative primary sources; all returned results are treated as on-topic
+        # because the FR API itself is query-targeted and returns matching documents.
+        source_type = "federal_register_rule" if "rule" in doc_type.lower() else "regulatory_document"
+        note_parts = [agency_str] if agency_str else []
+        if cfr_refs:
+            note_parts.append("CFR: " + ", ".join(str(r) for r in cfr_refs[:3]))
+
+        sources.append(
+            {
+                "sourceId": f"fr-{doc_number}" if doc_number else f"fr-source-{index}",
+                "sourceAlias": f"source-fr-{index}",
+                "title": title,
+                "provider": "federal_register",
+                "sourceType": source_type,
+                "verificationStatus": "verified_primary_source",
+                "accessStatus": (
+                    "full_text_verified" if html_url else ("pdf_available" if pdf_url else "access_unverified")
+                ),
+                "topicalRelevance": "on_topic",
+                "confidence": "high",
+                "isPrimarySource": True,
+                "canonicalUrl": canonical_url,
+                "retrievedUrl": canonical_url,
+                "fullTextObserved": bool(html_url),
+                "abstractObserved": bool(abstract),
+                "openAccessRoute": "open_access" if canonical_url else None,
+                "citationText": citation_text,
+                "citation": {
+                    "title": title,
+                    "authors": agency_names or [],
+                    "year": pub_date[:4] if isinstance(pub_date, str) and len(pub_date) >= 4 else None,
+                    "venue": "Federal Register",
+                    "canonicalId": citation_text,
+                    "citationText": citation_text,
+                },
+                "date": pub_date,
+                "note": "; ".join(note_parts) if note_parts else None,
+            }
+        )
+    return sources
 
 
 def _guided_findings_from_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2114,11 +2229,13 @@ def _guided_citation_from_structured_source(source: dict[str, Any]) -> dict[str,
 
 def _guided_citation_from_paper(paper: dict[str, Any], canonical_url: str | None) -> dict[str, Any] | None:
     doi, _ = resolve_doi_from_paper_payload(paper)
-    authors = [
-        str(author.get("name") or "").strip()
-        for author in (paper.get("authors") or [])
-        if isinstance(author, dict) and str(author.get("name") or "").strip()
-    ]
+    authors = list(
+        dict.fromkeys(
+            str(author.get("name") or "").strip()
+            for author in (paper.get("authors") or [])
+            if isinstance(author, dict) and str(author.get("name") or "").strip()
+        )
+    )
     year = _guided_year_text(paper.get("publicationDate") or paper.get("year"))
     journal_or_publisher = _guided_journal_or_publisher(paper)
     if not any([authors, year, paper.get("title"), journal_or_publisher, doi, canonical_url]):
@@ -2161,17 +2278,122 @@ def _guided_journal_or_publisher(payload: dict[str, Any]) -> str | None:
 
 
 def _guided_trust_summary(sources: list[dict[str, Any]], evidence_gaps: list[str]) -> dict[str, Any]:
+    verified_primary_source_count = sum(
+        1 for source in sources if source.get("verificationStatus") == "verified_primary_source"
+    )
+    verified_metadata_source_count = sum(
+        1 for source in sources if source.get("verificationStatus") == "verified_metadata"
+    )
+    on_topic_source_count = sum(1 for source in sources if source.get("topicalRelevance") == "on_topic")
+    weak_match_reasons = [
+        str(source.get("whyClassifiedAsWeakMatch") or source.get("note") or "").strip()
+        for source in sources
+        if source.get("topicalRelevance") == "weak_match"
+        and str(source.get("whyClassifiedAsWeakMatch") or source.get("note") or "").strip()
+    ]
+    off_topic_reasons = [
+        str(source.get("whyClassifiedAsWeakMatch") or source.get("note") or "").strip()
+        for source in sources
+        if source.get("topicalRelevance") == "off_topic"
+        and str(source.get("whyClassifiedAsWeakMatch") or source.get("note") or "").strip()
+    ]
+    if verified_primary_source_count > 0 and on_topic_source_count > 0:
+        strength_explanation = "Verified primary sources provide direct on-topic support."
+    elif verified_metadata_source_count > 0 and on_topic_source_count > 0:
+        strength_explanation = (
+            "On-topic support is present, but some records remain metadata-verified rather than full-text verified."
+        )
+    elif weak_match_reasons:
+        strength_explanation = (
+            "The saved evidence is related, but the strongest remaining records are still scope-limited."
+        )
+    elif off_topic_reasons:
+        strength_explanation = "Available sources are mostly off-topic for the saved query."
+    else:
+        strength_explanation = "No strong verified support was recorded for the saved query."
     return {
-        "verifiedSourceCount": sum(
-            1
-            for source in sources
-            if source.get("verificationStatus") in {"verified_primary_source", "verified_metadata"}
-        ),
-        "onTopicSourceCount": sum(1 for source in sources if source.get("topicalRelevance") == "on_topic"),
+        "verifiedSourceCount": verified_primary_source_count + verified_metadata_source_count,
+        "verifiedPrimarySourceCount": verified_primary_source_count,
+        "verifiedMetadataSourceCount": verified_metadata_source_count,
+        "onTopicSourceCount": on_topic_source_count,
         "weakMatchCount": sum(1 for source in sources if source.get("topicalRelevance") == "weak_match"),
         "offTopicCount": sum(1 for source in sources if source.get("topicalRelevance") == "off_topic"),
         "evidenceGapCount": len(evidence_gaps),
+        "rationaleByBucket": {
+            "weakMatch": weak_match_reasons[:3],
+            "offTopic": off_topic_reasons[:3],
+        },
+        "strengthExplanation": strength_explanation,
     }
+
+
+def _guided_confidence_signals(
+    *,
+    status: str,
+    sources: list[dict[str, Any]],
+    evidence_gaps: list[str],
+    degradation_reason: str | None = None,
+    synthesis_mode: str | None = None,
+    source: dict[str, Any] | None = None,
+    evidence_use_plan_applied: bool = False,
+) -> dict[str, Any]:
+    verified_on_topic_primary = sum(
+        1
+        for item in sources
+        if item.get("topicalRelevance") == "on_topic" and item.get("verificationStatus") == "verified_primary_source"
+    )
+    verified_on_topic = sum(
+        1
+        for item in sources
+        if item.get("topicalRelevance") == "on_topic"
+        and item.get("verificationStatus") in {"verified_primary_source", "verified_metadata"}
+    )
+    if verified_on_topic_primary > 0 or verified_on_topic >= 3:
+        evidence_quality_profile = "high"
+    elif verified_on_topic > 0:
+        evidence_quality_profile = "medium"
+    else:
+        evidence_quality_profile = "low"
+
+    trust_revision_reason = degradation_reason or (evidence_gaps[0] if evidence_gaps else None)
+    fallback_explanation = None
+    if degradation_reason == "deterministic_synthesis_fallback":
+        fallback_explanation = (
+            "A deterministic fallback answered the follow-up because model-backed synthesis was unavailable."
+        )
+    if synthesis_mode is None:
+        if status in {"answered", "succeeded"} and degradation_reason is None:
+            synthesis_mode = "grounded"
+        elif status in {"answered", "succeeded", "partial"}:
+            synthesis_mode = "limited"
+        else:
+            synthesis_mode = "insufficient"
+
+    source_scope_label = None
+    source_scope_reason = None
+    if source is None and len(sources) == 1:
+        source = sources[0]
+    if source is not None:
+        topical_relevance = str(source.get("topicalRelevance") or "").strip()
+        source_scope_reason = str(source.get("whyClassifiedAsWeakMatch") or source.get("note") or "").strip() or None
+        if topical_relevance == "on_topic":
+            source_scope_label = "directly_responsive"
+        elif topical_relevance == "weak_match" and source.get("verificationStatus") == "verified_primary_source":
+            source_scope_label = "authoritative_but_scope_limited"
+        elif topical_relevance == "weak_match":
+            source_scope_label = "related_but_incomplete"
+        elif topical_relevance == "off_topic":
+            source_scope_label = "off_topic"
+
+    return ConfidenceSignals(
+        evidenceQualityProfile=cast(Any, evidence_quality_profile),
+        synthesisMode=synthesis_mode,
+        trustRevisionReason=trust_revision_reason,
+        evidenceUsePlanApplied=evidence_use_plan_applied,
+        fallbackExplanation=fallback_explanation,
+        sourceScopeLabel=source_scope_label,
+        sourceScopeReason=source_scope_reason,
+    ).model_dump(by_alias=True, exclude_none=True)
 
 
 def _guided_failure_summary(
@@ -2246,8 +2468,9 @@ def _guided_result_meaning(
     return summary_line or "This result should be reviewed source by source before relying on it."
 
 
-def _guided_research_status(
+async def _guided_research_status(
     *,
+    query: str,
     intent: str,
     sources: list[dict[str, Any]],
     findings: list[dict[str, Any]],
@@ -2255,11 +2478,12 @@ def _guided_research_status(
     coverage_summary: dict[str, Any] | None,
     failure_summary: dict[str, Any] | None,
     clarification: dict[str, Any] | None,
-) -> str:
+    provider_bundle: Any | None = None,
+) -> tuple[str, str | None]:
     if clarification is not None:
-        return "needs_disambiguation"
+        return "needs_disambiguation", None
     if intent == "known_item" and findings:
-        return "succeeded"
+        return "succeeded", None
     if intent == "regulatory":
         primary_document_coverage = cast(
             dict[str, Any] | None,
@@ -2272,24 +2496,64 @@ def _guided_research_status(
         ]
         if primary_document_coverage is not None and primary_document_coverage.get("currentTextRequested"):
             if primary_document_coverage.get("currentTextSatisfied"):
-                return "partial" if failure_summary is not None else "succeeded"
+                return ("partial" if failure_summary is not None else "succeeded"), None
             if primary_sources:
-                return "partial"
+                return "partial", None
             if unverified_leads_count > 0:
-                return "partial"
-            return "abstained"
+                return "partial", None
+            return "abstained", None
         if primary_sources:
-            return "partial" if failure_summary is not None else "succeeded"
+            return ("partial" if failure_summary is not None else "succeeded"), None
         if unverified_leads_count > 0:
-            return "partial"
-        return "needs_disambiguation" if sources else "abstained"
+            return "partial", None
+        return ("needs_disambiguation" if sources else "abstained"), None
     if len(findings) >= 2:
-        return "partial" if failure_summary is not None else "succeeded"
-    if sources:
-        return "partial"
-    if unverified_leads_count > 0:
-        return "partial"
-    return "abstained"
+        base_status = "partial" if failure_summary is not None else "succeeded"
+    else:
+        on_topic_verified = sum(
+            1
+            for source in sources
+            if source.get("topicalRelevance") == "on_topic"
+            and source.get("verificationStatus") in {"verified_primary_source", "verified_metadata"}
+        )
+        if on_topic_verified >= 5:
+            base_status = "partial" if failure_summary is not None else "succeeded"
+        elif sources:
+            base_status = "partial"
+        elif unverified_leads_count > 0:
+            base_status = "partial"
+        else:
+            base_status = "abstained"
+
+    adequacy_reason: str | None = None
+    verified_sources = [
+        source
+        for source in sources
+        if source.get("topicalRelevance") == "on_topic"
+        and source.get("verificationStatus") in {"verified_primary_source", "verified_metadata"}
+    ]
+    if (
+        base_status == "partial"
+        and provider_bundle is not None
+        and verified_sources
+        and intent not in {"known_item", "regulatory"}
+    ):
+        try:
+            adequacy = await provider_bundle.aassess_result_adequacy(
+                query=query,
+                intent=intent,
+                verified_sources=verified_sources,
+                evidence_gaps=[],
+            )
+            adequacy_label = str(adequacy.get("adequacy") or "partial")
+            adequacy_reason = str(adequacy.get("reason") or "").strip() or None
+            if adequacy_label == "succeeded":
+                base_status = "succeeded"
+            elif adequacy_label == "insufficient":
+                base_status = "abstained"
+        except Exception:
+            adequacy_reason = None
+    return base_status, adequacy_reason
 
 
 def _guided_machine_failure_payload(
@@ -2420,9 +2684,10 @@ def _guided_next_actions(
     search_session_id: str | None,
     status: str,
     has_sources: bool,
+    calling_tool: str | None = None,
 ) -> list[str]:
     actions: list[str] = []
-    if search_session_id and has_sources:
+    if search_session_id and has_sources and calling_tool != "inspect_source":
         actions.append(
             f"Use inspect_source with searchSessionId='{search_session_id}' and one sourceId to inspect evidence."
         )
@@ -2639,6 +2904,28 @@ def _find_record_source(
 
 def _direct_read_recommendations(source: dict[str, Any], *, tool_profile: str) -> list[str]:
     recommendations: list[str] = []
+    topical_relevance = str(source.get("topicalRelevance") or "").strip()
+    verification_status = str(source.get("verificationStatus") or "").strip()
+    weak_match_reason = str(source.get("whyClassifiedAsWeakMatch") or source.get("note") or "").strip()
+    if topical_relevance == "on_topic" and verification_status == "verified_primary_source":
+        recommendations.append(
+            "This source is authoritative and directly responsive to the query; direct reading is the safest next step."
+        )
+    elif topical_relevance == "on_topic" and verification_status == "verified_metadata":
+        recommendations.append(
+            "This source is on-topic and metadata-verified, but direct reading is still useful "
+            "before relying on specific claims."
+        )
+    elif topical_relevance == "weak_match":
+        scope_reason = (
+            weak_match_reason or "It is related to the topic but not directly responsive enough to stand alone."
+        )
+        recommendations.append(f"This source is only a weak match: {scope_reason}")
+    elif topical_relevance == "off_topic":
+        scope_reason = (
+            weak_match_reason or "It is authoritative or retrievable, but it does not directly answer the saved query."
+        )
+        recommendations.append(f"This source is off-topic for the saved query: {scope_reason}")
     canonical_url = str(source.get("canonicalUrl") or source.get("retrievedUrl") or "").strip()
     if canonical_url:
         recommendations.append(f"Open the canonical source: {canonical_url}")
@@ -2654,7 +2941,9 @@ def _direct_read_recommendations(source: dict[str, Any], *, tool_profile: str) -
             "Use expert paper-detail tools if you need the full provider payload or citation expansion."
         )
     if tool_profile == "guided":
-        recommendations.append("Use inspect_source to compare provenance and access signals before citing this source.")
+        recommendations.append(
+            "Use inspect_source to compare provenance, scope, and access signals before citing this source."
+        )
     return recommendations[:3]
 
 
@@ -2727,6 +3016,11 @@ def _guided_contract_fields(
         "coverageSummary": coverage_summary,
         "evidence": evidence,
         "leads": leads,
+        "confidenceSignals": _guided_confidence_signals(
+            status=result_status,
+            sources=sources,
+            evidence_gaps=evidence_gaps,
+        ),
         "timeline": timeline,
     }
 
@@ -3120,10 +3414,43 @@ def _guided_relevance_triage_answers(
     return answers
 
 
-def _guided_follow_up_answer_mode(question: str, session_strategy_metadata: dict[str, Any]) -> str:
+def _guided_follow_up_response_mode(question: str, session_strategy_metadata: dict[str, Any]) -> str:
     lowered = question.lower()
+    facets = _guided_follow_up_introspection_facets(question)
+    if "relevance_triage" in facets:
+        return "relevance_triage"
     if any(marker in lowered for marker in ("compare", "versus", "vs", "tradeoff", "tradeoffs")):
         return "comparison"
+    if facets or any(
+        marker in lowered
+        for marker in (
+            "author",
+            "authors",
+            "who wrote",
+            "written by",
+            "venue",
+            "journal",
+            "publisher",
+            "published in",
+            "doi",
+            "identifier",
+            "publication year",
+            "what year",
+            "what venue",
+            "what records",
+            "what sources",
+            "which documents",
+        )
+    ):
+        return "metadata"
+    if any(marker in lowered for marker in ("mechanism", "pathway", "causal", "how does")):
+        return "mechanism_summary"
+    if any(
+        marker in lowered for marker in ("regulatory history", "timeline", "rulemaking", "listing", "critical habitat")
+    ):
+        return "regulatory_chain"
+    if any(marker in lowered for marker in ("trade-off", "tradeoff", "tradeoffs", "practical implications")):
+        return "intervention_tradeoff"
     if any(
         marker in lowered
         for marker in (
@@ -3137,10 +3464,21 @@ def _guided_follow_up_answer_mode(question: str, session_strategy_metadata: dict
             "implementation",
         )
     ):
-        return "qa"
+        return "evidence_planning"
     follow_up_mode = str(session_strategy_metadata.get("followUpMode") or "").strip().lower()
-    if follow_up_mode in {"qa", "claim_check", "comparison"}:
-        return follow_up_mode
+    if follow_up_mode == "comparison":
+        return "comparison"
+    if follow_up_mode == "claim_check":
+        return "evidence_planning"
+    return "metadata" if explicit_source_reference(question) else "evidence_planning"
+
+
+def _guided_follow_up_answer_mode(question: str, session_strategy_metadata: dict[str, Any]) -> str:
+    response_mode = _guided_follow_up_response_mode(question, session_strategy_metadata)
+    if response_mode == "comparison":
+        return "comparison"
+    if response_mode in {"mechanism_summary", "regulatory_chain", "intervention_tradeoff"}:
+        return "claim_check"
     return "qa"
 
 
@@ -3148,8 +3486,11 @@ def _answer_follow_up_from_session_state(
     *,
     question: str,
     session_state: dict[str, Any] | None,
+    response_mode: str,
 ) -> dict[str, Any] | None:
     if session_state is None:
+        return None
+    if response_mode not in {"metadata", "relevance_triage"}:
         return None
     answer_parts: list[str] = []
     coverage = cast(dict[str, Any] | None, session_state.get("coverage")) or {}
@@ -3373,6 +3714,12 @@ def _answer_follow_up_from_session_state(
             answer_source="saved_session_metadata",
             passes_run=0,
         ),
+        "confidenceSignals": _guided_confidence_signals(
+            status="answered",
+            sources=sources,
+            evidence_gaps=evidence_gaps,
+            synthesis_mode="session_introspection",
+        ),
     }
 
 
@@ -3585,7 +3932,13 @@ async def dispatch_tool(
         normalized_research_arguments, research_normalization = _guided_normalize_research_arguments(arguments)
         research_args = cast(ResearchArgs, TOOL_INPUT_MODELS[name].model_validate(normalized_research_arguments))
         intent = "discovery"
-        if _guided_is_known_item_query(research_args.query):
+        # Hard identifiers (DOI, arXiv, URL) are unambiguous — always short-circuit to reference resolution.
+        # For heuristic-only signals (title-like, year-bearing citation patterns), prefer the planner's judgment
+        # when a runtime is available: it can reason about intent with context that static matching cannot.
+        # The heuristic path is preserved as a fallback when no planner is configured.
+        if looks_like_paper_identifier(research_args.query):
+            intent = "known_item"
+        elif agentic_runtime is None and _guided_is_known_item_query(research_args.query):
             intent = "known_item"
         elif _guided_is_mixed_intent_query(research_args.query, research_args.focus):
             intent = "mixed"
@@ -3689,6 +4042,11 @@ async def dispatch_tool(
                 "latencyProfile": guided_research_latency_profile,
                 "providerBudget": initial_provider_budget,
             }
+            adequacy_bundle = (
+                agentic_runtime._provider_bundle_for_profile(guided_research_latency_profile)
+                if hasattr(agentic_runtime, "_provider_bundle_for_profile")
+                else None
+            )
             smart_runs: list[dict[str, Any]] = []
             pass_modes: list[str] = []
             escalation_attempted = False
@@ -3717,7 +4075,7 @@ async def dispatch_tool(
                 smart_runs.append(smart)
                 pass_modes.append(pass_mode)
 
-            def _summarize_guided_smart_runs() -> dict[str, Any]:
+            async def _summarize_guided_smart_runs() -> dict[str, Any]:
                 sources = _guided_dedupe_source_records(
                     [
                         _guided_source_record_from_structured_source(source, index=index)
@@ -3767,7 +4125,8 @@ async def dispatch_tool(
                     if derived_intent == "mixed" and any(source.get("isPrimarySource") for source in sources)
                     else derived_intent
                 )
-                status = _guided_research_status(
+                status, adequacy_reason = await _guided_research_status(
+                    query=research_args.query,
                     intent=status_intent,
                     sources=sources,
                     findings=verified_findings,
@@ -3775,6 +4134,7 @@ async def dispatch_tool(
                     coverage_summary=merged_coverage,
                     failure_summary=merged_failure_summary,
                     clarification=cast(dict[str, Any] | None, clarification),
+                    provider_bundle=adequacy_bundle,
                 )
                 return {
                     "sources": sources,
@@ -3786,6 +4146,7 @@ async def dispatch_tool(
                     "clarification": clarification,
                     "derivedIntent": derived_intent,
                     "status": status,
+                    "adequacyReason": adequacy_reason,
                 }
 
             try:
@@ -3813,7 +4174,7 @@ async def dispatch_tool(
                         "regulatory" if intent == "regulatory" else "auto",
                         initial_provider_budget,
                     )
-                smart_summary = _summarize_guided_smart_runs()
+                smart_summary = await _summarize_guided_smart_runs()
                 if guided_escalation_enabled and _guided_should_escalate_research(
                     intent=intent,
                     status=str(smart_summary["status"]),
@@ -3831,7 +4192,7 @@ async def dispatch_tool(
                             allow_paid_providers=guided_escalation_allow_paid_providers,
                         ),
                     )
-                    smart_summary = _summarize_guided_smart_runs()
+                    smart_summary = await _summarize_guided_smart_runs()
             except Exception as error:
                 return _guided_machine_failure_payload(
                     search_session_id=None,
@@ -3857,6 +4218,44 @@ async def dispatch_tool(
             merged_failure_summary = cast(dict[str, Any] | None, smart_summary["failureSummary"])
             derived_intent = str(smart_summary["derivedIntent"])
             status = str(smart_summary["status"])
+            adequacy_reason = str(smart_summary.get("adequacyReason") or "").strip() or None
+            if adequacy_reason and f"Adequacy assessment: {adequacy_reason}" not in evidence_gaps:
+                evidence_gaps = [*evidence_gaps, f"Adequacy assessment: {adequacy_reason}"]
+
+            # Supplement academic smart-pass results with Federal Register primary-source documents
+            # for regulatory-intent queries.  Only runs when the FR client is available and enabled.
+            if intent in {"mixed", "regulatory"} and enable_federal_register and federal_register_client is not None:
+                try:
+                    fr_response = await federal_register_client.search_documents(
+                        query=research_args.query,
+                        limit=5,
+                    )
+                    fr_docs = fr_response.data if hasattr(fr_response, "data") else []
+                    fr_sources = _guided_sources_from_fr_documents(research_args.query, fr_docs)
+                    if fr_sources:
+                        sources = _guided_dedupe_source_records(sources + fr_sources)
+                        verified_findings = _guided_findings_from_sources(sources)
+                        _status_intent = "regulatory" if any(s.get("isPrimarySource") for s in sources) else intent
+                        status, adequacy_reason = await _guided_research_status(
+                            query=research_args.query,
+                            intent=_status_intent,
+                            sources=sources,
+                            findings=verified_findings,
+                            unverified_leads_count=len(unverified_leads),
+                            coverage_summary=merged_coverage,
+                            failure_summary=merged_failure_summary,
+                            clarification=cast(dict[str, Any] | None, smart_summary.get("clarification")),
+                            provider_bundle=adequacy_bundle,
+                        )
+                        if adequacy_reason and f"Adequacy assessment: {adequacy_reason}" not in evidence_gaps:
+                            evidence_gaps = [*evidence_gaps, f"Adequacy assessment: {adequacy_reason}"]
+                except Exception as error:
+                    logger.warning(
+                        "Federal Register supplementation failed during guided research; "
+                        "continuing without FR sources: %s",
+                        error,
+                    )
+
             failure_summary = _guided_failure_summary(
                 failure_summary=merged_failure_summary,
                 status=status,
@@ -3986,7 +4385,8 @@ async def dispatch_tool(
         evidence_gaps = []
         unverified_leads = _guided_unverified_leads_from_sources(sources)
         trust_summary = _guided_trust_summary(sources, evidence_gaps)
-        status = _guided_research_status(
+        status, adequacy_reason = await _guided_research_status(
+            query=research_args.query,
             intent=intent,
             sources=sources,
             findings=verified_findings,
@@ -3994,7 +4394,10 @@ async def dispatch_tool(
             coverage_summary=cast(dict[str, Any] | None, raw.get("coverageSummary")),
             failure_summary=cast(dict[str, Any] | None, raw.get("failureSummary")),
             clarification=None,
+            provider_bundle=None,
         )
+        if adequacy_reason and f"Adequacy assessment: {adequacy_reason}" not in evidence_gaps:
+            evidence_gaps = [*evidence_gaps, f"Adequacy assessment: {adequacy_reason}"]
         failure_summary = _guided_failure_summary(
             failure_summary=cast(dict[str, Any] | None, raw.get("failureSummary")),
             status=status,
@@ -4084,6 +4487,7 @@ async def dispatch_tool(
         session_answer = _answer_follow_up_from_session_state(
             question=follow_up_args.question,
             session_state=session_state,
+            response_mode=_guided_follow_up_response_mode(follow_up_args.question, {}),
         )
         if session_answer is not None:
             session_answer["inputNormalization"] = _guided_normalization_payload(follow_up_normalization)
@@ -4243,6 +4647,10 @@ async def dispatch_tool(
             latency_profile=guided_follow_up_latency_profile,
         )
         try:
+            follow_up_response_mode = _guided_follow_up_response_mode(
+                follow_up_args.question,
+                session_strategy_metadata,
+            )
             follow_up_answer_mode = _guided_follow_up_answer_mode(
                 follow_up_args.question,
                 session_strategy_metadata,
@@ -4348,6 +4756,9 @@ async def dispatch_tool(
             "searchSessionId": follow_up_args.search_session_id,
             "answerStatus": answer_status,
             "answer": ask.get("answer"),
+            "providerUsed": ask.get("providerUsed"),
+            "degradationReason": ask.get("degradationReason"),
+            "evidenceUsePlan": ask.get("evidenceUsePlan"),
             "evidence": ask.get("evidence") or [],
             "unsupportedAsks": ask.get("unsupportedAsks") or [],
             "followUpQuestions": ask.get("followUpQuestions") or [],
@@ -4386,7 +4797,21 @@ async def dispatch_tool(
                 passes_run=1,
             ),
             "inputNormalization": _guided_normalization_payload(follow_up_normalization),
+            "confidenceSignals": _guided_confidence_signals(
+                status=guided_status,
+                sources=sources,
+                evidence_gaps=evidence_gaps,
+                degradation_reason=cast(str | None, ask.get("degradationReason")),
+                synthesis_mode=(
+                    "session_introspection"
+                    if follow_up_response_mode in {"metadata", "relevance_triage"}
+                    else "grounded_follow_up"
+                ),
+                evidence_use_plan_applied=bool(ask.get("evidenceUsePlan")),
+            ),
         }
+        if ask.get("agentHints") is not None:
+            response["agentHints"] = ask.get("agentHints")
         response.update(
             _guided_contract_fields(
                 query=follow_up_args.question,
@@ -4403,6 +4828,18 @@ async def dispatch_tool(
                 strategy_metadata=follow_up_strategy_metadata,
             )
         )
+        response["confidenceSignals"] = _guided_confidence_signals(
+            status=guided_status,
+            sources=sources,
+            evidence_gaps=evidence_gaps,
+            degradation_reason=cast(str | None, ask.get("degradationReason")),
+            synthesis_mode=(
+                "session_introspection"
+                if follow_up_response_mode in {"metadata", "relevance_triage"}
+                else "grounded_follow_up"
+            ),
+            evidence_use_plan_applied=bool(ask.get("evidenceUsePlan")),
+        )
         response["selectedEvidenceIds"] = [
             str(item.get("evidenceId") or "").strip()
             for item in response.get("evidence") or []
@@ -4416,6 +4853,7 @@ async def dispatch_tool(
         session_answer = _answer_follow_up_from_session_state(
             question=follow_up_args.question,
             session_state=session_state,
+            response_mode=follow_up_response_mode,
         )
         if answer_status == "answered" and not _guided_is_usable_answer_text(ask.get("answer")):
             if session_answer is not None:
@@ -4647,10 +5085,18 @@ async def dispatch_tool(
             "evidenceId": source.get("sourceId"),
             "selectedEvidenceIds": [str(source.get("sourceId") or "").strip()],
             "directReadRecommendations": _direct_read_recommendations(source, tool_profile=tool_profile),
+            "confidenceSignals": _guided_confidence_signals(
+                status="succeeded",
+                sources=[source],
+                evidence_gaps=[],
+                synthesis_mode="source_audit",
+                source=source,
+            ),
             "nextActions": _guided_next_actions(
                 search_session_id=inspect_args.search_session_id,
                 status="succeeded",
                 has_sources=True,
+                calling_tool="inspect_source",
             ),
             "sessionResolution": session_resolution,
             "sourceResolution": _guided_source_resolution_payload(

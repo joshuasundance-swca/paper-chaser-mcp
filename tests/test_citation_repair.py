@@ -10,6 +10,7 @@ from paper_chaser_mcp.citation_repair import (
     _filtered_alternative_candidates,
     _normalize_identifier_for_openalex,
     _normalize_identifier_for_semantic_scholar,
+    _venue_hint_in_text,
     looks_like_citation_query,
     parse_citation,
     resolve_citation,
@@ -65,6 +66,25 @@ def test_looks_like_citation_query_is_false_for_broad_environmental_discovery_qu
         )
         is False
     )
+
+
+def test_looks_like_citation_query_is_false_for_broad_year_bearing_environmental_query() -> None:
+    # Long query (>= 6 tokens including year): always False
+    assert (
+        looks_like_citation_query(
+            "soil carbon sequestration land-use change climate mitigation nature-based solutions 2022"
+        )
+        is False
+    )
+    # Shorter queries (6-7 tokens) that also lack bibliographic structure
+    assert looks_like_citation_query("nature-based solutions for urban stormwater management 2022") is False
+    assert looks_like_citation_query("microplastic pollution monitoring in freshwater ecosystems 2022 2023") is False
+    assert looks_like_citation_query("ecotoxicology of pharmaceuticals in aquatic environments 2023") is False
+
+
+def test_venue_hint_in_text_requires_word_boundaries() -> None:
+    assert _venue_hint_in_text("published in nature reviews microbiology", "nature") is True
+    assert _venue_hint_in_text("internationalnaturepark field report", "nature") is False
 
 
 def test_filtered_alternative_candidates_drop_weak_year_only_matches() -> None:
@@ -795,3 +815,107 @@ async def test_resolve_citation_exact_title_with_conflicting_author_year_venue_d
     assert payload["resolutionConfidence"] != "high", (
         "exact_title match with 3 conflicting key fields must not return high confidence"
     )
+
+
+@pytest.mark.asyncio
+async def test_resolve_citation_prefers_year_aligned_candidate_over_conflicting_exact_title_match() -> None:
+    class MixedCandidateClient(RecordingSemanticClient):
+        async def search_papers_match(self, **kwargs) -> dict:
+            self.calls.append(("search_papers_match", kwargs))
+            return {
+                "paperId": "planetary-2021",
+                "title": "Planetary Boundaries",
+                "year": 2021,
+                "venue": "Some Journal 2021",
+                "authors": [{"name": "Vincent Bellinkx"}],
+                "matchFound": True,
+                "matchStrategy": "exact_title",
+                "matchConfidence": "high",
+                "matchedFields": ["title"],
+                "conflictingFields": ["author", "year", "venue"],
+                "candidateCount": 1,
+            }
+
+        async def search_snippets(self, **kwargs) -> dict:
+            self.calls.append(("search_snippets", kwargs))
+            return {"data": []}
+
+        async def search_papers(self, **kwargs) -> dict:
+            self.calls.append(("search_papers", kwargs))
+            return {
+                "total": 1,
+                "offset": 0,
+                "data": [
+                    {
+                        "paperId": "planetary-2009",
+                        "title": "Planetary Boundaries",
+                        "year": 2009,
+                        "venue": "Nature",
+                        "authors": [
+                            {"name": "Johan Rockstrom"},
+                            {"name": "Will Steffen"},
+                        ],
+                    }
+                ],
+            }
+
+    semantic = MixedCandidateClient()
+
+    payload = await resolve_citation(
+        citation="Rockstrom et al planetary boundaries 2009 Nature 461 472",
+        max_candidates=3,
+        client=semantic,
+        enable_core=False,
+        enable_semantic_scholar=True,
+        enable_openalex=False,
+        enable_arxiv=False,
+        enable_serpapi=False,
+        core_client=None,
+        openalex_client=None,
+        arxiv_client=None,
+        serpapi_client=None,
+    )
+
+    assert payload["bestMatch"]["paper"]["paperId"] == "planetary-2009"
+    if payload["alternatives"]:
+        assert payload["alternatives"][0]["paper"]["paperId"] == "planetary-2021"
+
+
+@pytest.mark.asyncio
+async def test_resolve_citation_case_insensitive_title_match_for_human_domination() -> None:
+    class CapsVariantClient(RecordingSemanticClient):
+        async def search_papers_match(self, **kwargs) -> dict:
+            self.calls.append(("search_papers_match", kwargs))
+            return {
+                "paperId": "human-domination",
+                "title": "Human Domination of Earth's Ecosystems",
+                "year": 1997,
+                "venue": "Science",
+                "authors": [{"name": "Peter M. Vitousek"}],
+                "matchFound": True,
+                "matchStrategy": "exact_title",
+                "matchConfidence": "high",
+                "matchedFields": ["title"],
+                "conflictingFields": [],
+                "candidateCount": 1,
+            }
+
+    semantic = CapsVariantClient()
+
+    payload = await resolve_citation(
+        citation="HUMAN DOMINATION OF EARTH'S ECOSYSTEMS",
+        max_candidates=3,
+        client=semantic,
+        enable_core=False,
+        enable_semantic_scholar=True,
+        enable_openalex=False,
+        enable_arxiv=False,
+        enable_serpapi=False,
+        core_client=None,
+        openalex_client=None,
+        arxiv_client=None,
+        serpapi_client=None,
+    )
+
+    assert payload["bestMatch"]["paper"]["paperId"] == "human-domination"
+    assert payload["resolutionConfidence"] == "high"

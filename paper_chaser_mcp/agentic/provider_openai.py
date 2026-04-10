@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any
+from typing import Any, Literal, cast
 
 from pydantic import SecretStr
 
@@ -15,6 +15,7 @@ from .config import AgenticConfig
 from .models import ExpansionCandidate, PlannerDecision
 from .provider_base import DeterministicProviderBundle
 from .provider_helpers import (
+    _AdequacyJudgmentSchema,
     _AnswerSchema,
     _build_answer_payload,
     _build_theme_label_payload,
@@ -27,7 +28,10 @@ from .provider_helpers import (
     _normalize_theme_label_output,
     _normalized_embedding_text,
     _PlannerResponseSchema,
+    _RelevanceBatchSchema,
     _ResponseModelT,
+    _ReviseStrategySchema,
+    _sanitize_provider_plan,
 )
 
 logger = logging.getLogger("paper-chaser-mcp")
@@ -52,6 +56,8 @@ async def _execute_provider_call(**kwargs: Any) -> Any:
 
 class OpenAIProviderBundle(DeterministicProviderBundle):
     """Best-effort LangChain-backed OpenAI adapter with deterministic fallback."""
+
+    _ANSWER_TEXT_FALLBACK_MAX_OUTPUT_TOKENS = 400
 
     def __init__(
         self,
@@ -413,6 +419,28 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         text = self._extract_response_text(response.payload)
         return text or None
 
+    def _parse_answer_text_fallback(
+        self,
+        text_fallback: str,
+        *,
+        evidence_papers: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        json_payload = _extract_json_object(text_fallback) or text_fallback.strip()
+        try:
+            parsed_answer = _AnswerSchema.model_validate_json(json_payload)
+        except Exception as exc:
+            logger.warning(
+                "OpenAI answer text fallback returned invalid JSON; using deterministic fallback: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
+            return None
+        return _normalize_answer_schema_output(
+            parsed_answer=parsed_answer,
+            evidence_papers=evidence_papers,
+            confidence_normalizer=self.normalize_confidence,
+        )
+
     @staticmethod
     def _embedding_vectors(payload: Any) -> list[list[float]]:
         data = getattr(payload, "data", None)
@@ -680,9 +708,35 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 model_name=self.planner_model_name,
                 response_model=_PlannerResponseSchema,
                 system_prompt=(
-                    "Plan a grounded search workflow. intent may be discovery, review, known_item, author, "
-                    "citation, or regulatory. Keep providerPlan limited to semantic_scholar, openalex, "
-                    "scholarapi, core, arxiv, ecos, federal_register, govinfo, tavily, and perplexity. "
+                    "You are a scientific literature search planner. Classify the query and design the optimal "
+                    "retrieval strategy.\n"
+                    "\n"
+                    "INTENT CLASSIFICATION RULES:\n"
+                    "- discovery: any broad conceptual, multi-factor, or 'what does the literature say' question. "
+                    "Default for most queries. Use even when a year or title-like wording appears.\n"
+                    "- review: explicit requests for literature reviews, systematic reviews, or evidence synthesis.\n"
+                    "- known_item: ONLY when a hard bibliographic identifier is present (DOI, arXiv ID, or exact "
+                    "title lookup with no broader research question attached).\n"
+                    "- author: query is specifically about a person's publication list.\n"
+                    "- citation: query is repairing or verifying a specific citation reference string.\n"
+                    "- regulatory: query explicitly references a CFR section, rulemaking, or federal register notice.\n"
+                    "\n"
+                    "OUTPUT REQUIREMENTS:\n"
+                    "- querySpecificity: high|medium|low\n"
+                    "- ambiguityLevel: low|medium|high\n"
+                    "- queryType: broad_concept|known_item|citation_repair|regulatory|author|review\n"
+                    "- breadthEstimate: integer 1-4 where 1 is narrow and 4 is very broad\n"
+                    "- searchAngles: 2-4 distinct retrieval angles or reformulations for broader discovery asks\n"
+                    "- firstPassMode: targeted|broad|mixed\n"
+                    "- uncertaintyFlags: list any ambiguities or competing interpretations\n"
+                    "- retrievalHypotheses: concrete evidence expectations the search should try to satisfy\n"
+                    "\n"
+                    "PROVIDER SELECTION (only from: semantic_scholar, openalex, scholarapi, core, arxiv, ecos, "
+                    "federal_register, govinfo, tavily, perplexity). Prefer semantic_scholar and openalex for "
+                    "peer-reviewed literature. Add tavily or perplexity only for grey literature needs.\n"
+                    "\n"
+                    "candidateConcepts: list 3-6 key concepts/noun phrases that should anchor retrieval.\n"
+                    "successCriteria: list 2-3 concrete conditions that would make this search successful.\n"
                     "Return compact structured output only."
                 ),
                 payload={
@@ -760,6 +814,61 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 max_variants=max_variants,
             )
 
+    async def asuggest_grounded_expansions(
+        self,
+        *,
+        query: str,
+        papers: list[dict[str, Any]],
+        max_variants: int,
+        request_outcomes: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+    ) -> list[ExpansionCandidate]:
+        try:
+            response = await self._aresponses_parse(
+                endpoint="responses.parse:grounded_expansions",
+                model_name=self.planner_model_name,
+                response_model=_ExpansionListSchema,
+                system_prompt=(
+                    "Given the original literature query and the first-pass retrieved papers, suggest only the "
+                    "missing retrieval angles or concepts that would broaden coverage without drifting off topic. "
+                    "Return at most three grounded expansions. Label each expansion as from_retrieved_evidence "
+                    "or hypothesis, and explain briefly why it is missing from the original query."
+                ),
+                payload={
+                    "query": query,
+                    "papers": [
+                        {
+                            "paperId": paper.get("paperId") or paper.get("sourceId") or paper.get("canonicalId"),
+                            "title": paper.get("title"),
+                            "abstract": str(paper.get("abstract") or "")[:1000] or None,
+                        }
+                        for paper in papers[:8]
+                    ],
+                    "max_variants": max_variants,
+                },
+                request_outcomes=request_outcomes,
+                request_id=request_id,
+            )
+            if response is None:
+                self._mark_deterministic_fallback()
+                return super().suggest_grounded_expansions(
+                    query=query,
+                    papers=papers,
+                    max_variants=max_variants,
+                )
+            self._mark_provider_used()
+            return _filter_expansion_candidates(query, response.expansions, max_variants=max_variants)
+        except Exception:
+            logger.exception(
+                "Async OpenAI grounded expansion generation failed; falling back to deterministic expansions."
+            )
+            self._mark_deterministic_fallback()
+            return super().suggest_grounded_expansions(
+                query=query,
+                papers=papers,
+                max_variants=max_variants,
+            )
+
     async def alabel_theme(
         self,
         *,
@@ -827,8 +936,20 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 model_name=self.synthesis_model_name,
                 response_model=_AnswerSchema,
                 system_prompt=(
-                    "Answer only from the supplied papers. If evidence is weak, "
-                    "say so. Confidence must be exactly one of: high, medium, low."
+                    "You are a scientific literature analyst. Answer the user's question using ONLY "
+                    "the supplied paper abstracts. Follow these rules exactly:\n"
+                    "1. For every factual claim, cite the supporting paper by title and year in "
+                    "parentheses, e.g. (Smith et al., 2022).\n"
+                    "2. If papers report different findings or disagree, describe the disagreement "
+                    "explicitly — do not synthesize conflicting results into a single claim.\n"
+                    "3. If the question asks about a mechanism, rate, quantity, or causal pathway, "
+                    "describe what each relevant paper actually reports about it.\n"
+                    "4. Your answer must be at least 3 substantive sentences for any question that "
+                    "has supporting evidence. Do not produce keyword lists or title enumerations.\n"
+                    "5. If the supplied papers do not adequately address the question, state clearly "
+                    "at the end what evidence is missing or would be needed.\n"
+                    "6. Confidence must be exactly one of: high, medium, low — based on the "
+                    "directness and consistency of the evidence, not topic breadth."
                 ),
                 payload=_build_answer_payload(question, answer_mode, evidence_papers),
                 request_outcomes=request_outcomes,
@@ -846,25 +967,28 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 endpoint="responses.create:answer",
                 model_name=self.synthesis_model_name,
                 system_prompt=(
-                    "Answer only from the supplied papers. If evidence is weak, say so. "
-                    "Return only JSON with keys answer, unsupportedAsks, followUpQuestions, confidence, "
-                    "answerability, selectedEvidenceIds, and selectedLeadIds. "
-                    "Confidence must be exactly one of: high, medium, low."
+                    "You are a scientific literature analyst. Answer the user's question using ONLY "
+                    "the supplied paper abstracts. Cite each claim by paper title and year. "
+                    "Describe disagreements between papers explicitly. Provide at least 3 substantive "
+                    "sentences for any answerable question. State missing evidence at the end if "
+                    "the papers are insufficient. Confidence must be exactly one of: high, medium, low. "
+                    "Return only JSON with keys: answer, unsupportedAsks, followUpQuestions, confidence, "
+                    "answerability, selectedEvidenceIds, selectedLeadIds, citedPaperIds, "
+                    "evidenceSummary, missingEvidenceDescription."
                 ),
                 payload=_build_answer_payload(question, answer_mode, evidence_papers),
                 request_outcomes=request_outcomes,
                 request_id=request_id,
-                max_output_tokens=240,
+                max_output_tokens=self._ANSWER_TEXT_FALLBACK_MAX_OUTPUT_TOKENS,
             )
             if text_fallback:
-                json_payload = _extract_json_object(text_fallback) or text_fallback
-                parsed = _normalize_answer_schema_output(
-                    parsed_answer=_AnswerSchema.model_validate_json(json_payload),
+                fallback_parsed = self._parse_answer_text_fallback(
+                    text_fallback,
                     evidence_papers=evidence_papers,
-                    confidence_normalizer=self.normalize_confidence,
                 )
-                self._mark_provider_used()
-                return parsed
+                if fallback_parsed is not None:
+                    self._mark_provider_used()
+                    return fallback_parsed
         except Exception:
             logger.exception("Async OpenAI synthesis failed; falling back to deterministic answer generation.")
         self._mark_deterministic_fallback()
@@ -872,6 +996,161 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             question=question,
             evidence_papers=evidence_papers,
             answer_mode=answer_mode,
+        )
+
+    async def arevise_search_strategy(
+        self,
+        *,
+        original_query: str,
+        original_intent: str,
+        tried_providers: list[str],
+        result_summary: str,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        try:
+            result = await self._aresponses_parse(
+                endpoint="responses.parse:revise_strategy",
+                model_name=self.planner_model_name,
+                response_model=_ReviseStrategySchema,
+                system_prompt=(
+                    "You are a search strategy advisor. The initial retrieval attempt returned no useful results. "
+                    "Recommend a revised retrieval strategy. Return revisedQuery, revisedIntent, "
+                    "revisedProviders, and rationale."
+                ),
+                payload={
+                    "originalQuery": original_query,
+                    "originalIntent": original_intent,
+                    "triedProviders": tried_providers,
+                    "resultSummary": result_summary,
+                },
+                request_outcomes=None,
+                request_id=request_id,
+            )
+            if result is not None:
+                self._mark_provider_used()
+                providers = _sanitize_provider_plan(
+                    intent=result.revised_intent,
+                    provider_plan=result.revised_providers,
+                )
+                return {
+                    "revisedQuery": result.revised_query or original_query,
+                    "revisedIntent": result.revised_intent,
+                    "revisedProviders": providers,
+                    "rationale": result.rationale,
+                }
+        except Exception:
+            logger.exception("Async OpenAI strategy revision failed; using deterministic fallback.")
+        return await super().arevise_search_strategy(
+            original_query=original_query,
+            original_intent=original_intent,
+            tried_providers=tried_providers,
+            result_summary=result_summary,
+            request_id=request_id,
+        )
+
+    async def aclassify_relevance_batch(
+        self,
+        *,
+        query: str,
+        papers: list[dict[str, Any]],
+        request_id: str | None = None,
+    ) -> dict[str, dict[str, str]]:
+        if not papers:
+            return {}
+        try:
+            result = await self._aresponses_parse(
+                endpoint="responses.parse:relevance_batch",
+                model_name=self.synthesis_model_name,
+                response_model=_RelevanceBatchSchema,
+                system_prompt=(
+                    "You are a scientific literature relevance classifier. For each paper in the list, classify "
+                    "its relevance to the research query as on_topic, weak_match, or off_topic, and provide "
+                    "a one-sentence rationale for the classification."
+                ),
+                payload={
+                    "query": query,
+                    "papers": [
+                        {
+                            "paperId": str(paper.get("paperId") or paper.get("paper_id") or f"paper-{i}"),
+                            "title": str(paper.get("title") or ""),
+                            "abstract": str(paper.get("abstract") or "")[:500],
+                        }
+                        for i, paper in enumerate(papers)
+                    ],
+                },
+                request_outcomes=None,
+                request_id=request_id,
+            )
+            if result is not None:
+                self._mark_provider_used()
+                return {
+                    item.paper_id: {
+                        "classification": cast(
+                            Literal["on_topic", "weak_match", "off_topic"],
+                            item.classification,
+                        ),
+                        "rationale": str(item.rationale or "").strip(),
+                    }
+                    for item in result.classifications
+                    if item.paper_id
+                }
+        except Exception:
+            logger.exception("Async OpenAI relevance batch failed; falling back to weak_match.")
+        return {
+            str(paper.get("paperId") or paper.get("paper_id") or f"paper-{i}"): {
+                "classification": "weak_match",
+                "rationale": "Fallback relevance classification used because the model call failed.",
+            }
+            for i, paper in enumerate(papers)
+        }
+
+    async def aassess_result_adequacy(
+        self,
+        *,
+        query: str,
+        intent: str,
+        verified_sources: list[dict[str, Any]],
+        evidence_gaps: list[str],
+        request_id: str | None = None,
+    ) -> dict[str, str]:
+        try:
+            result = await self._aresponses_parse(
+                endpoint="responses.parse:adequacy_judgment",
+                model_name=self.synthesis_model_name,
+                response_model=_AdequacyJudgmentSchema,
+                system_prompt=(
+                    "You assess whether a research discovery result is adequate. Given the user query, intent, "
+                    "the verified sources, and known evidence gaps, return exactly one adequacy label: "
+                    "succeeded, partial, or insufficient, plus a short reason."
+                ),
+                payload={
+                    "query": query,
+                    "intent": intent,
+                    "verifiedSources": [
+                        {
+                            "sourceId": source.get("sourceId") or source.get("sourceAlias"),
+                            "title": source.get("title"),
+                            "note": source.get("note"),
+                            "topicalRelevance": source.get("topicalRelevance"),
+                        }
+                        for source in verified_sources[:8]
+                    ],
+                    "evidenceGaps": evidence_gaps[:5],
+                },
+                request_outcomes=None,
+                request_id=request_id,
+            )
+            if result is not None:
+                self._mark_provider_used()
+                return {"adequacy": result.adequacy, "reason": result.reason}
+        except Exception:
+            logger.exception("Async OpenAI adequacy judgment failed; using deterministic fallback.")
+        return await super().aassess_result_adequacy(
+            query=query,
+            intent=intent,
+            verified_sources=verified_sources,
+            evidence_gaps=evidence_gaps,
+            request_id=request_id,
         )
 
     def plan_search(
@@ -890,9 +1169,35 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 model_name=self.planner_model_name,
                 response_model=_PlannerResponseSchema,
                 system_prompt=(
-                    "Plan a grounded search workflow. intent may be discovery, review, known_item, author, "
-                    "citation, or regulatory. Keep providerPlan limited to semantic_scholar, openalex, "
-                    "scholarapi, core, arxiv, ecos, federal_register, govinfo, tavily, and perplexity. "
+                    "You are a scientific literature search planner. Classify the query and design the optimal "
+                    "retrieval strategy.\n"
+                    "\n"
+                    "INTENT CLASSIFICATION RULES:\n"
+                    "- discovery: any broad conceptual, multi-factor, or 'what does the literature say' question. "
+                    "Default for most queries. Use even when a year or title-like wording appears.\n"
+                    "- review: explicit requests for literature reviews, systematic reviews, or evidence synthesis.\n"
+                    "- known_item: ONLY when a hard bibliographic identifier is present (DOI, arXiv ID, or exact "
+                    "title lookup with no broader research question attached).\n"
+                    "- author: query is specifically about a person's publication list.\n"
+                    "- citation: query is repairing or verifying a specific citation reference string.\n"
+                    "- regulatory: query explicitly references a CFR section, rulemaking, or federal register notice.\n"
+                    "\n"
+                    "OUTPUT REQUIREMENTS:\n"
+                    "- querySpecificity: high|medium|low\n"
+                    "- ambiguityLevel: low|medium|high\n"
+                    "- queryType: broad_concept|known_item|citation_repair|regulatory|author|review\n"
+                    "- breadthEstimate: integer 1-4 where 1 is narrow and 4 is very broad\n"
+                    "- searchAngles: 2-4 distinct retrieval angles or reformulations for broader discovery asks\n"
+                    "- firstPassMode: targeted|broad|mixed\n"
+                    "- uncertaintyFlags: list any ambiguities or competing interpretations\n"
+                    "- retrievalHypotheses: concrete evidence expectations the search should try to satisfy\n"
+                    "\n"
+                    "PROVIDER SELECTION (only from: semantic_scholar, openalex, scholarapi, core, arxiv, ecos, "
+                    "federal_register, govinfo, tavily, perplexity). Prefer semantic_scholar and openalex for "
+                    "peer-reviewed literature. Add tavily or perplexity only for grey literature needs.\n"
+                    "\n"
+                    "candidateConcepts: list 3-6 key concepts/noun phrases that should anchor retrieval.\n"
+                    "successCriteria: list 2-3 concrete conditions that would make this search successful.\n"
                     "Return compact structured output only."
                 ),
                 payload={
@@ -933,9 +1238,39 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 [
                     (
                         "system",
-                        "Plan a grounded search workflow. intent may be discovery, review, known_item, author, "
-                        "citation, or regulatory. Keep providerPlan limited to semantic_scholar, openalex, "
-                        "scholarapi, core, arxiv, ecos, federal_register, govinfo, tavily, and perplexity. "
+                        "You are a scientific literature search planner. Classify the query and design the optimal "
+                        "retrieval strategy.\n"
+                        "\n"
+                        "INTENT CLASSIFICATION RULES:\n"
+                        "- discovery: any broad conceptual, multi-factor, or 'what does the literature say' "
+                        "question. "
+                        "Default for most queries. Use even when a year or title-like wording appears.\n"
+                        "- review: explicit requests for literature reviews, systematic reviews, or evidence "
+                        "synthesis.\n"
+                        "- known_item: ONLY when a hard bibliographic identifier is present (DOI, arXiv ID, or exact "
+                        "title lookup with no broader research question attached).\n"
+                        "- author: query is specifically about a person's publication list.\n"
+                        "- citation: query is repairing or verifying a specific citation reference string.\n"
+                        "- regulatory: query explicitly references a CFR section, rulemaking, or federal register "
+                        "notice.\n"
+                        "\n"
+                        "OUTPUT REQUIREMENTS:\n"
+                        "- querySpecificity: high|medium|low\n"
+                        "- ambiguityLevel: low|medium|high\n"
+                        "- queryType: broad_concept|known_item|citation_repair|regulatory|author|review\n"
+                        "- breadthEstimate: integer 1-4 where 1 is narrow and 4 is very broad\n"
+                        "- searchAngles: 2-4 distinct retrieval angles or reformulations for broader discovery asks\n"
+                        "- firstPassMode: targeted|broad|mixed\n"
+                        "- uncertaintyFlags: list any ambiguities or competing interpretations\n"
+                        "- retrievalHypotheses: concrete evidence expectations the search should try to satisfy\n"
+                        "\n"
+                        "PROVIDER SELECTION (only from: semantic_scholar, openalex, scholarapi, core, arxiv, "
+                        "ecos, federal_register, govinfo, tavily, perplexity). Prefer semantic_scholar and "
+                        "openalex for peer-reviewed literature. Add tavily or perplexity only for grey "
+                        "literature needs.\n"
+                        "\n"
+                        "candidateConcepts: list 3-6 key concepts/noun phrases that should anchor retrieval.\n"
+                        "successCriteria: list 2-3 concrete conditions that would make this search successful.\n"
                         "Return compact structured output only.",
                     ),
                     (
@@ -1172,17 +1507,16 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                         "Confidence must be exactly one of: high, medium, low."
                     ),
                     payload=_build_answer_payload(question, answer_mode, evidence_papers),
-                    max_output_tokens=240,
+                    max_output_tokens=self._ANSWER_TEXT_FALLBACK_MAX_OUTPUT_TOKENS,
                 )
                 if text_fallback:
-                    json_payload = _extract_json_object(text_fallback) or text_fallback
-                    parsed = _normalize_answer_schema_output(
-                        parsed_answer=_AnswerSchema.model_validate_json(json_payload),
+                    fallback_parsed = self._parse_answer_text_fallback(
+                        text_fallback,
                         evidence_papers=evidence_papers,
-                        confidence_normalizer=self.normalize_confidence,
                     )
-                    self._mark_provider_used()
-                    return parsed
+                    if fallback_parsed is not None:
+                        self._mark_provider_used()
+                        return fallback_parsed
                 if not self._allow_langchain_chat_fallback():
                     self._mark_deterministic_fallback()
                     return super().answer_question(

@@ -40,6 +40,37 @@ def test_planner_response_schema_supports_regulatory_routing_fields() -> None:
     assert decision.success_criteria == ["current_text_required", "timeline_required"]
 
 
+def test_planner_response_schema_round_trips_new_planner_owned_fields() -> None:
+    schema = _PlannerResponseSchema(
+        intent="discovery",
+        querySpecificity="low",
+        ambiguityLevel="high",
+        constraints=_PlannerConstraintsSchema(focus="benchmarking"),
+        seedIdentifiers=[],
+        candidateConcepts=["tool agents", "evaluation"],
+        providerPlan=["semantic_scholar", "openalex"],
+        successCriteria=["coverage_breadth"],
+        queryType="broad_concept",
+        breadthEstimate=4,
+        searchAngles=["tool agents evaluation", "agent benchmarking evidence"],
+        uncertaintyFlags=["multiple_competing_concepts"],
+        firstPassMode="broad",
+        retrievalHypotheses=["comparative evaluation evidence"],
+        followUpMode="claim_check",
+    )
+
+    decision = schema.to_planner_decision()
+
+    assert decision.query_specificity == "low"
+    assert decision.ambiguity_level == "high"
+    assert decision.query_type == "broad_concept"
+    assert decision.breadth_estimate == 4
+    assert decision.search_angles == ["tool agents evaluation", "agent benchmarking evidence"]
+    assert decision.uncertainty_flags == ["multiple_competing_concepts"]
+    assert decision.first_pass_mode == "broad"
+    assert decision.retrieval_hypotheses == ["comparative evaluation evidence"]
+
+
 def test_planner_response_schema_falls_back_to_default_provider_plan_for_intent() -> None:
     schema = _PlannerResponseSchema(
         intent="review",
@@ -97,6 +128,44 @@ def test_normalize_answer_schema_output_downgrades_grounded_without_evidence_lin
     )
 
     assert normalized["answerability"] == "limited"
+
+
+def test_normalize_answer_schema_output_backfills_citations_summary_and_missing_description() -> None:
+    parsed = _AnswerSchema(
+        answer=(
+            "The saved result set suggests that multiple verified sources support the grounded answer, "
+            "but additional evidence would still help confirm broader applicability."
+        ),
+        unsupportedAsks=[],
+        followUpQuestions=[],
+        confidence="high",
+        answerability="grounded",
+        selectedEvidenceIds=["paper-1"],
+        citedPaperIds=[],
+        evidenceSummary="",
+        missingEvidenceDescription="",
+    )
+    grounded = _normalize_answer_schema_output(
+        parsed_answer=parsed,
+        evidence_papers=[{"paperId": "paper-1", "title": "Source"}],
+        confidence_normalizer=_normalize_confidence,
+    )
+
+    insufficient = _normalize_answer_schema_output(
+        parsed_answer=_AnswerSchema(
+            answer="",
+            unsupportedAsks=[],
+            followUpQuestions=[],
+            confidence="medium",
+            answerability="insufficient",
+        ),
+        evidence_papers=[{"paperId": "paper-1", "title": "Source"}],
+        confidence_normalizer=_normalize_confidence,
+    )
+
+    assert grounded["citedPaperIds"] == ["paper-1"]
+    assert grounded["evidenceSummary"]
+    assert insufficient["missingEvidenceDescription"] == "The supplied papers did not contain enough direct evidence."
 
 
 def test_extract_json_object_ignores_prose_prefix_and_extracts_fenced_json() -> None:

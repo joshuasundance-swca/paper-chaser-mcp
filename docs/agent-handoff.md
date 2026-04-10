@@ -261,16 +261,19 @@ pytest tests/test_agentic_workflow.py -q
 
 1. Keep collecting real guided queries and tune trust thresholds, clarification
    prompts, and abstention language from that evidence.
-2. Improve `unverifiedLeads` ergonomics so users can see why something was
+2. Use `docs/environmental-science-remediation-plan.md` as the implementation
+  plan for the latest environmental-science review, especially for follow-up
+  degradation, species-specific regulatory grounding, and provenance UX.
+3. Improve `unverifiedLeads` ergonomics so users can see why something was
    excluded without mistaking it for verified support.
-3. Continue tightening the expert smart surface until landscape/graph tools
+4. Continue tightening the expert smart surface until landscape/graph tools
    consistently meet the same trust bar as guided outputs.
-4. If the GitHub agentic workflow needs broader expert coverage, keep the
+5. If the GitHub agentic workflow needs broader expert coverage, keep the
    default `tool_profile=guided` and add explicit expert checks rather than
    flipping the default experience back to raw/smart-first.
-5. For release work, follow `docs/release-publishing-plan.md`; do not rely on
+6. For release work, follow `docs/release-publishing-plan.md`; do not rely on
    stale branch/tag instructions from older notes.
-6. Calibrate family cross-check disagreement handling for exploratory one-seed
+7. Calibrate family cross-check disagreement handling for exploratory one-seed
   runs so valid review or policy pivots are not over-penalized once topic
   count and family coverage improve.
 

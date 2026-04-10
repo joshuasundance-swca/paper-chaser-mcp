@@ -382,8 +382,25 @@ def _merge_paper_dicts(left: dict[str, Any], right: dict[str, Any]) -> dict[str,
             merged[key] = value
             continue
         if isinstance(current, list) and isinstance(value, list):
-            seen = {repr(item) for item in current}
-            merged[key] = current + [item for item in value if repr(item) not in seen]
+
+            def _author_key(item: Any) -> str:
+                if isinstance(item, dict):
+                    name = str(item.get("name") or "").lower()
+                    # normalize: strip punctuation, sort tokens so "Smith, J." == "J. Smith"
+                    tokens = sorted(re.sub(r"[^a-z0-9 ]", " ", name).split())
+                    return " ".join(tokens)
+                return repr(item)
+
+            seen = {_author_key(item) for item in current}
+            new_items = [item for item in value if _author_key(item) not in seen]
+            # prefer the longest/most complete form of matching items
+            for item in value:
+                k = _author_key(item)
+                existing = next((x for x in current if _author_key(x) == k), None)
+                if existing is not None and isinstance(existing, dict) and isinstance(item, dict):
+                    if len(str(item.get("name") or "")) > len(str(existing.get("name") or "")):
+                        existing["name"] = item["name"]
+            merged[key] = current + new_items
     return merged
 
 

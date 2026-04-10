@@ -17,6 +17,22 @@
     "Compare evidence on kelp forest restoration success factors across regions.",
     "Find the most decision-relevant literature on habitat connectivity planning under land-use change."
   ],
+  "environmental_science_follow_up_quality": [
+    "For an eDNA biodiversity-monitoring session, compare where the saved evidence supports eDNA versus acoustic monitoring and where it does not.",
+    "For a PFAS remediation session, compare adsorption, membranes, and destruction methods only if the saved evidence directly supports all three.",
+    "For a wildfire smoke literature session, summarize which methods in the saved evidence actually connect air quality, satellite data, and health outcomes.",
+    "For a mangrove blue-carbon session, answer a grounded follow-up only if the saved evidence directly supports sequestration claims and uncertainty handling.",
+    "For a wetland restoration session, do not answer a policy tradeoff question from metadata alone; keep the answer grounded or abstain.",
+    "For a fisheries resilience session, distinguish theme-summary questions from direct comparison questions so weak saved evidence does not look like synthesis."
+  ],
+  "environmental_science_inspect_rationale": [
+    "Inspect a desert tortoise regulatory source and explain when it is authoritative but not species-specific enough for planning.",
+    "Inspect a PFAS drinking-water primary source and explain whether it is directly responsive or only context-adjacent.",
+    "Inspect a California condor Federal Register hit and explain why it is or is not suitable for a primary-source milestone timeline.",
+    "Inspect an ECOS species-profile result and explain the difference between metadata verification and full-text verification.",
+    "Inspect a weak offshore-wind Section 106 source and explain why the scope is too broad for cultural-resource guidance.",
+    "Inspect a desert-tortoise false positive and surface the exact reason it remains a weak match instead of hiding behind authority alone."
+  ],
   "consulting_and_due_diligence": [
     "I'm advising a utility on wildfire risk mitigation. Find the most decision-relevant literature on vegetation management, grid hardening, and predictive risk modeling.",
     "What does recent evidence say about prescribed fire versus mechanical thinning for reducing wildfire risk while retaining biodiversity in western U.S. forests?",

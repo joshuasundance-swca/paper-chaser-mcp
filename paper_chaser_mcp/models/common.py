@@ -328,6 +328,34 @@ class GuidedResultState(ApiModel):
     missing_evidence_type: str = Field(alias="missingEvidenceType")
 
 
+class ConfidenceSignals(ApiModel):
+    """Additive trust and synthesis cues for guided responses."""
+
+    evidence_quality_profile: Literal["high", "medium", "low"] | None = Field(
+        default=None,
+        alias="evidenceQualityProfile",
+    )
+    synthesis_mode: str | None = Field(default=None, alias="synthesisMode")
+    trust_revision_reason: str | None = Field(default=None, alias="trustRevisionReason")
+    evidence_use_plan_applied: bool | None = Field(default=None, alias="evidenceUsePlanApplied")
+    fallback_explanation: str | None = Field(default=None, alias="fallbackExplanation")
+    source_scope_label: str | None = Field(default=None, alias="sourceScopeLabel")
+    source_scope_reason: str | None = Field(default=None, alias="sourceScopeReason")
+
+
+class EvidenceUsePlan(ApiModel):
+    """Additive synthesis-planning payload for grounded follow-up answers."""
+
+    answer_subtype: str = Field(alias="answerSubtype")
+    directly_responsive_ids: list[str] = Field(default_factory=list, alias="directlyResponsiveIds")
+    unsupported_components: list[str] = Field(default_factory=list, alias="unsupportedComponents")
+    retrieval_sufficiency: Literal["sufficient", "thin", "insufficient"] = Field(
+        default="thin",
+        alias="retrievalSufficiency",
+    )
+    confidence: Literal["high", "medium", "low"] = "medium"
+
+
 class RuntimeSummary(ApiModel):
     """Effective runtime state for debugging and support."""
 
