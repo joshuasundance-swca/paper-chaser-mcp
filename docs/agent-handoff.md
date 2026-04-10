@@ -60,6 +60,10 @@ next steps without re-discovering project state.
   `scripts/generate_eval_topics.py`, `scripts/run_eval_autopilot.py`, and
   `scripts/run_eval_workflow.py` support ranked topic generation, immutable run
   bundles, guarded workflow handoff, and exploratory single-seed review loops.
+- The repo now includes a **cross-domain remediation plan** in
+  `docs/cross-domain-remediation-plan.md` covering reranking, routing,
+  regulatory breadth, cultural-resource coverage, known-item recovery, and a
+  durable cross-domain eval pack derived from recent manual tool exercises.
 - Narrow-run eval profiles can now use **single-seed diversification** to ask
   the planner for review, regulatory, and methods-oriented variants instead of
   depending only on looser workflow thresholds.

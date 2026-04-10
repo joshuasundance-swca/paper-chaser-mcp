@@ -4778,6 +4778,126 @@ async def test_rerank_candidates_penalizes_review_papers_missing_anchor_terms() 
 
 
 @pytest.mark.asyncio
+async def test_rerank_candidates_demotes_generic_bridge_hit_without_anchor_or_title_coverage() -> None:
+    provider_bundle = resolve_provider_bundle(
+        _deterministic_config(),
+        openai_api_key=None,
+    )
+    ranked = await rerank_candidates(
+        query="wetland restoration climate resilience coastal marshes",
+        merged_candidates=[
+            {
+                "paper": {
+                    "paperId": "anchor-good",
+                    "title": "Wetland Restoration for Climate Resilience in Coastal Marshes",
+                    "abstract": "Restoration interventions improve climate resilience across coastal marsh systems.",
+                    "year": 2024,
+                    "authors": [{"name": "Author One"}],
+                    "source": "semantic_scholar",
+                },
+                "providers": ["semantic_scholar"],
+                "variants": ["wetland restoration climate resilience coastal marshes"],
+                "variantSources": ["from_input"],
+                "providerRanks": {"semantic_scholar": 2},
+                "retrievalCount": 1,
+            },
+            {
+                "paper": {
+                    "paperId": "bridge-generic",
+                    "title": "Ecosystem Adaptation Pathways Under Sea Level Rise",
+                    "abstract": (
+                        "Synthesizes ecosystem adaptation pathways across coastal "
+                        "systems without discussing wetland restoration or marsh "
+                        "resilience directly."
+                    ),
+                    "year": 2025,
+                    "authors": [{"name": "Author Two"}],
+                    "source": "openalex",
+                },
+                "providers": ["openalex", "semantic_scholar"],
+                "variants": ["coastal systems adaptation", "marsh adaptation pathways"],
+                "variantSources": ["hypothesis", "from_input"],
+                "providerRanks": {"openalex": 1, "semantic_scholar": 1},
+                "retrievalCount": 2,
+            },
+        ],
+        provider_bundle=provider_bundle,
+        candidate_concepts=["wetland restoration", "climate resilience", "coastal marshes"],
+        routing_confidence="medium",
+        query_specificity="low",
+        ambiguity_level="high",
+    )
+
+    assert ranked[0]["paper"]["paperId"] == "anchor-good"
+    generic_breakdown = next(item for item in ranked if item["paper"]["paperId"] == "bridge-generic")["scoreBreakdown"]
+    assert generic_breakdown["bridgeCoverageBonus"] > 0
+    assert generic_breakdown["titleFacetCoverage"] == 0.0
+    assert generic_breakdown["titleAnchorCoverage"] == 0.0
+    assert generic_breakdown["relevanceClassificationBonus"] <= 0.0
+
+
+@pytest.mark.asyncio
+async def test_classify_query_infers_hybrid_regulatory_plus_literature_for_cultural_resource_query() -> None:
+    class _Bundle:
+        async def aplan_search(self, **kwargs: object) -> PlannerDecision:
+            return PlannerDecision(
+                intent="regulatory",
+                queryType="regulatory",
+                querySpecificity="medium",
+                ambiguityLevel="medium",
+                candidateConcepts=["blue creek historic district", "section 106", "nhpa"],
+                secondaryIntents=["review"],
+                followUpMode="qa",
+            )
+
+    _, planner = await classify_query(
+        query=(
+            "Summarize recent scholarship and Section 106/NHPA regulatory history for the Blue Creek Historic District."
+        ),
+        mode="auto",
+        year=None,
+        venue=None,
+        focus=None,
+        provider_bundle=_Bundle(),  # type: ignore[arg-type]
+    )
+
+    assert planner.intent == "regulatory"
+    assert planner.regulatory_subintent == "hybrid_regulatory_plus_literature"
+    assert "review" in planner.secondary_intents
+    assert planner.entity_card is not None
+    assert planner.entity_card.get("subjectArea") == "cultural_resources"
+    assert planner.entity_card.get("documentFamily") == "consultation_or_preservation"
+
+
+@pytest.mark.asyncio
+async def test_classify_query_title_like_without_identifier_can_stay_in_discovery_when_planner_is_broad() -> None:
+    class _Bundle:
+        async def aplan_search(self, **kwargs: object) -> PlannerDecision:
+            return PlannerDecision(
+                intent="discovery",
+                queryType="broad_concept",
+                querySpecificity="medium",
+                ambiguityLevel="medium",
+                breadthEstimate=3,
+                firstPassMode="mixed",
+                candidateConcepts=["urban heat inequity", "major us cities"],
+                followUpMode="qa",
+            )
+
+    _, planner = await classify_query(
+        query="Disproportionate exposure to urban heat island intensity across major US cities",
+        mode="auto",
+        year=None,
+        venue=None,
+        focus="environmental justice literature",
+        provider_bundle=_Bundle(),  # type: ignore[arg-type]
+    )
+
+    assert planner.intent == "discovery"
+    assert planner.intent_source == "planner"
+
+
+@pytest.mark.asyncio
 async def test_retrieve_variant_skips_serpapi_when_disabled_for_variant() -> None:
     class _EmptyClient:
         async def search(self, **kwargs: object) -> dict:

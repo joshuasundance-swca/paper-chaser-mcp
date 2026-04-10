@@ -168,7 +168,11 @@ AGENCY_REGULATORY_MARKERS = {
     "usda",
 }
 REGULATORY_QUERY_TERMS = {
+    "106 consultation",
+    "ac hp",
     "agency guidance",
+    "archaeology",
+    "archaeology guidance",
     "biological opinion",
     "cfr",
     "clinical decision support",
@@ -186,11 +190,14 @@ REGULATORY_QUERY_TERMS = {
     "five year review",
     "guidance for industry",
     "health advisory",
+    "historic district",
+    "historic preservation",
     "incidental take",
     "listing status",
     "listing history",
     "maximum contaminant level",
     "mcl",
+    "nhpa",
     "proposed rule",
     "recovery plan",
     "regulation",
@@ -198,8 +205,30 @@ REGULATORY_QUERY_TERMS = {
     "rulemaking",
     "safe drinking water act",
     "sdwa",
+    "section 106",
     "section 7",
     "species dossier",
+    "tribal consultation",
+    "thpo",
+    "shpo",
+    "sacred site",
+    "cultural resources",
+    "cultural landscape",
+}
+
+_CULTURAL_RESOURCE_MARKERS = {
+    "archaeology",
+    "cultural resources",
+    "cultural landscape",
+    "historic district",
+    "historic preservation",
+    "historic property",
+    "nhpa",
+    "sacred site",
+    "section 106",
+    "tribal consultation",
+    "thpo",
+    "shpo",
 }
 
 VARIANT_DEDUPE_STOPWORDS = (
@@ -315,6 +344,8 @@ def detect_regulatory_intent(query: str, focus: str | None = None) -> bool:
         return False
     if any(term in normalized for term in REGULATORY_QUERY_TERMS):
         return True
+    if any(term in normalized for term in _CULTURAL_RESOURCE_MARKERS):
+        return True
     if any(term in normalized for term in {"guidance", "policy", "policies"}) and any(
         marker in normalized for marker in AGENCY_REGULATORY_MARKERS
     ):
@@ -368,7 +399,14 @@ def detect_literature_intent(query: str, focus: str | None = None) -> bool:
         return False
     if any(term in normalized for term in LITERATURE_QUERY_TERMS):
         return True
+    if "scholarship" in normalized:
+        return True
     return bool(re.search(r"\b(?:doi|peer-reviewed|systematic review|meta-analysis|scientific reports?)\b", normalized))
+
+
+def _detect_cultural_resource_intent(query: str, focus: str | None = None) -> bool:
+    normalized = normalize_query(" ".join(part for part in [query, focus or ""] if part)).lower()
+    return bool(normalized) and any(term in normalized for term in _CULTURAL_RESOURCE_MARKERS)
 
 
 def _source_for_intent_candidate(
@@ -410,6 +448,14 @@ def _infer_regulatory_subintent(query: str, focus: str | None = None) -> str | N
         marker in normalized for marker in {"species dossier", "recovery plan", "critical habitat", "species profile"}
     ):
         return "species_dossier"
+    if detect_literature_intent(query, focus) and (
+        _detect_cultural_resource_intent(query, focus)
+        or any(
+            marker in normalized
+            for marker in {"history", "timeline", "rulemaking", "final rule", "proposed rule", "listing history"}
+        )
+    ):
+        return "hybrid_regulatory_plus_literature"
     if any(
         marker in normalized
         for marker in {"history", "timeline", "rulemaking", "final rule", "proposed rule", "listing history"}
@@ -433,6 +479,8 @@ def _infer_entity_card(query: str, focus: str | None = None) -> dict[str, str] |
         authority_context = "EPA/SDWA"
     elif "fda" in lowered:
         authority_context = "FDA"
+    elif "nhpa" in lowered or "section 106" in lowered or _detect_cultural_resource_intent(query, focus):
+        authority_context = "NHPA/Section 106"
 
     requested_document_family = None
     if "critical habitat" in lowered:
@@ -443,16 +491,28 @@ def _infer_entity_card(query: str, focus: str | None = None) -> dict[str, str] |
         requested_document_family = "listing_rule"
     elif "guidance" in lowered:
         requested_document_family = "guidance"
+    elif _detect_cultural_resource_intent(query, focus):
+        requested_document_family = "consultation_or_preservation"
 
     scientific_match = re.search(r"\b([A-Z][a-z]+\s+[a-z]{3,})\b", query)
     scientific_name = scientific_match.group(1) if scientific_match else None
 
+    cultural_subject_match = re.search(
+        (
+            r"\b([A-Z][A-Za-z0-9'’.-]+(?:\s+[A-Z][A-Za-z0-9'’.-]+){0,5}"
+            r"\s+(?:Historic District|National Monument|Cultural Landscape|Sacred Site))\b"
+        ),
+        query,
+    )
+
     common_name = None
+    if cultural_subject_match:
+        common_name = cultural_subject_match.group(1).strip()
     subject_match = re.search(
         r"\b(?:for|about)\s+(?:the\s+)?([a-z][a-z-]+(?:\s+[a-z][a-z-]+){0,3})\s+(?:under|with|in|on)\b",
         lowered,
     )
-    if subject_match:
+    if common_name is None and subject_match:
         candidate_subject = subject_match.group(1).strip()
         if candidate_subject and candidate_subject not in {"the species", "species dossier", "regulatory history"}:
             common_name = candidate_subject
@@ -491,6 +551,9 @@ def _infer_entity_card(query: str, focus: str | None = None) -> dict[str, str] |
         card["authorityContext"] = authority_context
     if requested_document_family:
         card["requestedDocumentFamily"] = requested_document_family
+    if _detect_cultural_resource_intent(query, focus):
+        card["subjectArea"] = "cultural_resources"
+        card["documentFamily"] = "consultation_or_preservation"
     return card
 
 
@@ -804,10 +867,15 @@ async def classify_query(
     )
     sorted_candidates = _sort_intent_candidates(intent_candidates, preferred_intent=cast(IntentLabel, planner.intent))
     planner.intent_candidates = sorted_candidates[:4]
-    planner.secondary_intents = cast(
-        list[IntentLabel],
-        [candidate.intent for candidate in planner.intent_candidates if candidate.intent != planner.intent][:3],
-    )
+    merged_secondary_intents = [
+        candidate.intent
+        for candidate in planner.intent_candidates
+        if candidate.intent != planner.intent and candidate.confidence in {"high", "medium"}
+    ]
+    for intent_label in planner.secondary_intents:
+        if intent_label != planner.intent and intent_label not in merged_secondary_intents:
+            merged_secondary_intents.append(intent_label)
+    planner.secondary_intents = cast(list[IntentLabel], merged_secondary_intents[:3])
     primary_candidate = next(
         (candidate for candidate in planner.intent_candidates if candidate.intent == planner.intent),
         None,

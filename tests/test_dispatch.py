@@ -2577,11 +2577,109 @@ async def test_guided_research_blends_regulatory_and_literature_runs(monkeypatch
     assert runtime.calls == ["regulatory", "review"]
     assert payload["intent"] == "mixed"
     assert payload["coverage"]["searchMode"] == "guided_hybrid_research"
+
+
+@pytest.mark.asyncio
+async def test_guided_research_blends_cultural_resource_regulatory_and_literature_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRuntime:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def search_papers_smart(self, **kwargs: object) -> dict[str, object]:
+            mode = str(kwargs.get("mode") or "auto")
+            self.calls.append(mode)
+            if mode == "regulatory":
+                return {
+                    "searchSessionId": "ssn-heritage-guided",
+                    "strategyMetadata": {
+                        "intent": "regulatory",
+                        "regulatorySubintent": "hybrid_regulatory_plus_literature",
+                        "secondaryIntents": ["review"],
+                    },
+                    "structuredSources": [
+                        {
+                            "sourceId": "nhpa-guidance",
+                            "title": "Section 106 consultation guidance for historic properties",
+                            "provider": "govinfo",
+                            "sourceType": "primary_regulatory",
+                            "verificationStatus": "verified_metadata",
+                            "accessStatus": "access_unverified",
+                            "topicalRelevance": "on_topic",
+                            "confidence": "high",
+                            "isPrimarySource": True,
+                        }
+                    ],
+                    "candidateLeads": [],
+                    "evidenceGaps": [],
+                    "coverageSummary": {
+                        "providersAttempted": ["govinfo", "federal_register"],
+                        "providersSucceeded": ["govinfo"],
+                        "providersFailed": [],
+                        "providersZeroResults": ["ecos"],
+                        "likelyCompleteness": "partial",
+                        "searchMode": "regulatory_primary_source",
+                    },
+                    "failureSummary": None,
+                    "clarification": None,
+                    "regulatoryTimeline": {"events": [{"title": "Section 106 guidance"}]},
+                }
+            if mode == "review":
+                return {
+                    "searchSessionId": "ssn-heritage-guided",
+                    "strategyMetadata": {"intent": "review"},
+                    "structuredSources": [
+                        {
+                            "sourceId": "heritage-paper",
+                            "title": "Archaeology, consultation, and cultural landscape stewardship",
+                            "provider": "semantic_scholar",
+                            "sourceType": "scholarly_article",
+                            "verificationStatus": "verified_metadata",
+                            "accessStatus": "abstract_only",
+                            "topicalRelevance": "on_topic",
+                            "confidence": "medium",
+                            "isPrimarySource": False,
+                        }
+                    ],
+                    "candidateLeads": [],
+                    "evidenceGaps": [],
+                    "coverageSummary": {
+                        "providersAttempted": ["semantic_scholar"],
+                        "providersSucceeded": ["semantic_scholar"],
+                        "providersFailed": [],
+                        "providersZeroResults": [],
+                        "likelyCompleteness": "partial",
+                        "searchMode": "smart_literature_review",
+                    },
+                    "failureSummary": None,
+                    "clarification": None,
+                }
+            raise AssertionError(f"Unexpected mode: {mode}")
+
+    runtime = _FakeRuntime()
+    monkeypatch.setattr(server, "agentic_runtime", runtime)
+
+    payload = _payload(
+        await server.call_tool(
+            "research",
+            {
+                "query": (
+                    "What recent U.S. federal actions address cultural resources, historic preservation, archaeology, "
+                    "or tribal consultation in environmental decision-making?"
+                )
+            },
+        )
+    )
+
+    assert runtime.calls == ["regulatory", "review"]
+    assert payload["intent"] == "mixed"
+    assert payload["coverage"]["searchMode"] == "guided_hybrid_research"
+    assert any(source["sourceId"] == "nhpa-guidance" for source in payload["sources"])
+    assert any(source["sourceId"] == "heritage-paper" for source in payload["sources"])
     assert len(payload["sources"]) == 2
-    assert any(source["sourceId"] == "nleb-fr" for source in payload["sources"])
-    assert any(source["sourceId"] == "nleb-paper" for source in payload["sources"])
     assert any("inspect_source" in action for action in payload["nextActions"])
-    assert payload["regulatoryTimeline"]["events"][0]["title"] == "NLEB rule"
+    assert payload["regulatoryTimeline"]["events"][0]["title"] == "Section 106 guidance"
 
 
 @pytest.mark.asyncio

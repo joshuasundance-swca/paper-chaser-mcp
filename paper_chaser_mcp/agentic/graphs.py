@@ -1559,7 +1559,7 @@ class AgenticRuntime:
         relevance_cache = cast(dict[str, Any], record.metadata.setdefault("relevanceCache", {}))
         relevance_cache_key = " ".join(str(question or "").lower().split())
         question_relevance_cache = cast(dict[str, Any], relevance_cache.setdefault(relevance_cache_key, {}))
-        llm_relevance: dict[str, dict[str, str]] = {}
+        llm_relevance: dict[str, dict[str, Any]] = {}
         if hasattr(provider_bundle, "aclassify_relevance_batch"):
             middle_zone_papers: list[dict[str, Any]] = []
             for item in evidence:
@@ -1571,6 +1571,8 @@ class AgenticRuntime:
                         llm_relevance[paper_id] = {
                             "classification": str(cached_entry.get("classification") or "weak_match"),
                             "rationale": str(cached_entry.get("rationale") or ""),
+                            "fallback": bool(cached_entry.get("fallback")),
+                            "provenance": str(cached_entry.get("provenance") or "model").strip() or "model",
                         }
                         continue
                     paper_dict = (
@@ -1592,6 +1594,8 @@ class AgenticRuntime:
                         normalized_entry = {
                             "classification": str(entry.get("classification") or "weak_match"),
                             "rationale": str(entry.get("rationale") or "").strip(),
+                            "fallback": bool(entry.get("fallback")),
+                            "provenance": str(entry.get("provenance") or "model").strip() or "model",
                         }
                         question_relevance_cache[normalized_paper_id] = normalized_entry
                         llm_relevance[normalized_paper_id] = normalized_entry
@@ -1602,6 +1606,7 @@ class AgenticRuntime:
             paper_id = str(item.paper.paper_id or item.paper.canonical_id or item.evidence_id or "").strip()
             relevance_entry = llm_relevance.get(paper_id) or {}
             relevance_rationale = str(relevance_entry.get("rationale") or "").strip()
+            relevance_provenance = str(relevance_entry.get("provenance") or "model").strip() or "model"
             topical_relevance = _classify_topical_relevance_for_paper(
                 query=question,
                 paper=item.paper,
@@ -1613,7 +1618,19 @@ class AgenticRuntime:
             source_records.append(
                 _source_record_from_paper(
                     item.paper,
-                    note=(relevance_rationale or item.why_relevant),
+                    note=(
+                        (
+                            relevance_rationale
+                            if relevance_provenance == "model"
+                            else f"{relevance_rationale} [relevance:{relevance_provenance}]".strip()
+                        )
+                        if relevance_rationale
+                        else (
+                            item.why_relevant
+                            if relevance_provenance == "model"
+                            else f"{item.why_relevant} [relevance:{relevance_provenance}]"
+                        )
+                    ),
                     topical_relevance=topical_relevance,
                 )
             )
@@ -1682,6 +1699,19 @@ class AgenticRuntime:
                     )
                     if identifier
                 ]
+        fallback_selected = [
+            entry
+            for entry in llm_relevance.values()
+            if bool(entry.get("fallback")) and str(entry.get("classification") or "") == "on_topic"
+        ]
+        if (
+            answer_status == "answered"
+            and answer_mode == "comparison"
+            and len(fallback_selected) >= max(on_topic_evidence, 1)
+        ):
+            answer_status = "insufficient_evidence"
+            answer_payload = None
+            answerability = "insufficient"
         if unsupported_asks and answer_status == "insufficient_evidence":
             answer_status = "abstained"
             answerability = "limited"

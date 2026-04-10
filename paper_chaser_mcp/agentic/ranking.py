@@ -194,6 +194,16 @@ async def rerank_candidates(
         request_outcomes=request_outcomes,
         request_id=request_id,
     )
+    relevance_batch: dict[str, dict[str, Any]] = {}
+    if hasattr(provider_bundle, "aclassify_relevance_batch"):
+        try:
+            relevance_batch = await provider_bundle.aclassify_relevance_batch(
+                query=query,
+                papers=[item["paper"] for item in merged_candidates],
+                request_id=request_id,
+            )
+        except Exception:
+            relevance_batch = {}
     facets = query_facets(query)
     terms = query_terms(query)
     anchor_terms = [term for term in terms if term not in GENERIC_RESEARCH_TERMS]
@@ -287,6 +297,30 @@ async def rerank_candidates(
                 bridge_bonus += 0.03
             if matched_candidate_concepts and len(set(item["variants"])) >= 2:
                 bridge_bonus += 0.03
+        if broad_query_mode and title_anchor_coverage == 0.0:
+            bridge_bonus *= 0.4
+
+        paper_id = str(
+            paper.get("paperId") or paper.get("paper_id") or paper.get("canonicalId") or paper.get("sourceId") or ""
+        ).strip()
+        relevance_entry = relevance_batch.get(paper_id, {})
+        relevance_classification = str(relevance_entry.get("classification") or "").strip() or None
+        relevance_fallback = bool(relevance_entry.get("fallback"))
+        relevance_bonus = 0.0
+        if relevance_classification == "on_topic":
+            relevance_bonus = 0.07 if not relevance_fallback else 0.04
+        elif relevance_classification == "off_topic":
+            relevance_bonus = -0.18 if not relevance_fallback else -0.12
+        elif relevance_classification == "weak_match" and broad_query_mode and title_anchor_coverage == 0.0:
+            relevance_bonus = -0.03
+
+        if broad_query_mode and title_anchor_coverage == 0.0 and anchor_coverage < 0.34:
+            facet_penalty += 0.08
+        if broad_query_mode and title_facet_coverage == 0.0 and query_similarity < 0.35:
+            facet_penalty += 0.05
+        if broad_query_mode and query_similarity < 0.2:
+            provider_bonus *= 0.5
+            citation_bonus *= 0.5
         final_score = (
             fused_rank_score
             + query_similarity
@@ -294,6 +328,7 @@ async def rerank_candidates(
             + provider_bonus
             + citation_bonus
             + bridge_bonus
+            + relevance_bonus
             - drift_penalty
             - (facet_penalty * facet_penalty_scale)
         )
@@ -304,6 +339,7 @@ async def rerank_candidates(
             "conceptCoverageBonus": round(concept_bonus, 6),
             "providerConsensusBonus": round(provider_bonus, 6),
             "bridgeCoverageBonus": round(bridge_bonus, 6),
+            "relevanceClassificationBonus": round(relevance_bonus, 6),
             "queryFacetCoverage": round(facet_coverage, 6),
             "queryTermCoverage": round(term_coverage, 6),
             "queryAnchorCoverage": round(anchor_coverage, 6),
@@ -314,6 +350,8 @@ async def rerank_candidates(
             "driftPenalty": round(drift_penalty, 6),
             "queryFacetPenalty": round(facet_penalty * facet_penalty_scale, 6),
             "broadQueryMode": broad_query_mode,
+            "relevanceClassification": relevance_classification,
+            "relevanceClassificationFallback": relevance_fallback,
             "finalScore": round(final_score, 6),
         }
         item["querySimilarity"] = query_similarity

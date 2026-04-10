@@ -2065,6 +2065,8 @@ def _guided_mentions_literature(query: str, focus: str | None = None) -> bool:
         return False
     if any(term in normalized for term in _GUIDED_LITERATURE_TERMS):
         return True
+    if "scholarship" in normalized:
+        return True
     return bool(re.search(r"\b(?:doi|systematic review|meta-analysis|peer-reviewed|scientific reports?)\b", normalized))
 
 
@@ -4841,14 +4843,10 @@ async def dispatch_tool(
             evidence_use_plan_applied=bool(ask.get("evidenceUsePlan")),
         )
         response["selectedEvidenceIds"] = [
-            str(item.get("evidenceId") or "").strip()
-            for item in response.get("evidence") or []
-            if isinstance(item, dict) and str(item.get("evidenceId") or "").strip()
+            str(identifier).strip() for identifier in (ask.get("selectedEvidenceIds") or []) if str(identifier).strip()
         ]
         response["selectedLeadIds"] = [
-            str(item.get("evidenceId") or "").strip()
-            for item in response.get("leads") or []
-            if isinstance(item, dict) and str(item.get("evidenceId") or "").strip()
+            str(identifier).strip() for identifier in (ask.get("selectedLeadIds") or []) if str(identifier).strip()
         ]
         session_answer = _answer_follow_up_from_session_state(
             question=follow_up_args.question,

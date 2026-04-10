@@ -13,7 +13,7 @@ from ..provider_runtime import ProviderDiagnosticsRegistry
 from ..transport import maybe_close_async_resource
 from .config import AgenticConfig
 from .models import ExpansionCandidate, PlannerDecision
-from .provider_base import DeterministicProviderBundle
+from .provider_base import DeterministicProviderBundle, classify_relevance_without_llm, relevance_paper_identifier
 from .provider_helpers import (
     _AdequacyJudgmentSchema,
     _AnswerSchema,
@@ -1054,7 +1054,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         query: str,
         papers: list[dict[str, Any]],
         request_id: str | None = None,
-    ) -> dict[str, dict[str, str]]:
+    ) -> dict[str, dict[str, Any]]:
         if not papers:
             return {}
         try:
@@ -1071,7 +1071,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                     "query": query,
                     "papers": [
                         {
-                            "paperId": str(paper.get("paperId") or paper.get("paper_id") or f"paper-{i}"),
+                            "paperId": relevance_paper_identifier(paper, i),
                             "title": str(paper.get("title") or ""),
                             "abstract": str(paper.get("abstract") or "")[:500],
                         }
@@ -1090,6 +1090,8 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                             item.classification,
                         ),
                         "rationale": str(item.rationale or "").strip(),
+                        "fallback": False,
+                        "provenance": "model",
                     }
                     for item in result.classifications
                     if item.paper_id
@@ -1097,10 +1099,10 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         except Exception:
             logger.exception("Async OpenAI relevance batch failed; falling back to weak_match.")
         return {
-            str(paper.get("paperId") or paper.get("paper_id") or f"paper-{i}"): {
-                "classification": "weak_match",
-                "rationale": "Fallback relevance classification used because the model call failed.",
-            }
+            relevance_paper_identifier(paper, i): classify_relevance_without_llm(
+                query=query,
+                paper=paper,
+            )
             for i, paper in enumerate(papers)
         }
 

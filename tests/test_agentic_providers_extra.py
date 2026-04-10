@@ -2,7 +2,7 @@ import asyncio
 import builtins
 import sys
 import types
-from typing import Any
+from typing import Any, Callable
 
 import pytest
 from pydantic import BaseModel, Field
@@ -2386,7 +2386,9 @@ async def test_langchain_bundle_falls_back_for_grounded_relevance_and_adequacy(
     )
 
     assert grounded
-    assert relevance["paper-1"]["classification"] == "weak_match"
+    assert relevance["paper-1"]["classification"] == "on_topic"
+    assert relevance["paper-1"]["fallback"] is True
+    assert relevance["paper-1"]["provenance"] == "deterministic_fallback"
     assert adequacy["adequacy"] == "partial"
 
 
@@ -2417,8 +2419,89 @@ async def test_openai_bundle_falls_back_for_grounded_relevance_and_adequacy() ->
     )
 
     assert grounded
-    assert relevance["paper-1"]["classification"] == "weak_match"
+    assert relevance["paper-1"]["classification"] == "on_topic"
+    assert relevance["paper-1"]["fallback"] is True
+    assert relevance["paper-1"]["provenance"] == "deterministic_fallback"
     assert adequacy["adequacy"] == "partial"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_name", "bundle_factory", "patcher"),
+    [
+        (
+            "anthropic",
+            lambda: AnthropicProviderBundle(_config(provider="anthropic"), api_key="sk-ant-test"),
+            "anthropic",
+        ),
+        (
+            "openai",
+            lambda: OpenAIProviderBundle(_config(), api_key="sk-test"),
+            "openai",
+        ),
+    ],
+)
+async def test_relevance_batch_fallback_distinguishes_on_topic_weak_match_and_off_topic(
+    provider_name: str,
+    bundle_factory: Callable[[], Any],
+    patcher: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = bundle_factory()
+
+    if patcher == "anthropic":
+        planner = _SequenceModel(structured_responses=[], text_responses=[])
+        synthesizer = _SequenceModel(structured_responses=[], text_responses=[])
+
+        async def _structured_none(**kwargs: Any) -> None:
+            del kwargs
+            return None
+
+        monkeypatch.setattr(bundle, "_load_models", lambda: (planner, synthesizer))
+        monkeypatch.setattr(bundle, "_structured_async", _structured_none)
+        monkeypatch.setattr(bundle, "_structured_from_text_async", _structured_none)
+    else:
+
+        async def _parse_none(**kwargs: Any) -> None:
+            del kwargs
+            return None
+
+        bundle._aresponses_parse = _parse_none  # type: ignore[method-assign]
+
+    relevance = await bundle.aclassify_relevance_batch(
+        query="tool-using agents for literature review",
+        papers=[
+            {
+                "paperId": "paper-on",
+                "title": "Tool-Using Agents for Systematic Literature Review",
+                "abstract": (
+                    "This paper directly studies tool use and retrieval workflows for systematic literature review."
+                ),
+            },
+            {
+                "paperId": "paper-weak",
+                "title": "Autonomous Agents for Research Assistants",
+                "abstract": (
+                    "Discusses autonomous agents and academic search assistants, "
+                    "but literature review is only indirect context."
+                ),
+            },
+            {
+                "paperId": "paper-off",
+                "title": "Cholestatic Pruritus Treatments: A Systematic Literature Review",
+                "abstract": "Clinical review of pruritus therapies in hepatology.",
+            },
+        ],
+    )
+
+    assert relevance["paper-on"]["classification"] == "on_topic", provider_name
+    assert relevance["paper-weak"]["classification"] == "weak_match", provider_name
+    assert relevance["paper-off"]["classification"] == "off_topic", provider_name
+    assert {
+        relevance["paper-on"]["classification"],
+        relevance["paper-weak"]["classification"],
+        relevance["paper-off"]["classification"],
+    } == {"on_topic", "weak_match", "off_topic"}
 
 
 def test_langchain_sync_methods_use_text_fallback_paths(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2582,7 +2665,9 @@ async def test_langchain_async_methods_use_text_and_deterministic_fallback_paths
     assert [item.variant for item in expansions] == ["retrieval agents evidence"]
     assert [item.variant for item in grounded] == ["retrieval grounded agents"]
     assert answer["answer"] == long_answer
-    assert relevance["paper-1"]["classification"] == "weak_match"
+    assert relevance["paper-1"]["classification"] == "on_topic"
+    assert relevance["paper-1"]["fallback"] is True
+    assert relevance["paper-1"]["provenance"] == "deterministic_fallback"
     assert adequacy["adequacy"] == "partial"
 
 
