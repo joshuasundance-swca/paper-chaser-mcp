@@ -55,6 +55,33 @@ def test_run_server_uses_http_transport_settings() -> None:
     ]
 
 
+def test_server_import_defers_env_loading_until_first_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings_module = importlib.import_module("paper_chaser_mcp.settings")
+    server_module = importlib.import_module("paper_chaser_mcp.server")
+    calls: list[dict[str, str] | None] = []
+    original_from_env = settings_module.AppSettings.from_env.__func__
+
+    def _tracking_from_env(
+        cls: type[server.AppSettings],
+        environ: dict[str, str] | None = None,
+    ) -> server.AppSettings:
+        calls.append(environ)
+        return original_from_env(cls, environ)
+
+    monkeypatch.setattr(settings_module.AppSettings, "from_env", classmethod(_tracking_from_env))
+
+    reloaded = importlib.reload(server_module)
+
+    assert calls == []
+    assert reloaded.client is None
+
+    reloaded.build_http_app()
+
+    assert len(calls) == 1
+
+
 @pytest.mark.asyncio
 async def test_execute_tool_preserves_result_and_captures_eval_metadata(
     monkeypatch: pytest.MonkeyPatch,

@@ -67,6 +67,11 @@ research(query="retrieval-augmented generation for coding agents", limit=5)
 - `resultStatus=succeeded` or `partial` with clear evidence semantics.
 - Evidence and routing fields are usable without reading raw provider payloads.
 - `nextActions` points to the next safe step.
+- `coverageSummary.providersSucceeded` reflects only providers that returned
+  results (zero-result providers are excluded).
+- `failureSummary.fallbackAttempted` is `true` whenever a fallback mode was
+  applied, and `outcome` is `partial_success` (not `no_failure`) when the
+  response abstained with zero sources.
 
 ### 2. Grounded follow-up (`follow_up_research`)
 
@@ -89,6 +94,10 @@ follow_up_research(searchSessionId="...", question="What evaluation tradeoffs sh
 - Explicit unsupported asks and evidence gaps on abstention paths.
 - Mixed saved sessions can still answer relevance-triage questions by classifying
   saved sources and leads into on-topic evidence, weaker context, and off-topic items.
+- `answerStatus` is now validated against both deterministic refusal patterns
+  and optional LLM-based validation when a provider bundle is available.
+- `canAnswerFollowUp` reflects capability (`has_sources AND has_session`), not
+  just permission.
 
 ### 3. Known-item and citation cleanup (`resolve_reference`)
 
@@ -139,6 +148,12 @@ For species/regulatory requests in `research`:
 6. For hybrid regulatory-plus-literature asks, expect guided `research` to run
    a blended pass when routing stays low-specificity or high-ambiguity. The
    summary and `routingSummary.passModes` should make that explicit.
+7. Papers without DOI or other identifiers now default to `unverified`
+   verification status (previously `verified_metadata`). This tightens
+   integrity for regulatory workflows where identifier coverage is sparse.
+8. Regulatory source-type recognition is expanded (13 types, up from 4),
+   covering rules, proposed rules, notices, executive orders, presidential
+   documents, and guidance documents.
 
 ## Expert fallback paths (intentional)
 
@@ -228,3 +243,9 @@ rather than answering an end-user research question.
 - Keep the eval-bootstrap docs, server guidance, and sample autopilot profiles
   synchronized whenever guarded workflow thresholds or single-seed
   diversification behavior changes.
+- Monitor citation-repair behavior after the tightened year-mismatch penalty
+  and reduced upstream-confidence bonus to catch regressions in near-miss
+  resolution scenarios.
+- Continue with cross-domain remediation plan workstreams (reranking,
+  relevance-classification resilience, cultural-resource routing) now that the
+  schema and runtime foundations from the stress-test remediation are in place.

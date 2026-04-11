@@ -14,12 +14,14 @@ from .config import AgenticConfig
 from .models import ExpansionCandidate, PlannerDecision
 from .provider_base import DeterministicProviderBundle, classify_relevance_without_llm, relevance_paper_identifier
 from .provider_helpers import (
+    AnswerStatusValidation,
     _AdequacyJudgmentSchema,
     _AnswerSchema,
     _build_answer_payload,
     _build_theme_label_payload,
     _build_theme_summary_payload,
     _coerce_langchain_structured_response,
+    _EvidenceGapSchema,
     _ExpansionListSchema,
     _filter_expansion_candidates,
     _langchain_message_text,
@@ -81,6 +83,9 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
         self.embedding_model_name = config.embedding_model
         self._planner: Any | None = None
         self._synthesizer: Any | None = None
+
+    def is_available(self) -> bool:
+        return bool(self._api_key)
 
     def supports_embeddings(self) -> bool:
         return False
@@ -1158,6 +1163,103 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
             intent=intent,
             verified_sources=verified_sources,
             evidence_gaps=evidence_gaps,
+            request_id=request_id,
+        )
+
+    async def avalidate_answer_status(
+        self,
+        *,
+        query: str,
+        answer_text: str,
+        evidence_count: int,
+        request_id: str | None = None,
+    ) -> AnswerStatusValidation | None:
+        _, answer_model = self._load_models()
+        try:
+            result = await self._structured_async(
+                endpoint="structured:answer_status_validation",
+                model=answer_model,
+                response_model=AnswerStatusValidation,
+                system_prompt=(
+                    "You are classifying whether a research answer provides a substantive response to the query. "
+                    "Classify as:\n"
+                    "- answered: The text provides specific, relevant information addressing the query\n"
+                    "- abstained: The text explicitly states inability to answer or lacks substantive content\n"
+                    "- insufficient_evidence: The text is hedging, vague, or contradicts its own claims of certainty"
+                ),
+                payload={
+                    "query": query,
+                    "answerText": answer_text[:2000],
+                    "evidenceCount": evidence_count,
+                },
+                request_id=request_id,
+            )
+            if result is not None:
+                self._mark_provider_used()
+                return result
+        except Exception:
+            logger.exception("Answer status validation failed; returning None.")
+        return None
+
+    async def agenerate_evidence_gaps(
+        self,
+        *,
+        query: str,
+        intent: str,
+        sources: list[dict[str, Any]],
+        evidence_gaps: list[str],
+        retrieval_hypotheses: list[str],
+        coverage_summary: dict[str, Any] | None,
+        timeline: dict[str, Any] | None,
+        anchor_type: str | None,
+        request_id: str | None = None,
+    ) -> list[str]:
+        planner_model, _ = self._load_models()
+        try:
+            result = await self._structured_async(
+                endpoint="structured:evidence_gap_generation",
+                model=planner_model,
+                response_model=_EvidenceGapSchema,
+                system_prompt=(
+                    "You identify evidence gaps for guided research. Return only specific missing evidence or missing "
+                    "timeline coverage, never adequacy assessments. Ignore irrelevant provider zero-results such as "
+                    "ECOS for non-species chemical regulation queries."
+                ),
+                payload={
+                    "query": query,
+                    "intent": intent,
+                    "anchorType": anchor_type,
+                    "sources": [
+                        {
+                            "sourceId": source.get("sourceId") or source.get("sourceAlias"),
+                            "title": source.get("title"),
+                            "topicalRelevance": source.get("topicalRelevance"),
+                            "verificationStatus": source.get("verificationStatus"),
+                            "note": source.get("note"),
+                        }
+                        for source in sources[:8]
+                    ],
+                    "existingEvidenceGaps": evidence_gaps[:5],
+                    "retrievalHypotheses": retrieval_hypotheses[:5],
+                    "timeline": timeline or {},
+                    "coverageSummary": coverage_summary or {},
+                },
+                request_id=request_id,
+            )
+            if result is not None:
+                self._mark_provider_used()
+                return [str(gap).strip() for gap in result.gaps if str(gap).strip()]
+        except Exception:
+            logger.exception("Evidence-gap generation failed; using deterministic fallback.")
+        return await super().agenerate_evidence_gaps(
+            query=query,
+            intent=intent,
+            sources=sources,
+            evidence_gaps=evidence_gaps,
+            retrieval_hypotheses=retrieval_hypotheses,
+            coverage_summary=coverage_summary,
+            timeline=timeline,
+            anchor_type=anchor_type,
             request_id=request_id,
         )
 

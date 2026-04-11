@@ -2,6 +2,34 @@
 
 This document turns the latest broad Paper Chaser tool exercise into a durable implementation plan. The exercise intentionally tested the guided workflow across environmental science, regulatory retrieval, environmental justice, cultural resources, archaeology, anthropology-adjacent stewardship questions, and known-item recovery. The goal is not just to fix individual failures. The goal is to make the guided public surface behave like a credible cross-domain research assistant for real practitioner workflows.
 
+## Stress-Test Remediation Completed (Prerequisite Foundations)
+
+Before starting the workstreams below, a comprehensive 8-phase stress-test
+remediation addressed foundational issues in schema integrity, answer
+validation, provider runtime contracts, payload efficiency, citation repair,
+and regulatory routing. Key outcomes relevant to this plan:
+
+- **Schema integrity**: `coverageSummary.providersSucceeded` now excludes
+  zero-result providers; `failureSummary` contracts are internally consistent;
+  `activeProviderSet` excludes suppressed providers; author dedup is reliable.
+- **Answer validation**: LLM-backed answer-status validation with deterministic
+  refusal-pattern fallback; `classify_answerability()` is now more trustworthy.
+- **Provider runtime**: `canAnswerFollowUp` is capability-based; SerpApi venue
+  parsing rejects author-pattern strings.
+- **Payload efficiency**: follow-up responses only include referenced sources;
+  null/empty fields stripped from evidence and source records.
+- **Citation repair**: year-mismatch penalty tightened; upstream confidence
+  bonus reduced; title-similarity length penalty added; confidence capped on
+  title conflicts.
+- **Regulatory routing**: verification-status default tightened to `unverified`
+  for papers without identifiers; regulatory source-type vocabulary expanded
+  from 4 to 13 entries.
+- **Test coverage**: 117 new tests across 6 modules (962 total, all passing).
+
+These fixes provide a stronger foundation for the workstreams below, especially
+Workstreams B (relevance classification), C (query routing), D (regulatory
+coverage), E (known-item recovery), and F (follow-up trust).
+
 ## Why this plan exists
 
 The recent tool exercise showed that the current guided surface is already useful in some ways:
@@ -76,7 +104,11 @@ The tests suggest the current guided surface is best understood as:
 - a weak mixed-domain policy-science synthesizer
 - a weak known-item resolver relative to what users expect from exact-title lookups
 
-This means the next cycle should prioritize quality of routing and ranking over adding more surface area. The product already has enough core tools. The issue is that the tools do not yet make the right semantic decisions often enough when the user is broad, interdisciplinary, or domain-mixed.
+The stress-test remediation (Phases 1–8) strengthened the schema, answer
+validation, payload efficiency, citation repair, and regulatory routing
+foundations. The next cycle should now focus on the remaining product-level
+gaps: reranking quality, relevance-classification resilience, cultural-resource
+routing, and follow-up trust gating.
 
 ## Verified implementation hotspots
 
@@ -89,7 +121,7 @@ The observed failures map to concrete code areas.
   Topic classification and filtering combine deterministic thresholds with optional LLM classifications. The deterministic thresholds are strict at the extremes but permissive in the middle zone. This is a good architecture, but it means degraded or missing LLM classifications matter a lot.
 
 - `paper_chaser_mcp/agentic/provider_openai.py`
-  Relevance-batch failure currently falls back to `weak_match` for every paper. That is safer than overclaiming, but it produces low-information rankings and low-information follow-up corpora.
+  Relevance-batch failure currently falls back to `weak_match` for every paper. That is safer than overclaiming, but it produces low-information rankings and low-information follow-up corpora. *(Stress-test Phase 2 added deterministic refusal detection as a complementary safeguard, but the all-`weak_match` fallback itself is still a Workstream B concern.)*
 
 - `paper_chaser_mcp/agentic/planner.py`
   Specificity estimation and heuristic overrides can promote some queries into `known_item` or `regulatory` too aggressively. That behavior is especially risky for mixed queries and exact-title requests without strong identifiers.
@@ -98,7 +130,7 @@ The observed failures map to concrete code areas.
   Regulatory document ranking is still driven mainly by subject-token overlap, priority-term overlap, facet overlap, and document-form bonuses. That is not enough for cultural resources, tribal consultation, or process-heavy regulatory questions.
 
 - `paper_chaser_mcp/agentic/graphs.py` and `paper_chaser_mcp/dispatch.py`
-  Guided follow-up quality depends heavily on the selected evidence pool. If ranking or relevance classification is weak upstream, follow-up can still be coherent but rest on a thin or noisy evidence set.
+  Guided follow-up quality depends heavily on the selected evidence pool. If ranking or relevance classification is weak upstream, follow-up can still be coherent but rest on a thin or noisy evidence set. *(Stress-test Phase 4 ensures follow-up now only includes sources referenced in `selectedEvidenceIds`, which helps but does not fix upstream pool quality.)*
 
 ## Workstream A: Reranking Quality
 
@@ -295,7 +327,10 @@ Make exact-title and near-exact-title retrieval behave like a high-confidence re
 
 - `paper_chaser_mcp/agentic/planner.py`
 - `paper_chaser_mcp/agentic/graphs.py`
-- `paper_chaser_mcp/citation_repair.py`
+- `paper_chaser_mcp/citation_repair.py` *(Stress-test Phase 5 tightened year
+  penalty, added title-similarity length penalty, reduced upstream confidence
+  bonus, and caps confidence on title conflicts. These changes help known-item
+  recovery by improving candidate ranking quality.)*
 - `tests/test_dispatch.py`
 
 ## Workstream F: Follow-Up Trust And Evidence Selection
@@ -371,6 +406,9 @@ Turn this review into a durable benchmark pack rather than a one-off manual exer
 
 ## Suggested sequencing
 
+0. ~~Schema integrity, answer validation, payload efficiency, citation repair,
+   regulatory routing foundations~~ — **completed** in stress-test remediation
+   Phases 1–8 (117 new tests, 962 total).
 1. Reranking quality and relevance fallback resilience
 2. Query-routing and hybrid-intent fixes
 3. Known-item recovery improvements

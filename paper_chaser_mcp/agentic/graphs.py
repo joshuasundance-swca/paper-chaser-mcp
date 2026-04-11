@@ -475,7 +475,7 @@ class AgenticRuntime:
         configured_provider = self._provider_bundle.configured_provider_name()
         enabled = {provider: False for provider in smart_providers}
         if self._config.enabled and configured_provider in enabled:
-            enabled[configured_provider] = True
+            enabled[configured_provider] = self._provider_bundle.is_available()
         order = ([configured_provider] if configured_provider in enabled else []) + [
             provider for provider in smart_providers if provider != configured_provider
         ]
@@ -1237,14 +1237,55 @@ class AgenticRuntime:
         )
 
         top_candidates = filtered_ranked[:limit]
-        smart_hits: list[SmartPaperHit] = []
-        for index, candidate in enumerate(top_candidates, start=1):
+        candidate_relevance_inputs: list[
+            tuple[dict[str, Any], ScoreBreakdown, str, Literal["on_topic", "weak_match", "off_topic"]]
+        ] = []
+        borderline_relevance_papers: list[dict[str, Any]] = []
+        borderline_relevance: dict[str, dict[str, Any]] = {}
+        for candidate in top_candidates:
             score_breakdown = ScoreBreakdown.model_validate(candidate["scoreBreakdown"])
+            deterministic_topical_relevance = _classify_topical_relevance_for_paper(
+                query=normalized_query,
+                paper=candidate["paper"],
+                query_similarity=score_breakdown.query_similarity,
+                score_breakdown=score_breakdown,
+            )
+            paper_id = str(
+                candidate["paper"].get("paperId")
+                or candidate["paper"].get("canonicalId")
+                or candidate["paper"].get("sourceId")
+                or ""
+            ).strip()
+            candidate_relevance_inputs.append((candidate, score_breakdown, paper_id, deterministic_topical_relevance))
+            if deterministic_topical_relevance == "weak_match" and hasattr(
+                provider_bundle, "aclassify_relevance_batch"
+            ):
+                borderline_relevance_papers.append(candidate["paper"])
+        if borderline_relevance_papers:
+            try:
+                borderline_relevance = await provider_bundle.aclassify_relevance_batch(
+                    query=normalized_query,
+                    papers=borderline_relevance_papers,
+                    request_id=request_id,
+                )
+            except Exception:
+                borderline_relevance = {}
+        smart_hits: list[SmartPaperHit] = []
+        for index, (candidate, score_breakdown, paper_id, deterministic_topical_relevance) in enumerate(
+            candidate_relevance_inputs,
+            start=1,
+        ):
+            relevance_entry = borderline_relevance.get(paper_id) or {}
             topical_relevance = _classify_topical_relevance_for_paper(
                 query=normalized_query,
                 paper=candidate["paper"],
                 query_similarity=score_breakdown.query_similarity,
                 score_breakdown=score_breakdown,
+                llm_classification=(
+                    cast(Any, relevance_entry.get("classification"))
+                    if deterministic_topical_relevance == "weak_match"
+                    else None
+                ),
             )
             smart_hits.append(
                 SmartPaperHit(
@@ -2807,7 +2848,10 @@ class AgenticRuntime:
             )
         if species_hit is None and "ecos" in zero_results:
             evidence_gaps.append("No ECOS species dossier match was found for the query.")
-        current_text_satisfied = (not current_text_requested) or govinfo_matched
+        govinfo_text_retrieved = govinfo_matched and any(
+            s.full_text_url_found for s in structured_sources if s.provider == "govinfo"
+        )
+        current_text_satisfied = (not current_text_requested) or govinfo_text_retrieved
         history_only = bool(current_text_requested and not current_text_satisfied and timeline_events)
         if current_text_requested and not govinfo_matched:
             evidence_gaps.append(
@@ -2885,6 +2929,16 @@ class AgenticRuntime:
             if cfr_request or species_hit is not None or agency_guidance_mode
             else ("medium" if anchored_subject_terms else None)
         )
+        retrieval_hypotheses = _regulatory_retrieval_hypotheses(
+            query=query,
+            planner=planner,
+            subject=subject,
+            anchor_type=anchor_type,
+            cfr_citation=cfr_citation,
+            current_text_requested=current_text_requested,
+            history_requested=history_requested,
+            agency_guidance_mode=agency_guidance_mode,
+        )
         strategy_metadata = SearchStrategyMetadata(
             intent=planner_intent,
             intentSource=planner.intent_source,
@@ -2898,7 +2952,7 @@ class AgenticRuntime:
             latencyProfile=latency_profile,
             normalizedQuery=query,
             queryVariantsTried=[query],
-            retrievalHypotheses=[],
+            retrievalHypotheses=retrieval_hypotheses,
             acceptedExpansions=[],
             rejectedExpansions=[],
             speculativeExpansions=[],
@@ -3721,7 +3775,7 @@ def _source_record_from_paper(
         isPrimarySource=paper.is_primary_source,
         canonicalUrl=paper.canonical_url,
         retrievedUrl=paper.retrieved_url,
-        fullTextObserved=paper.full_text_observed,
+        fullTextUrlFound=paper.full_text_url_found,
         abstractObserved=paper.abstract_observed,
         openAccessRoute=paper.open_access_route,
         citationText=str(paper.canonical_id or paper.paper_id or "") or None,
@@ -3783,7 +3837,8 @@ def _source_record_from_regulatory_document(
         isPrimarySource=True,
         canonicalUrl=canonical_url,
         retrievedUrl=canonical_url,
-        fullTextObserved=has_full_text,
+        fullTextUrlFound=has_full_text,
+        fullTextRetrieved=has_full_text,
         abstractObserved=False,
         openAccessRoute=("non_oa_or_unconfirmed" if (has_full_text or canonical_url) else "unknown"),
         citationText=citation,
@@ -3966,9 +4021,12 @@ def _smart_coverage_summary(
         )
         if provider
     ]
+    # Invariant: providers_succeeded and providers_zero_results must be disjoint
+    zero_results_set = set(zero_results)
+    succeeded = [p for p in providers_used if p not in zero_results_set]
     return CoverageSummary(
         providersAttempted=attempted,
-        providersSucceeded=providers_used,
+        providersSucceeded=succeeded,
         providersFailed=failed,
         providersZeroResults=zero_results,
         likelyCompleteness=("partial" if providers_used else ("incomplete" if failed else "unknown")),
@@ -4295,6 +4353,51 @@ def _format_cfr_citation(cfr_request: dict[str, Any] | None) -> str | None:
     if section:
         return f"{title} CFR {part}.{section}"
     return f"{title} CFR {part}"
+
+
+def _regulatory_retrieval_hypotheses(
+    *,
+    query: str,
+    planner: PlannerDecision,
+    subject: str | None,
+    anchor_type: str | None,
+    cfr_citation: str | None,
+    current_text_requested: bool,
+    history_requested: bool,
+    agency_guidance_mode: bool,
+) -> list[str]:
+    hypotheses: list[str] = [str(item).strip() for item in planner.retrieval_hypotheses if str(item).strip()]
+    anchor_subject = str(subject or planner.anchor_value or query).strip()
+    if current_text_requested and cfr_citation:
+        hypotheses.append(f"Current codified CFR text for {cfr_citation}.")
+    if cfr_citation and not current_text_requested:
+        hypotheses.append(f"40 CFR incorporation and referenced regulatory text for {cfr_citation}.")
+    if agency_guidance_mode:
+        hypotheses.append(f"Agency guidance documents directly addressing {anchor_subject}.")
+        hypotheses.append(f"Federal Register notices or policy actions relevant to {anchor_subject}.")
+    elif anchor_type in {"species_common_name", "species_scientific_name"}:
+        hypotheses.append(f"ECOS species dossier and supporting recovery-plan materials for {anchor_subject}.")
+        hypotheses.append(f"Federal Register listing or habitat actions for {anchor_subject}.")
+    else:
+        hypotheses.append(f"Federal Register final rule or notice history for {anchor_subject}.")
+        hypotheses.append(f"Current CFR incorporation or agency primary-source text for {anchor_subject}.")
+    if history_requested and not agency_guidance_mode:
+        hypotheses.append(f"Rulemaking timeline milestones for {anchor_subject}.")
+    for facet in query_facets(query):
+        facet_text = str(facet).strip()
+        if facet_text:
+            hypotheses.append(facet_text)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for hypothesis in hypotheses:
+        normalized = str(hypothesis).strip()
+        lowered = normalized.lower()
+        if not normalized or lowered in seen:
+            continue
+        seen.add(lowered)
+        deduped.append(normalized)
+    return deduped[:5]
 
 
 def _cfr_tokens(citation: str | None) -> set[str]:
@@ -4799,7 +4902,7 @@ def _known_item_recovery_warning(resolution_strategy: str) -> str:
 
 def _has_inspectable_sources(records: list[StructuredSourceRecord]) -> bool:
     return any(
-        bool(record.canonical_url or record.retrieved_url or record.full_text_observed or record.abstract_observed)
+        bool(record.canonical_url or record.retrieved_url or record.full_text_url_found or record.abstract_observed)
         for record in records
     )
 

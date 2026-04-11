@@ -13,6 +13,7 @@ from paper_chaser_mcp.agentic.models import ExpansionCandidate, PlannerDecision
 from paper_chaser_mcp.agentic.provider_helpers import (
     _AdequacyJudgmentSchema,
     _AnswerSchema,
+    _EvidenceGapSchema,
     _ExpansionListSchema,
     _ExpansionSchema,
     _RelevanceBatchSchema,
@@ -2423,6 +2424,66 @@ async def test_openai_bundle_falls_back_for_grounded_relevance_and_adequacy() ->
     assert relevance["paper-1"]["fallback"] is True
     assert relevance["paper-1"]["provenance"] == "deterministic_fallback"
     assert adequacy["adequacy"] == "partial"
+
+
+@pytest.mark.asyncio
+async def test_deterministic_bundle_generates_evidence_gaps_from_hypotheses() -> None:
+    bundle = DeterministicProviderBundle(_config(provider="deterministic"))
+
+    gaps = await bundle.agenerate_evidence_gaps(
+        query="Do orgone energy accumulators treat cancer?",
+        intent="discovery",
+        sources=[],
+        evidence_gaps=[],
+        retrieval_hypotheses=[
+            "No credible peer-reviewed evidence exists for orgone energy accumulators.",
+            "Peer-reviewed oncology evidence would be required to support therapeutic claims.",
+        ],
+        coverage_summary={
+            "providersAttempted": ["semantic_scholar", "openalex"],
+            "providersZeroResults": ["semantic_scholar", "openalex"],
+        },
+        timeline=None,
+        anchor_type=None,
+    )
+
+    assert gaps
+    assert not any("Adequacy assessment:" in gap for gap in gaps)
+    assert any("orgone energy accumulators" in gap.lower() for gap in gaps)
+
+
+@pytest.mark.asyncio
+async def test_openai_bundle_supports_evidence_gap_generation() -> None:
+    bundle = OpenAIProviderBundle(_config(), api_key="sk-test")
+
+    async def _parse(**kwargs: Any) -> Any:
+        endpoint = kwargs["endpoint"]
+        if endpoint == "responses.parse:evidence_gap_generation":
+            return _EvidenceGapSchema(
+                gaps=[
+                    "No credible peer-reviewed evidence supports orgone energy accumulators.",
+                    "Missing peer-reviewed oncology studies evaluating therapeutic outcomes.",
+                ]
+            )
+        raise AssertionError(f"Unexpected endpoint: {endpoint}")
+
+    bundle._aresponses_parse = _parse  # type: ignore[method-assign]
+
+    gaps = await bundle.agenerate_evidence_gaps(
+        query="Do orgone energy accumulators treat cancer?",
+        intent="discovery",
+        sources=[],
+        evidence_gaps=[],
+        retrieval_hypotheses=["No credible peer-reviewed evidence exists for orgone energy accumulators."],
+        coverage_summary={"providersAttempted": ["semantic_scholar"]},
+        timeline=None,
+        anchor_type=None,
+    )
+
+    assert gaps == [
+        "No credible peer-reviewed evidence supports orgone energy accumulators.",
+        "Missing peer-reviewed oncology studies evaluating therapeutic outcomes.",
+    ]
 
 
 @pytest.mark.asyncio

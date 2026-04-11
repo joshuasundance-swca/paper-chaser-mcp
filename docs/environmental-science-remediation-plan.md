@@ -13,6 +13,21 @@ The latest environmental-science pass showed a recognizable pattern:
 
 The practical gap is no longer just retrieval drift. The larger product problem is that the public guided contract promises trust-gated follow-up and subject-anchored regulatory behavior, while several real environmental-science cases still degrade into weak synthesis, weak specificity, or overconfident source framing.
 
+## Status update
+
+As of April 2026, the repo has already landed the cross-cutting foundations that this plan depended on:
+
+- guided abstention and follow-up payloads now compact more aggressively on insufficient-evidence paths, while preserving explicit recovery metadata
+- citation repair is less likely to suppress the correct top-ranked paper into alternatives-only when title similarity is very high
+- deterministic degradation is now covered in dedicated guided-tool integration tests
+- live integration tests exist and skip cleanly when smart-provider keys are absent
+- stress-test scenarios now live in durable eval fixtures under `tests/fixtures/evals/` and the benchmark corpus
+
+This plan should now be read together with:
+
+- `docs/cross-domain-remediation-plan.md` for the broader follow-on workstreams
+- `docs/stress-test-remediation-plan.md` for the phase-by-phase implementation plan and tracker
+
 ## Outcome targets
 
 The target for the next remediation cycle is not just fewer failures. It is a different quality profile.
@@ -66,6 +81,10 @@ These are the main implementation loci behind the observed failures.
 
 ## Workstream A: Follow-up Synthesis Integrity
 
+Status: partially complete.
+
+The repo now has explicit coverage for deterministic degradation, compact insufficient-evidence follow-up responses, and answered-but-abstaining follow-up regressions. The remaining work in this stream is higher-quality evidence-use planning and stronger response-mode separation for thin-but-usable saved sessions.
+
 ### Objective
 
 Fix the biggest current product failure: polished but weak follow-up answers.
@@ -117,6 +136,10 @@ Fix the biggest current product failure: polished but weak follow-up answers.
 - `tests/test_smart_tools.py`
 
 ## Workstream B: Species And Regulatory Entity Grounding
+
+Status: in progress.
+
+The schema and routing foundations are stronger than they were when this plan was first written, but the species-dossier and entity-chain work remains open. This is still the main environmental-science routing gap after the contract-efficiency and citation-confidence fixes.
 
 ### Objective
 
@@ -182,6 +205,10 @@ Make regulatory and ECOS-style retrieval practitioner-grade by grounding on the 
 
 ## Workstream C: Confidence And Provenance UX
 
+Status: in progress.
+
+The current repo now preserves more explicit abstention details and weaker-match rationale, but the provenance UX still needs richer source-specific explanation for environmental planning and species-specific regulatory workflows.
+
 ### Objective
 
 Make weak evidence look weak for the right reasons.
@@ -227,6 +254,10 @@ Make weak evidence look weak for the right reasons.
 - `tests/test_dispatch.py`
 
 ## Workstream D: Environmental-Science Eval Program
+
+Status: partially complete.
+
+The environmental-science slice is no longer a one-off review. The repo now includes dedicated environmental-science and stress-test seed fixtures plus benchmark-corpus entries for the main stress scenarios. The remaining work is broader trace promotion, judge-rubric iteration, and recurring score-driven tuning.
 
 ### Objective
 

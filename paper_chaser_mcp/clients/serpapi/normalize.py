@@ -67,6 +67,28 @@ def _authors_from_text(text: str | None) -> list[Author]:
     return authors
 
 
+# -- Venue validation -------------------------------------------------------
+
+_AUTHOR_NAME_RE = re.compile(r"^[A-Z][a-z]* [A-Z][a-z]+(?:,\s*[A-Z][a-z]* [A-Z][a-z]+)+$")
+_MAX_VENUE_LENGTH = 80
+
+
+def _validate_venue_candidate(candidate: str) -> Optional[str]:
+    """Return *candidate* only if it looks like a plausible venue name.
+
+    Rejects candidates that are too long (likely author lists) or that match
+    common author-name patterns (multiple ``Firstname Lastname`` segments
+    separated by commas).
+    """
+    if not candidate:
+        return None
+    if len(candidate) > _MAX_VENUE_LENGTH:
+        return None
+    if _AUTHOR_NAME_RE.match(candidate):
+        return None
+    return candidate
+
+
 def _build_paper(
     *,
     title: str,
@@ -169,7 +191,7 @@ def normalize_organic_result(result: dict[str, Any]) -> Optional[dict[str, Any]]
         # Strip trailing year / comma from venue
         venue_candidate = re.sub(r",?\s*(19|20)\d{2}.*$", "", venue_part).strip()
         if venue_candidate and venue_candidate != summary.strip():
-            venue = venue_candidate or None
+            venue = _validate_venue_candidate(venue_candidate)
 
     # --- Abstract/snippet: Scholar snippet is excerpt, not a full abstract ---
     abstract: Optional[str] = (result.get("snippet") or "").strip() or None

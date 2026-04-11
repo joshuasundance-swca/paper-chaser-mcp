@@ -183,6 +183,14 @@ def build_routing_decision(
     )
 
 
+def strip_null_fields(record: dict[str, Any]) -> dict[str, Any]:
+    """Strip None, empty-string, and empty-list fields from a dict.
+
+    Preserves ``False`` booleans and zero-valued integers.
+    """
+    return {k: v for k, v in record.items() if v is not None and v != "" and v != []}
+
+
 def build_evidence_records(
     *,
     sources: list[dict[str, Any]],
@@ -196,7 +204,9 @@ def build_evidence_records(
 
     for source in sources:
         decision = classify_source(source)
-        record = _guided_evidence_record_from_source(source, decision=decision).model_dump(by_alias=True)
+        record = strip_null_fields(
+            _guided_evidence_record_from_source(source, decision=decision).model_dump(by_alias=True)
+        )
         if decision.include_as == "evidence":
             evidence_items.append(record)
         elif decision.include_as == "lead":
@@ -209,15 +219,17 @@ def build_evidence_records(
         decision = classify_source(lead)
         if decision.include_as == "excluded":
             continue
-        record = _guided_evidence_record_from_source(
-            lead,
-            decision=EvidenceDecision(
-                evidenceId=str(lead.get("sourceId") or lead.get("sourceAlias") or "lead"),
-                includeAs="lead",
-                whyIncluded=decision.why_included or "Retained as background or unresolved lead.",
-                whyNotVerified=decision.why_not_verified,
-            ),
-        ).model_dump(by_alias=True)
+        record = strip_null_fields(
+            _guided_evidence_record_from_source(
+                lead,
+                decision=EvidenceDecision(
+                    evidenceId=str(lead.get("sourceId") or lead.get("sourceAlias") or "lead"),
+                    includeAs="lead",
+                    whyIncluded=decision.why_included or "Retained as background or unresolved lead.",
+                    whyNotVerified=decision.why_not_verified,
+                ),
+            ).model_dump(by_alias=True)
+        )
         evidence_id = str(record.get("evidenceId") or "").strip()
         if (
             evidence_id
@@ -259,18 +271,44 @@ def classify_source(source: dict[str, Any]) -> EvidenceDecision:
     )
 
 
+_REFUSAL_PATTERNS = re.compile(
+    r"cannot determine"
+    r"|insufficient evidence"
+    r"|unable to provide"
+    r"|no relevant"
+    r"|could not find"
+    r"|don'?t have enough"
+    r"|do not have enough"
+    r"|based on the available evidence,? there is no"
+    r"|cannot provide a definitive"
+    r"|unable to answer"
+    r"|no clear answer"
+    r"|not enough information"
+    r"|cannot answer",
+    re.IGNORECASE,
+)
+
+
+def _detect_refusal(answer_text: str) -> bool:
+    """Return True if the answer text contains refusal/hedging language."""
+    return bool(answer_text and _REFUSAL_PATTERNS.search(answer_text))
+
+
 def classify_answerability(
     *,
     status: str,
     evidence: list[dict[str, Any]],
     leads: list[dict[str, Any]],
     evidence_gaps: list[str],
+    answer_text: str = "",
 ) -> str:
     """Map source state into the simplified answerability ladder."""
 
     if status in {"succeeded", "answered"} and evidence:
         if any("deterministic_synthesis_fallback" in str(gap) for gap in evidence_gaps):
             return "limited"
+        if _detect_refusal(answer_text):
+            return "insufficient"
         return "grounded"
     if evidence or leads or evidence_gaps:
         return "limited"

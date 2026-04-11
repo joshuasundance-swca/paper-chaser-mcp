@@ -72,6 +72,36 @@ GAP_QUESTION_MARKERS = {
     "understudied",
     "underrepresented",
 }
+_MONTH_NAME_TO_NUMBER = {
+    "january": "01",
+    "february": "02",
+    "march": "03",
+    "april": "04",
+    "may": "05",
+    "june": "06",
+    "july": "07",
+    "august": "08",
+    "september": "09",
+    "october": "10",
+    "november": "11",
+    "december": "12",
+}
+_ADEQUACY_PREFIX = "adequacy assessment:"
+_ECOS_GAP_TEXT = "No ECOS species dossier match was found for the query."
+_SPECIES_QUERY_TERMS = {
+    "critical habitat",
+    "dossier",
+    "ecos",
+    "endangered",
+    "esa",
+    "habitat",
+    "listed",
+    "listing",
+    "recovery",
+    "species",
+    "threatened",
+    "wildlife",
+}
 BEHAVIOR_TERMS = {"behavior", "behaviour", "acoustic", "communication", "response"}
 PHYSIOLOGY_TERMS = {
     "physiology",
@@ -287,6 +317,17 @@ class _AdequacyJudgmentSchema(BaseModel):
     reason: str = Field(default="")
 
 
+class AnswerStatusValidation(BaseModel):
+    """LLM-powered classification of whether a research answer is substantive."""
+
+    classification: Literal["answered", "abstained", "insufficient_evidence"] = "abstained"
+    reasoning: str = Field(default="")
+
+
+class _EvidenceGapSchema(BaseModel):
+    gaps: list[str] = Field(default_factory=list)
+
+
 def _tokenize(text: str) -> list[str]:
     return TOKEN_RE.findall(text.lower())
 
@@ -348,6 +389,136 @@ def _paper_terms(paper: dict[str, Any]) -> set[str]:
     if "long" in normalized_tokens and "term" in normalized_tokens:
         normalized_tokens.add("longterm")
     return normalized_tokens
+
+
+def _normalize_gap_text(gap: str) -> str | None:
+    text = str(gap or "").strip()
+    if not text:
+        return None
+    if text.lower().startswith(_ADEQUACY_PREFIX):
+        return None
+    return text if text.endswith((".", "!", "?")) else f"{text}."
+
+
+def _ecos_gap_is_relevant(*, query: str, intent: str, anchor_type: str | None) -> bool:
+    if intent != "regulatory":
+        return False
+    if anchor_type in {"species_common_name", "species_scientific_name"}:
+        return True
+    lowered = str(query or "").lower()
+    return any(term in lowered for term in _SPECIES_QUERY_TERMS)
+
+
+def _query_month_year_references(query: str) -> list[tuple[str, str]]:
+    references: list[tuple[str, str]] = []
+    pattern = r"\b(" + "|".join(_MONTH_NAME_TO_NUMBER.keys()) + r")\s+((?:19|20)\d{2})\b"
+    for match in re.finditer(pattern, str(query or ""), re.IGNORECASE):
+        month_name = match.group(1).lower()
+        year = match.group(2)
+        references.append((f"{month_name} {year}", f"{year}-{_MONTH_NAME_TO_NUMBER[month_name]}"))
+    return references
+
+
+def _timeline_gap_statements(query: str, timeline: dict[str, Any] | None) -> list[str]:
+    references = _query_month_year_references(query)
+    if not references:
+        return []
+    descriptor = "final action" if "final action" in str(query or "").lower() else "event"
+    events = list((timeline or {}).get("events") or [])
+    if not events:
+        return [
+            f"The retrieved timeline does not cover the {reference} {descriptor} referenced in the query."
+            for reference, _ in references
+        ]
+    event_text = " ".join(
+        str(item.get(key) or "")
+        for item in events
+        if isinstance(item, dict)
+        for key in ("eventDate", "date", "publicationDate", "title", "citation", "note")
+    ).lower()
+    gaps: list[str] = []
+    for reference, numeric_reference in references:
+        if reference not in event_text and numeric_reference not in event_text:
+            gaps.append(f"The retrieved timeline does not cover the {reference} {descriptor} referenced in the query.")
+    return gaps
+
+
+def _hypothesis_gap_statements(retrieval_hypotheses: list[str]) -> list[str]:
+    gaps: list[str] = []
+    for hypothesis in retrieval_hypotheses:
+        text = str(hypothesis or "").strip()
+        normalized = _normalize_gap_text(text)
+        if not normalized:
+            continue
+        lowered = normalized.lower()
+        if any(
+            marker in lowered
+            for marker in (
+                "no ",
+                "missing",
+                "required",
+                "not included",
+                "not recover",
+                "not found",
+                "absent",
+                "incomplete",
+                "would be required",
+            )
+        ):
+            gaps.append(normalized)
+            continue
+        gaps.append(f"Missing evidence covering {text.rstrip('.')}.")
+    return gaps
+
+
+def generate_evidence_gaps_without_llm(
+    *,
+    query: str,
+    intent: str,
+    sources: list[dict[str, Any]],
+    evidence_gaps: list[str],
+    retrieval_hypotheses: list[str],
+    coverage_summary: dict[str, Any] | None,
+    timeline: dict[str, Any] | None,
+    anchor_type: str | None,
+) -> list[str]:
+    del coverage_summary
+    filtered: list[str] = []
+    ecos_relevant = _ecos_gap_is_relevant(query=query, intent=intent, anchor_type=anchor_type)
+    for gap in evidence_gaps:
+        normalized = _normalize_gap_text(str(gap or ""))
+        if not normalized:
+            continue
+        if normalized == _ECOS_GAP_TEXT and not ecos_relevant:
+            continue
+        filtered.append(normalized)
+
+    filtered.extend(_timeline_gap_statements(query, timeline))
+
+    verified_on_topic = any(
+        str(source.get("topicalRelevance") or "") == "on_topic"
+        and str(source.get("verificationStatus") or "") in {"verified_primary_source", "verified_metadata"}
+        for source in sources
+        if isinstance(source, dict)
+    )
+    if not verified_on_topic:
+        filtered.extend(_hypothesis_gap_statements(retrieval_hypotheses))
+
+    if not filtered and not verified_on_topic:
+        query_text = " ".join(str(query or "").split())
+        if query_text:
+            filtered.append(f"No verified on-topic sources addressed the requested evidence for: {query_text}.")
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for gap in filtered:
+        normalized = str(gap or "").strip()
+        lowered = normalized.lower()
+        if not normalized or lowered in seen:
+            continue
+        seen.add(lowered)
+        deduped.append(normalized)
+    return deduped[:6]
 
 
 def _question_focus_terms(question: str) -> list[str]:

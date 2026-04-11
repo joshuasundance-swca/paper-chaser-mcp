@@ -9,6 +9,7 @@ import paper_chaser_mcp.cli as cli
 import paper_chaser_mcp.clients.serpapi.client as serpapi_client_module
 import paper_chaser_mcp.dispatch as dispatch_module
 from paper_chaser_mcp import server
+from paper_chaser_mcp.agentic import WorkspaceRegistry
 from paper_chaser_mcp.clients.serpapi import SerpApiScholarClient
 from paper_chaser_mcp.enrichment import PaperEnrichmentService
 from paper_chaser_mcp.tool_specs import iter_visible_tool_specs
@@ -24,6 +25,11 @@ from tests.helpers import (
     RecordingUnpaywallClient,
     _payload,
 )
+
+
+def _server_workspace_registry() -> WorkspaceRegistry:
+    assert server.workspace_registry is not None
+    return server.workspace_registry
 
 
 def _assert_additive_metadata(
@@ -327,7 +333,112 @@ async def test_guided_research_adequacy_can_promote_partial_to_succeeded(
     payload = _payload(await server.call_tool("research", {"query": "wetland restoration climate resilience"}))
 
     assert payload["status"] == "succeeded"
-    assert any("Adequacy assessment:" in gap for gap in payload["evidenceGaps"])
+    assert not any("Adequacy assessment:" in gap for gap in payload["evidenceGaps"])
+
+
+def test_guided_deterministic_evidence_gaps_uses_retrieval_hypotheses_not_adequacy_strings() -> None:
+    gaps = dispatch_module._guided_deterministic_evidence_gaps(
+        query="Do orgone energy accumulators treat cancer?",
+        intent="discovery",
+        sources=[],
+        existing_evidence_gaps=["Adequacy assessment: The verified sources cover the discovery question."],
+        retrieval_hypotheses=[
+            "No credible peer-reviewed evidence exists for orgone energy accumulators.",
+            "Peer-reviewed oncology evidence would be required to support therapeutic claims.",
+        ],
+        coverage_summary={
+            "providersAttempted": ["semantic_scholar", "openalex"],
+            "providersZeroResults": ["semantic_scholar", "openalex"],
+        },
+        timeline=None,
+        anchor_type=None,
+    )
+
+    assert gaps
+    assert not any("Adequacy assessment:" in gap for gap in gaps)
+    assert any("orgone energy accumulators" in gap.lower() for gap in gaps)
+    assert any("peer-reviewed" in gap.lower() for gap in gaps)
+
+
+def test_guided_deterministic_evidence_gaps_detects_regulatory_timeline_gap_and_filters_irrelevant_ecos() -> None:
+    gaps = dispatch_module._guided_deterministic_evidence_gaps(
+        query="What was the December 2024 final TSCA action on methylene chloride?",
+        intent="regulatory",
+        sources=[],
+        existing_evidence_gaps=["No ECOS species dossier match was found for the query."],
+        retrieval_hypotheses=[
+            "Federal Register final rule for the December 2024 methylene chloride action.",
+            "40 CFR incorporation for methylene chloride restrictions.",
+        ],
+        coverage_summary={
+            "providersAttempted": ["ecos", "federal_register", "govinfo"],
+            "providersZeroResults": ["ecos"],
+        },
+        timeline={"events": [{"title": "EPA final rule issued", "eventDate": "2024-08-30"}]},
+        anchor_type="regulatory_subject_terms",
+    )
+
+    assert not any("ecos species dossier" in gap.lower() for gap in gaps)
+    assert any("december 2024" in gap.lower() for gap in gaps)
+    assert any("final rule" in gap.lower() or "40 cfr" in gap.lower() for gap in gaps)
+
+
+@pytest.mark.asyncio
+async def test_guided_research_uses_provider_generated_evidence_gaps(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _GapBundle:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        async def aassess_result_adequacy(self, **kwargs: Any) -> dict[str, str]:
+            del kwargs
+            return {"adequacy": "partial", "reason": "Coverage remains incomplete."}
+
+        async def agenerate_evidence_gaps(self, **kwargs: Any) -> list[str]:
+            self.calls.append(dict(kwargs))
+            return ["No credible peer-reviewed evidence supports orgone energy accumulators."]
+
+    bundle = _GapBundle()
+
+    class _FakeRuntime:
+        async def search_papers_smart(self, **kwargs: Any) -> dict[str, Any]:
+            del kwargs
+            return {
+                "searchSessionId": "ssn-gap-generation",
+                "strategyMetadata": {
+                    "intent": "discovery",
+                    "querySpecificity": "low",
+                    "ambiguityLevel": "medium",
+                    "retrievalHypotheses": [
+                        "No credible peer-reviewed evidence exists for orgone energy accumulators.",
+                        "Peer-reviewed oncology evidence would be required to support therapeutic claims.",
+                    ],
+                },
+                "structuredSources": [],
+                "candidateLeads": [],
+                "evidenceGaps": [],
+                "coverageSummary": {
+                    "providersAttempted": ["semantic_scholar", "openalex"],
+                    "providersSucceeded": [],
+                    "providersFailed": [],
+                    "providersZeroResults": ["semantic_scholar", "openalex"],
+                    "likelyCompleteness": "unknown",
+                    "searchMode": "smart_literature_review",
+                },
+                "failureSummary": None,
+                "clarification": None,
+                "resultStatus": "abstained",
+            }
+
+        def _provider_bundle_for_profile(self, latency_profile: str) -> _GapBundle:
+            assert latency_profile == "deep"
+            return bundle
+
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(await server.call_tool("research", {"query": "Do orgone energy accumulators treat cancer?"}))
+
+    assert bundle.calls
+    assert payload["evidenceGaps"] == ["No credible peer-reviewed evidence supports orgone energy accumulators."]
 
 
 @pytest.mark.asyncio
@@ -1584,7 +1695,7 @@ async def test_provider_diagnostics_runtime_summary_warns_on_hidden_tools_and_tl
 
 
 def test_guided_normalize_follow_up_arguments_warns_on_ambiguous_session_and_empty_question() -> None:
-    isolated_registry = type(server.workspace_registry)()
+    isolated_registry = WorkspaceRegistry()
     isolated_registry.save_result_set(
         source_tool="search_papers_smart",
         search_session_id="ssn-a",
@@ -1610,7 +1721,7 @@ def test_guided_normalize_follow_up_arguments_warns_on_ambiguous_session_and_emp
 
 
 def test_guided_normalize_inspect_arguments_repairs_invalid_session_and_missing_source() -> None:
-    isolated_registry = type(server.workspace_registry)()
+    isolated_registry = WorkspaceRegistry()
     isolated_registry.save_result_set(
         source_tool="search_papers_smart",
         search_session_id="ssn-only-source",
@@ -1630,7 +1741,7 @@ def test_guided_normalize_inspect_arguments_repairs_invalid_session_and_missing_
 
 
 def test_guided_normalize_follow_up_arguments_repairs_invalid_session_to_unique_active_session() -> None:
-    isolated_registry = type(server.workspace_registry)()
+    isolated_registry = WorkspaceRegistry()
     isolated_registry.save_result_set(
         source_tool="search_papers_smart",
         search_session_id="ssn-only-follow-up",
@@ -1648,7 +1759,7 @@ def test_guided_normalize_follow_up_arguments_repairs_invalid_session_to_unique_
 
 
 def test_guided_normalize_inspect_arguments_infers_source_bearing_session_from_source_id() -> None:
-    isolated_registry = type(server.workspace_registry)()
+    isolated_registry = WorkspaceRegistry()
     isolated_registry.save_result_set(
         source_tool="search_papers_smart",
         search_session_id="ssn-source-bearing",
@@ -1754,6 +1865,51 @@ async def test_get_runtime_status_surfaces_configured_and_active_smart_provider(
 
 
 @pytest.mark.asyncio
+async def test_get_runtime_status_excludes_unavailable_openai_before_first_smart_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeBundle:
+        def selection_metadata(self) -> dict[str, object]:
+            return {
+                "configuredSmartProvider": "openai",
+                "activeSmartProvider": "deterministic",
+                "plannerModel": "openai:deterministic-planner",
+                "plannerModelSource": "deterministic",
+                "synthesisModel": "openai:deterministic-synthesizer",
+                "synthesisModelSource": "deterministic",
+            }
+
+    class _FakeRuntime:
+        _provider_bundle = _FakeBundle()
+
+        @staticmethod
+        def smart_provider_diagnostics() -> tuple[dict[str, bool], list[str]]:
+            return (
+                {
+                    "openai": False,
+                    "azure-openai": False,
+                    "anthropic": False,
+                    "nvidia": False,
+                    "google": False,
+                    "mistral": False,
+                    "huggingface": False,
+                    "openrouter": False,
+                },
+                ["openai", "azure-openai", "anthropic", "nvidia", "google", "mistral", "huggingface", "openrouter"],
+            )
+
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(await server.call_tool("get_runtime_status", {}))
+
+    assert payload["runtimeSummary"]["configuredSmartProvider"] == "openai"
+    assert payload["runtimeSummary"]["activeSmartProvider"] == "deterministic"
+    assert "openai" not in payload["runtimeSummary"]["activeProviderSet"]
+    assert "openai" in payload["runtimeSummary"]["disabledProviderSet"]
+    assert any("deterministic fallback is active" in warning for warning in payload["warnings"])
+
+
+@pytest.mark.asyncio
 async def test_guided_research_escalates_once_when_initial_pass_is_too_weak(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1840,6 +1996,82 @@ async def test_guided_research_escalates_once_when_initial_pass_is_too_weak(
     assert [call["mode"] for call in runtime.calls] == ["auto", "review"]
     assert payload["executionProvenance"]["escalationAttempted"] is True
     assert payload["executionProvenance"]["passesRun"] == 2
+
+
+@pytest.mark.asyncio
+async def test_guided_research_returns_partial_when_deterministic_fallback_leaves_incomplete_retrieval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRuntime:
+        @staticmethod
+        def _provider_bundle_for_profile(*args: Any, **kwargs: Any) -> Any:
+            del args, kwargs
+
+            class _Bundle:
+                def selection_metadata(self) -> dict[str, str]:
+                    return {
+                        "configuredSmartProvider": "openai",
+                        "activeSmartProvider": "deterministic",
+                        "plannerModel": "openai:deterministic-planner",
+                        "plannerModelSource": "deterministic",
+                        "synthesisModel": "openai:deterministic-synthesizer",
+                        "synthesisModelSource": "deterministic",
+                    }
+
+                async def aassess_result_adequacy(self, **kwargs: Any) -> dict[str, str]:
+                    del kwargs
+                    return {
+                        "adequacy": "insufficient",
+                        "reason": "No verified sources were available.",
+                    }
+
+            return _Bundle()
+
+        async def search_papers_smart(self, **kwargs: Any) -> dict[str, Any]:
+            del kwargs
+            return {
+                "searchSessionId": "ssn-deterministic-partial",
+                "strategyMetadata": {
+                    "intent": "review",
+                    "configuredSmartProvider": "openai",
+                    "activeSmartProvider": "deterministic",
+                    "providerBudgetApplied": {"allowPaidProviders": True},
+                },
+                "structuredSources": [],
+                "candidateLeads": [],
+                "evidenceGaps": ["Smart provider 'openai' fell back to deterministic mode."],
+                "coverageSummary": {
+                    "providersAttempted": ["semantic_scholar", "openalex"],
+                    "providersSucceeded": [],
+                    "providersFailed": ["openalex"],
+                    "providersZeroResults": ["semantic_scholar"],
+                    "likelyCompleteness": "incomplete",
+                    "searchMode": "smart_literature_review",
+                },
+                "failureSummary": {
+                    "fallbackAttempted": True,
+                    "fallbackMode": "deterministic",
+                    "primaryPathFailureReason": "smart_provider_unavailable",
+                },
+                "clarification": None,
+            }
+
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(
+        await server.call_tool(
+            "research",
+            {"query": "retrieval degradation with offline smart provider"},
+        )
+    )
+
+    assert payload["status"] == "partial"
+    assert payload["resultStatus"] == "partial"
+    assert payload["executionProvenance"]["configuredSmartProvider"] == "openai"
+    assert payload["executionProvenance"]["activeSmartProvider"] == "deterministic"
+    assert payload["executionProvenance"]["deterministicFallbackUsed"] is True
+    assert payload["answerability"] == "limited"
+    assert any("deterministic fallback" in gap.lower() for gap in payload["evidenceGaps"])
     assert payload["executionProvenance"]["passModes"] == ["auto", "review"]
     assert payload["executionProvenance"]["latencyProfileApplied"] == server.settings.guided_research_latency_profile
     assert payload["status"] in {"succeeded", "partial"}
@@ -1847,7 +2079,7 @@ async def test_guided_research_escalates_once_when_initial_pass_is_too_weak(
 
 @pytest.mark.asyncio
 async def test_follow_up_research_without_session_returns_session_candidates_and_policy_metadata() -> None:
-    isolated_registry = type(server.workspace_registry)()
+    isolated_registry = WorkspaceRegistry()
     isolated_registry.save_result_set(
         source_tool="search_papers_smart",
         search_session_id="ssn-a",
@@ -1879,7 +2111,7 @@ async def test_follow_up_research_without_session_returns_session_candidates_and
 async def test_follow_up_research_passes_server_owned_latency_profile_to_ask_result_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    isolated_registry = type(server.workspace_registry)()
+    isolated_registry = WorkspaceRegistry()
     isolated_registry.save_result_set(
         source_tool="search_papers_smart",
         search_session_id="ssn-follow-up",
@@ -1954,7 +2186,7 @@ async def test_follow_up_research_surfaces_deterministic_synthesis_degradation(
         "treat the answer as a lightweight summary."
     )
 
-    isolated_registry = type(server.workspace_registry)()
+    isolated_registry = WorkspaceRegistry()
     isolated_registry.save_result_set(
         source_tool="search_papers_smart",
         search_session_id="ssn-follow-up-det",
@@ -2032,7 +2264,8 @@ async def test_follow_up_research_surfaces_deterministic_synthesis_degradation(
     assert payload["confidenceSignals"]["trustRevisionReason"] == "deterministic_synthesis_fallback"
 
 
-def test_answer_follow_up_from_session_state_only_answers_metadata_safe_modes() -> None:
+@pytest.mark.asyncio
+async def test_answer_follow_up_from_session_state_only_answers_metadata_safe_modes() -> None:
     session_state = {
         "searchSessionId": "ssn-session",
         "query": "PFAS remediation in groundwater",
@@ -2057,7 +2290,7 @@ def test_answer_follow_up_from_session_state_only_answers_metadata_safe_modes() 
     }
 
     assert (
-        dispatch_module._answer_follow_up_from_session_state(
+        await dispatch_module._answer_follow_up_from_session_state(
             question="Compare adsorption and membranes for PFAS removal.",
             session_state=session_state,
             response_mode="comparison",
@@ -2065,7 +2298,7 @@ def test_answer_follow_up_from_session_state_only_answers_metadata_safe_modes() 
         is None
     )
 
-    metadata_answer = dispatch_module._answer_follow_up_from_session_state(
+    metadata_answer = await dispatch_module._answer_follow_up_from_session_state(
         question="Which providers were searched and what were the main gaps?",
         session_state=session_state,
         response_mode="metadata",
@@ -2079,7 +2312,7 @@ def test_answer_follow_up_from_session_state_only_answers_metadata_safe_modes() 
 async def test_follow_up_research_surfaces_evidence_use_plan_for_comparison_question(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    isolated_registry = type(server.workspace_registry)()
+    isolated_registry = WorkspaceRegistry()
     isolated_registry.save_result_set(
         source_tool="search_papers_smart",
         search_session_id="ssn-follow-up-plan",
@@ -2163,7 +2396,7 @@ async def test_follow_up_research_surfaces_evidence_use_plan_for_comparison_ques
 
 @pytest.mark.asyncio
 async def test_inspect_source_surfaces_confidence_signals_and_scope_reason() -> None:
-    isolated_registry = type(server.workspace_registry)()
+    isolated_registry = WorkspaceRegistry()
     isolated_registry.save_result_set(
         source_tool="research",
         search_session_id="ssn-source-audit",
@@ -2212,7 +2445,7 @@ async def test_inspect_source_surfaces_confidence_signals_and_scope_reason() -> 
 
 @pytest.mark.asyncio
 async def test_inspect_source_returns_structured_disambiguation_when_session_is_ambiguous() -> None:
-    isolated_registry = type(server.workspace_registry)()
+    isolated_registry = WorkspaceRegistry()
     isolated_registry.save_result_set(
         source_tool="search_papers_smart",
         search_session_id="ssn-left",
@@ -2242,7 +2475,7 @@ async def test_inspect_source_returns_structured_disambiguation_when_session_is_
 
 @pytest.mark.asyncio
 async def test_inspect_source_returns_available_source_ids_when_source_is_unresolved() -> None:
-    isolated_registry = type(server.workspace_registry)()
+    isolated_registry = WorkspaceRegistry()
     isolated_registry.save_result_set(
         source_tool="search_papers_smart",
         search_session_id="ssn-source-list",
@@ -2452,7 +2685,7 @@ async def test_resolve_reference_title_only_match_with_conflicting_author_year_v
                 "failureSummary": None,
             }
 
-    isolated_registry = type(server.workspace_registry)()
+    isolated_registry = WorkspaceRegistry()
     isolated_registry.save_result_set(
         source_tool="search_papers_smart",
         search_session_id="ssn-guided-1",
@@ -2679,7 +2912,7 @@ async def test_guided_research_blends_cultural_resource_regulatory_and_literatur
     assert any(source["sourceId"] == "heritage-paper" for source in payload["sources"])
     assert len(payload["sources"]) == 2
     assert any("inspect_source" in action for action in payload["nextActions"])
-    assert payload["regulatoryTimeline"]["events"][0]["title"] == "Section 106 guidance"
+    assert payload["timeline"]["events"][0]["title"] == "Section 106 guidance"
 
 
 @pytest.mark.asyncio
@@ -2830,14 +3063,14 @@ async def test_guided_research_abstained_without_sources_omits_inspect_source(mo
     )
 
     assert payload["status"] == "abstained"
-    assert payload["sources"] == []
+    assert payload.get("sources", []) == []
     assert not any("inspect_source" in action for action in payload["nextActions"])
     assert any("follow_up_research" in action for action in payload["nextActions"])
 
 
 @pytest.mark.asyncio
 async def test_inspect_source_surfaces_guided_v2_source_fields() -> None:
-    record = server.workspace_registry.save_result_set(
+    record = _server_workspace_registry().save_result_set(
         source_tool="research",
         search_session_id="ssn-guided-inspect",
         query="test query",
@@ -2855,7 +3088,7 @@ async def test_inspect_source_surfaces_guided_v2_source_fields() -> None:
                     "isPrimarySource": False,
                     "canonicalUrl": "https://arxiv.org/abs/2401.12345",
                     "retrievedUrl": "https://arxiv.org/abs/2401.12345",
-                    "fullTextObserved": False,
+                    "fullTextUrlFound": False,
                     "abstractObserved": True,
                     "openAccessRoute": "repository_open_access",
                     "citationText": "arXiv:2401.12345",
@@ -2883,7 +3116,7 @@ async def test_inspect_source_surfaces_guided_v2_source_fields() -> None:
     )
 
     source = payload["source"]
-    assert source["fullTextObserved"] is False
+    assert source["fullTextUrlFound"] is False
     assert source["abstractObserved"] is True
     assert source["openAccessRoute"] == "repository_open_access"
     assert source["citationText"] == "arXiv:2401.12345"
@@ -2899,7 +3132,7 @@ async def test_follow_up_research_answers_from_saved_session_metadata_when_regul
         async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
             raise AssertionError(f"ask_result_set should not run for session introspection: {kwargs!r}")
 
-    record = server.workspace_registry.save_result_set(
+    record = _server_workspace_registry().save_result_set(
         source_tool="search_papers_smart",
         search_session_id="ssn-follow-up-regulatory",
         query="Regulatory history of the gray wolf delisting in the contiguous United States",
@@ -2923,7 +3156,7 @@ async def test_follow_up_research_answers_from_saved_session_metadata_when_regul
                     "isPrimarySource": True,
                     "canonicalUrl": "https://www.federalregister.gov/documents/2026/03/24/2026-05678/example",
                     "retrievedUrl": "https://www.federalregister.gov/documents/2026/03/24/2026-05678/example",
-                    "fullTextObserved": False,
+                    "fullTextUrlFound": False,
                     "abstractObserved": False,
                     "openAccessRoute": "non_oa_or_unconfirmed",
                     "citationText": "2026-05678",
@@ -2983,7 +3216,8 @@ async def test_follow_up_research_answers_from_saved_session_metadata_when_regul
     assert "No primary-source regulatory timeline could be reconstructed" in payload["answer"]
     assert payload["coverage"]["searchMode"] == "regulatory_primary_source"
     assert payload["evidenceGaps"][0].startswith("No primary-source regulatory timeline")
-    assert payload["unverifiedLeads"][0]["sourceId"] == "2026-05678"
+    # Payload efficiency: unreferenced leads are no longer re-serialized in follow-up
+    assert payload.get("unverifiedLeads", []) == []
     assert payload["resultState"]["status"] == "answered"
     assert payload["executionProvenance"]["executionMode"] == "session_introspection"
 
@@ -2996,7 +3230,7 @@ async def test_follow_up_research_classifies_saved_sources_and_leads_for_relevan
         async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
             raise AssertionError(f"ask_result_set should not run for saved-session triage: {kwargs!r}")
 
-    record = server.workspace_registry.save_result_set(
+    record = _server_workspace_registry().save_result_set(
         source_tool="search_papers_smart",
         search_session_id="ssn-follow-up-triage",
         query="FDA AI/ML lifecycle guidance documents",
@@ -3151,7 +3385,7 @@ async def test_follow_up_research_uses_question_shaped_answer_mode_over_saved_cl
                 "failureSummary": None,
             }
 
-    record = server.workspace_registry.save_result_set(
+    record = _server_workspace_registry().save_result_set(
         source_tool="search_papers_smart",
         search_session_id="ssn-follow-up-mode",
         query="freshwater eDNA biodiversity monitoring",
@@ -3198,7 +3432,7 @@ async def test_follow_up_research_relevance_triage_answers_weak_matches_versus_o
         async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
             raise AssertionError(f"ask_result_set should not run for saved-session relevance triage: {kwargs!r}")
 
-    record = server.workspace_registry.save_result_set(
+    record = _server_workspace_registry().save_result_set(
         source_tool="search_papers_smart",
         search_session_id="ssn-follow-up-weak-vs-offtopic",
         query="remote sensing algal blooms freshwater lakes",
@@ -3288,7 +3522,7 @@ async def test_follow_up_research_execution_provenance_uses_live_runtime_provide
                 "failureSummary": None,
             }
 
-    record = server.workspace_registry.save_result_set(
+    record = _server_workspace_registry().save_result_set(
         source_tool="search_papers_smart",
         search_session_id="ssn-follow-up-runtime-provider",
         query="environmental follow-up",
@@ -3320,7 +3554,7 @@ async def test_follow_up_research_uses_saved_unverified_leads_for_source_overvie
         async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
             raise AssertionError(f"ask_result_set should not run for session source overview: {kwargs!r}")
 
-    record = server.workspace_registry.save_result_set(
+    record = _server_workspace_registry().save_result_set(
         source_tool="search_papers_smart",
         search_session_id="ssn-follow-up-leads",
         query="Regulatory history of the gray wolf delisting in the contiguous United States",
@@ -3402,7 +3636,7 @@ async def test_follow_up_research_infers_single_active_session_when_search_sessi
         async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
             raise AssertionError(f"ask_result_set should not run for inferred session introspection: {kwargs!r}")
 
-    isolated_registry = type(server.workspace_registry)()
+    isolated_registry = WorkspaceRegistry()
     monkeypatch.setattr(server, "workspace_registry", isolated_registry)
 
     record = isolated_registry.save_result_set(
@@ -3449,7 +3683,7 @@ async def test_follow_up_research_infers_single_active_session_when_search_sessi
 async def test_inspect_source_accepts_index_alias_without_search_session_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    isolated_registry = type(server.workspace_registry)()
+    isolated_registry = WorkspaceRegistry()
     monkeypatch.setattr(server, "workspace_registry", isolated_registry)
 
     record = isolated_registry.save_result_set(
@@ -3493,7 +3727,7 @@ async def test_inspect_source_accepts_index_alias_without_search_session_id(
 async def test_follow_up_research_requires_explicit_session_when_multiple_are_active(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    isolated_registry = type(server.workspace_registry)()
+    isolated_registry = WorkspaceRegistry()
     monkeypatch.setattr(server, "workspace_registry", isolated_registry)
 
     isolated_registry.save_result_set(
@@ -3528,7 +3762,7 @@ async def test_follow_up_research_requires_explicit_session_when_multiple_are_ac
 async def test_inspect_source_requires_explicit_session_when_multiple_are_active(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    isolated_registry = type(server.workspace_registry)()
+    isolated_registry = WorkspaceRegistry()
     monkeypatch.setattr(server, "workspace_registry", isolated_registry)
 
     isolated_registry.save_result_set(
@@ -3566,7 +3800,7 @@ async def test_follow_up_research_answers_from_saved_session_metadata_when_parti
         async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
             raise AssertionError(f"ask_result_set should not run for session introspection: {kwargs!r}")
 
-    record = server.workspace_registry.save_result_set(
+    record = _server_workspace_registry().save_result_set(
         source_tool="search_papers_smart",
         search_session_id="ssn-follow-up-partial",
         query="Recent overview of retrieval-augmented generation evaluation methods for scholarly QA",
@@ -3586,7 +3820,7 @@ async def test_follow_up_research_answers_from_saved_session_metadata_when_parti
                     "isPrimarySource": False,
                     "canonicalUrl": "https://arxiv.org/abs/2309.15217v2",
                     "retrievedUrl": "https://arxiv.org/pdf/2309.15217v2",
-                    "fullTextObserved": True,
+                    "fullTextUrlFound": True,
                     "abstractObserved": True,
                     "openAccessRoute": "repository_open_access",
                     "citationText": "2309.15217",
@@ -3608,7 +3842,7 @@ async def test_follow_up_research_answers_from_saved_session_metadata_when_parti
                     "isPrimarySource": False,
                     "canonicalUrl": "https://arxiv.org/abs/2411.18583v1",
                     "retrievedUrl": "https://arxiv.org/pdf/2411.18583v1",
-                    "fullTextObserved": True,
+                    "fullTextUrlFound": True,
                     "abstractObserved": True,
                     "openAccessRoute": "repository_open_access",
                     "citationText": "2411.18583",
@@ -3677,7 +3911,7 @@ async def test_follow_up_research_answers_authors_and_venue_from_saved_source_me
         async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
             raise AssertionError(f"ask_result_set should not run for source metadata introspection: {kwargs!r}")
 
-    isolated_registry = type(server.workspace_registry)()
+    isolated_registry = WorkspaceRegistry()
     monkeypatch.setattr(server, "workspace_registry", isolated_registry)
     monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
 
@@ -3736,7 +3970,7 @@ async def test_follow_up_research_does_not_treat_stopwords_as_source_ids(
         async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
             raise AssertionError(f"ask_result_set should not run for session source overview: {kwargs!r}")
 
-    isolated_registry = type(server.workspace_registry)()
+    isolated_registry = WorkspaceRegistry()
     monkeypatch.setattr(server, "workspace_registry", isolated_registry)
     monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
 
@@ -3798,7 +4032,7 @@ async def test_follow_up_research_uses_evidence_contract_records_when_sources_ar
         async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
             raise AssertionError(f"ask_result_set should not run for evidence-only session introspection: {kwargs!r}")
 
-    isolated_registry = type(server.workspace_registry)()
+    isolated_registry = WorkspaceRegistry()
     monkeypatch.setattr(server, "workspace_registry", isolated_registry)
     monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
 
@@ -3874,7 +4108,7 @@ async def test_follow_up_research_uses_evidence_contract_records_when_sources_ar
 async def test_inspect_source_reads_evidence_contract_records_without_legacy_sources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    isolated_registry = type(server.workspace_registry)()
+    isolated_registry = WorkspaceRegistry()
     monkeypatch.setattr(server, "workspace_registry", isolated_registry)
 
     isolated_registry.save_result_set(
@@ -3928,7 +4162,7 @@ async def test_inspect_source_reads_evidence_contract_records_without_legacy_sou
 async def test_inspect_source_reads_candidate_and_unverified_leads_from_saved_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    isolated_registry = type(server.workspace_registry)()
+    isolated_registry = WorkspaceRegistry()
     monkeypatch.setattr(server, "workspace_registry", isolated_registry)
 
     isolated_registry.save_result_set(
@@ -3996,7 +4230,7 @@ async def test_inspect_source_reads_candidate_and_unverified_leads_from_saved_se
 async def test_inspect_source_matches_normalized_locator_without_protocol(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    isolated_registry = type(server.workspace_registry)()
+    isolated_registry = WorkspaceRegistry()
     monkeypatch.setattr(server, "workspace_registry", isolated_registry)
 
     isolated_registry.save_result_set(
@@ -4071,7 +4305,7 @@ async def test_follow_up_research_recovers_when_agentic_answer_is_blank(
                 "failureSummary": None,
             }
 
-    isolated_registry = type(server.workspace_registry)()
+    isolated_registry = WorkspaceRegistry()
     monkeypatch.setattr(server, "workspace_registry", isolated_registry)
     monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
 

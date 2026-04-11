@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Final, Literal
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 
 from ..models.common import ApiModel, CitationRecord, CoverageSummary, FailureSummary, OpenAccessRoute, Paper
 from ..models.regulations import RegulatoryTimeline
@@ -288,7 +288,12 @@ class StructuredSourceRecord(ApiModel):
     is_primary_source: bool | None = Field(default=None, alias="isPrimarySource")
     canonical_url: str | None = Field(default=None, alias="canonicalUrl")
     retrieved_url: str | None = Field(default=None, alias="retrievedUrl")
-    full_text_observed: bool | None = Field(default=None, alias="fullTextObserved")
+    full_text_url_found: bool | None = Field(
+        default=None,
+        alias="fullTextUrlFound",
+        validation_alias=AliasChoices("fullTextUrlFound", "fullTextObserved"),
+    )
+    full_text_retrieved: bool | None = Field(default=None, alias="fullTextRetrieved")
     abstract_observed: bool | None = Field(default=None, alias="abstractObserved")
     open_access_route: OpenAccessRoute | None = Field(default=None, alias="openAccessRoute")
     citation_text: str | None = Field(default=None, alias="citationText")

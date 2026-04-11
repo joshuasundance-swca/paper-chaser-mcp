@@ -243,6 +243,106 @@
       "expected": {
         "goal": "smart_fallback_without_model_corruption"
       }
+    },
+    {
+      "id": "stress_core_science_microplastics_discovery",
+      "category": "broad_topical_discovery",
+      "tool": "research",
+      "inputs": {
+        "query": "Impact of microplastics on freshwater benthic macroinvertebrates",
+        "limit": 5
+      },
+      "expected": {
+        "goal": "stress_test_positive_control",
+        "statusAnyOf": [
+          "succeeded",
+          "partial"
+        ]
+      }
+    },
+    {
+      "id": "stress_data_drought_mariana_trench_amphipods",
+      "category": "safe_abstention",
+      "tool": "research",
+      "inputs": {
+        "query": "PFAS bioaccumulation Mariana Trench amphipods Hirondellea gigas",
+        "limit": 5
+      },
+      "expected": {
+        "goal": "stress_test_data_drought_abstention",
+        "statusAnyOf": [
+          "partial",
+          "abstained"
+        ]
+      }
+    },
+    {
+      "id": "stress_regulatory_6ppd_primary_source",
+      "category": "regulatory_correctness",
+      "tool": "research",
+      "inputs": {
+        "query": "Proposed 2024 EPA TSCA regulations for 6PPD agricultural use",
+        "limit": 5
+      },
+      "expected": {
+        "goal": "stress_test_regulatory_primary_source",
+        "requiresFields": [
+          "intent",
+          "status",
+          "evidenceGaps",
+          "nextActions"
+        ]
+      }
+    },
+    {
+      "id": "stress_pseudoscience_healing_crystals_abstention",
+      "category": "safe_abstention",
+      "tool": "research",
+      "inputs": {
+        "query": "Do healing crystals reverse ocean acidification",
+        "limit": 5
+      },
+      "expected": {
+        "goal": "stress_test_hallucination_resistance",
+        "statusAnyOf": [
+          "abstained",
+          "partial"
+        ]
+      }
+    },
+    {
+      "id": "stress_mixed_intent_guided_blend",
+      "category": "guided_default_profile",
+      "tool": "research",
+      "inputs": {
+        "query": "Compare PFAS remediation literature with current U.S. regulatory guidance for groundwater treatment",
+        "limit": 5
+      },
+      "expected": {
+        "goal": "stress_test_mixed_intent_guided_blend",
+        "statusAnyOf": [
+          "succeeded",
+          "partial",
+          "abstained"
+        ]
+      }
+    },
+    {
+      "id": "stress_follow_up_answered_but_abstaining_fu4b",
+      "category": "safe_abstention",
+      "tool": "follow_up_research",
+      "inputs": {
+        "searchSessionId": "ssn_fixture_placeholder",
+        "question": "Compare the competing interventions and pick the best one."
+      },
+      "expected": {
+        "goal": "stress_test_answered_but_abstaining_follow_up",
+        "answerStatusAnyOf": [
+          "insufficient_evidence",
+          "abstained",
+          "answered"
+        ]
+      }
     }
   ]
 }

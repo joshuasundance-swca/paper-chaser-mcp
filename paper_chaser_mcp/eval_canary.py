@@ -40,6 +40,7 @@ PROVENANCE_SOURCE_TYPES = {
 PROVENANCE_TRUST_STATES = {"verified_primary_source", "verified_metadata", "unverified"}
 PROVENANCE_ACCESS_STATES = {
     "full_text_verified",
+    "full_text_retrieved",
     "abstract_only",
     "access_unverified",
     "restricted",

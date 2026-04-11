@@ -213,6 +213,21 @@ def test_environmental_science_eval_seed_fixture_covers_planner_synthesis_and_pr
     assert any("pfas" in json.dumps(row).lower() for row in rows)
 
 
+def test_stress_test_eval_seed_fixture_covers_core_stress_scenarios() -> None:
+    seed_path = Path(__file__).resolve().parent / "fixtures" / "evals" / "stress_test_remediation.seed.jsonl"
+    rows = [json.loads(line) for line in seed_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+    row_text = "\n".join(json.dumps(row) for row in rows).lower()
+
+    assert len(rows) >= 6
+    assert "microplastics" in row_text
+    assert "mariana trench amphipods" in row_text
+    assert "6ppd" in row_text
+    assert "healing crystals" in row_text
+    assert "mixed intent" in row_text
+    assert "answered-but-abstaining" in row_text
+
+
 def test_eval_autopilot_profiles_include_environmental_science_slice() -> None:
     profile_path = Path(__file__).resolve().parent / "fixtures" / "evals" / "eval-autopilot-profiles.sample.json"
     payload = json.loads(profile_path.read_text(encoding="utf-8"))

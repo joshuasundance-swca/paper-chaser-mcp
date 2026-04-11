@@ -1517,6 +1517,69 @@ async def test_search_papers_smart_regulatory_pfas_filters_collateral_rules_from
     assert "Vessel Incidental Discharge National Standards of Performance" not in titles
     assert "National Primary Drinking Water Regulations for Lead and Copper" in lead_titles
     assert "Vessel Incidental Discharge National Standards of Performance" in lead_titles
+    assert payload["strategyMetadata"]["retrievalHypotheses"]
+
+
+@pytest.mark.asyncio
+async def test_search_papers_smart_promotes_borderline_weak_match_with_relevance_batch() -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+
+    async def semantic_search(**kwargs: object) -> dict[str, Any]:
+        semantic.calls.append(("search_papers", dict(kwargs)))
+        return {
+            "total": 1,
+            "offset": 0,
+            "data": [
+                {
+                    "paperId": "paper-microplastic-thresholds",
+                    "title": "Microplastic Effect Thresholds for Freshwater Benthic Macroinvertebrates",
+                    "abstract": (
+                        "Synthesizes threshold evidence for microplastic exposure in freshwater benthic "
+                        "macroinvertebrates across river and lake systems."
+                    ),
+                    "year": 2024,
+                    "source": "semantic_scholar",
+                }
+            ],
+        }
+
+    async def empty_openalex_search(**kwargs: object) -> dict[str, Any]:
+        openalex.calls.append(("search", dict(kwargs)))
+        return {"total": 0, "offset": 0, "data": []}
+
+    semantic.search_papers = semantic_search  # type: ignore[method-assign]
+    openalex.search = empty_openalex_search  # type: ignore[method-assign]
+
+    _, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
+
+    relevance_calls = 0
+
+    async def _relevance_batch(**kwargs: object) -> dict[str, dict[str, str]]:
+        nonlocal relevance_calls
+        relevance_calls += 1
+        del kwargs
+        return {
+            "paper-microplastic-thresholds": {
+                "classification": "on_topic",
+                "rationale": (
+                    "The title and abstract directly match the user's requested microplastics, freshwater, and "
+                    "benthic macroinvertebrate focus."
+                ),
+            }
+        }
+
+    runtime._provider_bundle.aclassify_relevance_batch = _relevance_batch  # type: ignore[method-assign]
+    runtime._deterministic_bundle.aclassify_relevance_batch = _relevance_batch  # type: ignore[method-assign]
+
+    payload = await runtime.search_papers_smart(
+        query="microplastic effects in freshwater benthic macroinvertebrates",
+        limit=5,
+    )
+
+    assert relevance_calls == 1
+    assert payload["results"][0]["topicalRelevance"] == "on_topic"
+    assert payload["structuredSources"][0]["topicalRelevance"] == "on_topic"
 
 
 @pytest.mark.asyncio

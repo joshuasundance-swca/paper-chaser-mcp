@@ -34,6 +34,12 @@ def test_provider_benchmark_corpus_covers_required_scenarios() -> None:
     assert "guided_runtime_truth_status" in case_ids
     assert "safe_abstention_unsupported_follow_up" in case_ids
     assert "regulatory_condor_primary_source_correctness" in case_ids
+    assert "stress_core_science_microplastics_discovery" in case_ids
+    assert "stress_data_drought_mariana_trench_amphipods" in case_ids
+    assert "stress_regulatory_6ppd_primary_source" in case_ids
+    assert "stress_pseudoscience_healing_crystals_abstention" in case_ids
+    assert "stress_mixed_intent_guided_blend" in case_ids
+    assert "stress_follow_up_answered_but_abstaining_fu4b" in case_ids
 
     outage_providers = {case["provider"] for case in cases if case["category"] == "provider_outage"}
     assert outage_providers == {

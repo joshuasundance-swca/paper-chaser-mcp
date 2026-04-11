@@ -182,7 +182,7 @@ class CoreApiClient:
             if name:
                 authors.append(Author(name=name))
 
-        pdf_url = result.get("downloadUrl")
+        pdf_url = result.get("downloadUrl") or None
         if isinstance(pdf_url, dict):
             pdf_url = pdf_url.get("url") if pdf_url else None
         if not pdf_url and result.get("sourceFulltextUrls"):

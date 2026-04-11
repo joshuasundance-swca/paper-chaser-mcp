@@ -76,9 +76,9 @@ next steps without re-discovering project state.
   instead of static prompt assumptions.
 - The current checked-in package version is `0.2.1` in both `pyproject.toml`
   and `server.json`.
-- The current coverage-gated validation baseline after the latest release-readiness pass is:
+- The current coverage-gated validation baseline after the latest stress-test remediation pass is:
   `python -m pytest --cov=paper_chaser_mcp --cov-report=term-missing --cov-fail-under=85`
-  => `655 passed`, total coverage `85.09%`.
+  => `962 passed`, total coverage ≥ `85%`.
 
 ## Start Here
 
@@ -177,6 +177,18 @@ Use only when there is a concrete control need.
   Acceptance corpus for safe abstention and benchmark consistency.
 - `tests/test_agentic_workflow.py`
   Contract tests for `.github/workflows/test-paper-chaser.md` and doc sync.
+- `tests/test_schema_invariants.py`
+  Coverage-summary field invariants, author dedup, and active-provider-set correctness.
+- `tests/test_answer_validation.py`
+  LLM answer-status validation, refusal detection, and async contract-field behavior.
+- `tests/test_provider_runtime_fixes.py`
+  Capability-based follow-up eligibility and SerpApi venue parsing guards.
+- `tests/test_payload_efficiency.py`
+  Payload stripping and selected-evidence-only source inclusion.
+- `tests/test_citation_repair_fixes.py`
+  Year-penalty weighting, title-similarity length penalty, and confidence capping.
+- `tests/test_regulatory_routing.py`
+  Verification-status defaults, expanded regulatory source types, and routing contracts.
 
 ## Validation Commands
 
@@ -208,7 +220,71 @@ gh aw compile test-paper-chaser --dir .github/workflows
 pytest tests/test_agentic_workflow.py -q
 ```
 
-## What Was Added In This Pass
+## Stress-Test Remediation (Phase 1–8)
+
+A comprehensive 8-phase stress test exercised schema integrity, LLM answer
+validation, provider runtime contracts, payload efficiency, citation repair,
+and regulatory routing. The remediation added 117 new tests across 6 new test
+modules and made targeted fixes throughout the codebase.
+
+### Phase 1: Schema Integrity Fixes
+
+- `_smart_coverage_summary()` in `graphs.py`: `providersSucceeded` now excludes
+  zero-result providers (was raw `providers_used`).
+- `_guided_failure_summary()` in `dispatch.py`: `fallbackAttempted` forced
+  `True` when `fallbackMode` is set; `outcome` is `partial_success` (not
+  `no_failure`) when abstained with 0 sources.
+- Active provider set in `dispatch.py`: suppressed providers excluded from
+  `activeProviderSet`.
+- Author dedup: `_deduplicate_authors()` groups by `(surname, first_initial)`,
+  keeps longest form.
+- Tests: `tests/test_schema_invariants.py` (15 tests).
+
+### Phase 2: LLM Answer Status Validation
+
+- New `AnswerStatusValidation` Pydantic schema in `provider_helpers.py`.
+- `avalidate_answer_status()` added to `ModelProviderBundle`,
+  `OpenAIProviderBundle`, `LangChainChatProviderBundle`.
+- `classify_answerability()` in `guided_semantic.py` now accepts `answer_text`
+  and includes deterministic refusal detection via `_REFUSAL_PATTERNS`.
+- `_guided_contract_fields()` in `dispatch.py` is now async and runs LLM
+  validation when a provider bundle is available.
+- Tests: `tests/test_answer_validation.py` (25 tests).
+
+### Phase 3: Provider Runtime Fixes
+
+- `canAnswerFollowUp` is now capability-based (`has_sources AND has_session`)
+  not just permission-based.
+- SerpApi venue parsing: `_validate_venue_candidate()` rejects author-pattern
+  strings and over-long venues.
+- Tests: `tests/test_provider_runtime_fixes.py` (16 tests).
+
+### Phase 4: Payload Efficiency
+
+- Follow-up responses only include sources referenced in
+  `selectedEvidenceIds`.
+- Evidence and source records stripped of null/empty fields via
+  `strip_null_fields()`.
+- Tests: `tests/test_payload_efficiency.py` (9 tests).
+
+### Phase 5: Citation Repair
+
+- Year penalty in `_rank_candidate()` increased:
+  `-0.04×min(delta,5)` + hard penalty for `delta>5`.
+- Upstream confidence bonus reduced (`0.25→0.15` for high).
+- Title conflict caps confidence at `"medium"` in
+  `_classify_resolution_confidence()`.
+- Length-difference penalty added to `_title_similarity()`.
+- Tests: `tests/test_citation_repair_fixes.py` (13 tests).
+
+### Phase 6: Regulatory Routing
+
+- `_assign_verification_status()` default changed from `verified_metadata` to
+  `unverified` for papers without DOI or identifiers.
+- `_REGULATORY_SOURCE_TYPES` expanded from 4 to 13 entries.
+- Tests: `tests/test_regulatory_routing.py` (39 tests).
+
+## What Was Added In Earlier Passes
 
 - Guided-default public surface and expert fallback via
   `PAPER_CHASER_TOOL_PROFILE`.
@@ -260,6 +336,12 @@ pytest tests/test_agentic_workflow.py -q
   disagreement. Single-seed diversification improved coverage in live runs,
   but valid review or policy pivots can still be blocked by cross-check
   thresholds before workflow handoff.
+8. Citation repair now penalizes year mismatch more aggressively and caps
+   confidence when title conflicts exist. Watch for regressions in near-miss
+   citation resolution where a ±1 year difference is expected.
+9. Papers without DOI or identifiers now default to `unverified` verification
+   status. This is correct for integrity but may increase `unverified` counts
+   in regulatory result sets where primary-source metadata is sparse.
 
 ## Suggested Next Steps
 
@@ -280,6 +362,12 @@ pytest tests/test_agentic_workflow.py -q
 7. Calibrate family cross-check disagreement handling for exploratory one-seed
   runs so valid review or policy pivots are not over-penalized once topic
   count and family coverage improve.
+8. Use the stress-test remediation as a baseline and continue with the
+  cross-domain remediation plan workstreams (reranking quality,
+  relevance-classification resilience, cultural-resource routing).
+9. Monitor citation-repair regressions after the tightened year penalty and
+  reduced upstream confidence bonus. Collect examples where the new weights
+  over-penalize legitimate near-miss citations.
 
 ## Ready Handoff Prompt
 

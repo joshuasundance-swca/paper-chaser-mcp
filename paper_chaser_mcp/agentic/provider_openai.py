@@ -15,12 +15,14 @@ from .config import AgenticConfig
 from .models import ExpansionCandidate, PlannerDecision
 from .provider_base import DeterministicProviderBundle, classify_relevance_without_llm, relevance_paper_identifier
 from .provider_helpers import (
+    AnswerStatusValidation,
     _AdequacyJudgmentSchema,
     _AnswerSchema,
     _build_answer_payload,
     _build_theme_label_payload,
     _build_theme_summary_payload,
     _cosine_similarity,
+    _EvidenceGapSchema,
     _ExpansionListSchema,
     _extract_json_object,
     _filter_expansion_candidates,
@@ -82,6 +84,9 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         self._synthesizer: Any | None = None
         self._embeddings: Any | None = None
         self._embedding_cache: dict[str, tuple[float, ...]] = {}
+
+    def is_available(self) -> bool:
+        return bool(self._api_key)
 
     def supports_embeddings(self) -> bool:
         return (not self._disable_embeddings) and bool(self._api_key)
@@ -1155,6 +1160,103 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             request_id=request_id,
         )
 
+    async def avalidate_answer_status(
+        self,
+        *,
+        query: str,
+        answer_text: str,
+        evidence_count: int,
+        request_id: str | None = None,
+    ) -> AnswerStatusValidation | None:
+        try:
+            result = await self._aresponses_parse(
+                endpoint="responses.parse:answer_status_validation",
+                model_name=self.synthesis_model_name,
+                response_model=AnswerStatusValidation,
+                system_prompt=(
+                    "You are classifying whether a research answer provides a substantive response to the query. "
+                    "Classify as:\n"
+                    "- answered: The text provides specific, relevant information addressing the query\n"
+                    "- abstained: The text explicitly states inability to answer or lacks substantive content\n"
+                    "- insufficient_evidence: The text is hedging, vague, or contradicts its own claims of certainty"
+                ),
+                payload={
+                    "query": query,
+                    "answerText": answer_text[:2000],
+                    "evidenceCount": evidence_count,
+                },
+                request_outcomes=None,
+                request_id=request_id,
+            )
+            if result is not None:
+                self._mark_provider_used()
+                return result
+        except Exception:
+            logger.exception("Async OpenAI answer status validation failed; returning None.")
+        return None
+
+    async def agenerate_evidence_gaps(
+        self,
+        *,
+        query: str,
+        intent: str,
+        sources: list[dict[str, Any]],
+        evidence_gaps: list[str],
+        retrieval_hypotheses: list[str],
+        coverage_summary: dict[str, Any] | None,
+        timeline: dict[str, Any] | None,
+        anchor_type: str | None,
+        request_id: str | None = None,
+    ) -> list[str]:
+        try:
+            result = await self._aresponses_parse(
+                endpoint="responses.parse:evidence_gap_generation",
+                model_name=self.planner_model_name,
+                response_model=_EvidenceGapSchema,
+                system_prompt=(
+                    "You identify evidence gaps for guided research. Return only specific missing evidence or missing "
+                    "timeline coverage, never adequacy assessments. If a provider like ECOS is irrelevant to the "
+                    "query, do not report its zero-result as a gap."
+                ),
+                payload={
+                    "query": query,
+                    "intent": intent,
+                    "anchorType": anchor_type,
+                    "sources": [
+                        {
+                            "sourceId": source.get("sourceId") or source.get("sourceAlias"),
+                            "title": source.get("title"),
+                            "topicalRelevance": source.get("topicalRelevance"),
+                            "verificationStatus": source.get("verificationStatus"),
+                            "note": source.get("note"),
+                        }
+                        for source in sources[:8]
+                    ],
+                    "existingEvidenceGaps": evidence_gaps[:5],
+                    "retrievalHypotheses": retrieval_hypotheses[:5],
+                    "timeline": timeline or {},
+                    "coverageSummary": coverage_summary or {},
+                },
+                request_outcomes=None,
+                request_id=request_id,
+            )
+            if result is not None:
+                self._mark_provider_used()
+                return [str(gap).strip() for gap in result.gaps if str(gap).strip()]
+        except Exception:
+            logger.exception("Async OpenAI evidence-gap generation failed; using deterministic fallback.")
+        return await super().agenerate_evidence_gaps(
+            query=query,
+            intent=intent,
+            sources=sources,
+            evidence_gaps=evidence_gaps,
+            retrieval_hypotheses=retrieval_hypotheses,
+            coverage_summary=coverage_summary,
+            timeline=timeline,
+            anchor_type=anchor_type,
+            request_id=request_id,
+        )
+
     def plan_search(
         self,
         *,
@@ -1594,6 +1696,9 @@ class AzureOpenAIProviderBundle(OpenAIProviderBundle):
             self.planner_model_name = azure_planner_deployment
         if azure_synthesis_deployment:
             self.synthesis_model_name = azure_synthesis_deployment
+
+    def is_available(self) -> bool:
+        return bool(self._api_key and self._azure_endpoint)
 
     def supports_embeddings(self) -> bool:
         return (not self._disable_embeddings) and bool(self._api_key and self._azure_endpoint)

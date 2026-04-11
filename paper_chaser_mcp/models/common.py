@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, RootModel, model_validator
 
 
 class ApiModel(BaseModel):
@@ -139,6 +139,7 @@ VerificationStatus = Literal[
 ]
 AccessStatus = Literal[
     "full_text_verified",
+    "full_text_retrieved",
     "abstract_only",
     "oa_verified",
     "oa_uncertain",
@@ -467,7 +468,12 @@ class Paper(ApiModel):
     retrieved_url: str | None = Field(default=None, alias="retrievedUrl")
     confidence: Literal["high", "medium", "low"] | None = None
     is_primary_source: bool | None = Field(default=None, alias="isPrimarySource")
-    full_text_observed: bool | None = Field(default=None, alias="fullTextObserved")
+    full_text_url_found: bool | None = Field(
+        default=None,
+        alias="fullTextUrlFound",
+        validation_alias=AliasChoices("fullTextUrlFound", "fullTextObserved"),
+    )
+    full_text_retrieved: bool | None = Field(default=None, alias="fullTextRetrieved")
     abstract_observed: bool | None = Field(default=None, alias="abstractObserved")
     open_access_route: OpenAccessRoute | None = Field(default=None, alias="openAccessRoute")
 

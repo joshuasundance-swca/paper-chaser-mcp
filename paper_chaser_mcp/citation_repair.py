@@ -333,6 +333,7 @@ def build_match_metadata(
         matched_fields=ranked.matched_fields,
         conflicting_fields=ranked.conflicting_fields,
         resolution_strategy=ranked.resolution_strategy,
+        title_similarity=ranked.title_similarity,
     )
     return {
         "matchConfidence": confidence,
@@ -539,6 +540,7 @@ def _serialize_citation_response(
         matched_fields=best.matched_fields if best is not None else [],
         conflicting_fields=best.conflicting_fields if best is not None else [],
         resolution_strategy=best.resolution_strategy if best is not None else "none",
+        title_similarity=best.title_similarity if best is not None else None,
     )
     abstain = bool(
         best is not None
@@ -860,6 +862,7 @@ async def _resolve_title_candidates(
                     matched_fields=candidate.matched_fields,
                     conflicting_fields=candidate.conflicting_fields,
                     resolution_strategy=candidate.resolution_strategy,
+                    title_similarity=candidate.title_similarity,
                 )
                 == "high"
             ):
@@ -895,6 +898,7 @@ def _best_candidate_confidence(
         matched_fields=best.matched_fields if best is not None else [],
         conflicting_fields=best.conflicting_fields if best is not None else [],
         resolution_strategy=best.resolution_strategy if best is not None else "none",
+        title_similarity=best.title_similarity if best is not None else None,
     )
 
 
@@ -1122,7 +1126,9 @@ def _rank_candidate(
     elif year_delta == 1:
         score += 0.04
     elif year_delta is not None and year_delta > 1:
-        score -= min(year_delta, 3) * 0.02
+        score -= min(year_delta, 5) * 0.04
+        if year_delta > 5:
+            score -= 0.06
     if venue_overlap:
         score += 0.05
     if snippet_alignment > 0:
@@ -1131,13 +1137,13 @@ def _rank_candidate(
     score += publication_preference * 0.03
     upstream_bonus = 0.0
     if upstream_confidence == "high":
-        upstream_bonus = 0.25
+        upstream_bonus = 0.15
     elif upstream_confidence == "medium":
-        upstream_bonus = 0.12
+        upstream_bonus = 0.08
     if key_conflict_count >= 2:
-        upstream_bonus = min(upstream_bonus, 0.05)
+        upstream_bonus = min(upstream_bonus, 0.04)
     elif year_conflict:
-        upstream_bonus = min(upstream_bonus, 0.08)
+        upstream_bonus = min(upstream_bonus, 0.06)
     score += upstream_bonus
     score = max(0.0, min(score, 1.0))
 
@@ -1217,18 +1223,40 @@ def _classify_resolution_confidence(
     matched_fields: list[str],
     conflicting_fields: list[str],
     resolution_strategy: str,
+    title_similarity: float | None = None,
 ) -> Literal["high", "medium", "low"]:
     if best_score is None:
         return "low"
     gap = best_score - (runner_up_score or 0.0)
     high_signal_fields = {"title", "author", "year"} & set(matched_fields)
     key_conflicting = {"author", "year", "venue"} & set(conflicting_fields)
+    title_is_conflicting = "title" in set(conflicting_fields)
     if resolution_strategy.startswith("identifier") and "identifier" in matched_fields:
+        if title_is_conflicting:
+            return "medium"
         return "high"
     if resolution_strategy.endswith("exact_title") and "title" in matched_fields:
         if len(key_conflicting) >= 2:
             return "medium"
         return "high"
+    if (
+        resolution_strategy in {"fuzzy_search", "citation_ranked", "snippet_recovery"}
+        and "title" in matched_fields
+        and not title_is_conflicting
+        and title_similarity is not None
+        and title_similarity >= 0.9
+    ):
+        if ("year" in matched_fields or "author" in matched_fields) and best_score >= 0.42:
+            return "high"
+        return "medium"
+    if title_is_conflicting:
+        # Title conflict caps confidence at medium regardless of other signals.
+        # Only promote to medium when no other key fields conflict.
+        if len(high_signal_fields) >= 2 and len(key_conflicting) == 0:
+            return "medium"
+        if best_score >= 0.68 and gap >= 0.05 and len(key_conflicting) == 0:
+            return "medium"
+        return "low"
     if len(high_signal_fields) >= 3 and len(conflicting_fields) <= 1:
         return "high"
     if best_score >= 0.82 and gap >= 0.12 and len(conflicting_fields) <= 1:
@@ -1453,13 +1481,28 @@ def _title_similarity(parsed: ParsedCitation, paper: dict[str, Any]) -> float:
         normalized_candidate = normalize_citation_text(candidate).lower()
         if not normalized_candidate:
             continue
-        best = max(
-            best,
+        raw = max(
             SequenceMatcher(None, normalized_candidate, title).ratio(),
             _token_overlap_ratio(normalized_candidate, title),
             _weighted_token_overlap_ratio(normalized_candidate, title),
         )
+        raw = _apply_length_penalty(raw, normalized_candidate, title)
+        best = max(best, raw)
     return best
+
+
+def _apply_length_penalty(similarity: float, candidate: str, title: str) -> float:
+    """Reduce similarity when candidate and title lengths differ significantly."""
+    cand_len = len(candidate)
+    title_len = len(title)
+    if cand_len == 0 or title_len == 0:
+        return similarity
+    ratio = min(cand_len, title_len) / max(cand_len, title_len)
+    if ratio >= 0.7:
+        return similarity
+    # Scale penalty: at ratio=0.5 penalty ~0.15, at ratio=0.2 penalty ~0.35
+    penalty = (0.7 - ratio) * 0.7
+    return max(0.0, similarity - penalty)
 
 
 def _author_overlap(parsed: ParsedCitation, paper: dict[str, Any]) -> int:

@@ -16,6 +16,7 @@ from .models import (
 from .provider_helpers import (
     COMMON_QUERY_WORDS,
     GAP_QUESTION_MARKERS,
+    AnswerStatusValidation,
     _compact_theme_label,
     _deterministic_comparison_answer,
     _deterministic_gap_insights,
@@ -25,6 +26,7 @@ from .provider_helpers import (
     _normalize_confidence_label,
     _tokenize,
     _top_terms,
+    generate_evidence_gaps_without_llm,
 )
 
 __all__ = [
@@ -150,10 +152,15 @@ class ModelProviderBundle:
     synthesis_model_name: str
     embedding_model_name: str
 
+    def is_available(self) -> bool:
+        return True
+
     def configured_provider_name(self) -> str:
         return str(getattr(self, "_configured_provider", getattr(self, "_provider_name", "deterministic")))
 
     def active_provider_name(self) -> str:
+        if not self.is_available():
+            return "deterministic"
         return str(getattr(self, "_last_effective_provider_name", getattr(self, "_provider_name", "deterministic")))
 
     def _mark_provider_used(self, provider_name: str | None = None) -> None:
@@ -450,6 +457,46 @@ class ModelProviderBundle:
         if intent in {"discovery", "review"} and verified_count >= 3:
             return {"adequacy": "partial", "reason": "Some verified evidence exists, but coverage is incomplete."}
         return {"adequacy": "partial", "reason": "Deterministic fallback could not promote adequacy beyond partial."}
+
+    async def avalidate_answer_status(
+        self,
+        *,
+        query: str,
+        answer_text: str,
+        evidence_count: int,
+        request_id: str | None = None,
+    ) -> AnswerStatusValidation | None:
+        """Validate whether an answer is substantive using LLM judgment.
+
+        Returns None when no model is available (deterministic bundles).
+        """
+        del query, answer_text, evidence_count, request_id
+        return None
+
+    async def agenerate_evidence_gaps(
+        self,
+        *,
+        query: str,
+        intent: str,
+        sources: list[dict[str, Any]],
+        evidence_gaps: list[str],
+        retrieval_hypotheses: list[str],
+        coverage_summary: dict[str, Any] | None,
+        timeline: dict[str, Any] | None,
+        anchor_type: str | None,
+        request_id: str | None = None,
+    ) -> list[str]:
+        del request_id
+        return generate_evidence_gaps_without_llm(
+            query=query,
+            intent=intent,
+            sources=sources,
+            evidence_gaps=evidence_gaps,
+            retrieval_hypotheses=retrieval_hypotheses,
+            coverage_summary=coverage_summary,
+            timeline=timeline,
+            anchor_type=anchor_type,
+        )
 
 
 class DeterministicProviderBundle(ModelProviderBundle):
