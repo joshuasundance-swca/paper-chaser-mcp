@@ -14,7 +14,7 @@ tools:
   - web
   - todo
   - agent
-model: "Claude Sonnet 4"
+model: "GPT-5.4"
 argument-hint: "Describe which MCP tools to stress-test and any specific failure modes or edge cases to probe."
 ---
 
