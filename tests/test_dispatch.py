@@ -2861,6 +2861,29 @@ def test_guided_abstention_details_partial_status_narrow_pool_hints() -> None:
     assert "resolve_reference" in joined or "follow_up_research" in joined or "broaden" in joined
 
 
+def test_guided_abstention_details_all_off_topic_is_not_inspectable() -> None:
+    # R10 finding: abstentionDetails must agree with resultState routing.
+    # For all-off-topic pools, canInspectSources must be False and
+    # inspectableSourceCount must be 0 so agents don't re-enter inspect_source.
+    off_topic_sources = [
+        {"sourceId": "s1", "topicalRelevance": "off_topic"},
+        {"sourceId": "s2", "topicalRelevance": "off_topic"},
+    ]
+    details = dispatch_module._guided_abstention_details_payload(
+        status="partial",
+        sources=off_topic_sources,
+        evidence_gaps=["All results were off-topic for the query."],
+        trust_summary={
+            "onTopicSourceCount": 0,
+            "weakMatchCount": 0,
+            "offTopicCount": 2,
+        },
+    )
+    assert details is not None
+    assert details["canInspectSources"] is False
+    assert details["inspectableSourceCount"] == 0
+
+
 @pytest.mark.asyncio
 async def test_follow_up_research_passes_server_owned_latency_profile_to_ask_result_set(
     monkeypatch: pytest.MonkeyPatch,

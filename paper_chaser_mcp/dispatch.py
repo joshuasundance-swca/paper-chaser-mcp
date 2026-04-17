@@ -1716,16 +1716,19 @@ def _guided_abstention_details_payload(
         refinement_hints = ["Inspect the returned sources before treating the result as settled."]
     else:
         refinement_hints = ["Narrow the request so the server can recover a stronger initial anchor."]
+    all_sources_off_topic = _guided_sources_all_off_topic(sources)
+    effective_inspectable_count = 0 if all_sources_off_topic else len(sources)
+    can_inspect = bool(sources) and not all_sources_off_topic
     details = AbstentionDetails(
         category=category,
         reason=(
             evidence_gaps[0] if evidence_gaps else "The current evidence was not strong enough to ground an answer."
         ),
-        inspectableSourceCount=len(sources),
+        inspectableSourceCount=effective_inspectable_count,
         onTopicSourceCount=on_topic_source_count,
         weakMatchCount=weak_match_count,
         offTopicCount=off_topic_count,
-        canInspectSources=bool(sources),
+        canInspectSources=can_inspect,
         refinementHints=refinement_hints,
     )
     return details.model_dump(by_alias=True, exclude_none=True)
