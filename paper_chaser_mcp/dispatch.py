@@ -3320,12 +3320,33 @@ def _guided_missing_evidence_type(
     return "coverage_gap"
 
 
+def _guided_saved_session_topicality(
+    candidates: list[dict[str, Any]] | None,
+) -> tuple[bool, bool]:
+    """Return ``(has_sources, all_off_topic)`` for saved-session candidates.
+
+    Fifth rubber-duck pass: routing the empty-current-response path to
+    ``inspect_source`` must distinguish a saved session that still holds
+    on-topic/weak-match evidence from one where every stored candidate has
+    already been classified ``off_topic``. The latter should fall through to
+    ``research`` like the current-response all-off-topic path does.
+    """
+
+    items = [c for c in (candidates or []) if isinstance(c, dict)]
+    has_sources = bool(items)
+    all_off_topic = has_sources and all(
+        str(c.get("topicalRelevance") or "").strip().lower() == "off_topic" for c in items
+    )
+    return has_sources, all_off_topic
+
+
 def _guided_best_next_internal_action(
     *,
     status: str,
     has_sources: bool,
     search_session_id: str | None,
     saved_session_has_sources: bool = False,
+    saved_session_all_off_topic: bool = False,
     all_sources_off_topic: bool = False,
 ) -> str:
     normalized_status = str(status or "").strip().lower()
@@ -3344,8 +3365,15 @@ def _guided_best_next_internal_action(
     # The CURRENT response may have no sources (e.g., smart runtime unavailable
     # or inspect_source retry with a wrong sourceId), yet the SAVED SESSION may
     # still be inspectable. In that case prefer inspect_source over research so
-    # resultState agrees with the failureSummary's recommended retry.
-    if not has_sources and saved_session_has_sources and search_session_id:
+    # resultState agrees with the failureSummary's recommended retry. If every
+    # saved candidate is off_topic, fall through to research instead so the
+    # 9ee3168 "all off-topic → research" guarantee still holds.
+    if (
+        not has_sources
+        and saved_session_has_sources
+        and not saved_session_all_off_topic
+        and search_session_id
+    ):
         return "inspect_source"
     # Without inspectable sources, neither inspect_source nor another follow_up_research
     # over the same (empty) session can progress: keep the guidance aligned with the
@@ -3368,6 +3396,7 @@ def _guided_result_state(
     evidence_gaps: list[str],
     search_session_id: str | None,
     saved_session_has_sources: bool = False,
+    saved_session_all_off_topic: bool = False,
 ) -> dict[str, Any]:
     has_sources = bool(sources)
     all_sources_off_topic = has_sources and all(
@@ -3386,16 +3415,23 @@ def _guided_result_state(
         groundedness = "insufficient_evidence"
     else:
         groundedness = "unknown"
+    # Fifth rubber-duck pass (finding 3): hasInspectableSources must agree with
+    # bestNextInternalAction. When the current response is empty but the saved
+    # session still carries on_topic/weak_match evidence, the saved candidates
+    # remain reachable via inspect_source, so the flag has to reflect that.
+    saved_session_inspectable = saved_session_has_sources and not saved_session_all_off_topic
+    inspectable_sources = has_sources or saved_session_inspectable
     state = GuidedResultState(
         status=normalized_status,
         groundedness=groundedness,
-        hasInspectableSources=has_sources,
+        hasInspectableSources=inspectable_sources,
         canAnswerFollowUp=bool(search_session_id) and has_sources,
         bestNextInternalAction=_guided_best_next_internal_action(
             status=normalized_status,
             has_sources=has_sources,
             search_session_id=search_session_id,
             saved_session_has_sources=saved_session_has_sources,
+            saved_session_all_off_topic=saved_session_all_off_topic,
             all_sources_off_topic=all_sources_off_topic,
         ),
         missingEvidenceType=_guided_missing_evidence_type(
@@ -5532,13 +5568,17 @@ async def dispatch_tool(
             evidence_gaps = [follow_up_args.question]
             trust_summary = _guided_trust_summary([], evidence_gaps)
             saved_session_has_sources = False
+            saved_session_all_off_topic = False
             if workspace_registry is not None and follow_up_args.search_session_id:
                 try:
                     record = workspace_registry.get(follow_up_args.search_session_id)
                     if record is not None:
-                        saved_session_has_sources = bool(_guided_record_source_candidates(record))
+                        saved_session_has_sources, saved_session_all_off_topic = (
+                            _guided_saved_session_topicality(_guided_record_source_candidates(record))
+                        )
                 except Exception:
                     saved_session_has_sources = False
+                    saved_session_all_off_topic = False
             failure_summary = _guided_failure_summary(
                 failure_summary={
                     "outcome": "total_failure",
@@ -5587,6 +5627,7 @@ async def dispatch_tool(
                     evidence_gaps=evidence_gaps,
                     search_session_id=follow_up_args.search_session_id,
                     saved_session_has_sources=saved_session_has_sources,
+                    saved_session_all_off_topic=saved_session_all_off_topic,
                 ),
                 "sessionResolution": session_resolution,
                 "executionProvenance": _guided_execution_provenance_payload(
@@ -5970,16 +6011,20 @@ async def dispatch_tool(
         )
         if source is None:
             available_ids: list[str] = []
+            saved_candidates: list[dict[str, Any]] = []
             if workspace_registry is not None and inspect_args.search_session_id:
                 try:
                     record = workspace_registry.get(inspect_args.search_session_id)
+                    saved_candidates = _guided_record_source_candidates(record)
                     available_ids = [
                         str(candidate.get("sourceId") or "").strip()
-                        for candidate in _guided_record_source_candidates(record)
+                        for candidate in saved_candidates
                         if str(candidate.get("sourceId") or "").strip()
                     ][:8]
                 except Exception:
                     available_ids = []
+                    saved_candidates = []
+            saved_has_sources, saved_all_off_topic = _guided_saved_session_topicality(saved_candidates)
             evidence_gaps = [
                 "Could not find sourceId "
                 f"{inspect_args.source_id!r} in searchSessionId "
@@ -6023,7 +6068,8 @@ async def dispatch_tool(
                     sources=[],
                     evidence_gaps=evidence_gaps,
                     search_session_id=inspect_args.search_session_id,
-                    saved_session_has_sources=bool(available_ids),
+                    saved_session_has_sources=saved_has_sources,
+                    saved_session_all_off_topic=saved_all_off_topic,
                 ),
                 "sessionResolution": session_resolution,
                 "sourceResolution": _guided_source_resolution_payload(

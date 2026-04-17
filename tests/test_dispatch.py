@@ -2186,6 +2186,55 @@ def test_guided_best_next_internal_action_saved_session_has_inspectable_sources(
     )
 
 
+def test_guided_best_next_internal_action_saved_session_all_off_topic_prefers_research() -> None:
+    # Regression (Finding 1, 5th pass): when the CURRENT response is empty and
+    # the SAVED SESSION exists but every stored candidate has already been
+    # classified off_topic, inspect_source cannot rescue the result. The agent
+    # must be routed to research, matching the current-response all-off-topic
+    # guarantee from 9ee3168.
+    assert (
+        dispatch_module._guided_best_next_internal_action(
+            status="partial",
+            has_sources=False,
+            search_session_id="ssn-saved",
+            saved_session_has_sources=True,
+            saved_session_all_off_topic=True,
+        )
+        == "research"
+    )
+    # Saved session with at least one on_topic/weak_match candidate still
+    # prefers inspect_source.
+    assert (
+        dispatch_module._guided_best_next_internal_action(
+            status="partial",
+            has_sources=False,
+            search_session_id="ssn-saved",
+            saved_session_has_sources=True,
+            saved_session_all_off_topic=False,
+        )
+        == "inspect_source"
+    )
+
+
+def test_guided_saved_session_topicality_classifies_candidates() -> None:
+    # Regression (Finding 1, 5th pass): the helper must distinguish "has
+    # candidates" from "every candidate is off_topic" so downstream routing can
+    # prefer research over inspect_source for confirmed-irrelevant pools.
+    assert dispatch_module._guided_saved_session_topicality([]) == (False, False)
+    assert dispatch_module._guided_saved_session_topicality(
+        [{"sourceId": "s1", "topicalRelevance": "off_topic"}]
+    ) == (True, True)
+    assert dispatch_module._guided_saved_session_topicality(
+        [
+            {"sourceId": "s1", "topicalRelevance": "off_topic"},
+            {"sourceId": "s2", "topicalRelevance": "on_topic"},
+        ]
+    ) == (True, False)
+    assert dispatch_module._guided_saved_session_topicality(
+        [{"sourceId": "s1", "topicalRelevance": "weak_match"}]
+    ) == (True, False)
+
+
 def test_guided_best_next_internal_action_all_off_topic_prefers_research() -> None:
     # Regression (Finding 5, 4th pass): when every returned source is off_topic,
     # the agent must be told to refine the query via research rather than waste
