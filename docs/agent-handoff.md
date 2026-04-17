@@ -172,11 +172,61 @@ following additions on top of `main`:
   and `_guided_trust_summary` so machine-readable trust signals mirror the
   human rationale.
 
-#### Validation baseline (HEAD `3abda1e`)
+- **Test-masking cleanup** (`a16a6e8`): loosened brittle prose assertions
+  and pinned provenance stamps strictly in `test_trust_ux_deepen.py` and
+  `test_planner_llm_schema.py` so future regressions in trust sentence
+  composition or subject-card provenance surface directly.
 
-- `python -m pytest -q` => **1191 passed, 2 skipped**
+#### Phase 7 — LLM-first remediation round
+
+- **LLM-first literature/mixed-intent classification** (`13c4a87`): planner
+  `regulatoryIntent=hybrid_regulatory_plus_literature` now drives
+  `_guided_should_add_review_pass`; keyword heuristic becomes last-resort
+  fallback for deterministic bundles.
+- **LLM bundles correctly report `is_deterministic=False`** (`3a6b8c0`):
+  OpenAI and LangChain bundles override the shim default, and
+  `classify_query` snapshots grounding signals before deterministic
+  fallback can pollute them.
+- **Saved-session trust summary carries `subjectChainGaps`** (`7dc9710`):
+  `_guided_session_state` now threads the signal into rebuilt trust
+  summaries so session-introspection follow-ups inherit live-path trust
+  signals.
+- **Surface LLM classification alongside deterministic verdict**
+  (`f85988b`): Candidate/PaperRecord carry `llmClassification` +
+  `classificationSource`; smart-search strategyMetadata tallies
+  `llmClassificationOverrides` when the deterministic gate disagrees
+  with the LLM signal.
+- **`ask_result_set` routes question-mode via LLM classifier**
+  (`dfb12a4`): `aclassify_question_mode` is invoked with an explicit
+  `followUpMode` hint and passed into `build_evidence_use_plan`,
+  rescuing paraphrased synthesis queries over weak pools.
+- **LLM-first regulatory triage** (`5ac8111`):
+  `_derive_regulatory_query_flags` in `graphs.py` consults planner
+  `regulatoryIntent` + `subject_card.source` before falling back to the
+  CFR regex / agency-guidance keyword helpers; `_ecos_query_variants`
+  prepends planner-emitted species names so scientific-name
+  recognition does not depend solely on regex.
+- **Planner source provenance + hybrid corroboration** (`96cdc02`):
+  every provider bundle stamps `planner_source ∈ {llm, deterministic,
+  deterministic_fallback}` on the planner object. Subject-card provenance
+  keys off this flag instead of the unreliable `intent_source`, so
+  explicit-mode LLM planner runs no longer get downgraded and LLM
+  providers that internally fall back to deterministic are now stamped
+  correctly. The hybrid regulatory+literature label also now requires
+  query-side corroboration (literature keyword cue, `review`/`literature`
+  secondary intent, or `hybrid_policy_science` retrieval hypothesis) in
+  both `_derive_regulatory_intent` and `_guided_should_add_review_pass`.
+- **Concrete `aclassify_answer_mode` on LLM bundles** (`0776faf`):
+  `OpenAIProviderBundle` and `LangChainChatProviderBundle` now implement
+  `aclassify_answer_mode` via a compact structured-output schema so
+  `ask_result_set` actually reaches an LLM classifier in production
+  instead of the no-op base stub.
+
+#### Validation baseline (HEAD `0776faf`)
+
+- `python -m pytest -q` => **1228 passed, 2 skipped** (live-only)
 - `python -m ruff check .` clean
-- `python -m mypy --config-file pyproject.toml` clean across **164** source files
+- `python -m mypy --config-file pyproject.toml` clean across **171** source files
 - `python -m bandit -c pyproject.toml -r paper_chaser_mcp` clean
 - `pre-commit run --all-files` clean (ruff/ruff-format/mypy/bandit/checkov/
   hadolint/PSRule/secret-scan/typos/etc.)
