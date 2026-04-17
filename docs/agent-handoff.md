@@ -368,6 +368,31 @@ modules and made targeted fixes throughout the codebase.
 9. Monitor citation-repair regressions after the tightened year penalty and
   reduced upstream confidence bonus. Collect examples where the new weights
   over-penalize legitimate near-miss citations.
+10. Follow-up synthesis integrity (Workstreams A + F) landed via
+    `paper_chaser_mcp/agentic/answer_modes.py`, which centralizes
+    question-mode classification, weak-pool detection, and the evidence-use
+    plan. `ask_result_set` now gates synthesis-heavy answers through a
+    weak-pool check (skipped when the plan is already sufficient), a strict
+    synthesis-sufficiency check, and a generalized fallback-only gate
+    (previously comparison-only). Deferred items worth a near-term follow-up:
+
+    - Replace the keyword heuristic in `classify_question_mode` with a real
+      LLM answer-mode classifier. It is deliberately distinct from the
+      per-paper `llm_relevance` evidence-mode classifier; conflating them is
+      documented tech debt.
+    - Align `dispatch.py::_guided_follow_up_response_mode` (still has its own
+      keyword logic, emits `"evidence_planning"` not in `ANSWER_MODES`) with
+      `classify_question_mode`.
+    - Empirically tune the weak-pool threshold
+      (`PAPER_CHASER_WEAK_EVIDENCE_POOL_THRESHOLD`, default 0.6).
+    - Consider extending the fallback-only gate to `"unknown"` mode. Today
+      generic synthesis-shaped questions that don't keyword-match any
+      synthesis family classify as `"unknown"` and get a permissive plan so
+      downstream `should_abstain` / coverage / unsupported-asks machinery
+      retains ownership.
+    - Real provider-lane bounded recovery (distinct from the current
+      deterministic fallback path) remains unimplemented and is currently
+      dead code.
 
 ## Ready Handoff Prompt
 

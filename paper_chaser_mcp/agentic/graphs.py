@@ -1678,9 +1678,11 @@ class AgenticRuntime:
             answerability = "limited" if (evidence or unsupported_asks or follow_up_questions) else "insufficient"
         # Evidence-pool quality gate: for synthesis-heavy modes, a pool
         # dominated by weak_match / off_topic classifications cannot support a
-        # polished answer.
+        # polished answer. But only fire this gate when the plan itself is
+        # *not* already sufficient — otherwise a legitimate 2-paper synthesis
+        # co-located with off-topic noise would be killed.
         weak_pool = evidence_pool_is_weak(source_records)
-        if question_mode in SYNTHESIS_MODES and weak_pool:
+        if question_mode in SYNTHESIS_MODES and weak_pool and not plan_sufficient:
             answer_status = "insufficient_evidence"
             answer_payload = None
             answerability = "insufficient"
