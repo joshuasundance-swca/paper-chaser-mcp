@@ -311,9 +311,33 @@ following additions on top of `main`:
   branch now threads saved-session inspectability into
   failureSummary/nextActions/resultState. Resolves R7 findings.
 
-#### Validation baseline (HEAD `6e8714d`)
+#### Phase 7.9 — Exhaustive off-topic cross-field sweep (R8–R11)
 
-- `python -m pytest -q` => **1267 passed, 2 skipped** (live-only)
+- **`hasInspectableSources` effective predicate** (`edbd41b`): aligns
+  `_guided_result_state.hasInspectableSources` with the same
+  `has_sources AND NOT all_sources_off_topic` predicate that drives
+  routing. Previously True for all-off-topic pools.
+- **canAnswerFollowUp / failureSummary / groundedness / follow_up
+  saved-session** (`436fd7c`): `_guided_result_state.canAnswerFollowUp`
+  now uses inspectable_sources; `_guided_failure_summary.whatStillWorked`
+  no longer claims inspectable when pool is all-off-topic; answered +
+  all-off-topic downgrades `groundedness` to
+  `"insufficient_evidence"` and sets `missingEvidenceType="off_topic_only"`;
+  `follow_up_research` threads saved-session signals when current pool
+  is all-off-topic (previously only when empty).
+- **abstentionDetails effective inspectable** (`4e27b06`): zero
+  `inspectableSourceCount` and flip `canInspectSources=False` when every
+  source is off-topic.
+- **Abstention category + resultMeaning off-topic** (`11be79e`): force
+  `category="off_topic_only"` when sources are non-empty but all
+  off-topic (stops "Inspect the returned sources..." hints). Add
+  `all_sources_off_topic` kwarg to `_guided_result_meaning`; six
+  research/follow_up callers pass it so prose no longer claims "some
+  relevant evidence" for off-topic-only pools.
+
+#### Validation baseline (HEAD `11be79e`)
+
+- `python -m pytest -q` => **1275 passed, 2 skipped** (live-only)
 - `python -m ruff check .` clean
 - `python -m mypy --config-file pyproject.toml` clean across **171** source files
 - `python -m bandit -c pyproject.toml -r paper_chaser_mcp` clean (0 Medium, 0 High)
