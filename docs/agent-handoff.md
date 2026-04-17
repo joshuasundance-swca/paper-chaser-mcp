@@ -335,7 +335,41 @@ following additions on top of `main`:
   research/follow_up callers pass it so prose no longer claims "some
   relevant evidence" for off-topic-only pools.
 
-#### Validation baseline (HEAD `11be79e`)
+#### Phase 7.10 — Off-topic convergence into smart-search + LLM-first ranking gates + UX audit
+
+- **Off-topic-aware smart search** (`b763678`): `agentic/graphs.py`
+  adds `_has_on_topic_sources` and excludes `topical_relevance ==
+  "off_topic"` from `_has_inspectable_sources`. All four
+  `SmartSearchResponse` builders (search, regulatory early/late, review)
+  now drive `best_next_internal_action` from on-topic-aware
+  `has_sources`, so raw provider hits that are entirely off-topic no
+  longer advertise `hasInspectableSources` or `bestNextInternalAction:
+  "inspect_source"`. Pinned by `tests/test_graphs_inspectable_helpers.py`.
+- **LLM-first ranking gates** (`17c6eeb`): `agentic/ranking.py`
+  drops the `len(facets) >= 2` heuristic from `broad_query_mode`
+  (planner signals only) and adds `concept_bonus_gate_scale`: confident
+  `off_topic` zeroes the concept bonus, confident `weak_match` halves
+  it, fallback classifications pass through. Exposed as
+  `conceptBonusGateScale` in `scoreBreakdown`. Pinned by two
+  monkey-patched regression tests in `test_smart_tools.py`.
+- **inspect_source candidate metadata + resolve_reference status split**
+  (`ccff280`): `SourceResolution` now carries
+  `availableSourceCandidates` (compact projection: sourceId, title,
+  topicalRelevance, canonicalUrl, retrievedUrl, confidence, accessStatus,
+  verificationStatus, publicationYear) plus `candidatesHaveInspectable`
+  on the unresolved `inspect_source` branch. `resolve_reference` now
+  emits distinct `nextActions` for `resolved` vs `multiple_candidates`
+  (previously shared), and `golden-paths.md` documents the full status
+  set including `needs_disambiguation` (previously undocumented).
+
+#### Validation baseline (HEAD `ccff280`)
+
+- `python -m pytest -q` => **1285 passed, 2 skipped** (live-only)
+- `python -m ruff check .` clean
+- `python -m mypy --config-file pyproject.toml` clean
+- `pre-commit run --all-files` clean
+
+#### Validation baseline (earlier HEAD `11be79e`)
 
 - `python -m pytest -q` => **1275 passed, 2 skipped** (live-only)
 - `python -m ruff check .` clean
