@@ -40,13 +40,21 @@ from paper_chaser_mcp.agentic.subject_grounding import (
 
 
 class _StubBundle:
-    """Minimal provider bundle that returns a pre-baked PlannerDecision."""
+    """Minimal provider bundle that returns a pre-baked PlannerDecision.
+
+    Simulates an LLM-backed provider bundle: the returned :class:`PlannerDecision`
+    is stamped with ``planner_source="llm"`` so downstream provenance gates
+    (e.g. subject-card source stamping) treat it as a genuine LLM emission
+    rather than a deterministic fallback.
+    """
 
     def __init__(self, planner: PlannerDecision) -> None:
         self._planner = planner
 
     async def aplan_search(self, **kwargs: object) -> PlannerDecision:
-        return self._planner.model_copy(deep=True)
+        decision = self._planner.model_copy(deep=True)
+        decision.planner_source = "llm"
+        return decision
 
 
 # ---------------------------------------------------------------------------

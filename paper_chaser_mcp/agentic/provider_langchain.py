@@ -387,7 +387,9 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
             )
             if direct is not None:
                 self._mark_provider_used()
-                return direct.to_planner_decision()
+                decision = direct.to_planner_decision()
+                decision.planner_source = "llm"
+                return decision
             text_fallback = self._structured_from_text_sync(
                 endpoint="text:planner",
                 model=planner,
@@ -427,11 +429,15 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
             )
             if text_fallback is not None:
                 self._mark_provider_used()
-                return text_fallback.to_planner_decision()
+                decision = text_fallback.to_planner_decision()
+                decision.planner_source = "llm"
+                return decision
         except Exception:
             logger.exception("%s planner failed; falling back to deterministic planning.", self._provider_name)
         self._mark_deterministic_fallback()
-        return super().plan_search(query=query, mode=mode, year=year, venue=venue, focus=focus)
+        fallback_decision = super().plan_search(query=query, mode=mode, year=year, venue=venue, focus=focus)
+        fallback_decision.planner_source = "deterministic_fallback"
+        return fallback_decision
 
     async def aplan_search(
         self,
@@ -504,7 +510,9 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
             )
             if direct is not None:
                 self._mark_provider_used()
-                return direct.to_planner_decision()
+                decision = direct.to_planner_decision()
+                decision.planner_source = "llm"
+                return decision
             text_fallback = await self._structured_from_text_async(
                 endpoint="text:planner",
                 model=planner,
@@ -546,11 +554,15 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
             )
             if text_fallback is not None:
                 self._mark_provider_used()
-                return text_fallback.to_planner_decision()
+                decision = text_fallback.to_planner_decision()
+                decision.planner_source = "llm"
+                return decision
         except Exception:
             logger.exception("%s planner failed; falling back to deterministic planning.", self._provider_name)
         self._mark_deterministic_fallback()
-        return super().plan_search(query=query, mode=mode, year=year, venue=venue, focus=focus)
+        fallback_decision = super().plan_search(query=query, mode=mode, year=year, venue=venue, focus=focus)
+        fallback_decision.planner_source = "deterministic_fallback"
+        return fallback_decision
 
     def suggest_speculative_expansions(
         self,

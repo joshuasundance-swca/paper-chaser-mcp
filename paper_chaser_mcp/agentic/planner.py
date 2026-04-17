@@ -480,6 +480,31 @@ _VALID_REGULATORY_INTENTS: frozenset[str] = frozenset(
 )
 
 
+def _has_literature_corroboration(
+    *,
+    planner: PlannerDecision,
+    query: str,
+    focus: str | None,
+) -> bool:
+    """Return True when the query-side signals support a hybrid regulatory+literature label.
+
+    The LLM planner occasionally emits ``hybrid_regulatory_plus_literature``
+    for regulation-only asks (e.g. "what does EPA require for stormwater
+    discharges?"). Trusting that label alone causes the guided workflow to
+    tack on an unnecessary literature review pass. This helper checks the
+    independent keyword signal on the query and planner-emitted secondary
+    intents, so downstream consumers can demand corroboration before
+    honoring the hybrid route.
+    """
+    if detect_literature_intent(query, focus):
+        return True
+    for secondary in planner.secondary_intents:
+        label = str(secondary).strip().lower()
+        if label in {"review", "literature"}:
+            return True
+    return False
+
+
 def _derive_regulatory_intent(
     *,
     planner: PlannerDecision,
@@ -498,7 +523,14 @@ def _derive_regulatory_intent(
 
     existing = planner.regulatory_subintent
     if existing and existing in _VALID_REGULATORY_INTENTS:
-        return cast(RegulatoryIntentLabel, existing)
+        if existing == "hybrid_regulatory_plus_literature" and not _has_literature_corroboration(
+            planner=planner, query=query, focus=focus
+        ):
+            # Fall through to deterministic inference when the LLM emits a
+            # hybrid label without any query-side literature cue.
+            pass
+        else:
+            return cast(RegulatoryIntentLabel, existing)
 
     is_regulatory = planner.intent == "regulatory" or detect_regulatory_intent(query, focus)
     if not is_regulatory:
@@ -1025,20 +1057,32 @@ async def classify_query(
             planner.entity_card = _infer_entity_card(query, focus)
     if planner.regulatory_intent is None:
         planner.regulatory_intent = _derive_regulatory_intent(planner=planner, query=query, focus=focus)
+    elif planner.regulatory_intent == "hybrid_regulatory_plus_literature" and not _has_literature_corroboration(
+        planner=planner, query=query, focus=focus
+    ):
+        # LLM emitted the hybrid label directly. Require the same query-side
+        # corroboration as the deterministic derivation path to avoid
+        # forcing a literature review pass onto regulation-only asks.
+        planner.regulatory_intent = _derive_regulatory_intent(planner=planner, query=query, focus=focus)
     if planner.subject_card is None and planner.regulatory_intent is not None:
         # LLM-first subject card; uses planner.entity_card / candidate_concepts
         # and falls back to deterministic extraction when needed. The
-        # ``llm_bundle_available`` flag must reflect the real resolver: even
-        # though the deterministic shim satisfies the same planner contract,
-        # its output should be provenance-stamped as ``deterministic_fallback``.
+        # ``llm_bundle_available`` flag reflects the *actual* planner execution:
+        # it is True only when the provider bundle's ``aplan_search`` successfully
+        # ran an LLM call. LLM bundles that silently fall back to
+        # ``super().plan_search()`` (see provider_openai/provider_langchain) stamp
+        # ``planner.planner_source="deterministic_fallback"``, which must not be
+        # mistaken for a genuine LLM emission here even when the deterministic
+        # shim happens to populate ``candidateConcepts`` / ``entityCard``.
+        # ``intent_source`` is unreliable for this purpose -- explicit mode and
+        # heuristic overrides rewrite it independently of planner provenance.
         from .subject_grounding import resolve_subject_card
 
-        _bundle_is_deterministic = bool(getattr(provider_bundle, "is_deterministic", False))
         planner.subject_card = resolve_subject_card(
             query=query,
             focus=focus,
             planner=planner,
-            llm_bundle_available=(planner.intent_source == "planner" and not _bundle_is_deterministic),
+            llm_bundle_available=(planner.planner_source == "llm"),
             llm_emitted_grounding_signals=llm_emitted_grounding_signals,
         )
     if planner.regulatory_intent == "hybrid_regulatory_plus_literature":

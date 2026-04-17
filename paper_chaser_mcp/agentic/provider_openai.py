@@ -775,17 +775,21 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             )
             if direct is not None:
                 self._mark_provider_used()
-                return direct.to_planner_decision()
+                decision = direct.to_planner_decision()
+                decision.planner_source = "llm"
+                return decision
         except Exception:
             logger.exception("Async OpenAI planner failed; falling back to deterministic planning.")
         self._mark_deterministic_fallback()
-        return super().plan_search(
+        fallback_decision = super().plan_search(
             query=query,
             mode=mode,
             year=year,
             venue=venue,
             focus=focus,
         )
+        fallback_decision.planner_source = "deterministic_fallback"
+        return fallback_decision
 
     async def asuggest_speculative_expansions(
         self,
@@ -1392,25 +1396,31 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             )
             if direct is not None:
                 self._mark_provider_used()
-                return direct.to_planner_decision()
+                decision = direct.to_planner_decision()
+                decision.planner_source = "llm"
+                return decision
             if not self._allow_langchain_chat_fallback():
                 self._mark_deterministic_fallback()
-                return super().plan_search(
+                fallback_decision = super().plan_search(
                     query=query,
                     mode=mode,
                     year=year,
                     venue=venue,
                     focus=focus,
                 )
+                fallback_decision.planner_source = "deterministic_fallback"
+                return fallback_decision
             if planner is None:
                 self._mark_deterministic_fallback()
-                return super().plan_search(
+                fallback_decision = super().plan_search(
                     query=query,
                     mode=mode,
                     year=year,
                     venue=venue,
                     focus=focus,
                 )
+                fallback_decision.planner_source = "deterministic_fallback"
+                return fallback_decision
 
             structured = planner.with_structured_output(
                 _PlannerResponseSchema,
@@ -1479,17 +1489,21 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 ]
             )
             self._mark_provider_used()
-            return response.to_planner_decision()
+            decision = response.to_planner_decision()
+            decision.planner_source = "llm"
+            return decision
         except Exception:
             logger.exception("OpenAI planner failed; falling back to deterministic planning.")
             self._mark_deterministic_fallback()
-            return super().plan_search(
+            fallback_decision = super().plan_search(
                 query=query,
                 mode=mode,
                 year=year,
                 venue=venue,
                 focus=focus,
             )
+            fallback_decision.planner_source = "deterministic_fallback"
+            return fallback_decision
 
     def suggest_speculative_expansions(
         self,

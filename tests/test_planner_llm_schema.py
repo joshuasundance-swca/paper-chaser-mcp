@@ -26,13 +26,20 @@ from paper_chaser_mcp.agentic.provider_helpers import (
 
 
 class _StubBundle:
-    """Minimal provider bundle that returns a pre-baked PlannerDecision."""
+    """Minimal provider bundle that returns a pre-baked PlannerDecision.
+
+    Simulates an LLM-backed provider bundle: the returned decision is stamped
+    with ``planner_source="llm"`` so downstream provenance gates treat the
+    emission as a genuine LLM signal.
+    """
 
     def __init__(self, planner: PlannerDecision) -> None:
         self._planner = planner
 
     async def aplan_search(self, **kwargs: object) -> PlannerDecision:
-        return self._planner.model_copy(deep=True)
+        decision = self._planner.model_copy(deep=True)
+        decision.planner_source = "llm"
+        return decision
 
 
 def _llm_planner_decision(**overrides: object) -> PlannerDecision:
@@ -156,6 +163,58 @@ async def test_llm_response_with_grounding_signals_stamps_planner_llm() -> None:
         "LLM-emitted candidateConcepts are a valid phase-4 grounding signal; "
         "resolver must stamp planner_llm"
     )
+
+
+# ---------------------------------------------------------------------------
+# 2c) Bundle silently falls back to deterministic -> NOT planner_llm
+# ---------------------------------------------------------------------------
+
+
+class _DeterministicFallbackStubBundle:
+    """Simulates an LLM provider whose ``aplan_search`` failed and fell back
+    to the deterministic shim. The returned decision is stamped with
+    ``planner_source="deterministic_fallback"`` -- the post-hoc subject-card
+    resolver must NOT mistake this for a genuine LLM emission even when
+    ``candidateConcepts`` are populated.
+    """
+
+    def __init__(self, planner: PlannerDecision) -> None:
+        self._planner = planner
+
+    async def aplan_search(self, **kwargs: object) -> PlannerDecision:
+        decision = self._planner.model_copy(deep=True)
+        decision.planner_source = "deterministic_fallback"
+        return decision
+
+
+@pytest.mark.asyncio
+async def test_deterministic_fallback_does_not_stamp_planner_llm() -> None:
+    """Regression: Finding 1 -- provenance must follow ``planner_source``, not
+    the coincidental presence of LLM-shaped grounding signals. When the
+    bundle signals ``deterministic_fallback`` the subject-card source must
+    fall back to the deterministic stamp."""
+
+    seed = _llm_planner_decision(
+        candidateConcepts=["desert tortoise", "recovery plan", "ESA"],
+    )
+    assert seed.subject_card is None
+    assert seed.candidate_concepts
+
+    _, planner = await classify_query(
+        query="Desert tortoise recovery plan under the ESA",
+        mode="auto",
+        year=None,
+        venue=None,
+        focus=None,
+        provider_bundle=_DeterministicFallbackStubBundle(seed),  # type: ignore[arg-type]
+    )
+
+    assert planner.planner_source == "deterministic_fallback"
+    if planner.subject_card is not None:
+        assert planner.subject_card.source != "planner_llm", (
+            "deterministic_fallback must never be stamped as planner_llm "
+            "even when candidateConcepts happen to be populated"
+        )
 
 
 # ---------------------------------------------------------------------------

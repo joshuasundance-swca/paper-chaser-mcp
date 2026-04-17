@@ -77,16 +77,20 @@ class TestGuidedShouldAddReviewPass:
     """Verify the review-pass trigger prefers the planner's LLM signal."""
 
     def test_planner_hybrid_intent_triggers_review_pass(self) -> None:
-        """Even when the query starts as purely regulatory and the keyword
-        heuristic wouldn't flag it, a planner emission of
-        ``hybrid_regulatory_plus_literature`` must force a review pass."""
+        """When the planner emits ``hybrid_regulatory_plus_literature`` AND the
+        query carries an independent literature cue, the review pass fires.
+
+        This replaces the prior "LLM signal alone is enough" contract -- the
+        hybrid label must now be corroborated by the query itself (see
+        ``_guided_mentions_literature``), the planner's ``secondaryIntents``,
+        or explicit literature-shaped ``retrievalHypotheses`` -- so the
+        planner cannot hallucinate its way into an unneeded review pass.
+        """
 
         primary_smart = {
             "strategyMetadata": {
                 "regulatoryIntent": "hybrid_regulatory_plus_literature",
                 "intentSource": "planner",
-                # No secondaryIntents / low ambiguity: the pre-existing
-                # heuristics would have said "don't add a review pass".
                 "secondaryIntents": [],
                 "ambiguityLevel": "low",
                 "querySpecificity": "high",
@@ -95,7 +99,61 @@ class TestGuidedShouldAddReviewPass:
         }
         should_run, reason = _guided_should_add_review_pass(
             initial_intent="regulatory",
-            query="federal rules on climate research",
+            # "literature" is an independent corroborating cue
+            query="federal rules on climate change and peer-reviewed literature",
+            focus=None,
+            primary_smart=primary_smart,
+            pass_modes=["regulatory"],
+        )
+        assert should_run is True
+        assert reason == "planner_hybrid_regulatory_plus_literature"
+
+    def test_planner_hybrid_intent_without_corroboration_does_not_trigger(self) -> None:
+        """Regression guard for Finding 2: a regulation-only query where the
+        planner hallucinates ``hybrid_regulatory_plus_literature`` must NOT
+        trigger the review pass, because no independent literature cue
+        corroborates the hybrid label.
+        """
+
+        primary_smart = {
+            "strategyMetadata": {
+                "regulatoryIntent": "hybrid_regulatory_plus_literature",
+                "intentSource": "planner",
+                "secondaryIntents": [],
+                "ambiguityLevel": "low",
+                "querySpecificity": "high",
+                "retrievalHypotheses": [],
+            }
+        }
+        should_run, reason = _guided_should_add_review_pass(
+            initial_intent="regulatory",
+            query="What does EPA require for stormwater discharges?",
+            focus=None,
+            primary_smart=primary_smart,
+            pass_modes=["regulatory"],
+        )
+        assert should_run is False
+        assert reason is None
+
+    def test_planner_hybrid_intent_with_secondary_review_triggers_review_pass(self) -> None:
+        """Corroboration via ``secondaryIntents=["review"]`` is enough to honor
+        the planner's hybrid label even when the query itself has no keyword
+        literature cue.
+        """
+
+        primary_smart = {
+            "strategyMetadata": {
+                "regulatoryIntent": "hybrid_regulatory_plus_literature",
+                "intentSource": "planner",
+                "secondaryIntents": ["review"],
+                "ambiguityLevel": "low",
+                "querySpecificity": "high",
+                "retrievalHypotheses": [],
+            }
+        }
+        should_run, reason = _guided_should_add_review_pass(
+            initial_intent="regulatory",
+            query="federal rules on climate mitigation",
             focus=None,
             primary_smart=primary_smart,
             pass_modes=["regulatory"],

@@ -652,6 +652,7 @@ class DeterministicProviderBundle(ModelProviderBundle):
         constraints = {key: value for key, value in {"year": year, "venue": venue, "focus": focus}.items() if value}
         return PlannerDecision(
             intent=inferred_intent,  # type: ignore[arg-type]
+            plannerSource="deterministic",
             querySpecificity=cast(Any, query_specificity),
             ambiguityLevel=cast(Any, ambiguity_level),
             queryType=cast(Any, query_type),

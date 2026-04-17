@@ -1810,18 +1810,46 @@ def _guided_should_add_review_pass(
         dict[str, Any],
         primary_smart.get("strategyMetadata") if isinstance(primary_smart.get("strategyMetadata"), dict) else {},
     )
-    # LLM-first: when the planner classifies the query as hybrid regulatory+literature
-    # (either from the LLM or its deterministic fallback), honor that signal before any
-    # keyword heuristic. Mirrors the regulatoryIntent consumption pattern used elsewhere.
-    regulatory_intent = str(metadata.get("regulatoryIntent") or "").strip()
-    if regulatory_intent == "hybrid_regulatory_plus_literature":
-        return True, "planner_hybrid_regulatory_plus_literature"
     secondary_intents = {str(item).strip() for item in metadata.get("secondaryIntents") or [] if str(item).strip()}
     query_specificity = str(metadata.get("querySpecificity") or "").strip()
     ambiguity_level = str(metadata.get("ambiguityLevel") or "").strip()
     retrieval_hypotheses = [
         str(item).strip() for item in metadata.get("retrievalHypotheses") or [] if str(item).strip()
     ]
+    # LLM-first: when the planner classifies the query as hybrid regulatory+literature
+    # (either from the LLM or its deterministic fallback), honor that signal before any
+    # keyword heuristic -- but only when an independent query-side literature cue
+    # corroborates the hybrid label. Planners occasionally hallucinate
+    # ``hybrid_regulatory_plus_literature`` for regulation-only asks (e.g.
+    # "what does EPA require for stormwater discharges?"); trusting that label
+    # in isolation causes the guided workflow to tack on an unnecessary review
+    # pass. Corroboration is present when the query mentions literature-shaped
+    # terms, the planner's secondaryIntents include review/literature, or
+    # retrievalHypotheses carry explicit cross-domain literature cues.
+    regulatory_intent = str(metadata.get("regulatoryIntent") or "").strip()
+    if regulatory_intent == "hybrid_regulatory_plus_literature":
+        has_literature_corroboration = (
+            _guided_mentions_literature(query, focus)
+            or "review" in secondary_intents
+            or "literature" in secondary_intents
+            or any(
+                any(
+                    marker in hypothesis.lower()
+                    for marker in (
+                        "literature",
+                        "peer-review",
+                        "peer review",
+                        "peer-reviewed",
+                        "systematic review",
+                        "meta-analysis",
+                        "hybrid_policy_science",
+                    )
+                )
+                for hypothesis in retrieval_hypotheses
+            )
+        )
+        if has_literature_corroboration:
+            return True, "planner_hybrid_regulatory_plus_literature"
     if "review" in secondary_intents:
         return True, "review_secondary_intent_detected"
     if detect_literature_intent(query, focus) and (query_specificity == "low" or ambiguity_level in {"medium", "high"}):

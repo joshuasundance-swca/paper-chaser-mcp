@@ -700,6 +700,23 @@ class PlannerDecision(ApiModel):
         "hybrid_agreement",
         "fallback_recovery",
     ] = Field(default="planner", alias="intentSource")
+    planner_source: Literal[
+        "llm",
+        "deterministic",
+        "deterministic_fallback",
+    ] = Field(
+        default="deterministic",
+        alias="plannerSource",
+        description=(
+            "Provenance of the planner output itself: ``llm`` when an LLM-backed "
+            "bundle successfully produced the plan, ``deterministic_fallback`` "
+            "when an LLM bundle degraded to its deterministic shim (e.g. after a "
+            "model error), and ``deterministic`` when the deterministic bundle "
+            "produced the plan directly. Used by downstream provenance gates "
+            "(subject-card source stamping, etc.) that must not be fooled by "
+            "deterministic signals that happen to populate LLM-shaped fields."
+        ),
+    )
     intent_confidence: Literal["high", "medium", "low"] = Field(
         default="medium",
         alias="intentConfidence",
