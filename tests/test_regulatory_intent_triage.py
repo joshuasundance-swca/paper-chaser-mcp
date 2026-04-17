@@ -77,30 +77,23 @@ class TestDeriveRegulatoryQueryFlags:
         helpers must not double-route when the LLM has classified the query as
         ``current_cfr_text``."""
 
-        query = (
-            "What does 40 CFR 403.5 actually prohibit and what is the "
-            "final rule history?"
-        )
+        query = "What does 40 CFR 403.5 actually prohibit and what is the final rule history?"
         # Baseline: deterministic helpers misfire on BOTH routes.
         assert _is_current_cfr_text_request(query) is True
         assert _query_requests_regulatory_history(query) is True
 
-        flags = _derive_regulatory_query_flags(
-            query=query, planner=_planner("current_cfr_text")
-        )
+        flags = _derive_regulatory_query_flags(query=query, planner=_planner("current_cfr_text"))
         assert flags == (True, False, False)
 
     def test_planner_species_dossier_suppresses_history_route(self) -> None:
-        """"Listing history of the Pallid Sturgeon" must not activate the
+        """ "Listing history of the Pallid Sturgeon" must not activate the
         federal-register rulemaking-history route just because the word
         "history" appears in the query."""
 
         query = "Tell me about the listing history of the Pallid Sturgeon"
         assert _query_requests_regulatory_history(query) is True  # baseline misfire
 
-        flags = _derive_regulatory_query_flags(
-            query=query, planner=_planner("species_dossier")
-        )
+        flags = _derive_regulatory_query_flags(query=query, planner=_planner("species_dossier"))
         assert flags == (False, False, False)
 
     def test_planner_guidance_lookup_wins(self) -> None:
@@ -127,9 +120,7 @@ class TestDeriveRegulatoryQueryFlags:
             _query_requests_regulatory_history(query),
             _is_agency_guidance_query(query),
         )
-        flags = _derive_regulatory_query_flags(
-            query=query, planner=_planner("hybrid_regulatory_plus_literature")
-        )
+        flags = _derive_regulatory_query_flags(query=query, planner=_planner("hybrid_regulatory_plus_literature"))
         assert flags == expected
 
     def test_unspecified_falls_back_to_deterministic(self) -> None:
@@ -142,14 +133,8 @@ class TestDeriveRegulatoryQueryFlags:
             _query_requests_regulatory_history(query),
             _is_agency_guidance_query(query),
         )
-        assert (
-            _derive_regulatory_query_flags(query=query, planner=_planner("unspecified"))
-            == expected
-        )
-        assert (
-            _derive_regulatory_query_flags(query=query, planner=_planner(None))
-            == expected
-        )
+        assert _derive_regulatory_query_flags(query=query, planner=_planner("unspecified")) == expected
+        assert _derive_regulatory_query_flags(query=query, planner=_planner(None)) == expected
         assert _derive_regulatory_query_flags(query=query, planner=None) == expected
 
     def test_deterministic_bundle_prefers_keyword_helpers_over_label(self) -> None:
@@ -226,9 +211,7 @@ class TestEcosQueryVariantsPlannerFirst:
         all tagged ``"raw"``."""
 
         variants_with = _ecos_query_variants("northern long-eared bat ECOS species profile")
-        variants_without = _ecos_query_variants(
-            "northern long-eared bat ECOS species profile", planner=None
-        )
+        variants_without = _ecos_query_variants("northern long-eared bat ECOS species profile", planner=None)
         assert variants_with == variants_without
         # All variants come from raw/regex when no planner is supplied.
         assert all(origin == "raw" for _value, _anchor, origin in variants_with)
@@ -346,9 +329,7 @@ class TestEcosVariantRankingProvenance:
     variant outrank a single raw hit with just 2 incidental hits, defeating
     the provenance-first intent."""
 
-    def _variant(
-        self, idx: int, anchor: str, origin: str, hits: int
-    ) -> tuple[int, str, str, dict[str, Any]]:
+    def _variant(self, idx: int, anchor: str, origin: str, hits: int) -> tuple[int, str, str, dict[str, Any]]:
         return (
             idx,
             anchor,
@@ -495,10 +476,7 @@ class TestPlannerLlmRegulatoryIntentAuthority:
                 },
             }
         )
-        assert (
-            _derive_regulatory_query_flags(query=query, planner=planner_unspecified)
-            == expected
-        )
+        assert _derive_regulatory_query_flags(query=query, planner=planner_unspecified) == expected
 
 
 class TestPlannerLiteratureCorroborationHybridHypothesis:

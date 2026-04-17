@@ -925,9 +925,7 @@ async def classify_query(
     # / ``planner.subject_card``. ``resolve_subject_card`` needs this to tell
     # apart "LLM emitted phase-4 signals" from "deterministic extractor
     # populated these fields after the LLM returned nothing".
-    llm_emitted_grounding_signals = bool(
-        planner.entity_card or planner.candidate_concepts or planner.subject_card
-    )
+    llm_emitted_grounding_signals = bool(planner.entity_card or planner.candidate_concepts or planner.subject_card)
     planner.intent_source = "planner"
     planner.intent_confidence = "medium"
     intent_candidates = list(planner.intent_candidates)

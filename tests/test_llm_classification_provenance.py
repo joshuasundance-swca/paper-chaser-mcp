@@ -228,8 +228,6 @@ async def test_search_papers_smart_records_llm_override_in_strategy_metadata() -
     assert weak_hit["classificationSource"] == "llm_tiebreaker"
     assert weak_hit["topicalRelevance"] == "on_topic"
 
-    structured_by_id = {
-        src["sourceId"]: src for src in payload["structuredSources"] if src.get("sourceId")
-    }
+    structured_by_id = {src["sourceId"]: src for src in payload["structuredSources"] if src.get("sourceId")}
     assert structured_by_id["strong-match"]["llmClassification"] == "off_topic"
     assert structured_by_id["strong-match"]["classificationSource"] == "deterministic"

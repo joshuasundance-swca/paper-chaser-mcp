@@ -155,8 +155,11 @@ follow_up_research(searchSessionId="...", question="What evaluation tradeoffs sh
 
 1. Use `resolve_reference` when the user already has a citation, DOI, URL,
    arXiv id, title fragment, or regulatory reference.
-2. Treat `status` as the decision gate:
-   `resolved`, `multiple_candidates`, `no_match`, `regulatory_primary_source`.
+2. Treat `status` as the decision gate. The full set is:
+   `resolved` (one confident match), `multiple_candidates` (several plausible
+   matches — pick from `bestMatch`/`alternatives`), `needs_disambiguation`
+   (best match's key metadata — author/year/venue — conflicts and is unsafe to
+   cite directly), `no_match`, and `regulatory_primary_source`.
 3. Use `bestMatch`/`alternatives` and `nextActions` to decide whether to pivot
    back into `research` with a stronger anchor.
 4. Exact DOI, arXiv, and supported paper URLs should resolve as direct anchors before fuzzy recovery.

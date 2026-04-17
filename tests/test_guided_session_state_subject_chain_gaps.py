@@ -61,9 +61,7 @@ def test_guided_session_state_forwards_subject_chain_gaps() -> None:
     )
     assert session_state is not None
     trust_summary = session_state["trustSummary"]
-    assert "subjectChainGaps" in trust_summary, (
-        "Rebuilt trust summary must forward strategyMetadata.subjectChainGaps"
-    )
+    assert "subjectChainGaps" in trust_summary, "Rebuilt trust summary must forward strategyMetadata.subjectChainGaps"
     assert trust_summary["subjectChainGaps"] == [
         "species-specific dossier missing",
         "no recovery-plan full text verified",

@@ -2221,18 +2221,20 @@ def test_guided_saved_session_topicality_classifies_candidates() -> None:
     # candidates" from "every candidate is off_topic" so downstream routing can
     # prefer research over inspect_source for confirmed-irrelevant pools.
     assert dispatch_module._guided_saved_session_topicality([]) == (False, False)
-    assert dispatch_module._guided_saved_session_topicality(
-        [{"sourceId": "s1", "topicalRelevance": "off_topic"}]
-    ) == (True, True)
+    assert dispatch_module._guided_saved_session_topicality([{"sourceId": "s1", "topicalRelevance": "off_topic"}]) == (
+        True,
+        True,
+    )
     assert dispatch_module._guided_saved_session_topicality(
         [
             {"sourceId": "s1", "topicalRelevance": "off_topic"},
             {"sourceId": "s2", "topicalRelevance": "on_topic"},
         ]
     ) == (True, False)
-    assert dispatch_module._guided_saved_session_topicality(
-        [{"sourceId": "s1", "topicalRelevance": "weak_match"}]
-    ) == (True, False)
+    assert dispatch_module._guided_saved_session_topicality([{"sourceId": "s1", "topicalRelevance": "weak_match"}]) == (
+        True,
+        False,
+    )
 
 
 def test_guided_best_next_internal_action_all_off_topic_prefers_research() -> None:
@@ -2382,7 +2384,8 @@ def test_guided_machine_failure_payload_next_actions_align_with_recommendation()
     )
     assert inspectable["failureSummary"]["recommendedNextAction"] == "inspect_source"
     inspect_entries = [
-        action for action in inspectable["nextActions"]
+        action
+        for action in inspectable["nextActions"]
         if isinstance(action, str) and "inspect_source" in action and "ssn-inspectable" in action
     ]
     assert inspect_entries, "Expected nextActions to include an inspect_source entry for the saved session"
@@ -2397,10 +2400,9 @@ def test_guided_machine_failure_payload_next_actions_align_with_recommendation()
     )
     assert off_topic["failureSummary"]["recommendedNextAction"] == "research"
     assert off_topic["resultState"]["bestNextInternalAction"] == "research"
-    assert not any(
-        isinstance(action, str) and "inspect_source" in action
-        for action in off_topic["nextActions"]
-    ), "All-off-topic saved session must not recommend inspect_source in nextActions"
+    assert not any(isinstance(action, str) and "inspect_source" in action for action in off_topic["nextActions"]), (
+        "All-off-topic saved session must not recommend inspect_source in nextActions"
+    )
 
 
 def test_guided_follow_up_no_runtime_all_off_topic_recommends_research() -> None:
@@ -2416,10 +2418,7 @@ def test_guided_follow_up_no_runtime_all_off_topic_recommends_research() -> None
         has_sources=False,
         saved_session_inspectable=False,
     )
-    assert not any(
-        isinstance(action, str) and "inspect_source" in action
-        for action in off_topic_actions
-    )
+    assert not any(isinstance(action, str) and "inspect_source" in action for action in off_topic_actions)
 
 
 def test_guided_follow_up_no_runtime_inspectable_recommends_inspect_source() -> None:
@@ -2635,9 +2634,7 @@ async def test_follow_up_research_current_all_off_topic_saved_inspectable_recomm
     # compacts failureSummary/resultState out of the payload, so nextActions
     # is the durable surface for this assertion.)
     assert any(
-        isinstance(action, str)
-        and "inspect_source" in action
-        and "ssn-current-off-saved-on" in action
+        isinstance(action, str) and "inspect_source" in action and "ssn-current-off-saved-on" in action
         for action in payload["nextActions"]
     ), f"saved session stranded; nextActions={payload['nextActions']}"
 
@@ -2667,8 +2664,7 @@ def test_guided_next_actions_all_off_topic_sources_suppress_inspect_source_entry
         all_sources_off_topic=True,
     )
     assert any(
-        isinstance(action, str) and "inspect_source" in action and "ssn-off" in action
-        for action in inspectable_actions
+        isinstance(action, str) and "inspect_source" in action and "ssn-off" in action for action in inspectable_actions
     )
 
 
@@ -2730,9 +2726,7 @@ async def test_follow_up_research_empty_ask_result_with_inspectable_session_reco
 
     assert payload["answerStatus"] == "insufficient_evidence"
     assert any(
-        isinstance(action, str)
-        and "inspect_source" in action
-        and "ssn-empty-ask-inspectable" in action
+        isinstance(action, str) and "inspect_source" in action and "ssn-empty-ask-inspectable" in action
         for action in payload["nextActions"]
     )
 
@@ -2772,9 +2766,7 @@ async def test_inspect_source_unresolved_all_off_topic_saved_session_recommends_
     assert payload["failureSummary"]["recommendedNextAction"] == "research"
     assert payload["resultState"]["bestNextInternalAction"] == "research"
     assert payload["resultState"]["hasInspectableSources"] is False
-    assert not any(
-        isinstance(action, str) and "inspect_source" in action for action in payload["nextActions"]
-    )
+    assert not any(isinstance(action, str) and "inspect_source" in action for action in payload["nextActions"])
 
 
 @pytest.mark.asyncio
@@ -2816,6 +2808,53 @@ async def test_inspect_source_unresolved_inspectable_saved_session_recommends_in
     assert payload["resultState"]["bestNextInternalAction"] == "inspect_source"
     assert payload["resultState"]["hasInspectableSources"] is True
     assert set(payload["sourceResolution"]["availableSourceIds"]) == {"paper-a", "paper-b"}
+    candidates = payload["sourceResolution"]["availableSourceCandidates"]
+    assert {c["sourceId"] for c in candidates} == {"paper-a", "paper-b"}
+    assert {c.get("title") for c in candidates} == {"Attention", "Transformer"}
+    assert payload["sourceResolution"]["candidatesHaveInspectable"] is True
+
+
+@pytest.mark.asyncio
+async def test_inspect_source_unresolved_all_off_topic_exposes_candidates_without_inspectable_flag() -> None:
+    # Regression: when all saved candidates are off_topic the server must still
+    # expose the candidate metadata (title/topicalRelevance) so agents can
+    # reason about the pool, while advertising candidatesHaveInspectable=False.
+    isolated_registry = WorkspaceRegistry()
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-all-off-topic-candidates",
+        query="Ribbon worms in deep sea vents",
+        payload={
+            "sources": [
+                {"sourceId": "p-off-1", "title": "Stock analysis", "topicalRelevance": "off_topic"},
+                {"sourceId": "p-off-2", "title": "Macroeconomic policy", "topicalRelevance": "off_topic"},
+            ]
+        },
+    )
+
+    original_registry = server.workspace_registry
+    server.workspace_registry = isolated_registry
+    try:
+        payload = _payload(
+            await server.call_tool(
+                "inspect_source",
+                {
+                    "searchSessionId": "ssn-all-off-topic-candidates",
+                    "sourceId": "does-not-exist",
+                },
+            )
+        )
+    finally:
+        server.workspace_registry = original_registry
+
+    resolution = payload["sourceResolution"]
+    assert set(resolution["availableSourceIds"]) == {"p-off-1", "p-off-2"}
+    candidates = resolution["availableSourceCandidates"]
+    assert {c["sourceId"] for c in candidates} == {"p-off-1", "p-off-2"}
+    assert all(c["topicalRelevance"] == "off_topic" for c in candidates)
+    assert resolution["candidatesHaveInspectable"] is False
+    # Recommendation stays research because nothing is inspectable.
+    assert payload["failureSummary"]["recommendedNextAction"] == "research"
 
 
 def test_guided_abstention_details_partial_status_emits_refinement_hints() -> None:

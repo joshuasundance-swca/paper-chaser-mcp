@@ -366,9 +366,7 @@ async def test_inspect_source_threads_subject_chain_gaps_into_confidence_signals
     )
     signals = payload.get("confidenceSignals")
     assert isinstance(signals, dict)
-    assert "planner could not bind subject to a recovery plan document" in list(
-        signals.get("subjectChainGaps") or []
-    )
+    assert "planner could not bind subject to a recovery plan document" in list(signals.get("subjectChainGaps") or [])
 
 
 # ---------------------------------------------------------------------------

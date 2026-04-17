@@ -62,9 +62,7 @@ def test_azure_openai_bundle_reports_non_deterministic() -> None:
 
 
 def test_langchain_chat_bundle_reports_non_deterministic() -> None:
-    bundle = LangChainChatProviderBundle(
-        _config(), provider_name="langchain-chat", api_key="lc-test"
-    )
+    bundle = LangChainChatProviderBundle(_config(), provider_name="langchain-chat", api_key="lc-test")
     assert bundle.is_deterministic is False
 
 

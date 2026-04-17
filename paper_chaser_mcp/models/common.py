@@ -274,6 +274,20 @@ class SourceResolution(ApiModel):
     resolved_source_id: str | None = Field(default=None, alias="resolvedSourceId")
     match_type: str | None = Field(default=None, alias="matchType")
     available_source_ids: list[str] = Field(default_factory=list, alias="availableSourceIds")
+    available_source_candidates: list[dict[str, Any]] = Field(
+        default_factory=list,
+        alias="availableSourceCandidates",
+        description=(
+            "Compact metadata (sourceId, title, topicalRelevance, canonicalUrl, "
+            "confidence, accessStatus) for each available candidate so callers "
+            "can disambiguate without a follow-up round-trip."
+        ),
+    )
+    candidates_have_inspectable: bool = Field(
+        default=False,
+        alias="candidatesHaveInspectable",
+        description="True when at least one available candidate is not off_topic.",
+    )
 
 
 class SessionCandidate(ApiModel):

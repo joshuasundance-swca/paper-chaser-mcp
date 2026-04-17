@@ -169,12 +169,9 @@ def test_compose_why_classified_weak_match_combines_fragments() -> None:
     # combined sentence.
     auth_idx = lowered.find("authoritative notice")
     endangered_idx = lowered.find("endangered species")
-    assert endangered_idx != -1 and auth_idx != -1, (
-        f"Both component fragments should appear; got: {sentence!r}"
-    )
+    assert endangered_idx != -1 and auth_idx != -1, f"Both component fragments should appear; got: {sentence!r}"
     assert endangered_idx < auth_idx, (
-        f"classificationRationale fragment must appear before "
-        f"whyClassifiedAsWeakMatch fragment; got: {sentence!r}"
+        f"classificationRationale fragment must appear before whyClassifiedAsWeakMatch fragment; got: {sentence!r}"
     )
 
 

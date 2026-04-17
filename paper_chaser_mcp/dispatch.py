@@ -1594,18 +1594,55 @@ def _guided_inspect_session_resolution(
     return resolution.model_dump(by_alias=True, exclude_none=True)
 
 
+def _guided_compact_source_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Project a saved-session source candidate to its disambiguation-critical fields."""
+    keep_keys = (
+        "sourceId",
+        "title",
+        "topicalRelevance",
+        "canonicalUrl",
+        "retrievedUrl",
+        "confidence",
+        "accessStatus",
+        "verificationStatus",
+        "publicationYear",
+    )
+    projected: dict[str, Any] = {}
+    for key in keep_keys:
+        value = candidate.get(key)
+        if value not in (None, "", [], {}):
+            projected[key] = value
+    return projected
+
+
 def _guided_source_resolution_payload(
     *,
     requested_source_id: str | None,
     resolved_source_id: str | None,
     match_type: str | None,
     available_source_ids: list[str] | None = None,
+    available_candidates: list[dict[str, Any]] | None = None,
+    candidates_have_inspectable: bool | None = None,
 ) -> dict[str, Any]:
+    compact_candidates: list[dict[str, Any]] = []
+    if available_candidates:
+        for candidate in available_candidates:
+            if not isinstance(candidate, dict):
+                continue
+            projection = _guided_compact_source_candidate(candidate)
+            if projection.get("sourceId"):
+                compact_candidates.append(projection)
+    if candidates_have_inspectable is None:
+        candidates_have_inspectable = any(
+            candidate.get("topicalRelevance") != "off_topic" for candidate in compact_candidates
+        )
     resolution = SourceResolution(
         requestedSourceId=_guided_normalize_whitespace(requested_source_id),
         resolvedSourceId=_guided_normalize_whitespace(resolved_source_id),
         matchType=match_type,
         availableSourceIds=available_source_ids or [],
+        availableSourceCandidates=compact_candidates,
+        candidatesHaveInspectable=bool(candidates_have_inspectable) if compact_candidates else False,
     )
     return resolution.model_dump(by_alias=True, exclude_none=True)
 
@@ -2934,9 +2971,7 @@ def _guided_failure_summary(
         elif sources:
             # Ninth rubber-duck pass (finding 2): an all-off-topic pool is not
             # "inspectable" in the routing sense — do not claim otherwise.
-            what_still_worked = (
-                "The guided run returned sources, but all were off-topic for the question."
-            )
+            what_still_worked = "The guided run returned sources, but all were off-topic for the question."
         else:
             what_still_worked = (
                 "No provider failures were recorded, but the evidence was not strong enough to ground a result."
@@ -3440,12 +3475,7 @@ def _guided_best_next_internal_action(
     # resultState agrees with the failureSummary's recommended retry. If every
     # saved candidate is off_topic, fall through to research instead so the
     # 9ee3168 "all off-topic → research" guarantee still holds.
-    if (
-        not has_sources
-        and saved_session_has_sources
-        and not saved_session_all_off_topic
-        and search_session_id
-    ):
+    if not has_sources and saved_session_has_sources and not saved_session_all_off_topic and search_session_id:
         return "inspect_source"
     # Without inspectable sources, neither inspect_source nor another follow_up_research
     # over the same (empty) session can progress: keep the guidance aligned with the
@@ -4126,11 +4156,7 @@ def _guided_session_state(
     # "subject chain incomplete" trust signal.
     strategy_metadata_payload = payload.get("strategyMetadata")
     subject_chain_gaps = (
-        [
-            str(item).strip()
-            for item in strategy_metadata_payload.get("subjectChainGaps") or []
-            if str(item).strip()
-        ]
+        [str(item).strip() for item in strategy_metadata_payload.get("subjectChainGaps") or [] if str(item).strip()]
         if isinstance(strategy_metadata_payload, dict)
         else []
     )
@@ -4976,10 +5002,17 @@ async def dispatch_tool(
                 "Use research with the title plus author or year to find the correct paper.",
                 "Review the conflicting fields in bestMatch before treating this as a confirmed citation.",
             ]
-        elif status in {"resolved", "multiple_candidates"}:
+        elif status == "resolved":
             next_actions = [
-                "Use research with the resolved title or identifier to gather broader context.",
-                "Inspect the resolved metadata before citing or expanding it.",
+                "Citation resolved with high confidence against one candidate.",
+                "Use research with the resolved title, DOI, or identifier to gather broader context.",
+                "Inspect the resolved source metadata before citing or expanding it.",
+            ]
+        elif status == "multiple_candidates":
+            next_actions = [
+                "Multiple plausible matches were returned — compare bestMatch against alternatives before citing.",
+                "Use research with an added author, year, venue, or more specific title fragment to disambiguate.",
+                "If the best match is good enough, inspect its source record before relying on it.",
             ]
         else:
             next_actions = [
@@ -5673,8 +5706,8 @@ async def dispatch_tool(
                 try:
                     record = workspace_registry.get(follow_up_args.search_session_id)
                     if record is not None:
-                        saved_session_has_sources, saved_session_all_off_topic = (
-                            _guided_saved_session_topicality(_guided_record_source_candidates(record))
+                        saved_session_has_sources, saved_session_all_off_topic = _guided_saved_session_topicality(
+                            _guided_record_source_candidates(record)
                         )
                 except Exception:
                     saved_session_has_sources = False
@@ -5807,10 +5840,8 @@ async def dispatch_tool(
                 try:
                     failure_record = workspace_registry.get(follow_up_args.search_session_id)
                     if failure_record is not None:
-                        failure_saved_has_sources, failure_saved_all_off_topic = (
-                            _guided_saved_session_topicality(
-                                _guided_record_source_candidates(failure_record)
-                            )
+                        failure_saved_has_sources, failure_saved_all_off_topic = _guided_saved_session_topicality(
+                            _guided_record_source_candidates(failure_record)
                         )
                 except Exception:
                     failure_saved_has_sources = False
@@ -5925,17 +5956,13 @@ async def dispatch_tool(
             try:
                 _follow_up_saved_record = workspace_registry.get(follow_up_args.search_session_id)
                 if _follow_up_saved_record is not None:
-                    follow_up_saved_has_sources, follow_up_saved_all_off_topic = (
-                        _guided_saved_session_topicality(
-                            _guided_record_source_candidates(_follow_up_saved_record)
-                        )
+                    follow_up_saved_has_sources, follow_up_saved_all_off_topic = _guided_saved_session_topicality(
+                        _guided_record_source_candidates(_follow_up_saved_record)
                     )
             except Exception:
                 follow_up_saved_has_sources = False
                 follow_up_saved_all_off_topic = False
-        follow_up_saved_inspectable = (
-            follow_up_saved_has_sources and not follow_up_saved_all_off_topic
-        )
+        follow_up_saved_inspectable = follow_up_saved_has_sources and not follow_up_saved_all_off_topic
         failure_summary = _guided_failure_summary(
             failure_summary=cast(dict[str, Any] | None, ask.get("failureSummary")),
             status=guided_status,
@@ -6280,6 +6307,8 @@ async def dispatch_tool(
                     resolved_source_id=None,
                     match_type=match_type,
                     available_source_ids=available_ids,
+                    available_candidates=saved_candidates[:8],
+                    candidates_have_inspectable=saved_inspectable,
                 ),
                 "executionProvenance": _guided_execution_provenance_payload(
                     execution_mode="guided_source_inspection",

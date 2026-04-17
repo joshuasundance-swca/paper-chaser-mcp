@@ -160,8 +160,7 @@ async def test_llm_response_with_grounding_signals_stamps_planner_llm() -> None:
 
     assert planner.subject_card is not None
     assert planner.subject_card.source == "planner_llm", (
-        "LLM-emitted candidateConcepts are a valid phase-4 grounding signal; "
-        "resolver must stamp planner_llm"
+        "LLM-emitted candidateConcepts are a valid phase-4 grounding signal; resolver must stamp planner_llm"
     )
 
 
