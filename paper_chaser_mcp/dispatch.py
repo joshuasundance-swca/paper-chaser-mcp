@@ -49,6 +49,7 @@ from .models.common import (
     InputNormalization,
     MachineFailure,
     NormalizationRepair,
+    RuntimeHealthStatus,
     SessionCandidate,
     SessionResolution,
     SourceResolution,
@@ -760,58 +761,121 @@ def _build_provider_diagnostics_snapshot(
         ]
     )
     runtime_warnings: list[str] = []
+    structured_warnings: list[dict[str, Any]] = []
+
+    def _warn(
+        message: str,
+        *,
+        code: str,
+        severity: str = "warning",
+        subject: str | None = None,
+    ) -> None:
+        runtime_warnings.append(message)
+        structured_warnings.append(
+            {
+                "code": code,
+                "severity": severity,
+                "message": message,
+                "subject": subject,
+            }
+        )
+
     enabled_raw_providers = [provider for provider in (provider_order or []) if provider in active_provider_set]
     if len(enabled_raw_providers) <= 1:
-        runtime_warnings.append(
+        _warn(
             "The effective broker order is very narrow, so no-result responses "
-            "may reflect limited provider coverage rather than absence of evidence."
+            "may reflect limited provider coverage rather than absence of evidence.",
+            code="narrow_provider_order",
+            severity="warning",
         )
     if not enable_serpapi and serpapi_client is not None:
-        runtime_warnings.append(
+        _warn(
             "SerpApi client state is present but PAPER_CHASER_ENABLE_SERPAPI is "
-            "false, so paid recall recovery is disabled."
+            "false, so paid recall recovery is disabled.",
+            code="provider_disabled",
+            severity="info",
+            subject="serpapi_google_scholar",
         )
     if not enable_scholarapi and scholarapi_client is not None:
-        runtime_warnings.append(
+        _warn(
             "ScholarAPI client state is present but PAPER_CHASER_ENABLE_"
             "SCHOLARAPI is false, so ScholarAPI discovery and full-text paths "
-            "are inactive."
+            "are inactive.",
+            code="provider_disabled",
+            severity="info",
+            subject="scholarapi",
         )
     if hide_disabled_tools:
-        runtime_warnings.append(
-            "Disabled tools are hidden from list_tools output, which can make capability gaps harder to diagnose."
+        _warn(
+            "Disabled tools are hidden from list_tools output, which can make capability gaps harder to diagnose.",
+            code="tools_hidden",
+            severity="info",
         )
     if transport_mode == "stdio":
-        runtime_warnings.append(
-            "The current runtime is stdio, so HTTP deployment settings do not affect this invocation path."
+        _warn(
+            "The current runtime is stdio, so HTTP deployment settings do not affect this invocation path.",
+            code="stdio_transport",
+            severity="info",
         )
     if getattr(ecos_client, "verify_tls", True) is False:
-        runtime_warnings.append(
-            "ECOS TLS verification is disabled. This should only be a temporary troubleshooting state."
+        _warn(
+            "ECOS TLS verification is disabled. This should only be a temporary troubleshooting state.",
+            code="ecos_tls_disabled",
+            severity="warning",
+            subject="ecos",
         )
     if tool_profile == "guided" and hide_disabled_tools:
-        runtime_warnings.append(
-            "Guided profile is active while expert tools are hidden, so escalation paths are intentionally unavailable."
+        _warn(
+            (
+                "Guided profile is active while expert tools are hidden, "
+                "so escalation paths are intentionally unavailable."
+            ),
+            code="guided_hides_expert",
+            severity="info",
         )
     if configured_smart_provider == "huggingface":
-        runtime_warnings.append(
-            "Hugging Face is configured as a chat-only smart provider in this repo; embeddings stay disabled."
+        _warn(
+            "Hugging Face is configured as a chat-only smart provider in this repo; embeddings stay disabled.",
+            code="chat_only_smart_provider",
+            severity="info",
+            subject="huggingface",
         )
     if configured_smart_provider == "openrouter":
-        runtime_warnings.append(
-            "OpenRouter is configured as a chat-only smart provider in this repo; embeddings stay disabled."
+        _warn(
+            "OpenRouter is configured as a chat-only smart provider in this repo; embeddings stay disabled.",
+            code="chat_only_smart_provider",
+            severity="info",
+            subject="openrouter",
         )
-    if (
+    fallback_active = bool(
         configured_smart_provider
         and configured_smart_provider != "deterministic"
         and active_smart_provider == "deterministic"
-    ):
-        runtime_warnings.append(
-            (
-                f"Configured smart provider '{configured_smart_provider}' is unavailable, "
-                "so deterministic fallback is active."
-            )
+    )
+    fallback_reason: str | None = None
+    if fallback_active:
+        fallback_reason = (
+            f"Configured smart provider '{configured_smart_provider}' is unavailable, "
+            "so deterministic fallback is active."
         )
+        _warn(
+            fallback_reason,
+            code="smart_provider_fallback",
+            severity="critical",
+            subject=configured_smart_provider,
+        )
+
+    _smart_provider_names = set(smart_provider_enabled.keys())
+    _non_smart_disabled = [p for p in disabled_provider_set if p not in _smart_provider_names]
+    if agentic_runtime is None and configured_smart_provider and configured_smart_provider != "deterministic":
+        health_status: RuntimeHealthStatus = "critical"
+    elif fallback_active:
+        health_status = "fallback_active"
+    elif _non_smart_disabled:
+        health_status = "degraded"
+    else:
+        health_status = "nominal"
+
     runtime_summary = RuntimeSummary(
         effectiveProfile=tool_profile,
         transportMode=transport_mode,
@@ -833,6 +897,10 @@ def _build_provider_diagnostics_snapshot(
         guidedEscalationAllowPaidProviders=guided_escalation_allow_paid_providers,
         version=package_version_value,
         warnings=runtime_warnings,
+        healthStatus=health_status,
+        fallbackActive=fallback_active,
+        fallbackReason=fallback_reason,
+        structuredWarnings=structured_warnings,
     )
     if provider_registry is None:
         return {

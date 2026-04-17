@@ -383,6 +383,39 @@ A live MCP probe script `scripts/live_probe_mcp.py` loads `.env` and
 drives the guided surface over stdio via the `mcp` Python client for manual
 smoke checks.
 
+##### UX audit follow-up — runtime health consolidation
+
+`get_runtime_status` now emits structured health signals alongside the existing
+free-form warnings, so low-context agents can branch on state without
+string-parsing.
+
+- New `runtimeSummary.healthStatus` enum:
+  `nominal | degraded | fallback_active | critical`.
+  - `critical` is reserved for the case where the smart layer failed to
+    initialize and there is no usable smart fallback.
+  - `fallback_active` means the configured smart provider is unavailable and
+    deterministic fallback is in use.
+  - `degraded` means the smart provider is healthy but at least one optional
+    non-smart provider is disabled or suppressed.
+  - `nominal` means the configured smart provider is healthy and every
+    optional provider in scope is enabled.
+- New `runtimeSummary.fallbackActive: bool` mirror + `runtimeSummary.fallbackReason`
+  (present only when `fallbackActive` is true).
+- New `runtimeSummary.structuredWarnings: list[{code, severity, message, subject}]`.
+  Severity is one of `info | warning | critical`. Codes are classified at
+  emission time (no regex post-hoc classification of free-form strings);
+  known codes include `smart_provider_fallback`, `provider_disabled`,
+  `chat_only_smart_provider`, `tools_hidden`, `stdio_transport`,
+  `ecos_tls_disabled`, `guided_hides_expert`, and `narrow_provider_order`.
+- The legacy `runtimeSummary.warnings: list[str]` (also mirrored on the
+  top-level `warnings` field of the tool response) is preserved byte-identical
+  for backward compatibility.
+
+All additions are additive. Regression coverage lives in
+`tests/test_dispatch.py::test_get_runtime_status_nominal_when_all_providers_healthy`,
+`test_get_runtime_status_fallback_active_reflects_deterministic_smart_provider`,
+and `test_get_runtime_status_structured_warnings_encode_legacy_strings`.
+
 ## Start Here
 
 Read these in order before making behavior or guidance changes:

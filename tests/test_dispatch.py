@@ -1910,6 +1910,184 @@ async def test_get_runtime_status_excludes_unavailable_openai_before_first_smart
 
 
 @pytest.mark.asyncio
+async def test_get_runtime_status_fallback_active_reflects_deterministic_smart_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeBundle:
+        def selection_metadata(self) -> dict[str, object]:
+            return {
+                "configuredSmartProvider": "openai",
+                "activeSmartProvider": "deterministic",
+                "plannerModel": "openai:deterministic-planner",
+                "plannerModelSource": "deterministic",
+                "synthesisModel": "openai:deterministic-synthesizer",
+                "synthesisModelSource": "deterministic",
+            }
+
+    class _FakeRuntime:
+        _provider_bundle = _FakeBundle()
+
+        @staticmethod
+        def smart_provider_diagnostics() -> tuple[dict[str, bool], list[str]]:
+            return (
+                {
+                    "openai": False,
+                    "azure-openai": False,
+                    "anthropic": False,
+                    "nvidia": False,
+                    "google": False,
+                    "mistral": False,
+                    "huggingface": False,
+                    "openrouter": False,
+                },
+                ["openai", "azure-openai", "anthropic", "nvidia", "google", "mistral", "huggingface", "openrouter"],
+            )
+
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(await server.call_tool("get_runtime_status", {}))
+    summary = payload["runtimeSummary"]
+
+    assert summary["fallbackActive"] is True
+    assert summary["healthStatus"] == "fallback_active"
+    assert isinstance(summary.get("fallbackReason"), str)
+    assert "openai" in summary["fallbackReason"]
+    assert any(
+        entry.get("code") == "smart_provider_fallback" and entry.get("severity") == "critical"
+        for entry in summary.get("structuredWarnings", [])
+    )
+    assert payload["warnings"], "legacy warnings list must still be populated"
+    assert any("deterministic fallback is active" in warning for warning in payload["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_get_runtime_status_nominal_when_all_providers_healthy() -> None:
+    class _FakeBundle:
+        def selection_metadata(self) -> dict[str, object]:
+            return {
+                "configuredSmartProvider": "openai",
+                "activeSmartProvider": "openai",
+            }
+
+    class _FakeRuntime:
+        _provider_bundle = _FakeBundle()
+
+        @staticmethod
+        def smart_provider_diagnostics() -> tuple[dict[str, bool], list[str]]:
+            return (
+                {
+                    "openai": True,
+                    "azure-openai": False,
+                    "anthropic": False,
+                    "nvidia": False,
+                    "google": False,
+                    "mistral": False,
+                    "huggingface": False,
+                    "openrouter": False,
+                },
+                ["openai", "azure-openai", "anthropic", "nvidia", "google", "mistral", "huggingface", "openrouter"],
+            )
+
+    provider_order: list[Any] = [
+        "semantic_scholar",
+        "core",
+        "arxiv",
+        "serpapi_google_scholar",
+        "scholarapi",
+    ]
+    snapshot = dispatch_module._build_provider_diagnostics_snapshot(
+        include_recent_outcomes=False,
+        provider_order=provider_order,
+        provider_registry=None,
+        agentic_runtime=_FakeRuntime(),
+        transport_mode="http",
+        tool_profile="expert",
+        hide_disabled_tools=False,
+        session_ttl_seconds=1800,
+        embeddings_enabled=True,
+        guided_research_latency_profile="deep",
+        guided_follow_up_latency_profile="deep",
+        guided_allow_paid_providers=True,
+        guided_escalation_enabled=True,
+        guided_escalation_max_passes=2,
+        guided_escalation_allow_paid_providers=True,
+        enable_core=True,
+        enable_semantic_scholar=True,
+        enable_openalex=True,
+        enable_arxiv=True,
+        enable_serpapi=True,
+        enable_scholarapi=True,
+        enable_crossref=True,
+        enable_unpaywall=True,
+        enable_ecos=True,
+        enable_federal_register=True,
+        enable_govinfo_cfr=True,
+        ecos_client=None,
+        serpapi_client=None,
+        scholarapi_client=None,
+    )
+    summary = snapshot["runtimeSummary"]
+
+    assert summary["healthStatus"] == "nominal"
+    assert summary["fallbackActive"] is False
+    assert "fallbackReason" not in summary
+    assert summary.get("structuredWarnings") in (None, [])
+    assert summary["warnings"] == []
+
+
+@pytest.mark.asyncio
+async def test_get_runtime_status_structured_warnings_encode_legacy_strings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeBundle:
+        def selection_metadata(self) -> dict[str, object]:
+            return {
+                "configuredSmartProvider": "openai",
+                "activeSmartProvider": "deterministic",
+                "plannerModel": "openai:deterministic-planner",
+                "plannerModelSource": "deterministic",
+                "synthesisModel": "openai:deterministic-synthesizer",
+                "synthesisModelSource": "deterministic",
+            }
+
+    class _FakeRuntime:
+        _provider_bundle = _FakeBundle()
+
+        @staticmethod
+        def smart_provider_diagnostics() -> tuple[dict[str, bool], list[str]]:
+            return (
+                {
+                    "openai": False,
+                    "azure-openai": False,
+                    "anthropic": False,
+                    "nvidia": False,
+                    "google": False,
+                    "mistral": False,
+                    "huggingface": False,
+                    "openrouter": False,
+                },
+                ["openai", "azure-openai", "anthropic", "nvidia", "google", "mistral", "huggingface", "openrouter"],
+            )
+
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(await server.call_tool("get_runtime_status", {}))
+    summary = payload["runtimeSummary"]
+    legacy = list(payload["warnings"])
+    structured = list(summary.get("structuredWarnings") or [])
+
+    assert legacy, "legacy warnings list must still be populated for backward compat"
+    assert structured, "structuredWarnings must mirror the legacy warnings"
+    assert len(structured) == len(legacy)
+    for entry, legacy_message in zip(structured, legacy):
+        assert isinstance(entry, dict)
+        assert entry["message"] == legacy_message
+        assert entry["severity"] in {"info", "warning", "critical"}
+        assert isinstance(entry["code"], str) and entry["code"]
+        assert "subject" in entry
+
+
+@pytest.mark.asyncio
 async def test_guided_research_escalates_once_when_initial_pass_is_too_weak(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -164,6 +164,7 @@ OpenAccessRoute = Literal[
     "unknown",
 ]
 LikelyCompleteness = Literal["likely_complete", "partial", "unknown", "incomplete"]
+RuntimeHealthStatus = Literal["nominal", "degraded", "fallback_active", "critical"]
 FailureOutcome = Literal[
     "total_failure",
     "partial_success",
@@ -407,6 +408,13 @@ class RuntimeSummary(ApiModel):
     )
     version: str | None = None
     warnings: list[str] = Field(default_factory=list)
+    health_status: RuntimeHealthStatus | None = Field(default=None, alias="healthStatus")
+    fallback_active: bool | None = Field(default=None, alias="fallbackActive")
+    fallback_reason: str | None = Field(default=None, alias="fallbackReason")
+    structured_warnings: list[dict[str, Any]] | None = Field(
+        default=None,
+        alias="structuredWarnings",
+    )
 
 
 class Paper(ApiModel):
