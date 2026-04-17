@@ -4417,38 +4417,55 @@ def _ecos_query_variants(
     return variants
 
 
-_ECOS_PROVENANCE_FACTORS: dict[str, float] = {"raw": 1.0, "planner": 0.9}
+_ECOS_PROVENANCE_RANK: dict[str, int] = {"raw": 0, "planner": 1}
 
 
 def _rank_ecos_variant_hits(
     variant_hits: list[tuple[int, str, str, dict[str, Any]]],
 ) -> tuple[int, str, str, dict[str, Any]] | None:
-    """Finding 4 (4th rubber-duck pass): pick the best ECOS variant result.
+    """Finding 4 (5th rubber-duck pass): pick the best ECOS variant result.
 
-    Each entry is ``(variant_idx, anchor_type, origin, search_payload)``.
-    Ranking is ``len(data) * factor`` where ``factor`` is 1.0 for raw /
-    query-corroborated variants and 0.9 for planner-supplied variants. Ties
-    break first on origin (raw beats planner) and then on the original
-    variant index to preserve the intentional ordering from
-    ``_ecos_query_variants``. Returns ``None`` when the input is empty.
+    Each entry is ``(variant_idx, anchor_type, origin, search_payload)``. The
+    earlier scoring (``hits * factor`` with a 0.9 planner factor) let a
+    planner-only variant with two incidental hits outrank a corroborated raw
+    variant with one solid hit, defeating the provenance-first intent.
 
-    The 0.9 factor is intentionally modest: it only flips the ranking when
-    a corroborated variant is within ~10% of a planner-only variant's hit
-    count, which is the exact regression we want to guard against
-    (planner-only winning by one incidental hit over a valid raw match).
+    The ranking key is strictly tiered:
+
+    1. Non-empty variants beat empty ones (a corroborated variant with zero
+       hits cannot stand in for a variant with real hits).
+    2. Provenance rank (raw/query-corroborated beats planner-supplied).
+    3. Hit count (higher wins within the same tier).
+    4. Original ``variant_idx`` to preserve the intentional ordering from
+       ``_ecos_query_variants`` as the final tie-breaker.
+
+    That guarantees any corroborated variant with ``>=1`` hit beats any
+    planner-only variant regardless of hit count, while still using hit count
+    to disambiguate variants sharing a provenance tier. Returns ``None`` when
+    the input is empty.
     """
 
     if not variant_hits:
         return None
-    scored: list[tuple[float, int, int, int, str, str, dict[str, Any]]] = []
+    scored: list[tuple[int, int, int, int, int, str, str, dict[str, Any]]] = []
     for variant_idx, anchor_type, origin, search_payload in variant_hits:
         hit_count = len(list(search_payload.get("data") or []))
-        factor = _ECOS_PROVENANCE_FACTORS.get(origin, 0.9)
-        score = hit_count * factor
-        origin_rank = 0 if origin == "raw" else 1
-        scored.append((-score, origin_rank, variant_idx, hit_count, anchor_type, origin, search_payload))
+        has_hits_rank = 0 if hit_count > 0 else 1
+        provenance_rank = _ECOS_PROVENANCE_RANK.get(origin, 1)
+        scored.append(
+            (
+                has_hits_rank,
+                provenance_rank,
+                -hit_count,
+                variant_idx,
+                hit_count,
+                anchor_type,
+                origin,
+                search_payload,
+            )
+        )
     scored.sort()
-    _, _, variant_idx, _hit_count, anchor_type, origin, search_payload = scored[0]
+    *_, variant_idx, _hit_count, anchor_type, origin, search_payload = scored[0]
     return (variant_idx, anchor_type, origin, search_payload)
 
 

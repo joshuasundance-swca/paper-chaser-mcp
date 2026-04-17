@@ -338,13 +338,13 @@ class TestIsOpaqueQuery:
 
 
 class TestEcosVariantRankingProvenance:
-    """Finding 4 (4th rubber-duck pass): ``_ecosProvenance`` is stamped on
-    the chosen ECOS species hit, but the old break-on-first loop never
-    consumed it — whichever variant returned first won regardless of
-    corroboration. Now ``_rank_ecos_variant_hits`` weights each variant's
-    hit count by a provenance factor (raw/corroborated = 1.0,
-    planner-only = 0.9) so a planner-only result cannot beat a
-    roughly-equal raw match by accident."""
+    """Finding 4 (5th rubber-duck pass): ``_rank_ecos_variant_hits`` now makes
+    provenance strictly primary. Any corroborated raw/query variant with at
+    least one hit beats any planner-only variant regardless of hit count, and
+    hit count is used only within a provenance tier as a tie-breaker. Earlier
+    scoring (``hits * factor`` with a 0.9 planner factor) let a planner-only
+    variant outrank a single raw hit with just 2 incidental hits, defeating
+    the provenance-first intent."""
 
     def _variant(
         self, idx: int, anchor: str, origin: str, hits: int
@@ -363,18 +363,34 @@ class TestEcosVariantRankingProvenance:
         assert picked is not None and picked[2] == "raw"
 
     def test_corroborated_variant_wins_when_planner_has_one_more_hit(self) -> None:
-        # raw: 2 * 1.0 = 2.0 vs planner: 2 * 0.9 = 1.8 → raw wins.
         raw = self._variant(0, "species_scientific_name", "raw", 2)
         planner = self._variant(1, "species_scientific_name", "planner", 2)
         picked = _rank_ecos_variant_hits([planner, raw])
         assert picked is not None and picked[2] == "raw"
 
-    def test_planner_wins_when_score_materially_exceeds_raw(self) -> None:
-        # raw: 1 * 1.0 = 1.0 vs planner: 3 * 0.9 = 2.7 → planner wins.
+    def test_corroborated_variant_wins_even_when_planner_hits_dominate(self) -> None:
+        # Regression (Finding 4, 5th pass): provenance is strictly primary.
+        # The earlier ``hits * factor`` scoring let a planner-only variant with
+        # 3 hits (2.7) outrank a corroborated raw variant with 1 hit (1.0).
+        # Any corroborated variant with >=1 hit must now beat any planner-only
+        # variant, regardless of hit count.
         raw = self._variant(0, "species_scientific_name", "raw", 1)
         planner = self._variant(1, "species_scientific_name", "planner", 3)
         picked = _rank_ecos_variant_hits([raw, planner])
+        assert picked is not None and picked[2] == "raw"
+        assert picked[0] == 0
+
+    def test_planner_wins_only_when_no_corroborated_hit(self) -> None:
+        # When no raw variant produced hits, planner variants win and get
+        # ranked among themselves by hit count (more hits first).
+        raw_empty = self._variant(0, "species_scientific_name", "raw", 0)
+        planner_lo = self._variant(1, "species_scientific_name", "planner", 1)
+        planner_hi = self._variant(2, "species_common_name", "planner", 3)
+        picked = _rank_ecos_variant_hits([raw_empty, planner_lo, planner_hi])
+        # Zero-hit variants lose to any non-empty variant regardless of
+        # provenance, and among the planner variants the higher hit count wins.
         assert picked is not None and picked[2] == "planner"
+        assert picked[0] == 2
 
     def test_empty_input_returns_none(self) -> None:
         assert _rank_ecos_variant_hits([]) is None
@@ -384,6 +400,13 @@ class TestEcosVariantRankingProvenance:
         raw_b = self._variant(2, "species_common_name", "raw", 1)
         picked = _rank_ecos_variant_hits([raw_b, raw_a])
         assert picked is not None and picked[0] == 0
+
+    def test_hit_count_breaks_ties_within_provenance_tier(self) -> None:
+        # Within the same provenance tier, more hits should still win.
+        raw_lo = self._variant(0, "species_scientific_name", "raw", 1)
+        raw_hi = self._variant(1, "species_common_name", "raw", 3)
+        picked = _rank_ecos_variant_hits([raw_lo, raw_hi])
+        assert picked is not None and picked[0] == 1
 
 
 class TestPlannerLlmRegulatoryIntentAuthority:
