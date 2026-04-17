@@ -631,7 +631,10 @@ class AgenticRuntime:
             )
             if regulatory_result.get("structuredSources"):
                 return regulatory_result
-            if _is_agency_guidance_query(normalized_query):
+            _, _, _agency_guidance_route = _derive_regulatory_query_flags(
+                query=normalized_query, planner=planner
+            )
+            if _agency_guidance_route:
                 return regulatory_result
 
             # LLM-driven strategy revision — single recovery attempt instead of hard-coded branching.
@@ -2482,9 +2485,9 @@ class AgenticRuntime:
         timeline_events: list[RegulatoryTimelineEvent] = []
         candidate_leads: list[StructuredSourceRecord] = []
         subject: str | None = None
-        current_text_requested = _is_current_cfr_text_request(query)
-        history_requested = _query_requests_regulatory_history(query)
-        agency_guidance_mode = _is_agency_guidance_query(query)
+        current_text_requested, history_requested, agency_guidance_mode = _derive_regulatory_query_flags(
+            query=query, planner=planner
+        )
         govinfo_matched = False
         federal_register_matched = False
 
@@ -2660,7 +2663,7 @@ class AgenticRuntime:
             started = time.perf_counter()
             try:
                 species_search: dict[str, Any] = {"data": []}
-                for species_query, inferred_anchor_type in _ecos_query_variants(query):
+                for species_query, inferred_anchor_type in _ecos_query_variants(query, planner=planner):
                     species_search = await self._ecos_client.search_species(
                         query=species_query,
                         limit=min(limit, 5),
@@ -4309,7 +4312,11 @@ def _extract_common_name_candidate(query: str) -> str | None:
     return cleaned
 
 
-def _ecos_query_variants(query: str) -> list[tuple[str, str]]:
+def _ecos_query_variants(
+    query: str,
+    *,
+    planner: PlannerDecision | None = None,
+) -> list[tuple[str, str]]:
     variants: list[tuple[str, str]] = []
     seen: set[str] = set()
 
@@ -4325,12 +4332,28 @@ def _ecos_query_variants(query: str) -> list[tuple[str, str]]:
         seen.add(marker)
         variants.append((normalized, anchor_type))
 
-    scientific_name = _extract_scientific_name_candidate(query)
-    _add(scientific_name, "species_scientific_name")
-    common_name = _extract_common_name_candidate(query)
-    if common_name and scientific_name and common_name.lower() == scientific_name.lower():
-        common_name = None
-    _add(common_name, "species_common_name")
+    # LLM-first: surface planner/subject-card species identifiers (which the
+    # regex extractors cannot recover from genus-only / subspecies mentions)
+    # as *additional* variants ahead of the regex-derived ones. The regex
+    # extractors still run so deterministic-bundle callers keep the historical
+    # noise-removal candidate as a fallback try.
+    if planner is not None:
+        entity_card = planner.entity_card or {}
+        if isinstance(entity_card, dict):
+            _add(
+                str(entity_card.get("scientificName") or "") or None,
+                "species_scientific_name",
+            )
+            _add(
+                str(entity_card.get("commonName") or "") or None,
+                "species_common_name",
+            )
+        if planner.subject_card is not None:
+            _add(planner.subject_card.scientific_name, "species_scientific_name")
+            _add(planner.subject_card.common_name, "species_common_name")
+
+    _add(_extract_scientific_name_candidate(query), "species_scientific_name")
+    _add(_extract_common_name_candidate(query), "species_common_name")
     _add(query, "regulatory_subject_terms")
     return variants
 
@@ -4383,6 +4406,56 @@ def _is_current_cfr_text_request(query: str) -> bool:
         "under ",
     )
     return any(marker in lowered for marker in markers) or bool(re.search(r"\b\d+\s*cfr\s+\d+(?:\.\S+)?\b", lowered))
+
+
+def _derive_regulatory_query_flags(
+    *,
+    query: str,
+    planner: PlannerDecision | None,
+) -> tuple[bool, bool, bool]:
+    """Map ``planner.regulatory_intent`` into the three routing booleans.
+
+    LLM-first: when the planner bundle actually ran a real LLM (signalled by
+    ``planner.subject_card.source in {"planner_llm", "hybrid"}``) and emitted
+    a definitive ``regulatoryIntent`` label, trust it authoritatively so the
+    LLM signal wins over query keywords (e.g. "listing history of the Pallid
+    Sturgeon" tagged ``species_dossier`` must NOT also activate the
+    rulemaking-history route).
+
+    Falls back to the deterministic keyword/regex helpers when:
+
+    * the bundle is deterministic (``subject_card.source == "deterministic_fallback"``
+      or ``subject_card is None``) — in that case ``regulatoryIntent`` itself
+      came from deterministic heuristics and is no more reliable than the
+      keyword helpers, so we prefer the keyword helpers to avoid losing
+      secondary routes on queries like "Regulatory history ... under 50 CFR ...";
+    * the LLM emitted ``unspecified`` / ``hybrid_regulatory_plus_literature``
+      / ``None`` — mixed or uncommitted intent, so every keyword-matched
+      sub-route may still be relevant.
+
+    Returns ``(current_text_requested, history_requested, agency_guidance_mode)``.
+    """
+
+    intent = planner.regulatory_intent if planner is not None else None
+    llm_authoritative = (
+        planner is not None
+        and planner.subject_card is not None
+        and planner.subject_card.source in ("planner_llm", "hybrid")
+    )
+    if llm_authoritative:
+        if intent == "current_cfr_text":
+            return (True, False, False)
+        if intent == "rulemaking_history":
+            return (False, True, False)
+        if intent == "guidance_lookup":
+            return (False, False, True)
+        if intent == "species_dossier":
+            return (False, False, False)
+    return (
+        _is_current_cfr_text_request(query),
+        _query_requests_regulatory_history(query),
+        _is_agency_guidance_query(query),
+    )
 
 
 def _year_text(value: Any) -> str | None:
