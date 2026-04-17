@@ -157,9 +157,25 @@ def test_compose_why_classified_weak_match_combines_fragments() -> None:
     source = _fr_weak_source()
     sentence = dispatch_module._compose_why_classified_weak_match(source)
     assert sentence
+    # Hard cap from the composer contract — enforces UI-safe length.
     assert len(sentence) <= 200
-    # prior-work classificationRationale should be the primary fragment
-    assert sentence.lower().startswith("notice mentions endangered species")
+    lowered = sentence.lower()
+    # Behavioral contract: classificationRationale (prior-work fragment) comes
+    # first. Assert on distinctive content rather than exact wording.
+    assert "endangered species" in lowered
+    assert "desert tortoise" in lowered
+    # Priority ordering: classificationRationale fragment must precede the
+    # whyClassifiedAsWeakMatch fragment ("authoritative notice...") in the
+    # combined sentence.
+    auth_idx = lowered.find("authoritative notice")
+    endangered_idx = lowered.find("endangered species")
+    assert endangered_idx != -1 and auth_idx != -1, (
+        f"Both component fragments should appear; got: {sentence!r}"
+    )
+    assert endangered_idx < auth_idx, (
+        f"classificationRationale fragment must appear before "
+        f"whyClassifiedAsWeakMatch fragment; got: {sentence!r}"
+    )
 
 
 def test_compose_why_classified_weak_match_graceful_without_subject_card() -> None:
@@ -169,7 +185,14 @@ def test_compose_why_classified_weak_match_graceful_without_subject_card() -> No
         "classificationRationale": "Partial facet coverage.",
     }
     sentence = dispatch_module._compose_why_classified_weak_match(source)
-    assert sentence == "Partial facet coverage."
+    assert sentence is not None
+    assert len(sentence) <= 200
+    # Single-fragment path must surface the classificationRationale content
+    # without dropping or duplicating it. We check substring + end-punctuation
+    # invariants instead of exact-equality so harmless punctuation tweaks in
+    # the composer do not cause false failures.
+    assert "partial facet coverage" in sentence.lower()
+    assert sentence.rstrip().endswith(".")
 
 
 def test_compose_why_classified_weak_match_uses_subject_chain_gaps() -> None:

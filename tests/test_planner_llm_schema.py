@@ -114,8 +114,20 @@ async def test_legacy_llm_response_without_new_fields_triggers_fallback() -> Non
         "hybrid_regulatory_plus_literature",
     }
     assert planner.subject_card is not None
-    # No LLM bundle signal and no entity_card/candidate_concepts -> deterministic extractor.
-    assert planner.subject_card.source in {"deterministic_fallback", "planner_llm"}
+    # Provenance contract: an LLM bundle was available (the stub provided a
+    # PlannerDecision via aplan_search). Even though the LLM itself omitted
+    # ``subjectCard``, the downstream resolver derives the card from the
+    # LLM-backed planner signals (entity_card / candidate_concepts / planner
+    # context). Per the ws-subject-grounding fix (commit df918df) the stamp
+    # must therefore be ``planner_llm`` — the deterministic-fallback label is
+    # reserved for the case where no LLM bundle is available at all (see the
+    # DeterministicProviderBundle test in test_phase4_signal_integration.py).
+    # Pin strictly so a future regression that confuses these two paths fails
+    # loudly rather than masking behind an `in {...}` set.
+    assert planner.subject_card.source == "planner_llm", (
+        f"With an LLM bundle present (StubBundle), the post-hoc subject-card "
+        f"resolver must stamp source='planner_llm'; got {planner.subject_card.source!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
