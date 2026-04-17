@@ -297,9 +297,23 @@ following additions on top of `main`:
   corroborated variant with ≥1 hit beats any planner-only variant,
   regardless of hit count.
 
-#### Validation baseline (HEAD `7a5e460`)
+#### Phase 7.8 — Cross-field consistency with the two-bool saved-session signal
 
-- `python -m pytest -q` => **1259 passed, 2 skipped** (live-only)
+- **`_guided_next_actions` / `_guided_machine_failure_payload` honor
+  `saved_session_inspectable`** (`2436b1c`): emits an `inspect_source`
+  nextAction entry that agrees with `failureSummary.recommendedNextAction`
+  and `resultState.bestNextInternalAction`. Fixes R6 findings where saved
+  session was inspectable but `nextActions` still pointed nowhere useful.
+- **Route empty / all-off-topic guided paths consistently** (`6e8714d`):
+  introduces shared `_guided_sources_all_off_topic` predicate; extends
+  `_guided_failure_summary` and `_guided_next_actions` with
+  `all_sources_off_topic`; normal `follow_up_research`/`ask_result_set`
+  branch now threads saved-session inspectability into
+  failureSummary/nextActions/resultState. Resolves R7 findings.
+
+#### Validation baseline (HEAD `6e8714d`)
+
+- `python -m pytest -q` => **1267 passed, 2 skipped** (live-only)
 - `python -m ruff check .` clean
 - `python -m mypy --config-file pyproject.toml` clean across **171** source files
 - `python -m bandit -c pyproject.toml -r paper_chaser_mcp` clean (0 Medium, 0 High)
