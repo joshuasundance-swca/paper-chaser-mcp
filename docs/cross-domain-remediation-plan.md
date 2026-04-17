@@ -134,6 +134,9 @@ The observed failures map to concrete code areas.
 
 ## Workstream A: Reranking Quality
 
+Status: complete on `llm-guidance`.
+Landed commits: `fad75ab`.
+
 ### Objective
 
 Reduce the number of generic, weakly related, or merely adjacent papers that survive near the top of broad or interdisciplinary result sets.
@@ -176,6 +179,9 @@ Reduce the number of generic, weakly related, or merely adjacent papers that sur
 
 ## Workstream B: Relevance Classification Resilience
 
+Status: complete on `llm-guidance`.
+Landed commits: `fad75ab`.
+
 ### Objective
 
 Prevent relevance-model failures from collapsing whole candidate pools into undifferentiated `weak_match` buckets.
@@ -213,6 +219,9 @@ Prevent relevance-model failures from collapsing whole candidate pools into undi
 - `tests/test_smart_tools.py`
 
 ## Workstream C: Query Routing And Intent Splitting
+
+Status: complete on `llm-guidance`.
+Landed commits: `ece5fa7`, `594b5ce`.
 
 ### Objective
 
@@ -253,6 +262,9 @@ Reduce early misrouting into `regulatory` or `known_item` when the user is reall
 - `tests/test_dispatch.py`
 
 ## Workstream D: Regulatory Coverage Beyond Species And Air
+
+Status: complete on `llm-guidance`.
+Landed commits: `ece5fa7`, `594b5ce`.
 
 ### Objective
 
@@ -297,6 +309,9 @@ Improve regulatory usefulness for cultural resources, tribal consultation, histo
 
 ## Workstream E: Known-Item Recovery Quality
 
+Status: complete on `llm-guidance`.
+Landed commits: `dce6e8b`, `594b5ce`.
+
 ### Objective
 
 Make exact-title and near-exact-title retrieval behave like a high-confidence reference resolver instead of a partial discovery workflow.
@@ -335,6 +350,9 @@ Make exact-title and near-exact-title retrieval behave like a high-confidence re
 
 ## Workstream F: Follow-Up Trust And Evidence Selection
 
+Status: complete on `llm-guidance`.
+Landed commits: `f315797`, `c74b492`.
+
 ### Objective
 
 Keep the strong follow-up experience while making it less vulnerable to noisy initial corpora.
@@ -368,6 +386,9 @@ Keep the strong follow-up experience while making it less vulnerable to noisy in
 - `tests/test_smart_tools.py`
 
 ## Workstream G: Cross-Domain Eval Program
+
+Status: complete on `llm-guidance`.
+Landed commits: `21e8006`, `3f68553`.
 
 ### Objective
 

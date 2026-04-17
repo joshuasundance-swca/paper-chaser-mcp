@@ -229,6 +229,21 @@ For source-level audits, treat `whyClassifiedAsWeakMatch` and
 the primary explanation of why an authoritative record was retained as a weak
 match or off-topic lead.
 
+Additional trust and grounding signals landed in the `llm-guidance` phase-4
+wave. Guided responses can expose `confidenceSignals.evidenceQualityProfile`,
+`confidenceSignals.synthesisMode`, `confidenceSignals.evidenceProfileDetail`,
+`confidenceSignals.synthesisPath`, `confidenceSignals.trustRevisionNarrative`,
+and a `trustSummary.authoritativeButWeak` bucket for primary-source records
+that are authoritative but not topically responsive. `searchStrategy` may
+surface `regulatoryIntent`, `intentFamily`, a `subjectCard` for species and
+regulatory grounding, and `subjectChainGaps` describing missing subject-chain
+evidence. `inspect_source` pairs each direct-read suggestion with a
+`directReadRecommendationDetails` entry shaped as
+`{trustLevel, whyRecommended, cautions}` so agents can prioritize direct reads
+by quality. See [Paper Chaser Golden Paths](docs/golden-paths.md) and
+[Guided And Smart Robustness Notes](docs/guided-smart-robustness.md) for how
+to read and act on these signals.
+
 ## Deferred export design
 
 Session export is intentionally deferred in this wave. The planned future shape is

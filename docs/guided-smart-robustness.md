@@ -84,3 +84,48 @@ Focused regressions should cover:
 - mixed and degraded flows that still return actionable result state
 - saved-session relevance triage over mixed evidence and leads
 - recommendation-first summaries that still preserve the full audit payload
+
+## Phase 4 trust and grounding additions
+
+The `llm-guidance` phase-4 wave added several LLM-first robustness behaviors
+layered on top of the guided dispatch path. Agents should treat them as
+additive signals with deterministic fallbacks.
+
+### Weak-match rationale path
+
+`inspect_source` now emits a one-sentence `whyClassifiedAsWeakMatch` rationale
+whenever a source landed in `trustSummary.authoritativeButWeak` or was filtered
+out of grounded evidence. The rationale is produced LLM-first with a
+deterministic template fallback and is pinned to the same
+`classificationRationale` / `trustRationale` values already exposed on the
+structured source record. Clients should cite it when explaining why an
+authoritative source was not promoted into the answer.
+
+### Species-dossier on_topic demotion
+
+For regulatory intents resolved to `species_dossier`, the relevance fallback
+demotes candidates from `on_topic` to `weak_match` when the pool contains no
+species-specific evidence for the grounded subject. The demotion is reported
+through `confidenceSignals.trustRevisionNarrative` and surfaces the gap as
+`subjectChainGaps=["missing_species_specific_evidence"]`. This prevents
+adjacent agency notices from becoming grounded dossier evidence for the wrong
+species.
+
+### Known-item weak-signal breadth preservation
+
+The known-item gate now refuses to force a title-like query into known-item
+resolution when the query carries no DOI, arXiv id, or URL anchor and the
+planner reports high ambiguity. Such queries stay on the broader retrieval
+path so weak but genuine signals are preserved instead of being collapsed into
+a fabricated exact match. `knownItemResolutionState=needs_disambiguation` is
+the expected surface for these cases.
+
+### `hybrid_policy_science` retrieval hypothesis
+
+Planner routing can now emit a `hybrid_policy_science` retrieval hypothesis
+alongside the existing regulatory and literature hypotheses. It signals that
+both a regulatory primary-source pass and a literature pass should run and
+their evidence should be merged under a shared subject card. `searchStrategy`
+exposes this hypothesis so clients can tell when a response blends both
+streams; it typically co-occurs with
+`searchStrategy.regulatoryIntent="hybrid_regulatory_plus_literature"`.

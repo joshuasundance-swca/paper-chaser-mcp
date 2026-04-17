@@ -73,6 +73,51 @@ research(query="retrieval-augmented generation for coding agents", limit=5)
   applied, and `outcome` is `partial_success` (not `no_failure`) when the
   response abstained with zero sources.
 
+#### How to read the new trust + grounding signals
+
+Guided `research` and `follow_up_research` responses now expose additive trust
+and grounding cues. Treat them as hints layered on top of `answerability` and
+`resultStatus`, not as replacements.
+
+- `confidenceSignals.evidenceQualityProfile` buckets the supporting pool as
+  `strong` (multiple directly responsive sources), `mixed` (some responsive,
+  some weak), `weak` (mostly filtered or adjacent), or `authoritative_but_weak`
+  (primary-source authority without topical fit). Use `strong`/`mixed` to
+  justify confident synthesis; treat `weak` and `authoritative_but_weak` as
+  reasons to qualify claims or route to `inspect_source`.
+- `confidenceSignals.synthesisMode` describes how the answer was assembled
+  (for example `grounded_synthesis`, `evidence_triage`, `session_introspection`,
+  `deterministic_salvage`). Only `grounded_synthesis` should be treated as a
+  normal answer; the others require caution.
+- `confidenceSignals.evidenceProfileDetail` gives a short rationale behind the
+  profile bucket, and `confidenceSignals.synthesisPath` records which synthesis
+  branch ran. `confidenceSignals.trustRevisionNarrative` explains any trust
+  re-grade that happened after initial ranking (for example when a highly
+  ranked record was demoted because the subject chain did not match).
+- `trustSummary.authoritativeButWeak` collects primary-source records that the
+  server judged authoritative (agency rule, CFR text, species listing, etc.)
+  but that did not topically respond to the query. Cite them only after
+  confirming responsiveness with `inspect_source`; do not promote them into
+  grounded evidence.
+- `searchStrategy.regulatoryIntent` (when present) is one of
+  `current_cfr_text`, `rulemaking_history`, `species_dossier`,
+  `guidance_lookup`, or `hybrid_regulatory_plus_literature`. Use it to decide
+  whether to drive with CFR text, Federal Register history, species profiles,
+  agency guidance, or a blended regulatory-plus-literature pass.
+- `searchStrategy.subjectCard` is the LLM-first subject grounding card used
+  for species and regulatory workflows. It contains the canonical subject
+  name, aliases, taxonomy or agency context, and pre-resolved anchors. Use it
+  to confirm the server grounded the right entity before trusting species
+  dossiers or agency-specific summaries.
+- `searchStrategy.subjectChainGaps` lists missing links in the subject chain
+  (for example `missing_species_specific_evidence`,
+  `missing_rulemaking_history`, `missing_guidance_anchor`). Treat each gap as
+  an explicit evidence boundary and reflect it in any response to the user.
+- `searchStrategy.intentFamily` records the detected intent family (for
+  example `literature_review`, `known_item`, `heritage_cultural_resources`,
+  `regulatory_timeline`). Use it to validate that the server interpreted the
+  ask the same way you did.
+
 ### 2. Grounded follow-up (`follow_up_research`)
 
 1. Use `follow_up_research` with `searchSessionId` from `research`.
@@ -116,7 +161,10 @@ follow_up_research(searchSessionId="...", question="What evaluation tradeoffs sh
 2. Review provenance and trust state before citing.
 3. Use `whyClassifiedAsWeakMatch` plus `confidenceSignals.sourceScopeLabel` /
   `confidenceSignals.sourceScopeReason` to distinguish authoritative but scope-limited records from directly responsive ones.
-4. Follow direct-read recommendations for primary sources.
+4. Follow direct-read recommendations for primary sources. When
+  `directReadRecommendationDetails` is present, each entry carries
+  `{trustLevel, whyRecommended, cautions}`; prefer higher `trustLevel` entries
+  first and honor the `cautions` when summarizing the source.
 5. If `searchSessionId` is omitted and more than one compatible session exists, provide it explicitly instead of expecting newest-session rebinding.
 
 **Success signals**

@@ -81,7 +81,8 @@ These are the main implementation loci behind the observed failures.
 
 ## Workstream A: Follow-up Synthesis Integrity
 
-Status: partially complete.
+Status: complete on `llm-guidance`.
+Landed commits: `f315797`, `c74b492`.
 
 The repo now has explicit coverage for deterministic degradation, compact insufficient-evidence follow-up responses, and answered-but-abstaining follow-up regressions. The remaining work in this stream is higher-quality evidence-use planning and stronger response-mode separation for thin-but-usable saved sessions.
 
@@ -137,7 +138,8 @@ Fix the biggest current product failure: polished but weak follow-up answers.
 
 ## Workstream B: Species And Regulatory Entity Grounding
 
-Status: in progress.
+Status: complete on `llm-guidance`.
+Landed commits: `594b5ce`.
 
 The schema and routing foundations are stronger than they were when this plan was first written, but the species-dossier and entity-chain work remains open. This is still the main environmental-science routing gap after the contract-efficiency and citation-confidence fixes.
 
@@ -205,7 +207,8 @@ Make regulatory and ECOS-style retrieval practitioner-grade by grounding on the 
 
 ## Workstream C: Confidence And Provenance UX
 
-Status: in progress.
+Status: complete on `llm-guidance`.
+Landed commits: `c74b492`, `ece5fa7`.
 
 The current repo now preserves more explicit abstention details and weaker-match rationale, but the provenance UX still needs richer source-specific explanation for environmental planning and species-specific regulatory workflows.
 
@@ -255,7 +258,8 @@ Make weak evidence look weak for the right reasons.
 
 ## Workstream D: Environmental-Science Eval Program
 
-Status: partially complete.
+Status: complete on `llm-guidance`.
+Landed commits: `3f68553`, `21e8006`.
 
 The environmental-science slice is no longer a one-off review. The repo now includes dedicated environmental-science and stress-test seed fixtures plus benchmark-corpus entries for the main stress scenarios. The remaining work is broader trace promotion, judge-rubric iteration, and recurring score-driven tuning.
 
