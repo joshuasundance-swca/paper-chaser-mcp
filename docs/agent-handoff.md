@@ -127,7 +127,8 @@ following additions on top of `main`:
   `regulatoryIntent` enum (`current_cfr_text` / `rulemaking_history` /
   `species_dossier` / `guidance_lookup` / `hybrid_regulatory_plus_literature`),
   `hybrid_policy_science` retrieval hypothesis, new `agentic/subject_grounding.py`
-  LLM-first SubjectCard resolver (deterministic fallback cached per session),
+  LLM-first SubjectCard resolver with deterministic fallback (no cross-request
+  cache — see "Known gaps" in `docs/guided-smart-robustness.md`),
   document-family boost on regulatory ranking, species-dossier `on_topic`
   demotion when no species-specific evidence is present, subject-chain
   evidence gaps surfaced on strategy metadata, and a stricter known-item

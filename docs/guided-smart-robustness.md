@@ -95,11 +95,18 @@ additive signals with deterministic fallbacks.
 
 `inspect_source` now emits a one-sentence `whyClassifiedAsWeakMatch` rationale
 whenever a source landed in `trustSummary.authoritativeButWeak` or was filtered
-out of grounded evidence. The rationale is produced LLM-first with a
-deterministic template fallback and is pinned to the same
-`classificationRationale` / `trustRationale` values already exposed on the
-structured source record. Clients should cite it when explaining why an
-authoritative source was not promoted into the answer.
+out of grounded evidence. The rationale is composed deterministically at
+inspect time from the structured classification signals that were already
+attached to the source upstream — in priority order: `classificationRationale`,
+`whyClassifiedAsWeakMatch`, `whyWeak`, `note`, `whyNotVerified`, and up to two
+`subjectChainGaps` pulled from the session's `strategyMetadata`. Fragments are
+de-duplicated, joined into a single <=200-char sentence, and truncated with an
+ellipsis if necessary. This is an intentional design choice: the upstream
+classifier (LLM-first during ranking) is where the semantic judgement happens,
+so per-source LLM calls at inspect time would inflate token budgets without
+adding signal the classifier has not already produced. Clients should cite the
+composed sentence when explaining why an authoritative source was not promoted
+into the answer.
 
 ### Species-dossier on_topic demotion
 
@@ -129,3 +136,28 @@ their evidence should be merged under a shared subject card. `searchStrategy`
 exposes this hypothesis so clients can tell when a response blends both
 streams; it typically co-occurs with
 `searchStrategy.regulatoryIntent="hybrid_regulatory_plus_literature"`.
+
+### Known gaps (honest tech debt)
+
+The following behaviors are *not* implemented today. They are tracked here so
+future iterations can address them rather than having docs quietly overclaim.
+
+- **Subject-card session-level cache.** `resolve_subject_card` in
+  `paper_chaser_mcp/agentic/subject_grounding.py` re-derives the card each time
+  it is called. The resolver is pure and cheap (it reshapes planner outputs or
+  falls back to the deterministic `_infer_entity_card` extractor), but there
+  is no explicit per-session cache. The planner does populate
+  `PlannerDecision.subject_card` once and downstream call sites read from that
+  field, which functions as an implicit single-resolution-per-request memo —
+  but it is not a cache across sessions, tools, or follow-up calls.
+- **Richer subject-card fields.** The shipped `SubjectCard` exposes only
+  `commonName`, `scientificName`, `agency`, `requestedDocumentFamily`,
+  `subjectTerms` (up to six candidate concepts), `confidence`, and `source`.
+  Explicit alias lists, taxonomy trees (order/family/genus), and
+  pre-resolved primary-source anchor URLs are not on the card. Agents that
+  want aliases today can approximate by reading `subjectTerms` or by pivoting
+  into `resolve_reference`.
+- **Per-source LLM-composed weak-match rationale.** `whyClassifiedAsWeakMatch`
+  at `inspect_source` time is composed deterministically (see the weak-match
+  rationale section above). A future iteration could add an optional
+  LLM-rewrite pass guarded by a budget check, but that is not shipped.

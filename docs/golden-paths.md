@@ -104,11 +104,18 @@ and grounding cues. Treat them as hints layered on top of `answerability` and
   `guidance_lookup`, or `hybrid_regulatory_plus_literature`. Use it to decide
   whether to drive with CFR text, Federal Register history, species profiles,
   agency guidance, or a blended regulatory-plus-literature pass.
-- `searchStrategy.subjectCard` is the LLM-first subject grounding card used
-  for species and regulatory workflows. It contains the canonical subject
-  name, aliases, taxonomy or agency context, and pre-resolved anchors. Use it
-  to confirm the server grounded the right entity before trusting species
-  dossiers or agency-specific summaries.
+- `searchStrategy.subjectCard` is the subject-grounding card used for species
+  and regulatory workflows. It is populated LLM-first from planner outputs
+  (`entity_card`, `candidate_concepts`, `regulatory_intent`) with a
+  deterministic fallback when no LLM bundle is available. Fields:
+  `commonName`, `scientificName`, `agency`, `requestedDocumentFamily`,
+  `subjectTerms` (up to six candidate concepts), `confidence`
+  (`high` / `medium` / `low` / `deterministic_fallback`), and `source`
+  (`planner_llm` / `deterministic_fallback` / `hybrid`). Use it to confirm the
+  server grounded the right entity before trusting species dossiers or
+  agency-specific summaries. Alias lists, taxonomy trees, and pre-resolved
+  primary-source anchors are *not* on the card today — see the "Known gaps"
+  subsection of `docs/guided-smart-robustness.md`.
 - `searchStrategy.subjectChainGaps` lists missing links in the subject chain
   (for example `missing_species_specific_evidence`,
   `missing_rulemaking_history`, `missing_guidance_anchor`). Treat each gap as
