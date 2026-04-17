@@ -83,8 +83,10 @@ next steps without re-discovering project state.
 ### Fleet-mode `llm-guidance` branch (in progress, not merged)
 
 The `llm-guidance` branch bundles a focused LLM-first quality pass. All
-commits live locally and have not been pushed. HEAD is `dce6e8b` with the
+commits live locally and have not been pushed. HEAD is `5a3ccdd` with the
 following additions on top of `main`:
+
+#### Phase 1-3
 
 - **Workstream G — eval fixture expansion** (`21e8006`): cross-domain fixture
   corpus + `tests/test_cross_domain_slices.py` behavioral regression harness.
@@ -108,10 +110,41 @@ following additions on top of `main`:
   force-routed into known-item, and wires the state through
   `citation_repair.py` + the graphs known-item branch.
 
-Validation on the branch: `python -m pytest` => `1086 passed, 2 skipped`;
-`python -m ruff check .` clean; `python -m mypy --config-file pyproject.toml`
-clean across 156 source files; `python -m bandit -c pyproject.toml -r paper_chaser_mcp`
-clean. A live MCP probe script `scripts/live_probe_mcp.py` loads `.env` and
+#### Phase 4 — Residual durable-plan workstreams
+
+- **Env-sci eval autopilot** (`3f68553`): new `tests/fixtures/evals/env_sci_benchmark_pack.json`
+  (16 rows across literature/regulatory/follow-up/inspection/species-dossier),
+  judge rubric template `tests/fixtures/evals/env_sci_judge_rubric.json`,
+  `tests/test_env_sci_eval_slices.py` (8 tests incl. 5 failure-family slices),
+  `EnvSciJudgeRubric` dataclass + `build_env_sci_judge_prompt` in
+  `eval_curation.py`, and `--slice env-sci` flag on `run_eval_autopilot.py`.
+- **Trust UX deepen** (`c74b492`): `whyClassifiedAsWeakMatch` sentence on
+  `inspect_source`, `confidenceSignals.evidenceProfileDetail`/`synthesisPath`/
+  `trustRevisionNarrative`, `trustSummary.authoritativeButWeak` bucket, and
+  parallel `directReadRecommendationDetails` with `{trustLevel, whyRecommended,
+  cautions}`.
+- **Regulatory intent split + subject-card grounding** (`594b5ce`): planner-level
+  `regulatoryIntent` enum (`current_cfr_text` / `rulemaking_history` /
+  `species_dossier` / `guidance_lookup` / `hybrid_regulatory_plus_literature`),
+  `hybrid_policy_science` retrieval hypothesis, new `agentic/subject_grounding.py`
+  LLM-first SubjectCard resolver (deterministic fallback cached per session),
+  document-family boost on regulatory ranking, species-dossier `on_topic`
+  demotion when no species-specific evidence is present, subject-chain
+  evidence gaps surfaced on strategy metadata, and a stricter known-item
+  demotion for title-like queries without DOI/URL under high ambiguity.
+- **Ruff-format reformat + handoff** (`5a3ccdd`).
+
+#### Validation baseline (HEAD `5a3ccdd`)
+
+- `python -m pytest -q` => **1134 passed, 2 skipped**
+- `python -m pytest --cov=paper_chaser_mcp --cov-fail-under=85` => **85.64%**
+- `python -m ruff check .` clean
+- `python -m mypy --config-file pyproject.toml` clean across **160** source files
+- `python -m bandit -c pyproject.toml -r paper_chaser_mcp` clean
+- `pre-commit run --all-files` clean (ruff/ruff-format/mypy/bandit/checkov/
+  hadolint/PSRule/secret-scan/typos/etc.)
+
+A live MCP probe script `scripts/live_probe_mcp.py` loads `.env` and
 drives the guided surface over stdio via the `mcp` Python client for manual
 smoke checks.
 
