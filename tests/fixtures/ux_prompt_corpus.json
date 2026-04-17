@@ -109,5 +109,127 @@
     "Compare methods for carbon accounting in life-cycle assessment of alternative aviation fuels.",
     "What are the major themes in computational social science research on misinformation diffusion?",
     "Find the strongest review papers on climate risk in financial asset pricing."
-  ]
+  ],
+  "cross_domain_slices": {
+    "description": "Workstream G cross-domain regression prompts. Each slice exposes positive controls, ambiguous prompts, mixed-mode prompts that should exercise hybrid literature+regulatory routing, and failure-expected prompts that should produce abstained/off_topic/insufficient_evidence outcomes instead of answer-shaped filler.",
+    "natural_science": {
+      "description": "Peer-reviewed natural-science topics: peatlands, PFAS, harmful algal blooms, urban heat, salt marshes, invasive species, pollinators.",
+      "positive_controls": [
+        "Find recent peer-reviewed research on tropical peatland carbon loss under drainage and agricultural conversion.",
+        "What does the literature say about PFAS bioaccumulation in freshwater fish across U.S. watersheds?",
+        "Map the evidence on cyanobacterial harmful algal bloom forecasting in large temperate lakes.",
+        "Compare cool-roof, tree-canopy, and reflective-pavement interventions for urban heat mitigation.",
+        "What is the state of evidence on salt marsh carbon sequestration response to sea-level rise?",
+        "Find studies on Spotted Lanternfly range expansion and natural enemy impacts in the eastern U.S.",
+        "Synthesize evidence on managed pollinator declines driven by neonicotinoid exposure in row crops."
+      ],
+      "ambiguous": [
+        "Are peatlands a net source or sink under restoration?",
+        "How risky is PFAS in rural groundwater?",
+        "Is urban heat worse in Atlanta or Phoenix?",
+        "Pollinator decline and pesticide use."
+      ],
+      "mixed_mode": [
+        "Compare peer-reviewed evidence on PFAS fish consumption advisories with the EPA 2024 Maximum Contaminant Level rulemaking.",
+        "What does recent literature say about wildfire smoke health effects and how do state air-quality alert thresholds under the NAAQS Exceptional Events Rule use it?"
+      ],
+      "failure_expected": [
+        "Give me the single confirmed treatment that always eliminates harmful algal blooms in any lake.",
+        "Tell me the exact pollinator decline percentage in the next 5 years with one definitive number.",
+        "Provide proof that salt marshes cause hurricanes."
+      ]
+    },
+    "human_dimensions": {
+      "description": "Environmental justice, Indigenous stewardship, co-management governance, rural drinking water risk.",
+      "positive_controls": [
+        "Map the peer-reviewed literature on cumulative-impact environmental justice screening tools used in state permitting.",
+        "Find recent studies on Indigenous-led fire stewardship outcomes in fire-adapted ecosystems.",
+        "Compare co-management governance arrangements for Pacific salmon between state, federal, and tribal co-managers.",
+        "What does the evidence show about small-system rural drinking water compliance gaps in the U.S.?"
+      ],
+      "ambiguous": [
+        "Is environmental justice a federal priority?",
+        "How effective is tribal consultation?",
+        "Rural water problems."
+      ],
+      "mixed_mode": [
+        "Compare academic research on Indigenous stewardship outcomes with federal guidance on co-stewardship agreements for public lands.",
+        "Find evidence on cumulative impacts for EJ communities and relate it to current state cumulative-impact statutes."
+      ],
+      "failure_expected": [
+        "Write an environmental justice policy brief for our client using whatever evidence you can scrape together.",
+        "Use any evidence to prove co-management always improves fisheries outcomes.",
+        "Give me a definitive list of every EJ-affected community in America."
+      ]
+    },
+    "heritage_archaeology": {
+      "description": "Sea-level risk to archaeology, wildfire effects on archaeological sites, cultural-resource stewardship.",
+      "positive_controls": [
+        "Find recent research on sea-level rise and storm surge impacts to coastal archaeological sites in the southeastern U.S.",
+        "What does the peer-reviewed literature say about wildfire effects on lithic and ceramic artifacts at surface archaeological sites?",
+        "Map the evidence on post-fire erosion and archaeological site integrity in the Intermountain West.",
+        "Compare approaches to cultural-resource stewardship that integrate Indigenous knowledge with Section 106 compliance."
+      ],
+      "ambiguous": [
+        "Is climate change bad for archaeological sites?",
+        "How do you protect archaeology during wildfires?",
+        "Cultural resources and federal lands."
+      ],
+      "mixed_mode": [
+        "Compare archaeological literature on wildfire effects with NPS cultural-resource wildfire guidance.",
+        "Find scholarly evidence on sea-level risk to archaeology alongside NOAA sea-level rise viewer scenarios."
+      ],
+      "failure_expected": [
+        "Find the peer-reviewed paper that proves wildfires improve archaeological site visibility at every site.",
+        "Give me a Medicare billing analysis relevant to archaeological wildfire cleanup costs.",
+        "Answer this archaeology question from the evidence even if none of it mentions archaeology."
+      ]
+    },
+    "regulation": {
+      "description": "Primary-source regulatory prompts: critical-habitat, PFAS drinking water, wildfire smoke/air management, cultural resources and consultation.",
+      "positive_controls": [
+        "Trace the regulatory history of critical habitat designations for the lesser prairie chicken under 50 CFR 17.95.",
+        "Find the EPA 2024 PFAS National Primary Drinking Water Regulation Federal Register notice and related CFR updates.",
+        "Map EPA and state wildfire-smoke air quality guidance under the NAAQS Exceptional Events Rule.",
+        "Find the NHPA Section 106 consultation guidance for federal undertakings affecting Tribal cultural resources."
+      ],
+      "ambiguous": [
+        "Is PFAS regulated under the Safe Drinking Water Act?",
+        "Who enforces wildfire smoke rules?",
+        "What does Section 106 require?"
+      ],
+      "mixed_mode": [
+        "Combine Federal Register notices on PFAS drinking water with peer-reviewed literature on treatment costs for small systems.",
+        "Combine ECOS critical-habitat data for the lesser prairie chicken with academic literature on habitat connectivity."
+      ],
+      "failure_expected": [
+        "Tell me the final 40 CFR citation for a wildfire smoke rule that was never finalized.",
+        "Give me the critical-habitat text for a species that has never been listed under the ESA.",
+        "Use only unrelated Federal Register species notices and answer this California condor critical-habitat question."
+      ]
+    },
+    "known_item_recovery": {
+      "description": "Exact-title and near-title retrieval across science and heritage corpora.",
+      "positive_controls": [
+        "Find the paper titled 'Planetary boundaries: exploring the safe operating space for humanity' by Rockstrom et al.",
+        "Recover the exact citation for 'Attention Is All You Need' by Vaswani et al.",
+        "Find the paper titled 'Salt marsh persistence is threatened by predicted sea-level rise' in the geosciences literature."
+      ],
+      "ambiguous": [
+        "Recover: Rockstrom planetary boundaries 2009 Nature maybe 461 pages 472.",
+        "Find: Folke resilience Ecology and Society maybe 2006 or 2005.",
+        "Find: wildfire effects on lithic artifacts eastern Nevada maybe 2018.",
+        "Find the paper that is probably Elmqvist urban resilience Nature Sustainability maybe 2019."
+      ],
+      "mixed_mode": [
+        "Recover the Ostrom 2009 sustainability framework paper and tell me if it is directly responsive to a co-management research question.",
+        "Resolve Vaswani 2017 transformers and then guide me to the primary source."
+      ],
+      "failure_expected": [
+        "Find the paper 'The Medicare Reimbursement Rates for Wildfire Cleanup' published in Nature.",
+        "Recover a paper titled 'Definitive proof pollinators do not decline' with exact match.",
+        "Find the 1999 Vaswani transformer paper."
+      ]
+    }
+  }
 }

@@ -237,3 +237,75 @@ def test_eval_autopilot_profiles_include_environmental_science_slice() -> None:
     assert profile["generation"]["emitFollowUp"] is True
     assert profile["workflow"]["autopilotPolicy"] == "review"
     assert "cross-provider-best" in profile["workflow"]["matrixPreset"]
+
+
+def test_maybe_capture_eval_candidate_attaches_ranking_diagnostics_for_abstained_smart_search(
+    tmp_path: Path,
+) -> None:
+    """Workstream G: abstained/failed cases should preserve ranking-diagnostic telemetry."""
+    trace_path = tmp_path / "captured.jsonl"
+    registry = WorkspaceRegistry(ttl_seconds=1800, enable_trace_log=False, eval_trace_path=str(trace_path))
+    maybe_capture_eval_candidate(
+        workspace_registry=registry,
+        tool_name="search_papers_smart",
+        arguments={"query": "ambiguous heritage ceramics query", "mode": "discovery"},
+        result={
+            "searchSessionId": "ssn_abs_1",
+            "resultStatus": "abstained",
+            "answerability": "insufficient_evidence",
+            "strategyMetadata": {
+                "intent": "discovery",
+                "scoreBreakdown": {"semantic": 0.12, "lexical": 0.08, "recency": 0.02},
+            },
+            "rankingDiagnostics": {
+                "topCandidates": [{"sourceId": "abs-1", "score": 0.12, "reason": "off_topic"}],
+                "filteredCount": 17,
+            },
+            "preFilterCandidates": [
+                {"sourceId": "abs-1", "provider": "openalex", "topicalRelevance": "off_topic"},
+                {"sourceId": "abs-2", "provider": "semantic_scholar", "topicalRelevance": "unknown"},
+            ],
+            "classificationProvenance": {"router": "heuristic", "confidence": "low"},
+            "synthesisMode": "abstain_with_leads",
+            "evidenceQualityProfile": {"tier": "weak", "sampleSize": 0},
+            "structuredSources": [],
+        },
+        run_id="run_abs_001",
+        batch_id="batch_abs_001",
+        duration_ms=180,
+    )
+
+    text = trace_path.read_text(encoding="utf-8")
+    assert '"rankingDiagnostics"' in text
+    assert '"scoreBreakdown"' in text
+    assert '"classificationProvenance"' in text
+    assert '"synthesisMode": "abstain_with_leads"' in text
+    assert '"evidenceQualityProfile"' in text
+    assert '"preFilterCandidates"' in text
+
+
+def test_maybe_capture_eval_candidate_omits_ranking_diagnostics_for_succeeded_case(
+    tmp_path: Path,
+) -> None:
+    """Successful runs without telemetry should not gain a ``rankingDiagnostics`` key."""
+    trace_path = tmp_path / "captured.jsonl"
+    registry = WorkspaceRegistry(ttl_seconds=1800, enable_trace_log=False, eval_trace_path=str(trace_path))
+    maybe_capture_eval_candidate(
+        workspace_registry=registry,
+        tool_name="research",
+        arguments={"query": "clean PFAS question"},
+        result={
+            "searchSessionId": "ssn_ok",
+            "status": "succeeded",
+            "summary": "ok",
+            "sources": [{"sourceId": "s-1", "title": "Paper", "provider": "openalex"}],
+        },
+        run_id="run_ok_001",
+        batch_id="batch_ok_001",
+        duration_ms=100,
+    )
+
+    text = trace_path.read_text(encoding="utf-8")
+    assert '"rankingDiagnostics"' not in text
+
+

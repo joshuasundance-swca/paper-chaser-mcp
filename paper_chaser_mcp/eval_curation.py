@@ -238,6 +238,80 @@ def _extract_telemetry(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_RANKING_DIAGNOSTIC_TERMINAL_STATUSES = {
+    "abstained",
+    "failed",
+    "partial",
+    "insufficient_evidence",
+    "needs_disambiguation",
+}
+
+
+def extract_ranking_diagnostics(result: dict[str, Any]) -> dict[str, Any] | None:
+    """Collect optional ranking-diagnostic telemetry for failed/abstained cases.
+
+    Workstream G (``docs/cross-domain-remediation-plan.md`` lines 370-405)
+    requires the eval-capture pipeline to preserve ranking-diagnostic signals
+    for terminal-non-success outcomes so review queues can reconstruct *why*
+    evidence was rejected. Sibling agents are still landing the producer-side
+    fields (``rankingDiagnostics``, ``preFilterCandidates``, ``scoreBreakdown``,
+    ``classificationProvenance``, ``synthesisMode``, ``evidenceQualityProfile``)
+    so this extractor must be tolerant: it uses ``.get`` defensively and
+    returns ``None`` when nothing useful is present so callers can cheaply
+    skip wiring the key into the captured payload.
+    """
+    if not isinstance(result, dict):
+        return None
+    strategy_metadata = _first_dict(result.get("strategyMetadata"))
+    diagnostics: dict[str, Any] = {}
+
+    ranking_diagnostics = result.get("rankingDiagnostics")
+    if isinstance(ranking_diagnostics, dict) and ranking_diagnostics:
+        diagnostics["rankingDiagnostics"] = ranking_diagnostics
+    elif isinstance(ranking_diagnostics, list) and ranking_diagnostics:
+        diagnostics["rankingDiagnostics"] = ranking_diagnostics
+
+    pre_filter = result.get("preFilterCandidates")
+    if isinstance(pre_filter, list) and pre_filter:
+        diagnostics["preFilterCandidates"] = pre_filter[:8]
+
+    score_breakdown = result.get("scoreBreakdown")
+    if not isinstance(score_breakdown, (dict, list)) or not score_breakdown:
+        score_breakdown = strategy_metadata.get("scoreBreakdown")
+    if isinstance(score_breakdown, (dict, list)) and score_breakdown:
+        diagnostics["scoreBreakdown"] = score_breakdown
+
+    classification_provenance = result.get("classificationProvenance")
+    if isinstance(classification_provenance, (dict, list)) and classification_provenance:
+        diagnostics["classificationProvenance"] = classification_provenance
+
+    synthesis_mode = result.get("synthesisMode")
+    if isinstance(synthesis_mode, str) and synthesis_mode.strip():
+        diagnostics["synthesisMode"] = synthesis_mode
+
+    evidence_quality_profile = result.get("evidenceQualityProfile")
+    if isinstance(evidence_quality_profile, (dict, list)) and evidence_quality_profile:
+        diagnostics["evidenceQualityProfile"] = evidence_quality_profile
+
+    return diagnostics or None
+
+
+def _maybe_attach_ranking_diagnostics(output: Any, result: dict[str, Any]) -> None:
+    """Attach ranking diagnostics to ``output`` only for terminal-non-success cases."""
+    if not isinstance(output, dict):
+        return
+    status_values = {
+        str(result.get("status") or "").strip().lower(),
+        str(result.get("resultStatus") or "").strip().lower(),
+        str(result.get("answerStatus") or "").strip().lower(),
+    }
+    if not status_values & _RANKING_DIAGNOSTIC_TERMINAL_STATUSES:
+        return
+    diagnostics = extract_ranking_diagnostics(result)
+    if diagnostics:
+        output["rankingDiagnostics"] = diagnostics
+
+
 def build_eval_capture_payload(
     tool_name: str, arguments: dict[str, Any], result: dict[str, Any]
 ) -> dict[str, Any] | None:
@@ -246,7 +320,7 @@ def build_eval_capture_payload(
     heuristic_summary = _build_heuristic_summary(tool_name, arguments, result)
     if tool_name == "research":
         sources = [item for item in result.get("sources") or [] if isinstance(item, dict)]
-        return {
+        payload = {
             "tool": tool_name,
             "taskFamily": "planner",
             "evaluationTarget": "internal_llm_role",
@@ -275,9 +349,11 @@ def build_eval_capture_payload(
             },
             "tags": _tags_with_prompt_family(["captured-live", "guided", "planner"], heuristic_summary),
         }
+        _maybe_attach_ranking_diagnostics(payload["output"], result)
+        return payload
     if tool_name == "follow_up_research":
         sources = [item for item in result.get("sources") or [] if isinstance(item, dict)]
-        return {
+        payload = {
             "tool": tool_name,
             "taskFamily": "synthesis",
             "evaluationTarget": "internal_llm_role",
@@ -306,6 +382,8 @@ def build_eval_capture_payload(
             },
             "tags": _tags_with_prompt_family(["captured-live", "guided", "synthesis"], heuristic_summary),
         }
+        _maybe_attach_ranking_diagnostics(payload["output"], result)
+        return payload
     if tool_name == "inspect_source":
         source = _first_dict(result.get("source"))
         return {
@@ -347,7 +425,7 @@ def build_eval_capture_payload(
     if tool_name == "search_papers_smart":
         structured_sources = [item for item in result.get("structuredSources") or [] if isinstance(item, dict)]
         strategy_metadata = result.get("strategyMetadata") if isinstance(result.get("strategyMetadata"), dict) else {}
-        return {
+        payload = {
             "tool": tool_name,
             "taskFamily": "planner",
             "toolRole": "expert_smart_search",
@@ -379,10 +457,12 @@ def build_eval_capture_payload(
                 heuristic_summary,
             ),
         }
+        _maybe_attach_ranking_diagnostics(payload["output"], result)
+        return payload
     if tool_name == "ask_result_set":
         evidence = [item for item in result.get("evidence") or [] if isinstance(item, dict)]
         structured_sources = [item for item in result.get("structuredSources") or [] if isinstance(item, dict)]
-        return {
+        payload = {
             "tool": tool_name,
             "taskFamily": "synthesis",
             "toolRole": "expert_grounded_qa",
@@ -417,6 +497,8 @@ def build_eval_capture_payload(
                 heuristic_summary,
             ),
         }
+        _maybe_attach_ranking_diagnostics(payload["output"], result)
+        return payload
     if tool_name == "map_research_landscape":
         themes = [item for item in result.get("themes") or [] if isinstance(item, dict)]
         structured_sources = [item for item in result.get("structuredSources") or [] if isinstance(item, dict)]
