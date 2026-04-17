@@ -135,12 +135,48 @@ following additions on top of `main`:
   demotion for title-like queries without DOI/URL under high ambiguity.
 - **Ruff-format reformat + handoff** (`5a3ccdd`).
 
-#### Validation baseline (HEAD `5a3ccdd`)
+#### Phase 5 — Docs alignment + native planner schema
 
-- `python -m pytest -q` => **1134 passed, 2 skipped**
-- `python -m pytest --cov=paper_chaser_mcp --cov-fail-under=85` => **85.64%**
+- **User-facing docs + plan status markers** (`57e23ec`).
+- **Native planner LLM emission** of `regulatoryIntent` + `subjectCard`
+  via `_PlannerResponseSchema` (`9c2468d`); deterministic fallback preserved.
+- **Durable handoff summary** (`319f8a0`).
+
+#### Phase 6 — Integration red-team + critique remediation
+
+- **End-to-end signal red-team** (`b3df3d4`): new
+  `tests/test_phase4_signal_integration.py` covers the full plumbing from
+  planner → smart layer → dispatch response. Surfaced a critical bug where
+  `strategyMetadata.{intentFamily,regulatoryIntent,subjectCard,subjectChainGaps}`
+  were emitted internally but dropped by the dispatch serializer.
+- **Docs-drift cleanup** (`4637cde`): aligned overclaims in
+  `guided-smart-robustness.md`, `golden-paths.md`, and this handoff with
+  actual code behaviour; added a "Known gaps" subsection for honest tech
+  debt (no cross-request SubjectCard cache, no richer SubjectCard fields,
+  no per-source LLM-composed weak-match rationale).
+- **Surface strategy signals + LLM-first follow-up gate + provenance fix**
+  (`df918df`): extended `routingSummary` with Phase 4/5 fields (additive
+  Option C); added LLM-first `classify_question_mode` with async variant,
+  session-hint precedence, classifier cache, and fail-closed unknown-mode
+  branch for paraphrased synthesis over weak pools; fixed
+  `resolve_subject_card` provenance so `DeterministicProviderBundle`
+  correctly stamps `source="deterministic_fallback"`.
+- **Regulatory `unspecified` fallback** (`8ce97d7`): `_infer_regulatory_subintent`
+  now returns `None` when no specific cue is present, so
+  `_derive_regulatory_intent` reaches its documented `unspecified` fallback
+  for broad regulatory queries instead of biasing onto rulemaking timelines.
+- **Dispatch compat + trust threading** (`3abda1e`): restored legacy
+  `fullTextObserved` key alongside `fullTextUrlFound` (dual-emit), restored
+  `verified_metadata` default for DOI-less scholarly records with basic
+  metadata, and threaded `subjectChainGaps` into `_guided_confidence_signals`
+  and `_guided_trust_summary` so machine-readable trust signals mirror the
+  human rationale.
+
+#### Validation baseline (HEAD `3abda1e`)
+
+- `python -m pytest -q` => **1191 passed, 2 skipped**
 - `python -m ruff check .` clean
-- `python -m mypy --config-file pyproject.toml` clean across **160** source files
+- `python -m mypy --config-file pyproject.toml` clean across **164** source files
 - `python -m bandit -c pyproject.toml -r paper_chaser_mcp` clean
 - `pre-commit run --all-files` clean (ruff/ruff-format/mypy/bandit/checkov/
   hadolint/PSRule/secret-scan/typos/etc.)
