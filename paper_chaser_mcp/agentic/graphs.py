@@ -631,9 +631,7 @@ class AgenticRuntime:
             )
             if regulatory_result.get("structuredSources"):
                 return regulatory_result
-            _, _, _agency_guidance_route = _derive_regulatory_query_flags(
-                query=normalized_query, planner=planner
-            )
+            _, _, _agency_guidance_route = _derive_regulatory_query_flags(query=normalized_query, planner=planner)
             if _agency_guidance_route:
                 return regulatory_result
 
@@ -1374,7 +1372,7 @@ class AgenticRuntime:
             hasInspectableSources=_has_inspectable_sources(source_records),
             bestNextInternalAction=_best_next_internal_action(
                 intent=planner.intent,
-                has_sources=bool(source_records),
+                has_sources=_has_on_topic_sources(source_records),
                 result_status=result_status,
             ),
         )
@@ -2686,9 +2684,7 @@ class AgenticRuntime:
                     variant_data = list(variant_search.get("data") or [])
                     if not variant_data:
                         continue
-                    variant_hits.append(
-                        (variant_idx, inferred_anchor_type, variant_origin, variant_search)
-                    )
+                    variant_hits.append((variant_idx, inferred_anchor_type, variant_origin, variant_search))
                 selected = _rank_ecos_variant_hits(variant_hits)
                 if selected is not None:
                     species_search = selected[3]
@@ -3180,7 +3176,7 @@ class AgenticRuntime:
             repairedInputs=repaired_inputs,
             bestNextInternalAction=_best_next_internal_action(
                 intent=planner_intent,
-                has_sources=bool(structured_sources),
+                has_sources=_has_on_topic_sources(structured_sources),
                 result_status=result_status,
             ),
             **provider_selection,
@@ -3247,7 +3243,7 @@ class AgenticRuntime:
             hasInspectableSources=_has_inspectable_sources(structured_sources),
             bestNextInternalAction=_best_next_internal_action(
                 intent=planner_intent,
-                has_sources=bool(structured_sources),
+                has_sources=_has_on_topic_sources(structured_sources),
                 result_status=result_status,
             ),
         )
@@ -3752,10 +3748,10 @@ class AgenticRuntime:
             evidenceGaps=list(strategy_metadata.drift_warnings),
             structuredSources=source_records,
             resultStatus=result_status,
-            hasInspectableSources=bool(smart_hits),
+            hasInspectableSources=_has_inspectable_sources(source_records),
             bestNextInternalAction=_best_next_internal_action(
                 intent=planner.intent,
-                has_sources=bool(smart_hits),
+                has_sources=_has_on_topic_sources(source_records),
                 result_status=result_status,
             ),
         )
@@ -4786,9 +4782,7 @@ def _classify_topical_relevance_with_provenance(
     has_title_signal = (title_facet_coverage > 0.0) or (title_anchor_coverage > 0.0)
     has_title_or_body_signal = has_title_signal or (query_facet_coverage > 0.0) or (query_anchor_coverage > 0.0)
     fast_path_on_topic = deterministic == "on_topic" and query_similarity > 0.5
-    fast_path_off_topic = (
-        deterministic == "off_topic" and query_similarity < 0.12 and not has_title_or_body_signal
-    )
+    fast_path_off_topic = deterministic == "off_topic" and query_similarity < 0.12 and not has_title_or_body_signal
 
     effective: Literal["on_topic", "weak_match", "off_topic"]
     source: Literal["deterministic", "llm", "llm_tiebreaker"]
@@ -5444,9 +5438,14 @@ def _known_item_recovery_warning(resolution_strategy: str) -> str:
 
 def _has_inspectable_sources(records: list[StructuredSourceRecord]) -> bool:
     return any(
-        bool(record.canonical_url or record.retrieved_url or record.full_text_url_found or record.abstract_observed)
+        record.topical_relevance != "off_topic"
+        and bool(record.canonical_url or record.retrieved_url or record.full_text_url_found or record.abstract_observed)
         for record in records
     )
+
+
+def _has_on_topic_sources(records: list[StructuredSourceRecord]) -> bool:
+    return any(record.topical_relevance != "off_topic" for record in records)
 
 
 def _best_next_internal_action(*, intent: str, has_sources: bool, result_status: str) -> str:
