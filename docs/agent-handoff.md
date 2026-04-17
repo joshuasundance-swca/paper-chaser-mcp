@@ -80,6 +80,41 @@ next steps without re-discovering project state.
   `python -m pytest --cov=paper_chaser_mcp --cov-report=term-missing --cov-fail-under=85`
   => `962 passed`, total coverage ≥ `85%`.
 
+### Fleet-mode `llm-guidance` branch (in progress, not merged)
+
+The `llm-guidance` branch bundles a focused LLM-first quality pass. All
+commits live locally and have not been pushed. HEAD is `dce6e8b` with the
+following additions on top of `main`:
+
+- **Workstream G — eval fixture expansion** (`21e8006`): cross-domain fixture
+  corpus + `tests/test_cross_domain_slices.py` behavioral regression harness.
+- **Workstream B/A — relevance & reranking resilience** (`fad75ab`):
+  `paper_chaser_mcp/agentic/relevance_fallback.py` introduces a three-way
+  deterministic tier (on_topic/weak_match/off_topic) with provenance, a
+  degraded-mode cap, and anchored reranking diagnostics.
+- **Workstream A/F — follow-up weak-pool gate** (`f315797`): synthesis
+  integrity guard so `follow_up_research` cannot promote answer-shaped
+  filler when the pool lacks grounded support.
+- **Workstream C/D — classification rationale UX + heritage intent family**
+  (`ece5fa7`): adds `classificationRationale` on structured source records
+  and smart hits, `trustRationale` + `classificationRationaleByBucket` on
+  `inspect_source` trust summaries, and a `heritage_cultural_resources`
+  intent family with a regulatory ranking boost for Section-106 / NHPA /
+  tribal-consultation documents.
+- **Workstream E — known-item resolution states** (`dce6e8b`): adds
+  `knownItemResolutionState` with `resolved_exact` / `resolved_probable` /
+  `needs_disambiguation`, tightens the known-item gate so broad conceptual
+  queries labeled `broad_concept`/`low`/`high` by the LLM are not
+  force-routed into known-item, and wires the state through
+  `citation_repair.py` + the graphs known-item branch.
+
+Validation on the branch: `python -m pytest` => `1086 passed, 2 skipped`;
+`python -m ruff check .` clean; `python -m mypy --config-file pyproject.toml`
+clean across 156 source files; `python -m bandit -c pyproject.toml -r paper_chaser_mcp`
+clean. A live MCP probe script `scripts/live_probe_mcp.py` loads `.env` and
+drives the guided surface over stdio via the `mcp` Python client for manual
+smoke checks.
+
 ## Start Here
 
 Read these in order before making behavior or guidance changes:
