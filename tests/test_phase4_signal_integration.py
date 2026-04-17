@@ -31,6 +31,7 @@ from paper_chaser_mcp.agentic import (
     AgenticConfig,
     WorkspaceRegistry,
 )
+from paper_chaser_mcp.agentic.models import SubjectCard
 from paper_chaser_mcp.agentic.planner import classify_query
 from paper_chaser_mcp.agentic.provider_base import DeterministicProviderBundle
 from tests.helpers import _payload
@@ -278,28 +279,20 @@ async def test_research_weak_match_populates_authoritative_but_weak_bucket(
 
 
 # ---------------------------------------------------------------------------
-# XFAIL — strategyMetadata / Phase 4/5 top-level signals are not surfaced
+# Phase 4/5 strategy signals are surfaced through routingSummary
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    reason=(
-        "Red-team finding: the research dispatch serializer does not surface "
-        "Phase 4/5 signals `intentFamily`, `regulatoryIntent`, `subjectCard`, "
-        "and `subjectChainGaps` at the top level (strategyMetadata comes through "
-        "as null on the smart-backed path and routingSummary does not re-expose "
-        "these fields). Only `retrievalHypotheses` makes it into routingSummary. "
-        "This means downstream agents cannot observe the planner's subject card "
-        "or regulatory intent from a research response even though the smart "
-        "layer emitted them. Owner should decide whether to surface these in "
-        "routingSummary or as a dedicated searchStrategy block."
-    ),
-    strict=True,
-)
 async def test_research_surfaces_phase4_strategy_fields_end_to_end(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Fix for ws-dispatch-surface-strategy: ``intentFamily``,
+    ``regulatoryIntent``, ``subjectCard``, and ``subjectChainGaps`` emitted by
+    the smart layer must be surfaced on the research response so downstream
+    agents can observe the planner's classification. They are attached
+    additively under ``routingSummary``.
+    """
     smart = _smart_result(
         intent="regulatory",
         structured=[_strong_source()],
@@ -319,20 +312,18 @@ async def test_research_surfaces_phase4_strategy_fields_end_to_end(
 
     payload = _payload(await server.call_tool("research", {"query": "desert tortoise recovery plan"}))
 
-    # Expect these to appear either at top level, in strategyMetadata, or in routingSummary.
-    def _any_location_has(key: str) -> bool:
-        if payload.get(key) not in (None, [], {}, ""):
-            return True
-        sm = payload.get("strategyMetadata")
-        if isinstance(sm, dict) and sm.get(key) not in (None, [], {}, ""):
-            return True
-        rs = payload.get("routingSummary")
-        if isinstance(rs, dict) and rs.get(key) not in (None, [], {}, ""):
-            return True
-        return False
-
-    for key in ("intentFamily", "regulatoryIntent", "subjectCard", "subjectChainGaps"):
-        assert _any_location_has(key), f"Phase 4/5 signal {key!r} not surfaced anywhere"
+    rs = payload.get("routingSummary")
+    assert isinstance(rs, dict), "routingSummary must be present on grounded research responses"
+    assert rs.get("intentFamily") == "species_dossier_regulatory"
+    assert rs.get("regulatoryIntent") == "species_dossier"
+    subject_card = rs.get("subjectCard")
+    assert isinstance(subject_card, dict) and subject_card.get("commonName") == "desert tortoise", (
+        f"routingSummary.subjectCard should round-trip the smart-layer card; got {subject_card!r}"
+    )
+    assert list(rs.get("subjectChainGaps") or []) == ["missing recovery plan document"]
+    assert "species_recovery" in list(rs.get("retrievalHypotheses") or []), (
+        "Existing retrievalHypotheses consumers must continue to see their field."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -477,9 +468,7 @@ async def test_follow_up_research_trust_revision_narrative_populates_when_pool_i
 
     cs = payload.get("confidenceSignals") or {}
     narrative = cs.get("trustRevisionNarrative") or cs.get("trustRevisionReason")
-    assert narrative, (
-        f"Expected confidenceSignals.trustRevisionNarrative/Reason to be populated; got {cs!r}"
-    )
+    assert narrative, f"Expected confidenceSignals.trustRevisionNarrative/Reason to be populated; got {cs!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -527,9 +516,7 @@ async def test_inspect_source_weak_record_surfaces_rationale_and_trust_level() -
     # Either whyRecommended (spec name) or a plausible synonym from the
     # dispatch implementation ("why" / "recommendation") must be present.
     has_rationale_field = any(k in first for k in ("whyRecommended", "why", "recommendation"))
-    assert has_rationale_field, (
-        f"directReadRecommendationDetails entry missing rationale field: {sorted(first)}"
-    )
+    assert has_rationale_field, f"directReadRecommendationDetails entry missing rationale field: {sorted(first)}"
 
 
 @pytest.mark.asyncio
@@ -562,8 +549,7 @@ async def test_inspect_source_strong_record_omits_false_positive_weak_rationale(
         server.workspace_registry = original_registry
 
     assert not payload.get("whyClassifiedAsWeakMatch"), (
-        f"Strong-match inspect_source leaked whyClassifiedAsWeakMatch: "
-        f"{payload.get('whyClassifiedAsWeakMatch')!r}"
+        f"Strong-match inspect_source leaked whyClassifiedAsWeakMatch: {payload.get('whyClassifiedAsWeakMatch')!r}"
     )
     # And the recommendation details should reflect a non-low trust level.
     details = payload.get("directReadRecommendationDetails") or []
@@ -583,15 +569,10 @@ async def test_inspect_source_strong_record_omits_false_positive_weak_rationale(
 async def test_deterministic_provider_bundle_emits_populated_subject_card() -> None:
     """LLM-first principle check: when the real ``DeterministicProviderBundle``
     is used (no LLM keys), the subject card must still be populated so
-    downstream code that consumes the card keeps working.
-
-    Spec note / deviation: the task matrix called for
-    ``subjectCard.source == "deterministic_fallback"``. In reality, when the
-    planner LLM schema is the code path that constructs the card, its source
-    tag is ``"planner_llm"`` even under ``DeterministicProviderBundle`` (the
-    schema stamps that value before the deterministic bundle has a chance to
-    relabel it). The true LLM-first invariant enforced here is that the card
-    is non-empty and usable regardless of which tag the schema stamped.
+    downstream code that consumes the card keeps working. After
+    ws-dispatch-surface-strategy, provenance must honor the actual resolver:
+    the deterministic shim stamps ``subjectCard.source == "deterministic_fallback"``
+    instead of leaking the ``planner_llm`` tag.
     """
     config = AgenticConfig(
         enabled=True,
@@ -604,6 +585,7 @@ async def test_deterministic_provider_bundle_emits_populated_subject_card() -> N
         enable_trace_log=False,
     )
     bundle = DeterministicProviderBundle(config)
+    assert bundle.is_deterministic, "DeterministicProviderBundle must self-identify as deterministic."
     _, planner = await classify_query(
         query="Desert tortoise recovery plan under the ESA",
         mode="auto",
@@ -613,9 +595,9 @@ async def test_deterministic_provider_bundle_emits_populated_subject_card() -> N
         provider_bundle=bundle,
     )
     assert planner.subject_card is not None
-    assert planner.subject_card.source in {"deterministic_fallback", "planner_llm"}, (
-        f"Unexpected subject card source tag under DeterministicProviderBundle: "
-        f"{planner.subject_card.source!r}"
+    assert planner.subject_card.source == "deterministic_fallback", (
+        f"DeterministicProviderBundle must stamp subjectCard.source='deterministic_fallback'; "
+        f"got {planner.subject_card.source!r}"
     )
     # Downstream accessors must still work — common_name populated by the extractor.
     assert (planner.subject_card.common_name or "").lower().startswith("desert tortoise")
@@ -652,3 +634,138 @@ async def test_research_response_shape_snapshot_keeps_legacy_keys_stable(
         f"Legacy/stable research response keys went missing after Phase 4/5: {sorted(missing)}. "
         f"Actual keys: {sorted(top_keys)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# ws-dispatch-surface-strategy regression tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_research_routing_summary_accepts_subject_card_pydantic_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: the smart layer may emit ``subjectCard`` as either a dict
+    or a ``SubjectCard`` pydantic instance depending on serialization path.
+    The dispatch must normalize both shapes into a JSON-safe dict under
+    ``routingSummary.subjectCard`` with camelCase aliases preserved."""
+    card = SubjectCard(
+        commonName="desert tortoise",
+        scientificName="Gopherus agassizii",
+        confidence="high",
+        source="planner_llm",
+        subjectTerms=["desert tortoise", "recovery plan"],
+    )
+    smart = _smart_result(
+        intent="regulatory",
+        structured=[_strong_source()],
+        strategy_overrides={
+            "intentFamily": "species_dossier_regulatory",
+            "regulatoryIntent": "species_dossier",
+            "subjectCard": card,
+            "subjectChainGaps": ["missing recovery plan document"],
+        },
+    )
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime(smart_result=smart))
+
+    payload = _payload(await server.call_tool("research", {"query": "desert tortoise recovery plan"}))
+
+    rs = payload.get("routingSummary") or {}
+    sc = rs.get("subjectCard")
+    assert isinstance(sc, dict), (
+        f"routingSummary.subjectCard must be normalized to a dict even when the smart layer "
+        f"emits a pydantic SubjectCard; got {type(sc).__name__}"
+    )
+    assert sc.get("commonName") == "desert tortoise"
+    assert sc.get("scientificName") == "Gopherus agassizii"
+    assert sc.get("source") == "planner_llm"
+    assert "desert tortoise" in (sc.get("subjectTerms") or [])
+
+
+@pytest.mark.asyncio
+async def test_research_trust_summary_always_exposes_authoritative_but_weak_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: ``trustSummary.authoritativeButWeak`` must always be present
+    (even as an empty list) on grounded research responses so downstream
+    consumers can ``get('authoritativeButWeak', [])``-style key-check safely
+    instead of branching on a ``KeyError``-shaped surface."""
+    smart = _smart_result(
+        intent="regulatory",
+        structured=[_strong_source()],
+    )
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime(smart_result=smart))
+
+    payload = _payload(await server.call_tool("research", {"query": "desert tortoise recovery plan"}))
+
+    ts = payload.get("trustSummary")
+    assert isinstance(ts, dict), "trustSummary must be present on grounded research responses"
+    assert "authoritativeButWeak" in ts, (
+        "trustSummary.authoritativeButWeak key must always be present on research responses"
+    )
+    assert isinstance(ts["authoritativeButWeak"], list)
+
+
+@pytest.mark.asyncio
+async def test_follow_up_research_trust_summary_always_exposes_authoritative_but_weak_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: the follow_up_research session re-emit path must include
+    ``trustSummary.authoritativeButWeak`` (setdefault to empty list) so the
+    key is stable across research/follow_up_research."""
+    isolated_registry = WorkspaceRegistry()
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-follow-up-trust-key",
+        query="desert tortoise recovery plan",
+        payload={
+            "query": "desert tortoise recovery plan",
+            "intent": "regulatory",
+            "sources": [_strong_source()],
+        },
+    )
+    ask_result: dict[str, Any] = {
+        "answerStatus": "answered",
+        "answer": "Synthesis result.",
+        "providerUsed": "deterministic",
+        "degradationReason": None,
+        "evidenceUsePlan": None,
+        "evidence": [],
+        "unsupportedAsks": [],
+        "followUpQuestions": [],
+        "structuredSources": [_strong_source()],
+        "candidateLeads": [],
+        "evidenceGaps": [],
+        "coverageSummary": {
+            "providersAttempted": ["federal_register"],
+            "providersSucceeded": ["federal_register"],
+            "providersFailed": [],
+            "providersZeroResults": [],
+            "searchMode": "grounded_follow_up",
+        },
+        "failureSummary": None,
+    }
+
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime(ask_result=ask_result))
+    original_registry = server.workspace_registry
+    server.workspace_registry = isolated_registry
+    try:
+        payload = _payload(
+            await server.call_tool(
+                "follow_up_research",
+                {
+                    "searchSessionId": "ssn-follow-up-trust-key",
+                    "question": "What actions are required under the recovery plan?",
+                },
+            )
+        )
+    finally:
+        server.workspace_registry = original_registry
+
+    ts = payload.get("trustSummary")
+    if ts is not None:
+        assert isinstance(ts, dict)
+        assert "authoritativeButWeak" in ts, (
+            "trustSummary.authoritativeButWeak key missing on follow_up_research re-emit path"
+        )
+        assert isinstance(ts["authoritativeButWeak"], list)

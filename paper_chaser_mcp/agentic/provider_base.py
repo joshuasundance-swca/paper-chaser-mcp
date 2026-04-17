@@ -155,6 +155,18 @@ class ModelProviderBundle:
     def is_available(self) -> bool:
         return True
 
+    @property
+    def is_deterministic(self) -> bool:
+        """Whether this bundle is the deterministic / offline shim.
+
+        Concrete LLM-backed bundles keep the default (``False``). Only
+        :class:`DeterministicProviderBundle` overrides this to ``True`` so that
+        provenance consumers (e.g. :func:`subject_grounding.resolve_subject_card`)
+        can stamp ``source="deterministic_fallback"`` correctly even though the
+        deterministic shim still fills the same planner contract.
+        """
+        return False
+
     def configured_provider_name(self) -> str:
         return str(getattr(self, "_configured_provider", getattr(self, "_provider_name", "deterministic")))
 
@@ -501,6 +513,10 @@ class ModelProviderBundle:
 
 class DeterministicProviderBundle(ModelProviderBundle):
     """Pure-Python fallback planner/synthesizer for tests and offline use."""
+
+    @property
+    def is_deterministic(self) -> bool:
+        return True
 
     def __init__(self, config: AgenticConfig) -> None:
         self._config = config

@@ -1019,14 +1019,18 @@ async def classify_query(
         planner.regulatory_intent = _derive_regulatory_intent(planner=planner, query=query, focus=focus)
     if planner.subject_card is None and planner.regulatory_intent is not None:
         # LLM-first subject card; uses planner.entity_card / candidate_concepts
-        # and falls back to deterministic extraction when needed.
+        # and falls back to deterministic extraction when needed. The
+        # ``llm_bundle_available`` flag must reflect the real resolver: even
+        # though the deterministic shim satisfies the same planner contract,
+        # its output should be provenance-stamped as ``deterministic_fallback``.
         from .subject_grounding import resolve_subject_card
 
+        _bundle_is_deterministic = bool(getattr(provider_bundle, "is_deterministic", False))
         planner.subject_card = resolve_subject_card(
             query=query,
             focus=focus,
             planner=planner,
-            llm_bundle_available=planner.intent_source == "planner",
+            llm_bundle_available=(planner.intent_source == "planner" and not _bundle_is_deterministic),
         )
     if planner.regulatory_intent == "hybrid_regulatory_plus_literature":
         hybrid_marker = (

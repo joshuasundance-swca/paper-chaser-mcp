@@ -1711,6 +1711,12 @@ def _guided_strategy_metadata_from_runs(smart_runs: list[dict[str, Any]]) -> dic
             "activeSmartProvider",
             "providerBudgetApplied",
             "latencyProfile",
+            # Phase 4/5 planner classification signals — pass through the first
+            # non-empty value so downstream routingSummary serialization can
+            # expose them to agents.
+            "intentFamily",
+            "regulatoryIntent",
+            "subjectCard",
         ):
             value = metadata.get(field)
             if value not in (None, "", [], {}) and field not in merged:
@@ -1720,6 +1726,12 @@ def _guided_strategy_metadata_from_runs(smart_runs: list[dict[str, Any]]) -> dic
                 text = str(item).strip()
                 if text and text not in merged_lists[field]:
                     merged_lists[field].append(text)
+        for item in metadata.get("subjectChainGaps") or []:
+            text = str(item).strip()
+            if text:
+                subject_chain_gaps = merged.setdefault("subjectChainGaps", [])
+                if isinstance(subject_chain_gaps, list) and text not in subject_chain_gaps:
+                    subject_chain_gaps.append(text)
 
         intent_confidence = str(metadata.get("intentConfidence") or "").strip()
         if intent_confidence in confidence_rank:
@@ -3671,6 +3683,24 @@ async def _guided_contract_fields(
         except Exception:
             logger.debug("LLM answer status validation failed; using deterministic result.")
 
+    metadata_for_routing = strategy_metadata or {}
+    subject_card_payload: dict[str, Any] | None = None
+    raw_subject_card = metadata_for_routing.get("subjectCard")
+    if isinstance(raw_subject_card, dict) and raw_subject_card:
+        subject_card_payload = dict(raw_subject_card)
+    elif raw_subject_card is not None and hasattr(raw_subject_card, "model_dump"):
+        try:
+            dumped = raw_subject_card.model_dump(by_alias=True, exclude_none=True)  # type: ignore[union-attr]
+        except Exception:  # pragma: no cover - defensive
+            dumped = {}
+        if dumped:
+            subject_card_payload = dumped
+    subject_chain_gaps_payload = [
+        str(item).strip() for item in metadata_for_routing.get("subjectChainGaps") or [] if str(item).strip()
+    ]
+    intent_family_payload = str(metadata_for_routing.get("intentFamily") or "").strip() or None
+    regulatory_intent_payload = str(metadata_for_routing.get("regulatoryIntent") or "").strip() or None
+
     return {
         "resultStatus": result_status,
         "answerability": answerability,
@@ -3698,6 +3728,13 @@ async def _guided_contract_fields(
                 if provider not in list((coverage_summary or {}).get("providersAttempted") or [])
             ],
             "whyPartial": evidence_gaps[0] if evidence_gaps and result_status != "succeeded" else None,
+            # Phase 4/5 planner classification signals surfaced for agents
+            # (additive — existing consumers that only read retrievalHypotheses
+            # continue to work unchanged).
+            "intentFamily": intent_family_payload,
+            "regulatoryIntent": regulatory_intent_payload,
+            "subjectCard": subject_card_payload,
+            "subjectChainGaps": subject_chain_gaps_payload,
         },
         "coverageSummary": coverage_summary,
         "evidence": evidence,
@@ -4387,6 +4424,12 @@ async def _answer_follow_up_from_session_state(
         in {s.get("title") or s.get("sourceId") for s in _filtered_sources}
     ]
 
+    # Ensure trustSummary.authoritativeButWeak is always present (possibly
+    # empty) for shape consistency across research / follow_up_research /
+    # inspect_source synthesis paths.
+    _session_trust_summary = cast(dict[str, Any], dict(session_state.get("trustSummary") or {}))
+    _session_trust_summary.setdefault("authoritativeButWeak", [])
+
     return {
         "searchSessionId": session_state["searchSessionId"],
         "answerStatus": "answered",
@@ -4400,7 +4443,7 @@ async def _answer_follow_up_from_session_state(
         "sources": _filtered_sources,
         "unverifiedLeads": _filtered_leads,
         "evidenceGaps": session_state["evidenceGaps"],
-        "trustSummary": session_state["trustSummary"],
+        "trustSummary": _session_trust_summary,
         "coverage": session_state["coverage"],
         "failureSummary": session_state["failureSummary"],
         "resultMeaning": session_state["resultMeaning"],

@@ -19,9 +19,19 @@ unavailable).
 from __future__ import annotations
 
 import os
+from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
 from .models import EvidenceItem, StructuredSourceRecord
+
+# Type aliases for optional LLM-backed classification.
+#
+# ``LLMModeClassifier`` is a synchronous callable that takes the raw question
+# plus the allowed mode list and returns one of ``ANSWER_MODES`` (or ``None``
+# if the LLM abstains / the call fails). ``AsyncLLMModeClassifier`` is the
+# awaitable sibling used by ``aclassify_question_mode``.
+LLMModeClassifier = Callable[[str, tuple[str, ...]], str | None]
+AsyncLLMModeClassifier = Callable[[str, tuple[str, ...]], Awaitable[str | None]]
 
 ANSWER_MODES: tuple[str, ...] = (
     "metadata",
@@ -65,12 +75,127 @@ def _weak_pool_threshold() -> float:
     return value
 
 
-def classify_question_mode(question: str, session_metadata: dict[str, Any] | None = None) -> str:
+def classify_question_mode(
+    question: str,
+    session_metadata: dict[str, Any] | None = None,
+    *,
+    llm_classifier: LLMModeClassifier | None = None,
+    classifier_cache: dict[str, str] | None = None,
+) -> str:
     """Classify a follow-up question into one of ``ANSWER_MODES``.
 
-    Deterministic keyword heuristic. Falls through to ``"unknown"`` when we
-    cannot confidently route the question. ``session_metadata`` may carry a
-    ``followUpMode`` hint from the planner.
+    Resolution order (fail-closed; the first signal we trust wins):
+
+    1. A planner/session ``followUpMode`` hint when it maps to a concrete
+       answer mode. This is the LLM-native signal already emitted by the
+       planner, so we prefer it over every other heuristic.
+    2. An optional LLM-backed classifier (``llm_classifier``) when supplied.
+       This is the LLM-first primary path: it catches paraphrased synthesis
+       questions that the deterministic keyword table would otherwise miss.
+       Results are memoised in ``classifier_cache`` (keyed on the raw
+       question) so retries and subsequent follow-ups do not pay for another
+       LLM call.
+    3. The deterministic keyword heuristic (preserved as the always-available
+       fallback).
+    4. ``"unknown"`` when nothing else matches.
+
+    The LLM classifier is treated as advisory: a return value outside
+    ``ANSWER_MODES`` is ignored and we continue to the keyword fallback.
+    """
+    normalised_question = (question or "").strip()
+    session_hint = _resolve_session_followup_mode(session_metadata)
+    if session_hint is not None:
+        return session_hint
+
+    if llm_classifier is not None and normalised_question:
+        cached: str | None = None
+        if classifier_cache is not None:
+            cached_value = classifier_cache.get(normalised_question)
+            if isinstance(cached_value, str) and cached_value in ANSWER_MODES:
+                cached = cached_value
+        if cached is not None:
+            return cached
+        try:
+            llm_mode = llm_classifier(normalised_question, ANSWER_MODES)
+        except Exception:
+            llm_mode = None
+        if isinstance(llm_mode, str):
+            candidate = llm_mode.strip().lower()
+            if candidate in ANSWER_MODES and candidate != "unknown":
+                if classifier_cache is not None:
+                    classifier_cache[normalised_question] = candidate
+                return candidate
+
+    return _classify_question_mode_keyword(normalised_question)
+
+
+async def aclassify_question_mode(
+    question: str,
+    session_metadata: dict[str, Any] | None = None,
+    *,
+    llm_classifier: AsyncLLMModeClassifier | None = None,
+    classifier_cache: dict[str, str] | None = None,
+) -> str:
+    """Async counterpart to :func:`classify_question_mode`.
+
+    Mirrors the synchronous resolution order but awaits ``llm_classifier``
+    when one is provided. Exceptions from the LLM coroutine are swallowed so
+    that safety-critical gating never crashes on a provider hiccup -- we
+    simply fall through to the keyword heuristic.
+    """
+    normalised_question = (question or "").strip()
+    session_hint = _resolve_session_followup_mode(session_metadata)
+    if session_hint is not None:
+        return session_hint
+
+    if llm_classifier is not None and normalised_question:
+        if classifier_cache is not None:
+            cached_value = classifier_cache.get(normalised_question)
+            if isinstance(cached_value, str) and cached_value in ANSWER_MODES:
+                return cached_value
+        try:
+            llm_mode = await llm_classifier(normalised_question, ANSWER_MODES)
+        except Exception:
+            llm_mode = None
+        if isinstance(llm_mode, str):
+            candidate = llm_mode.strip().lower()
+            if candidate in ANSWER_MODES and candidate != "unknown":
+                if classifier_cache is not None:
+                    classifier_cache[normalised_question] = candidate
+                return candidate
+
+    return _classify_question_mode_keyword(normalised_question)
+
+
+def _resolve_session_followup_mode(session_metadata: dict[str, Any] | None) -> str | None:
+    """Extract a concrete answer mode from a planner/session hint.
+
+    Returns ``None`` when no usable hint is available (including the generic
+    ``"qa"`` planner default, which just means "no opinion").
+    """
+    if not session_metadata:
+        return None
+    raw = session_metadata.get("followUpMode")
+    if not isinstance(raw, str):
+        return None
+    hint = raw.strip().lower()
+    if not hint or hint == "qa":
+        return None
+    if hint in ANSWER_MODES and hint != "unknown":
+        return hint
+    if hint == "claim_check":
+        # Historic alias -- treat claim-check prompts as mechanism summaries
+        # so they route through synthesis-mode gating.
+        return "mechanism_summary"
+    return None
+
+
+def _classify_question_mode_keyword(question: str) -> str:
+    """Deterministic keyword heuristic (the legacy classifier).
+
+    Preserved as the always-available fallback. The public
+    :func:`classify_question_mode` entry point consults this only after the
+    planner hint and optional LLM classifier have been considered.
     """
     lowered = (question or "").lower()
     metadata_facets = _metadata_facets(lowered)
@@ -109,16 +234,54 @@ def classify_question_mode(question: str, session_metadata: dict[str, Any] | Non
         )
     ):
         return "intervention_tradeoff"
-    metadata_hint = (session_metadata or {}).get("followUpMode") if session_metadata else None
-    if isinstance(metadata_hint, str):
-        hint = metadata_hint.strip().lower()
-        if hint in ANSWER_MODES:
-            return hint
-        if hint == "claim_check":
-            # Historic alias -- treat claim-check prompts as mechanism summaries
-            # so they route through synthesis-mode gating.
-            return "mechanism_summary"
     return "unknown"
+
+
+# Phrase-level cues for paraphrased synthesis questions the keyword classifier
+# is not designed to catch (e.g. "summarize the findings", "walk me through
+# what's known", "what does the literature conclude"). Used by the
+# fail-closed branch in :func:`build_evidence_use_plan` so that unknown-mode
+# questions over a weak evidence pool abstain instead of slipping through.
+_SYNTHESIS_SHAPE_MARKERS: tuple[str, ...] = (
+    "summarize",
+    "summarise",
+    "summary of",
+    "synthes",
+    "literature",
+    "findings",
+    "conclude",
+    "conclusion",
+    "overall",
+    "walk me through",
+    "walk through",
+    "what's known",
+    "what is known",
+    "known about",
+    "compare",
+    "contrast",
+    "versus",
+    "explain",
+    "overview",
+    "consensus",
+    "state of the art",
+    "state-of-the-art",
+)
+
+
+def _looks_like_synthesis_question(question: str) -> bool:
+    """Return True when ``question`` exhibits synthesis-shape cues.
+
+    Requires an actual synthesis-style phrase -- a bare question mark is NOT
+    sufficient, because routine Q&A questions use ``?`` too and we do not
+    want the fail-closed branch to swallow every unclassified question over
+    a weak-ish pool. Only consulted inside the unknown-mode fail-closed
+    branch, so false positives there collapse to an ``insufficient`` verdict
+    rather than a wrong mode.
+    """
+    lowered = (question or "").strip().lower()
+    if not lowered:
+        return False
+    return any(marker in lowered for marker in _SYNTHESIS_SHAPE_MARKERS)
 
 
 def _looks_like_relevance_triage(lowered_question: str) -> bool:
@@ -292,11 +455,30 @@ def build_evidence_use_plan(
             rationale = "Relevance triage can run against the saved record even without fresh synthesis."
         elif mode == "unknown":
             # Generic Q&A / synthesis questions we cannot confidently route.
-            # Preserve the legacy behaviour: emit a permissive plan so the
-            # downstream answer-status machinery (which has its own
-            # ``should_abstain`` checks, coverage heuristics, and
-            # unsupported-asks upgrades) keeps ownership of the decision.
-            if on_topic_count >= 1:
+            #
+            # Fail-closed safety gate (ws-followup-llm-gate): if the question
+            # looks like a synthesis ask (paraphrased "summarize", "what does
+            # the literature conclude", comparatives, any question mark) AND
+            # the saved evidence pool is dominated by weak/off-topic hits,
+            # refuse to declare the plan sufficient. Previously the unknown
+            # branch unconditionally returned ``sufficient=True`` and relied on
+            # downstream heuristics, which is brittle in exactly the case where
+            # the keyword classifier misses a paraphrased synthesis question.
+            synthesis_shaped = _looks_like_synthesis_question(question)
+            weak_pool = evidence_pool_is_weak(source_records)
+            if synthesis_shaped and weak_pool:
+                retrieval_sufficiency = "insufficient"
+                confidence = "low"
+                sufficient = False
+                rationale = (
+                    "Unclassified follow-up with synthesis-shape cues over a weak evidence pool; "
+                    "failing closed rather than producing a polished answer from weak matches."
+                )
+                unsupported_components.append(
+                    "The saved evidence is dominated by weak/off-topic matches; "
+                    "the requested synthesis is not grounded."
+                )
+            elif on_topic_count >= 1:
                 retrieval_sufficiency = "sufficient"
                 confidence = "medium"
                 sufficient = True
@@ -353,6 +535,9 @@ __all__ = [
     "ANSWER_MODES",
     "SYNTHESIS_MODES",
     "SALVAGEABLE_MODES",
+    "AsyncLLMModeClassifier",
+    "LLMModeClassifier",
+    "aclassify_question_mode",
     "classify_question_mode",
     "build_evidence_use_plan",
     "evidence_pool_is_weak",

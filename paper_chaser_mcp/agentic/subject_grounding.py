@@ -121,23 +121,22 @@ def resolve_subject_card(
                 subject_terms.append(token)
                 seen.add(token.lower())
 
-    llm_grounded = bool(planner and (planner.entity_card or planner.candidate_concepts))
+    # Provenance rule: ``planner_llm`` may only be stamped when the caller
+    # confirms an LLM-backed bundle produced (or could have produced) the
+    # underlying signals. ``entity_card`` / ``candidate_concepts`` alone do not
+    # imply LLM origin — the deterministic shim populates them too.
+    has_signals = bool(planner and (planner.entity_card or planner.candidate_concepts))
     confidence: SubjectCardConfidence
     source: str
-    if llm_grounded or llm_bundle_available:
+    if llm_bundle_available and has_signals:
         confidence = "medium"
         source = "planner_llm"
     else:
         confidence = "deterministic_fallback"
         source = "deterministic_fallback"
     if common_name or scientific_name:
-        if confidence != "deterministic_fallback":
+        if source == "planner_llm":
             confidence = "high"
-    if confidence == "deterministic_fallback" and (common_name or scientific_name or requested_family):
-        # Even though we lack an LLM bundle, we still resolved concrete entity
-        # signals from the query — tag as hybrid so downstream can tell the
-        # difference from "nothing at all".
-        source = "deterministic_fallback"
 
     # Heritage / cultural-resource queries without a species or rule often
     # only have a cultural subject — keep the card shape consistent.
