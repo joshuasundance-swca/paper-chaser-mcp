@@ -2289,6 +2289,47 @@ def test_guided_result_state_saved_session_inspectable_overrides_research() -> N
     assert state["bestNextInternalAction"] == "inspect_source"
 
 
+def test_guided_result_state_has_inspectable_sources_includes_saved_session() -> None:
+    # Regression (Finding 3, 5th pass): resultState used to report
+    # bestNextInternalAction=="inspect_source" alongside
+    # hasInspectableSources==False whenever the inspectable evidence lived only
+    # in the saved session. That contradiction misled agents into treating the
+    # retry path as unreachable. Derive hasInspectableSources from the union of
+    # current and saved-session candidates so the flag and the action agree.
+    state = dispatch_module._guided_result_state(
+        status="partial",
+        sources=[],
+        evidence_gaps=["Smart runtime unavailable."],
+        search_session_id="ssn-saved",
+        saved_session_has_sources=True,
+        saved_session_all_off_topic=False,
+    )
+    assert state["bestNextInternalAction"] == "inspect_source"
+    assert state["hasInspectableSources"] is True
+
+    # When the saved session is all off_topic, inspect_source cannot rescue it,
+    # so both the action and the flag fall back together.
+    state_off_topic = dispatch_module._guided_result_state(
+        status="partial",
+        sources=[],
+        evidence_gaps=["All saved candidates were off_topic."],
+        search_session_id="ssn-off",
+        saved_session_has_sources=True,
+        saved_session_all_off_topic=True,
+    )
+    assert state_off_topic["bestNextInternalAction"] == "research"
+    assert state_off_topic["hasInspectableSources"] is False
+
+    # Current response with sources still drives the flag on its own.
+    state_current = dispatch_module._guided_result_state(
+        status="answered",
+        sources=[{"sourceId": "s1", "topicalRelevance": "on_topic"}],
+        evidence_gaps=[],
+        search_session_id="ssn-ok",
+    )
+    assert state_current["hasInspectableSources"] is True
+
+
 def test_guided_machine_failure_payload_prefers_inspect_source_for_saved_session() -> None:
     # Regression (Finding 2, 5th pass): when follow_up_research's ask_result_set
     # path raises but the saved session still holds inspectable candidates, the
