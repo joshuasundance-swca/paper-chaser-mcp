@@ -2275,6 +2275,10 @@ def test_guided_result_state_all_off_topic_sources_research_action() -> None:
         search_session_id="ssn-off",
     )
     assert state["bestNextInternalAction"] == "research"
+    # R8 finding 1: hasInspectableSources must also reflect the effective
+    # inspectable predicate (current non-off-topic or saved-session inspectable),
+    # not raw bool(sources). All-off-topic + no saved session => False.
+    assert state["hasInspectableSources"] is False
 
 
 def test_guided_result_state_saved_session_inspectable_overrides_research() -> None:

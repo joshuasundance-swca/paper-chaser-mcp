@@ -3463,7 +3463,8 @@ def _guided_result_state(
     # session still carries on_topic/weak_match evidence, the saved candidates
     # remain reachable via inspect_source, so the flag has to reflect that.
     saved_session_inspectable = saved_session_has_sources and not saved_session_all_off_topic
-    inspectable_sources = has_sources or saved_session_inspectable
+    current_inspectable = has_sources and not all_sources_off_topic
+    inspectable_sources = current_inspectable or saved_session_inspectable
     state = GuidedResultState(
         status=normalized_status,
         groundedness=groundedness,
