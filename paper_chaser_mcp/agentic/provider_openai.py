@@ -17,6 +17,7 @@ from .provider_base import DeterministicProviderBundle, classify_relevance_witho
 from .provider_helpers import (
     AnswerStatusValidation,
     _AdequacyJudgmentSchema,
+    _AnswerModeClassificationSchema,
     _AnswerSchema,
     _build_answer_payload,
     _build_theme_label_payload,
@@ -1266,6 +1267,50 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
                 return result
         except Exception:
             logger.exception("Async OpenAI answer status validation failed; returning None.")
+        return None
+
+    async def aclassify_answer_mode(
+        self,
+        *,
+        question: str,
+        modes: tuple[str, ...],
+        request_id: str | None = None,
+    ) -> str | None:
+        """Classify a follow-up ``question`` into one of ``modes`` via OpenAI.
+
+        Returns the chosen mode when the call succeeds and the response is one
+        of ``modes``; returns ``None`` on any failure so the caller falls back
+        to the deterministic keyword heuristic without observing an exception.
+        """
+        try:
+            result = await self._aresponses_parse(
+                endpoint="responses.parse:answer_mode_classification",
+                model_name=self.synthesis_model_name,
+                response_model=_AnswerModeClassificationSchema,
+                system_prompt=(
+                    "Classify a follow-up research question into exactly one answerMode. "
+                    "Allowed answerMode values: " + "|".join(modes) + ". "
+                    "Use metadata for venue/year/DOI lookups, relevance_triage for 'is this relevant' "
+                    "asks, comparison for side-by-side or versus questions, mechanism_summary for "
+                    "how/why/pathway/causal explanations, regulatory_chain for rulemaking or listing "
+                    "timelines, intervention_tradeoff for practical policy or cost-benefit tradeoffs, "
+                    "and unknown when no category fits. Return JSON only."
+                ),
+                payload={
+                    "question": question,
+                    "allowedModes": list(modes),
+                },
+                request_outcomes=None,
+                request_id=request_id,
+            )
+            if result is None:
+                return None
+            candidate = str(result.answerMode or "").strip().lower()
+            if candidate and candidate in modes:
+                self._mark_provider_used()
+                return candidate
+        except Exception:
+            logger.exception("Async OpenAI answer-mode classification failed; returning None.")
         return None
 
     async def agenerate_evidence_gaps(

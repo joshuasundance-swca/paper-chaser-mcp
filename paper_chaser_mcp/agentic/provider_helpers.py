@@ -484,6 +484,18 @@ class _EvidenceGapSchema(BaseModel):
     gaps: list[str] = Field(default_factory=list)
 
 
+class _AnswerModeClassificationSchema(BaseModel):
+    """LLM classification for follow-up answer modes (ask_result_set routing).
+
+    ``answerMode`` must be one of :data:`agentic.answer_modes.ANSWER_MODES`.
+    Callers validate the value against ``ANSWER_MODES`` before honoring it
+    and treat anything else as equivalent to ``"unknown"``, so invalid model
+    output never forces a specific route.
+    """
+
+    answerMode: str = Field(default="unknown")
+
+
 def _tokenize(text: str) -> list[str]:
     return TOKEN_RE.findall(text.lower())
 
