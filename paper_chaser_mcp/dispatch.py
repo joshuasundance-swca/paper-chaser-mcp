@@ -2871,12 +2871,28 @@ def _guided_confidence_signals(
     return result
 
 
+def _guided_sources_all_off_topic(sources: list[dict[str, Any]] | None) -> bool:
+    """Return True when ``sources`` is non-empty and every entry is ``off_topic``.
+
+    Seventh rubber-duck pass (finding 2): shared predicate used by
+    ``_guided_failure_summary`` / ``_guided_next_actions`` / ``_guided_result_state``
+    so their cross-field routing stays consistent when the current response
+    contains only off-topic sources.
+    """
+
+    items = [source for source in (sources or []) if isinstance(source, dict)]
+    if not items:
+        return False
+    return all(str(source.get("topicalRelevance") or "").strip().lower() == "off_topic" for source in items)
+
+
 def _guided_failure_summary(
     *,
     failure_summary: dict[str, Any] | None,
     status: str,
     sources: list[dict[str, Any]],
     evidence_gaps: list[str],
+    all_sources_off_topic: bool = False,
 ) -> dict[str, Any]:
     if failure_summary is not None:
         summary = dict(failure_summary)
@@ -2892,9 +2908,14 @@ def _guided_failure_summary(
             outcome = "fallback_success"
         else:
             outcome = "no_failure"
+    # Seventh rubber-duck pass (finding 2): when every current source is
+    # off_topic, inspect_source cannot rescue the result — route to research
+    # so the default recommendation agrees with _guided_result_state's
+    # all-off-topic routing.
+    effective_has_inspectable = bool(sources) and not all_sources_off_topic
     recommended_next_action = summary.get("recommendedNextAction")
     if not recommended_next_action:
-        recommended_next_action = "inspect_source" if sources else "research"
+        recommended_next_action = "inspect_source" if effective_has_inspectable else "research"
     completeness_impact = summary.get("completenessImpact")
     if not completeness_impact and evidence_gaps:
         completeness_impact = evidence_gaps[0]
@@ -3291,13 +3312,19 @@ def _guided_next_actions(
     has_sources: bool,
     calling_tool: str | None = None,
     saved_session_inspectable: bool = False,
+    all_sources_off_topic: bool = False,
 ) -> list[str]:
     actions: list[str] = []
     # Sixth rubber-duck pass (finding 2): even when the current response has no
     # sources, a saved session can still hold inspectable candidates. Surface
     # inspect_source in nextActions so it agrees with the failure-summary and
     # machine-failure bestNextInternalAction routing.
-    inspect_relevant = has_sources or saved_session_inspectable
+    # Seventh rubber-duck pass (finding 2): when the current response has
+    # sources but every one is off_topic, inspect_source is not productive —
+    # treat the current response as empty for inspect-routing purposes so
+    # nextActions agrees with bestNextInternalAction ("research").
+    effective_has_inspectable = has_sources and not all_sources_off_topic
+    inspect_relevant = effective_has_inspectable or saved_session_inspectable
     if search_session_id and inspect_relevant and calling_tool != "inspect_source":
         actions.append(
             f"Use inspect_source with searchSessionId='{search_session_id}' and one sourceId to inspect evidence."
@@ -4045,6 +4072,7 @@ def _guided_session_state(
         status=status,
         sources=sources,
         evidence_gaps=evidence_gaps,
+        all_sources_off_topic=_guided_sources_all_off_topic(sources),
     )
     # Forward ``subjectChainGaps`` recorded on the original
     # ``strategyMetadata`` so that the rebuilt ``trustSummary`` surfaces the
@@ -4091,6 +4119,7 @@ def _guided_session_state(
             search_session_id=record.search_session_id,
             status=status,
             has_sources=bool(sources),
+            all_sources_off_topic=_guided_sources_all_off_topic(sources),
         ),
         "strategyMetadata": cast(
             dict[str, Any] | None,
@@ -4956,6 +4985,7 @@ async def dispatch_tool(
                 status=status,
                 sources=sources,
                 evidence_gaps=evidence_gaps,
+                all_sources_off_topic=_guided_sources_all_off_topic(sources),
             )
             response = {
                 "intent": intent,
@@ -4985,6 +5015,7 @@ async def dispatch_tool(
                     search_session_id=cast(str | None, resolved.get("searchSessionId")),
                     status=status,
                     has_sources=bool(sources),
+                    all_sources_off_topic=_guided_sources_all_off_topic(sources),
                 ),
                 "clarification": None,
                 "resultState": _guided_result_state(
@@ -5250,6 +5281,7 @@ async def dispatch_tool(
                 status=status,
                 sources=sources,
                 evidence_gaps=evidence_gaps,
+                all_sources_off_topic=_guided_sources_all_off_topic(sources),
             )
             primary_smart = smart_runs[0]
             search_session_id = next(
@@ -5337,6 +5369,7 @@ async def dispatch_tool(
                     search_session_id=search_session_id,
                     status=status,
                     has_sources=bool(sources),
+                    all_sources_off_topic=_guided_sources_all_off_topic(sources),
                 ),
                 "clarification": smart_summary.get("clarification"),
                 "resultState": _guided_result_state(
@@ -5420,6 +5453,7 @@ async def dispatch_tool(
             status=status,
             sources=sources,
             evidence_gaps=evidence_gaps,
+            all_sources_off_topic=_guided_sources_all_off_topic(sources),
         )
         response = {
             "intent": intent,
@@ -5445,6 +5479,7 @@ async def dispatch_tool(
                 search_session_id=cast(str | None, raw.get("searchSessionId")),
                 status=status,
                 has_sources=bool(sources),
+                all_sources_off_topic=_guided_sources_all_off_topic(sources),
             ),
             "clarification": None,
             "resultState": _guided_result_state(
@@ -5820,12 +5855,45 @@ async def dispatch_tool(
                 (follow_up_strategy_metadata or {}).get("subjectChainGaps"),
             ),
         )
+        # Seventh rubber-duck pass (finding 1): when the current ask_result_set
+        # response has no structuredSources but the saved search session still
+        # holds inspectable candidates, failureSummary/nextActions/resultState
+        # must route to inspect_source instead of research — matching the
+        # no-runtime and exception branches and bestNextInternalAction.
+        follow_up_saved_has_sources = False
+        follow_up_saved_all_off_topic = False
+        if not sources and workspace_registry is not None and follow_up_args.search_session_id:
+            try:
+                _follow_up_saved_record = workspace_registry.get(follow_up_args.search_session_id)
+                if _follow_up_saved_record is not None:
+                    follow_up_saved_has_sources, follow_up_saved_all_off_topic = (
+                        _guided_saved_session_topicality(
+                            _guided_record_source_candidates(_follow_up_saved_record)
+                        )
+                    )
+            except Exception:
+                follow_up_saved_has_sources = False
+                follow_up_saved_all_off_topic = False
+        follow_up_saved_inspectable = (
+            follow_up_saved_has_sources and not follow_up_saved_all_off_topic
+        )
+        follow_up_all_off_topic = _guided_sources_all_off_topic(sources)
         failure_summary = _guided_failure_summary(
             failure_summary=cast(dict[str, Any] | None, ask.get("failureSummary")),
             status=guided_status,
             sources=sources,
             evidence_gaps=evidence_gaps,
+            all_sources_off_topic=follow_up_all_off_topic,
         )
+        # When current sources are empty/all-off-topic but the saved session is
+        # still inspectable, prefer inspect_source over the default "research"
+        # recommendation so the summary agrees with resultState routing.
+        if (
+            follow_up_saved_inspectable
+            and (not sources or follow_up_all_off_topic)
+            and failure_summary.get("recommendedNextAction") == "research"
+        ):
+            failure_summary["recommendedNextAction"] = "inspect_source"
         response = {
             "searchSessionId": follow_up_args.search_session_id,
             "answerStatus": answer_status,
@@ -5855,12 +5923,16 @@ async def dispatch_tool(
                 search_session_id=follow_up_args.search_session_id,
                 status=guided_status,
                 has_sources=bool(sources),
+                saved_session_inspectable=follow_up_saved_inspectable,
+                all_sources_off_topic=follow_up_all_off_topic,
             ),
             "resultState": _guided_result_state(
                 status=guided_status,
                 sources=sources,
                 evidence_gaps=evidence_gaps,
                 search_session_id=follow_up_args.search_session_id,
+                saved_session_has_sources=follow_up_saved_has_sources,
+                saved_session_all_off_topic=follow_up_saved_all_off_topic,
             ),
             "sessionResolution": session_resolution,
             "executionProvenance": _guided_execution_provenance_payload(
@@ -5953,6 +6025,8 @@ async def dispatch_tool(
                 sources=sources,
                 evidence_gaps=evidence_gaps,
                 search_session_id=follow_up_args.search_session_id,
+                saved_session_has_sources=follow_up_saved_has_sources,
+                saved_session_all_off_topic=follow_up_saved_all_off_topic,
             )
             abstention_details = _guided_abstention_details_payload(
                 status="insufficient_evidence",

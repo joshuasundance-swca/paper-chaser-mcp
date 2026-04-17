@@ -2435,6 +2435,209 @@ def test_guided_follow_up_no_runtime_inspectable_recommends_inspect_source() -> 
     )
 
 
+def test_guided_failure_summary_all_off_topic_sources_recommend_research() -> None:
+    # Regression (7th rubber-duck pass, finding 2): when every current source
+    # is off_topic, _guided_failure_summary must default recommendedNextAction
+    # to "research" so it agrees with _guided_result_state's all-off-topic
+    # routing rather than suggesting inspect_source over irrelevant evidence.
+    off_topic_sources = [{"sourceId": "p1", "topicalRelevance": "off_topic"}]
+    summary = dispatch_module._guided_failure_summary(
+        failure_summary=None,
+        status="partial",
+        sources=off_topic_sources,
+        evidence_gaps=["Only off-topic matches were surfaced."],
+        all_sources_off_topic=True,
+    )
+    assert summary["recommendedNextAction"] == "research"
+
+    # Sanity: when not flagged all-off-topic (or a mix), inspect_source is
+    # still the default.
+    mixed = dispatch_module._guided_failure_summary(
+        failure_summary=None,
+        status="partial",
+        sources=off_topic_sources,
+        evidence_gaps=["Mixed pool."],
+        all_sources_off_topic=False,
+    )
+    assert mixed["recommendedNextAction"] == "inspect_source"
+
+
+def test_guided_next_actions_all_off_topic_sources_suppress_inspect_source_entry() -> None:
+    # Regression (7th rubber-duck pass, finding 2): when every current source
+    # is off_topic and there is no inspectable saved session, nextActions
+    # must not recommend inspect_source because bestNextInternalAction is
+    # "research".
+    actions = dispatch_module._guided_next_actions(
+        search_session_id="ssn-off",
+        status="partial",
+        has_sources=True,
+        saved_session_inspectable=False,
+        all_sources_off_topic=True,
+    )
+    assert not any(isinstance(action, str) and "inspect_source" in action for action in actions)
+
+    # And when saved session is still inspectable, the saved-session
+    # inspect_source entry should still appear even though current sources
+    # are all off-topic.
+    inspectable_actions = dispatch_module._guided_next_actions(
+        search_session_id="ssn-off",
+        status="partial",
+        has_sources=True,
+        saved_session_inspectable=True,
+        all_sources_off_topic=True,
+    )
+    assert any(
+        isinstance(action, str) and "inspect_source" in action and "ssn-off" in action
+        for action in inspectable_actions
+    )
+
+
+@pytest.mark.asyncio
+async def test_follow_up_research_empty_ask_result_with_inspectable_session_recommends_inspect_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression (7th rubber-duck pass, finding 1): the normal non-exception
+    # ask_result_set branch of follow_up_research must consult saved-session
+    # topicality when the current response has no structuredSources. If the
+    # saved session is still inspectable, resultState/failureSummary/
+    # nextActions must route to inspect_source so guided cross-fields agree.
+    isolated_registry = WorkspaceRegistry()
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-empty-ask-inspectable",
+        query="Attention Is All You Need",
+        payload={
+            "sources": [
+                {
+                    "sourceId": "paper-a",
+                    "title": "Attention is All you Need",
+                    "topicalRelevance": "on_topic",
+                }
+            ]
+        },
+    )
+
+    class _FakeRuntime:
+        async def ask_result_set(self, **kwargs: Any) -> dict[str, Any]:
+            return {
+                "answerStatus": "insufficient_evidence",
+                "answer": None,
+                "evidence": [],
+                "unsupportedAsks": [],
+                "followUpQuestions": [],
+                "structuredSources": [],
+                "candidateLeads": [],
+                "evidenceGaps": ["Ask_result_set returned no structured sources."],
+                "coverageSummary": None,
+                "failureSummary": None,
+            }
+
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+    original_registry = server.workspace_registry
+    server.workspace_registry = isolated_registry
+    try:
+        payload = _payload(
+            await server.call_tool(
+                "follow_up_research",
+                {
+                    "searchSessionId": "ssn-empty-ask-inspectable",
+                    "question": "What does the saved session say about attention?",
+                },
+            )
+        )
+    finally:
+        server.workspace_registry = original_registry
+
+    assert payload["answerStatus"] == "insufficient_evidence"
+    assert any(
+        isinstance(action, str)
+        and "inspect_source" in action
+        and "ssn-empty-ask-inspectable" in action
+        for action in payload["nextActions"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_inspect_source_unresolved_all_off_topic_saved_session_recommends_research() -> None:
+    # Regression (7th rubber-duck pass, finding 3 testing gap): the
+    # inspect_source unresolved-source branch must recommend research (not
+    # inspect_source) when every saved candidate is off_topic — so the
+    # failureSummary agrees with resultState.bestNextInternalAction.
+    isolated_registry = WorkspaceRegistry()
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-off-topic-only",
+        query="Attention Is All You Need",
+        payload={
+            "sources": [
+                {"sourceId": "paper-x", "title": "Unrelated", "topicalRelevance": "off_topic"},
+                {"sourceId": "paper-y", "title": "Also unrelated", "topicalRelevance": "off_topic"},
+            ]
+        },
+    )
+
+    original_registry = server.workspace_registry
+    server.workspace_registry = isolated_registry
+    try:
+        payload = _payload(
+            await server.call_tool(
+                "inspect_source",
+                {"searchSessionId": "ssn-off-topic-only", "sourceId": "missing-source"},
+            )
+        )
+    finally:
+        server.workspace_registry = original_registry
+
+    assert payload["source"] is None
+    assert payload["failureSummary"]["recommendedNextAction"] == "research"
+    assert payload["resultState"]["bestNextInternalAction"] == "research"
+    assert payload["resultState"]["hasInspectableSources"] is False
+    assert not any(
+        isinstance(action, str) and "inspect_source" in action for action in payload["nextActions"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_inspect_source_unresolved_inspectable_saved_session_recommends_inspect_source() -> None:
+    # Regression (7th rubber-duck pass, finding 3 testing gap): the
+    # inspect_source unresolved-source branch must recommend inspect_source
+    # (pointing at available saved IDs) when the saved session still holds
+    # on-topic candidates.
+    isolated_registry = WorkspaceRegistry()
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-inspectable-unresolved",
+        query="Attention Is All You Need",
+        payload={
+            "sources": [
+                {"sourceId": "paper-a", "title": "Attention", "topicalRelevance": "on_topic"},
+                {"sourceId": "paper-b", "title": "Transformer", "topicalRelevance": "on_topic"},
+            ]
+        },
+    )
+
+    original_registry = server.workspace_registry
+    server.workspace_registry = isolated_registry
+    try:
+        payload = _payload(
+            await server.call_tool(
+                "inspect_source",
+                {
+                    "searchSessionId": "ssn-inspectable-unresolved",
+                    "sourceId": "missing-source",
+                },
+            )
+        )
+    finally:
+        server.workspace_registry = original_registry
+
+    assert payload["source"] is None
+    assert payload["failureSummary"]["recommendedNextAction"] == "inspect_source"
+    assert payload["resultState"]["bestNextInternalAction"] == "inspect_source"
+    assert payload["resultState"]["hasInspectableSources"] is True
+    assert set(payload["sourceResolution"]["availableSourceIds"]) == {"paper-a", "paper-b"}
+
+
 def test_guided_abstention_details_partial_status_emits_refinement_hints() -> None:
     # Regression (Finding 2): status="partial" with weak sources must populate
     # abstentionDetails.refinementHints as a concrete, non-empty list.
