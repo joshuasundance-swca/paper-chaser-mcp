@@ -378,7 +378,7 @@ following additions on top of `main`:
   clears the relaxed threshold — on-topic still wins on title-anchor
   coverage).
 
-#### Validation baseline (HEAD pending Finding #3/#4 commit)
+#### Validation baseline (HEAD `df61f99`)
 
 - `python -m pytest -q` => **1290 passed, 2 skipped** (live-only)
 - `python -m ruff check .` clean
