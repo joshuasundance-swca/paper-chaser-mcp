@@ -3157,8 +3157,15 @@ def _guided_machine_failure_payload(
     error: Exception,
     normalization: dict[str, Any] | None = None,
     execution_provenance: dict[str, Any] | None = None,
+    saved_session_has_sources: bool = False,
+    saved_session_all_off_topic: bool = False,
 ) -> dict[str, Any]:
     evidence_gaps = ["Smart runtime returned an invalid or unstructured result payload, so guided output was degraded."]
+    # Fifth rubber-duck pass (finding 2): when a saved session is still
+    # inspectable, recommend inspect_source rather than research so the
+    # failure payload agrees with the result-state routing used elsewhere.
+    saved_session_inspectable = saved_session_has_sources and not saved_session_all_off_topic
+    recommended_next_action = "inspect_source" if saved_session_inspectable else "research"
     failure_summary = _guided_failure_summary(
         failure_summary={
             "outcome": "total_failure",
@@ -3168,7 +3175,7 @@ def _guided_machine_failure_payload(
             "fallbackMode": None,
             "primaryPathFailureReason": str(type(error).__name__),
             "completenessImpact": evidence_gaps[0],
-            "recommendedNextAction": "research",
+            "recommendedNextAction": recommended_next_action,
         },
         status="partial",
         sources=[],
@@ -3204,13 +3211,15 @@ def _guided_machine_failure_payload(
             sources=[],
             evidence_gaps=evidence_gaps,
             search_session_id=search_session_id,
+            saved_session_has_sources=saved_session_has_sources,
+            saved_session_all_off_topic=saved_session_all_off_topic,
         ),
         "machineFailure": MachineFailure(
             category="smart_runtime_structural_failure",
             errorType=type(error).__name__,
             error=str(error),
             retryable=True,
-            bestNextInternalAction="research",
+            bestNextInternalAction=recommended_next_action,
         ).model_dump(by_alias=True, exclude_none=True),
     }
     if execution_provenance is not None:
@@ -5682,6 +5691,20 @@ async def dispatch_tool(
             if not isinstance(ask, dict):
                 raise ValueError("ask_result_set returned a non-object payload.")
         except Exception as error:
+            failure_saved_has_sources = False
+            failure_saved_all_off_topic = False
+            if workspace_registry is not None and follow_up_args.search_session_id:
+                try:
+                    failure_record = workspace_registry.get(follow_up_args.search_session_id)
+                    if failure_record is not None:
+                        failure_saved_has_sources, failure_saved_all_off_topic = (
+                            _guided_saved_session_topicality(
+                                _guided_record_source_candidates(failure_record)
+                            )
+                        )
+                except Exception:
+                    failure_saved_has_sources = False
+                    failure_saved_all_off_topic = False
             machine_failure = _guided_machine_failure_payload(
                 search_session_id=follow_up_args.search_session_id,
                 error=error,
@@ -5693,6 +5716,8 @@ async def dispatch_tool(
                     strategy_metadata=follow_up_strategy_metadata,
                     passes_run=1,
                 ),
+                saved_session_has_sources=failure_saved_has_sources,
+                saved_session_all_off_topic=failure_saved_all_off_topic,
             )
             response = {
                 "searchSessionId": follow_up_args.search_session_id,

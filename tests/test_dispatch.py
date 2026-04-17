@@ -2289,6 +2289,41 @@ def test_guided_result_state_saved_session_inspectable_overrides_research() -> N
     assert state["bestNextInternalAction"] == "inspect_source"
 
 
+def test_guided_machine_failure_payload_prefers_inspect_source_for_saved_session() -> None:
+    # Regression (Finding 2, 5th pass): when follow_up_research's ask_result_set
+    # path raises but the saved session still holds inspectable candidates, the
+    # machine failure payload must recommend inspect_source rather than regress
+    # to research so agents keep grounded recovery available.
+    payload_inspectable = dispatch_module._guided_machine_failure_payload(
+        search_session_id="ssn-saved",
+        error=RuntimeError("smart runtime blew up"),
+        saved_session_has_sources=True,
+        saved_session_all_off_topic=False,
+    )
+    assert payload_inspectable["resultState"]["bestNextInternalAction"] == "inspect_source"
+    assert payload_inspectable["machineFailure"]["bestNextInternalAction"] == "inspect_source"
+    assert payload_inspectable["failureSummary"]["recommendedNextAction"] == "inspect_source"
+
+    # Saved session exists but every candidate is off_topic -> research still
+    # wins because inspect_source cannot rescue confirmed-irrelevant evidence.
+    payload_off_topic = dispatch_module._guided_machine_failure_payload(
+        search_session_id="ssn-off",
+        error=RuntimeError("smart runtime blew up"),
+        saved_session_has_sources=True,
+        saved_session_all_off_topic=True,
+    )
+    assert payload_off_topic["resultState"]["bestNextInternalAction"] == "research"
+    assert payload_off_topic["machineFailure"]["bestNextInternalAction"] == "research"
+    assert payload_off_topic["failureSummary"]["recommendedNextAction"] == "research"
+
+    # Default (no saved-session signal) keeps the legacy research recommendation.
+    payload_default = dispatch_module._guided_machine_failure_payload(
+        search_session_id=None,
+        error=RuntimeError("smart runtime blew up"),
+    )
+    assert payload_default["machineFailure"]["bestNextInternalAction"] == "research"
+
+
 def test_guided_abstention_details_partial_status_emits_refinement_hints() -> None:
     # Regression (Finding 2): status="partial" with weak sources must populate
     # abstentionDetails.refinementHints as a concrete, non-empty list.
