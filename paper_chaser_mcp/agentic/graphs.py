@@ -2664,19 +2664,36 @@ class AgenticRuntime:
             try:
                 species_search: dict[str, Any] = {"data": []}
                 species_ecos_origin: str | None = None
-                for species_query, inferred_anchor_type, variant_origin in _ecos_query_variants(
-                    query, planner=planner
-                ):
-                    species_search = await self._ecos_client.search_species(
+                # Finding 4 (4th rubber-duck pass): collect hits from each
+                # variant and rank them by ``hit_count * provenance_factor``
+                # (raw/corroborated = 1.0, planner-only = 0.9). Previously
+                # the loop broke on the first variant with any hits, so a
+                # planner-only variant could win over a later raw/corroborated
+                # variant that would have offered stronger query-grounded
+                # evidence. The provenance field was stamped on the winner
+                # but nothing downstream actually consumed it.
+                variant_hits: list[tuple[int, str, str, dict[str, Any]]] = []
+                for variant_idx, (
+                    species_query,
+                    inferred_anchor_type,
+                    variant_origin,
+                ) in enumerate(_ecos_query_variants(query, planner=planner)):
+                    variant_search = await self._ecos_client.search_species(
                         query=species_query,
                         limit=min(limit, 5),
                         match_mode="auto",
                     )
-                    species_data = list(species_search.get("data") or [])
-                    if species_data:
-                        species_anchor_type = inferred_anchor_type
-                        species_ecos_origin = variant_origin
-                        break
+                    variant_data = list(variant_search.get("data") or [])
+                    if not variant_data:
+                        continue
+                    variant_hits.append(
+                        (variant_idx, inferred_anchor_type, variant_origin, variant_search)
+                    )
+                selected = _rank_ecos_variant_hits(variant_hits)
+                if selected is not None:
+                    species_search = selected[3]
+                    species_anchor_type = selected[1]
+                    species_ecos_origin = selected[2]
                 stage_timings_ms["regulatoryEcosSearch"] = int((time.perf_counter() - started) * 1000)
                 species_data = list(species_search.get("data") or [])
                 if species_data:
@@ -4398,6 +4415,41 @@ def _ecos_query_variants(
         _add(query, "regulatory_subject_terms", "raw")
 
     return variants
+
+
+_ECOS_PROVENANCE_FACTORS: dict[str, float] = {"raw": 1.0, "planner": 0.9}
+
+
+def _rank_ecos_variant_hits(
+    variant_hits: list[tuple[int, str, str, dict[str, Any]]],
+) -> tuple[int, str, str, dict[str, Any]] | None:
+    """Finding 4 (4th rubber-duck pass): pick the best ECOS variant result.
+
+    Each entry is ``(variant_idx, anchor_type, origin, search_payload)``.
+    Ranking is ``len(data) * factor`` where ``factor`` is 1.0 for raw /
+    query-corroborated variants and 0.9 for planner-supplied variants. Ties
+    break first on origin (raw beats planner) and then on the original
+    variant index to preserve the intentional ordering from
+    ``_ecos_query_variants``. Returns ``None`` when the input is empty.
+
+    The 0.9 factor is intentionally modest: it only flips the ranking when
+    a corroborated variant is within ~10% of a planner-only variant's hit
+    count, which is the exact regression we want to guard against
+    (planner-only winning by one incidental hit over a valid raw match).
+    """
+
+    if not variant_hits:
+        return None
+    scored: list[tuple[float, int, int, int, str, str, dict[str, Any]]] = []
+    for variant_idx, anchor_type, origin, search_payload in variant_hits:
+        hit_count = len(list(search_payload.get("data") or []))
+        factor = _ECOS_PROVENANCE_FACTORS.get(origin, 0.9)
+        score = hit_count * factor
+        origin_rank = 0 if origin == "raw" else 1
+        scored.append((-score, origin_rank, variant_idx, hit_count, anchor_type, origin, search_payload))
+    scored.sort()
+    _, _, variant_idx, _hit_count, anchor_type, origin, search_payload = scored[0]
+    return (variant_idx, anchor_type, origin, search_payload)
 
 
 _OPAQUE_DOI_RE = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Za-z0-9]+\b")

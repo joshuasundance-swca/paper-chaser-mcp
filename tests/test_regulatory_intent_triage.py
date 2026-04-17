@@ -24,13 +24,16 @@ Audit regressions these tests lock in:
 
 from __future__ import annotations
 
+from typing import Any
+
 from paper_chaser_mcp.agentic.graphs import (
     _derive_regulatory_query_flags,
     _ecos_query_variants,
     _is_agency_guidance_query,
-    _is_opaque_query,
     _is_current_cfr_text_request,
+    _is_opaque_query,
     _query_requests_regulatory_history,
+    _rank_ecos_variant_hits,
 )
 from paper_chaser_mcp.agentic.models import PlannerDecision
 from paper_chaser_mcp.agentic.planner import _has_literature_corroboration
@@ -332,6 +335,55 @@ class TestIsOpaqueQuery:
     def test_prose_query_is_not_opaque(self) -> None:
         assert _is_opaque_query("Pallid Sturgeon critical habitat designation") is False
         assert _is_opaque_query("40 CFR 403.5 current text") is False
+
+
+class TestEcosVariantRankingProvenance:
+    """Finding 4 (4th rubber-duck pass): ``_ecosProvenance`` is stamped on
+    the chosen ECOS species hit, but the old break-on-first loop never
+    consumed it — whichever variant returned first won regardless of
+    corroboration. Now ``_rank_ecos_variant_hits`` weights each variant's
+    hit count by a provenance factor (raw/corroborated = 1.0,
+    planner-only = 0.9) so a planner-only result cannot beat a
+    roughly-equal raw match by accident."""
+
+    def _variant(
+        self, idx: int, anchor: str, origin: str, hits: int
+    ) -> tuple[int, str, str, dict[str, Any]]:
+        return (
+            idx,
+            anchor,
+            origin,
+            {"data": [{"speciesId": f"sp-{idx}-{i}"} for i in range(hits)]},
+        )
+
+    def test_corroborated_variant_wins_tie_against_planner(self) -> None:
+        raw = self._variant(0, "species_scientific_name", "raw", 1)
+        planner = self._variant(1, "species_scientific_name", "planner", 1)
+        picked = _rank_ecos_variant_hits([raw, planner])
+        assert picked is not None and picked[2] == "raw"
+
+    def test_corroborated_variant_wins_when_planner_has_one_more_hit(self) -> None:
+        # raw: 2 * 1.0 = 2.0 vs planner: 2 * 0.9 = 1.8 → raw wins.
+        raw = self._variant(0, "species_scientific_name", "raw", 2)
+        planner = self._variant(1, "species_scientific_name", "planner", 2)
+        picked = _rank_ecos_variant_hits([planner, raw])
+        assert picked is not None and picked[2] == "raw"
+
+    def test_planner_wins_when_score_materially_exceeds_raw(self) -> None:
+        # raw: 1 * 1.0 = 1.0 vs planner: 3 * 0.9 = 2.7 → planner wins.
+        raw = self._variant(0, "species_scientific_name", "raw", 1)
+        planner = self._variant(1, "species_scientific_name", "planner", 3)
+        picked = _rank_ecos_variant_hits([raw, planner])
+        assert picked is not None and picked[2] == "planner"
+
+    def test_empty_input_returns_none(self) -> None:
+        assert _rank_ecos_variant_hits([]) is None
+
+    def test_earlier_variant_index_breaks_remaining_ties(self) -> None:
+        raw_a = self._variant(0, "species_scientific_name", "raw", 1)
+        raw_b = self._variant(2, "species_common_name", "raw", 1)
+        picked = _rank_ecos_variant_hits([raw_b, raw_a])
+        assert picked is not None and picked[0] == 0
 
 
 class TestPlannerLlmRegulatoryIntentAuthority:

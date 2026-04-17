@@ -332,7 +332,20 @@ async def test_search_papers_smart_routes_regulatory_queries_to_primary_sources(
     class FakeEcosClient:
         async def search_species(self, *, query: str, limit: int = 10, match_mode: str = "auto") -> dict[str, Any]:
             del limit, match_mode
-            assert "regulatory history" in query.lower()
+            # Finding 4 (4th rubber-duck pass): the dispatcher now probes every
+            # ``_ecos_query_variants`` entry instead of breaking on the first
+            # hit, so this fake has to accept regex-extracted subqueries too.
+            # Return the California condor match for variants that plausibly
+            # describe it (or carry the "regulatory history" subject terms);
+            # return an empty payload otherwise.
+            lowered = query.lower()
+            relevant = (
+                "regulatory history" in lowered
+                or "california condor" in lowered
+                or "condor" in lowered
+            )
+            if not relevant:
+                return {"query": query, "matchMode": "auto", "total": 0, "data": []}
             return {
                 "query": query,
                 "matchMode": "auto",

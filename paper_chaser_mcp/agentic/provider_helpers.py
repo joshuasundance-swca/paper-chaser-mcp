@@ -311,7 +311,9 @@ class _PlannerResponseSchema(BaseModel):
         ][:4]
         uncertainty_flags = [str(flag).strip() for flag in self.uncertaintyFlags if str(flag).strip()][:6]
         regulatory_intent = self._coerce_regulatory_intent()
-        regulatory_intent_source = "llm" if regulatory_intent is not None else "unspecified"
+        regulatory_intent_source: Literal["llm", "deterministic_fallback", "unspecified"] = (
+            "llm" if regulatory_intent is not None else "unspecified"
+        )
         subject_card = self._coerce_subject_card()
         return PlannerDecision(
             intent=intent,
