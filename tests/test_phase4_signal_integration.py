@@ -324,6 +324,51 @@ async def test_research_surfaces_phase4_strategy_fields_end_to_end(
     assert "species_recovery" in list(rs.get("retrievalHypotheses") or []), (
         "Existing retrievalHypotheses consumers must continue to see their field."
     )
+    # ws-dispatch-contract-trust (finding #5): subjectChainGaps must also flow
+    # into the machine-readable trust signals, not only into the top-level
+    # routing summary / prose rationale.
+    signals = payload.get("confidenceSignals")
+    assert isinstance(signals, dict)
+    assert list(signals.get("subjectChainGaps") or []) == ["missing recovery plan document"]
+
+
+@pytest.mark.asyncio
+async def test_inspect_source_threads_subject_chain_gaps_into_confidence_signals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ws-dispatch-contract-trust (finding #5): when a saved session records
+    planner ``subjectChainGaps`` in its ``strategyMetadata``, a subsequent
+    ``inspect_source`` call must surface those gaps in ``confidenceSignals``
+    too — not only in the human-readable weak-match prose."""
+    isolated_registry = WorkspaceRegistry()
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-inspect-gaps",
+        query="desert tortoise recovery plan",
+        payload={
+            "query": "desert tortoise recovery plan",
+            "intent": "regulatory",
+            "sources": [_weak_authoritative_source()],
+            "strategyMetadata": {
+                "intent": "regulatory",
+                "subjectChainGaps": ["planner could not bind subject to a recovery plan document"],
+            },
+        },
+    )
+
+    monkeypatch.setattr(server, "workspace_registry", isolated_registry)
+
+    payload = _payload(
+        await server.call_tool(
+            "inspect_source",
+            {"searchSessionId": "ssn-inspect-gaps", "sourceId": "fr-weak-1"},
+        )
+    )
+    signals = payload.get("confidenceSignals")
+    assert isinstance(signals, dict)
+    assert "planner could not bind subject to a recovery plan document" in list(
+        signals.get("subjectChainGaps") or []
+    )
 
 
 # ---------------------------------------------------------------------------

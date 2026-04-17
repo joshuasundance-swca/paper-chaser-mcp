@@ -1000,6 +1000,9 @@ def _guided_source_record_from_structured_source(source: dict[str, Any], *, inde
         "canonicalUrl": source.get("canonicalUrl"),
         "retrievedUrl": source.get("retrievedUrl"),
         "fullTextUrlFound": bool(source.get("fullTextUrlFound") or source.get("fullTextObserved")),
+        # Legacy alias retained for backward compatibility with clients that
+        # read the pre-rename key. Kept in lockstep with ``fullTextUrlFound``.
+        "fullTextObserved": bool(source.get("fullTextUrlFound") or source.get("fullTextObserved")),
         "abstractObserved": bool(source.get("abstractObserved")),
         "openAccessRoute": _guided_open_access_route(source),
         "citationText": source.get("citationText"),
@@ -1020,6 +1023,29 @@ def _guided_source_record_from_paper(query: str, paper: dict[str, Any], *, index
         has_doi_resolution=bool(doi),
         full_text_url_found=bool(paper.get("fullTextUrlFound") or paper.get("fullTextObserved")),
     )
+    # Backward-compatible default: a scholarly article with basic descriptive
+    # metadata (title + at least one author OR a venue) should remain
+    # ``verified_metadata`` rather than silently drop to ``unverified`` just
+    # because it lacks a DOI. ``unverified`` is reserved for records truly
+    # missing descriptive metadata. (ws-dispatch-contract-trust / finding #3.)
+    if (
+        verification_status == "unverified"
+        and str(source_type) == "scholarly_article"
+        and str(paper.get("title") or "").strip()
+    ):
+        _authors = paper.get("authors") or []
+        _has_author = False
+        if isinstance(_authors, list):
+            for _author in _authors:
+                if isinstance(_author, str) and _author.strip():
+                    _has_author = True
+                    break
+                if isinstance(_author, dict) and str(_author.get("name") or "").strip():
+                    _has_author = True
+                    break
+        _has_venue = bool(str(paper.get("venue") or "").strip())
+        if _has_author or _has_venue:
+            verification_status = "verified_metadata"
     access_status = paper.get("accessStatus") or (
         "full_text_verified"
         if (paper.get("fullTextUrlFound") or paper.get("fullTextObserved"))
@@ -1045,6 +1071,9 @@ def _guided_source_record_from_paper(query: str, paper: dict[str, Any], *, index
             "canonicalUrl": canonical_url,
             "retrievedUrl": paper.get("retrievedUrl") or canonical_url,
             "fullTextUrlFound": bool(paper.get("fullTextUrlFound") or paper.get("fullTextObserved")),
+            # Legacy alias retained for backward compatibility with clients that
+            # read the pre-rename key. Kept in lockstep with ``fullTextUrlFound``.
+            "fullTextObserved": bool(paper.get("fullTextUrlFound") or paper.get("fullTextObserved")),
             "abstractObserved": bool(paper.get("abstractObserved")),
             "openAccessRoute": _guided_open_access_route(paper),
             "citationText": str(paper.get("canonicalId") or paper.get("paperId") or "") or None,
@@ -2558,6 +2587,7 @@ def _guided_trust_summary(
     evidence_gaps: list[str],
     *,
     classification_provenance: dict[str, Any] | None = None,
+    subject_chain_gaps: list[str] | None = None,
 ) -> dict[str, Any]:
     verified_primary_source_count = sum(
         1 for source in sources if source.get("verificationStatus") == "verified_primary_source"
@@ -2657,6 +2687,14 @@ def _guided_trust_summary(
     if classification_provenance and classification_provenance.get("total"):
         summary["classificationProvenance"] = classification_provenance
         summary["degradedClassification"] = bool(classification_provenance.get("degradedClassification"))
+    # ws-dispatch-contract-trust (finding #5): surface planner subject-chain
+    # gaps in machine-readable trust signals, not just the prose rationale
+    # emitted by ``_compose_why_classified_weak_match``. Clients reading
+    # ``trustSummary``/``confidenceSignals`` previously missed the same reason
+    # shown in the human sentence.
+    _subject_chain_gaps = [str(item).strip() for item in subject_chain_gaps or [] if str(item).strip()]
+    if _subject_chain_gaps:
+        summary["subjectChainGaps"] = _subject_chain_gaps
     return summary
 
 
@@ -2669,6 +2707,7 @@ def _guided_confidence_signals(
     synthesis_mode: str | None = None,
     source: dict[str, Any] | None = None,
     evidence_use_plan_applied: bool = False,
+    subject_chain_gaps: list[str] | None = None,
 ) -> dict[str, Any]:
     verified_on_topic_primary = sum(
         1
@@ -2689,6 +2728,12 @@ def _guided_confidence_signals(
         evidence_quality_profile = "low"
 
     trust_revision_reason = degradation_reason or (evidence_gaps[0] if evidence_gaps else None)
+    # ws-dispatch-contract-trust (finding #5): if no other revision reason
+    # exists, surface the first subject-chain gap so the machine-readable
+    # signal doesn't go empty when the only trust deficit is a planner gap.
+    _subject_chain_gaps = [str(item).strip() for item in subject_chain_gaps or [] if str(item).strip()]
+    if trust_revision_reason is None and _subject_chain_gaps:
+        trust_revision_reason = _subject_chain_gaps[0]
     fallback_explanation = None
     if degradation_reason == "deterministic_synthesis_fallback":
         fallback_explanation = (
@@ -2745,6 +2790,12 @@ def _guided_confidence_signals(
     )
     if narrative:
         result["trustRevisionNarrative"] = narrative
+    # ws-dispatch-contract-trust (finding #5): expose subject-chain gaps as a
+    # first-class additive field so clients reading ``confidenceSignals`` get
+    # the same reason already surfaced in prose by
+    # ``_compose_why_classified_weak_match``.
+    if _subject_chain_gaps:
+        result["subjectChainGaps"] = _subject_chain_gaps
     return result
 
 
@@ -3743,6 +3794,7 @@ async def _guided_contract_fields(
             status=result_status,
             sources=sources,
             evidence_gaps=evidence_gaps,
+            subject_chain_gaps=subject_chain_gaps_payload,
         ),
         "timeline": timeline,
     }
@@ -4477,6 +4529,12 @@ async def _answer_follow_up_from_session_state(
             sources=sources,
             evidence_gaps=evidence_gaps,
             synthesis_mode="session_introspection",
+            subject_chain_gaps=cast(
+                list[str] | None,
+                (session_state.get("strategyMetadata") or {}).get("subjectChainGaps")
+                if isinstance(session_state.get("strategyMetadata"), dict)
+                else None,
+            ),
         ),
     }
 
@@ -5025,8 +5083,15 @@ async def dispatch_tool(
                 ),
                 None,
             )
-            trust_summary = _guided_trust_summary(sources, evidence_gaps)
             strategy_metadata = _guided_strategy_metadata_from_runs(smart_runs)
+            trust_summary = _guided_trust_summary(
+                sources,
+                evidence_gaps,
+                subject_chain_gaps=cast(
+                    list[str] | None,
+                    (strategy_metadata or {}).get("subjectChainGaps"),
+                ),
+            )
             if review_pass_reason:
                 strategy_metadata["reviewPassReason"] = review_pass_reason
             evidence_gaps = _append_deterministic_fallback_gap(
@@ -5524,6 +5589,10 @@ async def dispatch_tool(
             sources,
             evidence_gaps,
             classification_provenance=cast(dict[str, Any] | None, ask.get("classificationProvenance")),
+            subject_chain_gaps=cast(
+                list[str] | None,
+                (follow_up_strategy_metadata or {}).get("subjectChainGaps"),
+            ),
         )
         failure_summary = _guided_failure_summary(
             failure_summary=cast(dict[str, Any] | None, ask.get("failureSummary")),
@@ -5587,6 +5656,10 @@ async def dispatch_tool(
                     else "grounded_follow_up"
                 ),
                 evidence_use_plan_applied=bool(ask.get("evidenceUsePlan")),
+                subject_chain_gaps=cast(
+                    list[str] | None,
+                    (follow_up_strategy_metadata or {}).get("subjectChainGaps"),
+                ),
             ),
         }
         if ask.get("agentHints") is not None:
@@ -5618,6 +5691,10 @@ async def dispatch_tool(
                 else "grounded_follow_up"
             ),
             evidence_use_plan_applied=bool(ask.get("evidenceUsePlan")),
+            subject_chain_gaps=cast(
+                list[str] | None,
+                (follow_up_strategy_metadata or {}).get("subjectChainGaps"),
+            ),
         )
         response["selectedEvidenceIds"] = [
             str(identifier).strip() for identifier in (ask.get("selectedEvidenceIds") or []) if str(identifier).strip()
@@ -5869,6 +5946,10 @@ async def dispatch_tool(
                 evidence_gaps=[],
                 synthesis_mode="source_audit",
                 source=source,
+                subject_chain_gaps=cast(
+                    list[str] | None,
+                    (inspect_strategy_metadata or {}).get("subjectChainGaps"),
+                ),
             ),
             "nextActions": _guided_next_actions(
                 search_session_id=inspect_args.search_session_id,

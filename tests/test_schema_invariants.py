@@ -498,6 +498,46 @@ class TestFullTextFieldRename:
         assert "fullTextUrlFound" in paper_dumped
         assert "fullTextObserved" not in paper_dumped
 
+    def test_guided_dispatch_source_record_emits_both_keys(self) -> None:
+        """The guided-layer source output must emit BOTH the legacy
+        ``fullTextObserved`` key and the new ``fullTextUrlFound`` key with the
+        same value. Clients built against the pre-rename contract keep working.
+        (ws-dispatch-contract-trust / finding #2.)"""
+        from paper_chaser_mcp.dispatch import (
+            _guided_source_record_from_paper,
+            _guided_source_record_from_structured_source,
+        )
+
+        # Paper path — DOI present so upstream asserts don't care about
+        # verification status; only the dual-emit invariant is tested here.
+        paper_record = _guided_source_record_from_paper(
+            "query",
+            {
+                "title": "Some Paper",
+                "authors": [{"name": "A Person"}],
+                "doi": "10.1234/example",
+                "fullTextUrlFound": True,
+            },
+            index=1,
+        )
+        assert paper_record["fullTextUrlFound"] is True
+        assert paper_record["fullTextObserved"] is True
+        assert paper_record["fullTextUrlFound"] == paper_record["fullTextObserved"]
+
+        # Structured-source path (from ask_result_set output).
+        structured_record = _guided_source_record_from_structured_source(
+            {
+                "sourceId": "src-1",
+                "title": "Another",
+                "sourceType": "scholarly_article",
+                "fullTextObserved": True,
+            },
+            index=1,
+        )
+        assert structured_record["fullTextUrlFound"] is True
+        assert structured_record["fullTextObserved"] is True
+        assert structured_record["fullTextUrlFound"] == structured_record["fullTextObserved"]
+
 
 # ---------------------------------------------------------------------------
 # 1.8: regulatoryTimeline / timeline deduplication
