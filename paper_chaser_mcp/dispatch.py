@@ -2364,6 +2364,183 @@ def _guided_journal_or_publisher(payload: dict[str, Any]) -> str | None:
     return provider or None
 
 
+_AUTHORITATIVE_PROVIDERS: frozenset[str] = frozenset(
+    {"govinfo", "federal_register", "ecos", "gov_info"}
+)
+
+
+def _is_authoritative_source(source: dict[str, Any]) -> bool:
+    provider = str(source.get("provider") or "").strip().lower()
+    source_type = str(source.get("sourceType") or "").strip()
+    if provider in _AUTHORITATIVE_PROVIDERS:
+        return True
+    if source_type in _REGULATORY_SOURCE_TYPES:
+        return True
+    if bool(source.get("isPrimarySource")):
+        return True
+    return False
+
+
+def _compose_why_classified_weak_match(
+    source: dict[str, Any],
+    *,
+    strategy_metadata: dict[str, Any] | None = None,
+) -> str | None:
+    """Compose a concise (<=200 char) human-readable rationale for why a source
+    was classified as a weak match or off-topic.
+
+    Reads, in priority order, from: ``classificationRationale`` (prior work),
+    ``whyClassifiedAsWeakMatch``/``whyWeak`` (ws-regulatory-grounding),
+    ``note``/``whyNotVerified``, and ``strategy_metadata.subjectChainGaps``.
+    Returns ``None`` when no signal is present or the source is not weak/off-topic.
+    """
+    topical_relevance = str(source.get("topicalRelevance") or "").strip()
+    if topical_relevance not in {"weak_match", "off_topic"}:
+        return None
+    fragments: list[str] = []
+    seen: set[str] = set()
+
+    def _add(value: Any) -> None:
+        text = str(value or "").strip()
+        if not text:
+            return
+        key = text.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        fragments.append(text)
+
+    _add(source.get("classificationRationale"))
+    _add(source.get("whyClassifiedAsWeakMatch"))
+    _add(source.get("whyWeak"))
+    _add(source.get("note"))
+    _add(source.get("whyNotVerified"))
+    if isinstance(strategy_metadata, dict):
+        gaps = strategy_metadata.get("subjectChainGaps")
+        if isinstance(gaps, list):
+            for gap in gaps[:2]:
+                _add(gap)
+    if not fragments:
+        return None
+    head = fragments[0].rstrip(".")
+    if len(fragments) >= 2:
+        tail = fragments[1].rstrip(".")
+        combined = f"{head}; {tail}."
+    else:
+        combined = f"{head}."
+    if len(combined) > 200:
+        combined = combined[:197].rstrip() + "..."
+    return combined
+
+
+def _evidence_quality_detail(sources: list[dict[str, Any]]) -> str:
+    """Classify the evidence pool into a qualitative profile.
+
+    Returns one of ``strong_on_topic``, ``mixed``, ``weak_authoritative_only``,
+    ``off_topic``, or ``insufficient``.
+    """
+    if not sources:
+        return "insufficient"
+    on_topic_primary = 0
+    on_topic = 0
+    weak = 0
+    off_topic = 0
+    authoritative_weak = 0
+    for source in sources:
+        relevance = str(source.get("topicalRelevance") or "").strip()
+        if relevance == "on_topic":
+            on_topic += 1
+            if source.get("verificationStatus") == "verified_primary_source":
+                on_topic_primary += 1
+        elif relevance == "weak_match":
+            weak += 1
+            if _is_authoritative_source(source):
+                authoritative_weak += 1
+        elif relevance == "off_topic":
+            off_topic += 1
+    total = len(sources)
+    if on_topic > 0 and (weak > 0 or off_topic > 0):
+        return "mixed"
+    if on_topic > 0:
+        return "strong_on_topic"
+    if on_topic == 0 and authoritative_weak > 0 and off_topic < total:
+        return "weak_authoritative_only"
+    if on_topic == 0 and off_topic >= max(weak, 1):
+        return "off_topic"
+    return "insufficient"
+
+
+def _synthesis_path(
+    *,
+    status: str,
+    sources: list[dict[str, Any]],
+    evidence_gaps: list[str],
+    synthesis_mode: str | None,
+) -> str:
+    """Return which synthesis path actually ran.
+
+    Values: ``direct``, ``conservative``, ``abstained``, ``metadata_only``.
+    """
+    if status in {"abstained", "insufficient_evidence"} and not sources:
+        return "abstained"
+    normalized_mode = str(synthesis_mode or "").strip().lower()
+    if normalized_mode == "source_audit" and sources:
+        return "metadata_only"
+    has_primary = any(item.get("verificationStatus") == "verified_primary_source" for item in sources)
+    has_on_topic = any(item.get("topicalRelevance") == "on_topic" for item in sources)
+    if status in {"answered", "succeeded"} and has_primary and has_on_topic and not evidence_gaps:
+        return "direct"
+    if status in {"answered", "succeeded", "partial"} and sources:
+        return "conservative"
+    if not sources:
+        return "abstained"
+    return "conservative"
+
+
+def _trust_revision_narrative(
+    *,
+    sources: list[dict[str, Any]],
+    evidence_gaps: list[str],
+    degradation_reason: str | None,
+) -> str | None:
+    """Return a prose reason why the trust summary was downgraded, if any."""
+    if not sources and not evidence_gaps and degradation_reason is None:
+        return None
+    has_on_topic = any(item.get("topicalRelevance") == "on_topic" for item in sources)
+    authoritative_weak = [item for item in sources if _is_authoritative_source(item) and not has_on_topic
+                          and str(item.get("topicalRelevance") or "") in {"weak_match", "off_topic"}]
+    if degradation_reason == "deterministic_synthesis_fallback":
+        return (
+            "Model-backed synthesis was unavailable; deterministic fallback summarized "
+            "available evidence."
+        )
+    if sources and not has_on_topic and authoritative_weak:
+        return (
+            "Authoritative primary sources were retrieved, but none specifically address "
+            "the saved query. Treat as scope-limited support only."
+        )
+    if sources and not has_on_topic:
+        return "Available evidence is weak or off-topic for the saved query."
+    if evidence_gaps and sources and has_on_topic:
+        return f"On-topic evidence is partial: {evidence_gaps[0]}"
+    return None
+
+
+def _authoritative_but_weak_source_ids(sources: list[dict[str, Any]]) -> list[str]:
+    """Source IDs that are authoritative (primary-source family) but weak/off-topic."""
+    ids: list[str] = []
+    for source in sources:
+        relevance = str(source.get("topicalRelevance") or "").strip()
+        if relevance not in {"weak_match", "off_topic"}:
+            continue
+        if not _is_authoritative_source(source):
+            continue
+        source_id = str(source.get("sourceId") or "").strip()
+        if source_id:
+            ids.append(source_id)
+    return ids
+
+
 def _guided_trust_summary(
     sources: list[dict[str, Any]],
     evidence_gaps: list[str],
@@ -2413,6 +2590,32 @@ def _guided_trust_summary(
         strength_explanation = "Available sources are mostly off-topic for the saved query."
     else:
         strength_explanation = "No strong verified support was recorded for the saved query."
+    authoritative_but_weak = _authoritative_but_weak_source_ids(sources)
+    authoritative_but_weak_count = len(authoritative_but_weak)
+    strong_on_topic_count = on_topic_source_count
+    weak_match_bucket_count = sum(1 for source in sources if source.get("topicalRelevance") == "weak_match")
+    off_topic_bucket_count = sum(1 for source in sources if source.get("topicalRelevance") == "off_topic")
+    breakdown_fragments: list[str] = []
+    if strong_on_topic_count:
+        noun = "source" if strong_on_topic_count == 1 else "sources"
+        breakdown_fragments.append(f"{strong_on_topic_count} strong on-topic verified {noun}")
+    if authoritative_but_weak_count:
+        noun = "source" if authoritative_but_weak_count == 1 else "sources"
+        breakdown_fragments.append(
+            f"{authoritative_but_weak_count} authoritative but weak-match {noun}"
+        )
+        remaining_weak = max(weak_match_bucket_count - authoritative_but_weak_count, 0)
+        if remaining_weak:
+            noun = "lead" if remaining_weak == 1 else "leads"
+            breakdown_fragments.append(f"{remaining_weak} other weak-match {noun}")
+    elif weak_match_bucket_count:
+        noun = "lead" if weak_match_bucket_count == 1 else "leads"
+        breakdown_fragments.append(f"{weak_match_bucket_count} weak-match {noun}")
+    if off_topic_bucket_count:
+        noun = "lead" if off_topic_bucket_count == 1 else "leads"
+        breakdown_fragments.append(f"{off_topic_bucket_count} off-target {noun}")
+    if breakdown_fragments:
+        strength_explanation = f"{strength_explanation} Breakdown: {', '.join(breakdown_fragments)}."
     summary = {
         "verifiedSourceCount": verified_primary_source_count + verified_metadata_source_count,
         "verifiedPrimarySourceCount": verified_primary_source_count,
@@ -2429,6 +2632,7 @@ def _guided_trust_summary(
             "weakMatch": weak_match_rationales[:3],
             "offTopic": off_topic_rationales[:3],
         },
+        "authoritativeButWeak": authoritative_but_weak,
         "strengthExplanation": strength_explanation,
     }
     top_rationale: str | None = None
@@ -2504,7 +2708,7 @@ def _guided_confidence_signals(
         elif topical_relevance == "off_topic":
             source_scope_label = "off_topic"
 
-    return ConfidenceSignals(
+    result = ConfidenceSignals(
         evidenceQualityProfile=cast(Any, evidence_quality_profile),
         synthesisMode=synthesis_mode,
         trustRevisionReason=trust_revision_reason,
@@ -2513,6 +2717,25 @@ def _guided_confidence_signals(
         sourceScopeLabel=source_scope_label,
         sourceScopeReason=source_scope_reason,
     ).model_dump(by_alias=True, exclude_none=True)
+
+    # Workstream C (ws-trust-ux-deepen): additive detail fields that expose the
+    # richer WS-C enums without breaking the existing ``evidenceQualityProfile``
+    # / ``synthesisMode`` contract.
+    result["evidenceProfileDetail"] = _evidence_quality_detail(sources)
+    result["synthesisPath"] = _synthesis_path(
+        status=status,
+        sources=sources,
+        evidence_gaps=evidence_gaps,
+        synthesis_mode=synthesis_mode,
+    )
+    narrative = _trust_revision_narrative(
+        sources=sources,
+        evidence_gaps=evidence_gaps,
+        degradation_reason=degradation_reason,
+    )
+    if narrative:
+        result["trustRevisionNarrative"] = narrative
+    return result
 
 
 def _guided_failure_summary(
@@ -3142,48 +3365,134 @@ def _find_record_source(
 
 
 def _direct_read_recommendations(source: dict[str, Any], *, tool_profile: str) -> list[str]:
-    recommendations: list[str] = []
+    return [entry["recommendation"] for entry in _direct_read_recommendation_entries(source, tool_profile=tool_profile)]
+
+
+def _direct_read_recommendation_details(
+    source: dict[str, Any], *, tool_profile: str
+) -> list[dict[str, Any]]:
+    """Parallel to :func:`_direct_read_recommendations` returning dicts with
+    trustLevel/whyRecommended/cautions fields. Order matches.
+    """
+    return [
+        {k: v for k, v in entry.items() if k != "recommendation"} | {"recommendation": entry["recommendation"]}
+        for entry in _direct_read_recommendation_entries(source, tool_profile=tool_profile)
+    ]
+
+
+def _direct_read_recommendation_entries(
+    source: dict[str, Any], *, tool_profile: str
+) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
     topical_relevance = str(source.get("topicalRelevance") or "").strip()
     verification_status = str(source.get("verificationStatus") or "").strip()
     weak_match_reason = str(source.get("whyClassifiedAsWeakMatch") or source.get("note") or "").strip()
+    is_authoritative = _is_authoritative_source(source)
+    cautions: list[str] = []
     if topical_relevance == "on_topic" and verification_status == "verified_primary_source":
-        recommendations.append(
+        trust_level = "high"
+        why = (
+            "Authoritative and directly responsive to the saved query; safe to cite with "
+            "direct-read verification."
+        )
+        text = (
             "This source is authoritative and directly responsive to the query; direct reading is the safest next step."
         )
     elif topical_relevance == "on_topic" and verification_status == "verified_metadata":
-        recommendations.append(
+        trust_level = "medium"
+        why = "On-topic and metadata-verified; direct reading confirms specific claims."
+        text = (
             "This source is on-topic and metadata-verified, but direct reading is still useful "
             "before relying on specific claims."
         )
+        cautions.append("metadata-verified only; full text not yet observed")
     elif topical_relevance == "weak_match":
         scope_reason = (
             weak_match_reason or "It is related to the topic but not directly responsive enough to stand alone."
         )
-        recommendations.append(f"This source is only a weak match: {scope_reason}")
+        if is_authoritative:
+            trust_level = "low_authoritative_but_weak"
+            why = (
+                "Authoritative primary source, but not directly on-topic. Useful for context or "
+                "regulatory framing only."
+            )
+            cautions.append("authoritative but not specifically responsive to the saved query")
+        else:
+            trust_level = "low"
+            why = "Related but scope-limited; unlikely to directly answer the query on its own."
+        text = f"This source is only a weak match: {scope_reason}"
     elif topical_relevance == "off_topic":
         scope_reason = (
             weak_match_reason or "It is authoritative or retrievable, but it does not directly answer the saved query."
         )
-        recommendations.append(f"This source is off-topic for the saved query: {scope_reason}")
+        if is_authoritative:
+            trust_level = "low_authoritative_but_weak"
+            why = "Authoritative source that does not address the saved query."
+            cautions.append("authoritative but off-target for the saved query")
+        else:
+            trust_level = "low"
+            why = "Off-topic for the saved query; direct reading is unlikely to help."
+        text = f"This source is off-topic for the saved query: {scope_reason}"
+    else:
+        trust_level = "medium"
+        why = "Source relevance is unclassified; inspect directly before relying on it."
+        text = "Inspect this source directly before citing specific claims."
+
+    entries.append({
+        "recommendation": text,
+        "trustLevel": trust_level,
+        "whyRecommended": why,
+        "cautions": list(cautions),
+    })
     canonical_url = str(source.get("canonicalUrl") or source.get("retrievedUrl") or "").strip()
     if canonical_url:
-        recommendations.append(f"Open the canonical source: {canonical_url}")
+        entries.append({
+            "recommendation": f"Open the canonical source: {canonical_url}",
+            "trustLevel": trust_level,
+            "whyRecommended": "Direct link to the canonical copy of this source.",
+            "cautions": [],
+        })
     provider = str(source.get("provider") or "")
     if tool_profile != "guided" and provider == "govinfo":
-        recommendations.append("Use get_cfr_text for authoritative CFR follow-through.")
+        entries.append({
+            "recommendation": "Use get_cfr_text for authoritative CFR follow-through.",
+            "trustLevel": "high",
+            "whyRecommended": "GovInfo-backed CFR text is the authoritative regulatory source.",
+            "cautions": [],
+        })
     elif tool_profile != "guided" and provider == "federal_register":
-        recommendations.append("Use get_federal_register_document to read the full Federal Register item.")
+        entries.append({
+            "recommendation": "Use get_federal_register_document to read the full Federal Register item.",
+            "trustLevel": "high",
+            "whyRecommended": "The Federal Register document is the primary rulemaking source.",
+            "cautions": [],
+        })
     elif tool_profile != "guided" and provider == "ecos":
-        recommendations.append("Use get_document_text_ecos for the full ECOS document text when available.")
+        entries.append({
+            "recommendation": "Use get_document_text_ecos for the full ECOS document text when available.",
+            "trustLevel": "high",
+            "whyRecommended": "ECOS primary documents provide species-specific regulatory context.",
+            "cautions": [],
+        })
     elif tool_profile != "guided" and provider in {"semantic_scholar", "openalex", "arxiv", "core", "scholarapi"}:
-        recommendations.append(
-            "Use expert paper-detail tools if you need the full provider payload or citation expansion."
-        )
+        entries.append({
+            "recommendation": (
+                "Use expert paper-detail tools if you need the full provider payload or citation expansion."
+            ),
+            "trustLevel": "medium",
+            "whyRecommended": "Expert paper-detail tools expose provider-specific metadata and citation graphs.",
+            "cautions": [],
+        })
     if tool_profile == "guided":
-        recommendations.append(
-            "Use inspect_source to compare provenance, scope, and access signals before citing this source."
-        )
-    return recommendations[:3]
+        entries.append({
+            "recommendation": (
+                "Use inspect_source to compare provenance, scope, and access signals before citing this source."
+            ),
+            "trustLevel": trust_level,
+            "whyRecommended": "inspect_source is the guided way to audit a single source's provenance.",
+            "cautions": [],
+        })
+    return entries[:3]
 
 
 def _guided_follow_up_status(status: str | None) -> str:
@@ -5497,12 +5806,21 @@ async def dispatch_tool(
             if isinstance(inspect_session_state, dict)
             else []
         )
-        return {
+        inspect_strategy_metadata = cast(
+            dict[str, Any] | None, (inspect_session_state or {}).get("strategyMetadata")
+        )
+        why_classified_weak = _compose_why_classified_weak_match(
+            source, strategy_metadata=inspect_strategy_metadata
+        )
+        inspect_response: dict[str, Any] = {
             "searchSessionId": inspect_args.search_session_id,
             "source": source,
             "evidenceId": source.get("sourceId"),
             "selectedEvidenceIds": [str(source.get("sourceId") or "").strip()],
             "directReadRecommendations": _direct_read_recommendations(source, tool_profile=tool_profile),
+            "directReadRecommendationDetails": _direct_read_recommendation_details(
+                source, tool_profile=tool_profile
+            ),
             "confidenceSignals": _guided_confidence_signals(
                 status="succeeded",
                 sources=[source],
@@ -5550,6 +5868,9 @@ async def dispatch_tool(
             ),
             "inputNormalization": _guided_normalization_payload(inspect_normalization),
         }
+        if why_classified_weak:
+            inspect_response["whyClassifiedAsWeakMatch"] = why_classified_weak
+        return inspect_response
 
     if name == "search_papers_smart":
         smart_args = cast(
