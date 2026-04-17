@@ -2663,7 +2663,10 @@ class AgenticRuntime:
             started = time.perf_counter()
             try:
                 species_search: dict[str, Any] = {"data": []}
-                for species_query, inferred_anchor_type in _ecos_query_variants(query, planner=planner):
+                species_ecos_origin: str | None = None
+                for species_query, inferred_anchor_type, variant_origin in _ecos_query_variants(
+                    query, planner=planner
+                ):
                     species_search = await self._ecos_client.search_species(
                         query=species_query,
                         limit=min(limit, 5),
@@ -2672,6 +2675,7 @@ class AgenticRuntime:
                     species_data = list(species_search.get("data") or [])
                     if species_data:
                         species_anchor_type = inferred_anchor_type
+                        species_ecos_origin = variant_origin
                         break
                 stage_timings_ms["regulatoryEcosSearch"] = int((time.perf_counter() - started) * 1000)
                 species_data = list(species_search.get("data") or [])
@@ -2679,6 +2683,12 @@ class AgenticRuntime:
                     succeeded.append("ecos")
                     species_hit = species_data[0] if isinstance(species_data[0], dict) else None
                     if species_hit is not None:
+                        # Stamp provenance so downstream ranking can down-weight
+                        # planner-only hits (potential LLM hallucination) vs
+                        # query-corroborated hits.
+                        species_hit["_ecosProvenance"] = (
+                            "corroborated" if species_ecos_origin == "raw" else "planner_only"
+                        )
                         anchored_subject_terms = _extract_subject_terms(
                             str(species_hit.get("commonName") or "") or None,
                             str(species_hit.get("scientificName") or "") or None,
@@ -4316,11 +4326,25 @@ def _ecos_query_variants(
     query: str,
     *,
     planner: PlannerDecision | None = None,
-) -> list[tuple[str, str]]:
-    variants: list[tuple[str, str]] = []
+) -> list[tuple[str, str, str]]:
+    """Return ECOS query candidates as ``(query, anchor_type, origin)`` tuples.
+
+    ``origin`` is ``"raw"`` for regex/raw-query-derived candidates and
+    ``"planner"`` for candidates supplied by the planner bundle's
+    ``entityCard`` / ``subjectCard``. Raw candidates are emitted first so
+    the ECOS loop tries query-grounded variants before falling back to
+    planner-supplied names — this removes the hallucination-first risk
+    where a plausible-but-wrong LLM species name returns real-but-wrong
+    ECOS data and contaminates downstream ranking. The planner variants
+    still run as a fallback so genuine LLM-emitted names (which can
+    recover from genus-only / subspecies prose the regex misses) keep
+    their recall.
+    """
+
+    variants: list[tuple[str, str, str]] = []
     seen: set[str] = set()
 
-    def _add(candidate: str | None, anchor_type: str) -> None:
+    def _add(candidate: str | None, anchor_type: str, origin: str) -> None:
         if not candidate:
             return
         normalized = " ".join(candidate.split())
@@ -4330,31 +4354,34 @@ def _ecos_query_variants(
         if marker in seen:
             return
         seen.add(marker)
-        variants.append((normalized, anchor_type))
+        variants.append((normalized, anchor_type, origin))
 
-    # LLM-first: surface planner/subject-card species identifiers (which the
-    # regex extractors cannot recover from genus-only / subspecies mentions)
-    # as *additional* variants ahead of the regex-derived ones. The regex
-    # extractors still run so deterministic-bundle callers keep the historical
-    # noise-removal candidate as a fallback try.
+    # Raw / regex-derived variants are emitted first so ECOS corroborates
+    # planner-supplied names via the query itself where possible.
+    _add(_extract_scientific_name_candidate(query), "species_scientific_name", "raw")
+    _add(_extract_common_name_candidate(query), "species_common_name", "raw")
+    _add(query, "regulatory_subject_terms", "raw")
+
+    # Planner-supplied names run as a fallback for genus-only / subspecies
+    # prose the regex cannot recover. Downstream callers stamp hits from
+    # these variants with a lower-confidence ``ecosProvenance`` marker.
     if planner is not None:
         entity_card = planner.entity_card or {}
         if isinstance(entity_card, dict):
             _add(
                 str(entity_card.get("scientificName") or "") or None,
                 "species_scientific_name",
+                "planner",
             )
             _add(
                 str(entity_card.get("commonName") or "") or None,
                 "species_common_name",
+                "planner",
             )
         if planner.subject_card is not None:
-            _add(planner.subject_card.scientific_name, "species_scientific_name")
-            _add(planner.subject_card.common_name, "species_common_name")
+            _add(planner.subject_card.scientific_name, "species_scientific_name", "planner")
+            _add(planner.subject_card.common_name, "species_common_name", "planner")
 
-    _add(_extract_scientific_name_candidate(query), "species_scientific_name")
-    _add(_extract_common_name_candidate(query), "species_common_name")
-    _add(query, "regulatory_subject_terms")
     return variants
 
 

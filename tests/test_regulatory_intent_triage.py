@@ -185,11 +185,12 @@ class TestDeriveRegulatoryQueryFlags:
 
 
 class TestEcosQueryVariantsPlannerFirst:
-    def test_planner_entity_card_supplies_scientific_name_over_regex(self) -> None:
+    def test_planner_entity_card_supplies_scientific_name_as_fallback(self) -> None:
         """Genus-only / non-binomial mentions either escape the regex or cause
         it to latch onto adjacent prose (e.g. ``"Scaphirhynchus critical"``);
-        the planner entity card surfaces the true scientific name as an
-        additional variant ahead of the regex-derived ones."""
+        the planner entity card surfaces the true scientific name as a
+        fallback variant AFTER the raw/regex-derived ones so a hallucinated
+        LLM species name cannot lock ECOS onto real-but-wrong data."""
 
         query = "Scaphirhynchus critical habitat designation"
         planner = _planner(
@@ -200,29 +201,62 @@ class TestEcosQueryVariantsPlannerFirst:
             },
         )
         variants = _ecos_query_variants(query, planner=planner)
-        scientific_values = [value for value, anchor in variants if anchor == "species_scientific_name"]
-        common_values = [value for value, anchor in variants if anchor == "species_common_name"]
+        scientific = [(value, origin) for value, anchor, origin in variants if anchor == "species_scientific_name"]
+        common = [(value, origin) for value, anchor, origin in variants if anchor == "species_common_name"]
 
-        # Planner-supplied names are present (preceding any regex candidates).
-        assert "Scaphirhynchus albus" in scientific_values
-        assert "Pallid Sturgeon" in common_values
-        # Planner candidates are tried first so ECOS sees them before the
-        # noisy regex-extracted variants.
-        assert scientific_values.index("Scaphirhynchus albus") == 0
-        assert common_values.index("Pallid Sturgeon") == 0
+        # Planner-supplied names are still present, but tagged "planner".
+        assert ("Scaphirhynchus albus", "planner") in scientific
+        assert ("Pallid Sturgeon", "planner") in common
+
+        # Raw variants must appear before planner variants in the overall list
+        # so ECOS tries query-grounded candidates first.
+        origins = [origin for _value, _anchor, origin in variants]
+        if "planner" in origins and "raw" in origins:
+            assert origins.index("raw") < origins.index("planner")
 
     def test_ecos_variants_without_planner_preserve_regex_behavior(self) -> None:
         """Deterministic callers (no planner) keep the pre-existing variant
-        contract: regex-extracted scientific/common name plus the raw query."""
+        contract: regex-extracted scientific/common name plus the raw query,
+        all tagged ``"raw"``."""
 
         variants_with = _ecos_query_variants("northern long-eared bat ECOS species profile")
         variants_without = _ecos_query_variants(
             "northern long-eared bat ECOS species profile", planner=None
         )
         assert variants_with == variants_without
-        # The regex noise-removal still surfaces "northern long-eared bat".
-        common_values = [value for value, anchor in variants_with if anchor == "species_common_name"]
+        # All variants come from raw/regex when no planner is supplied.
+        assert all(origin == "raw" for _value, _anchor, origin in variants_with)
+        common_values = [value for value, anchor, _origin in variants_with if anchor == "species_common_name"]
         assert any("northern long-eared bat" in value.lower() for value in common_values)
+
+    def test_raw_variants_precede_planner_fallbacks(self) -> None:
+        """Finding 3 regression: when the planner emits a species name not
+        supported by the raw query, the raw/regex variants must be tried
+        FIRST so ECOS corroborates the planner name via the query itself
+        where possible. This removes the hallucination-first risk where a
+        plausible-but-wrong LLM species name returns real-but-wrong ECOS
+        data and contaminates downstream ranking."""
+
+        query = "Myotis lucifugus hibernation sites in Vermont"
+        planner = _planner(
+            "species_dossier",
+            entityCard={
+                "scientificName": "Myotis septentrionalis",
+                "commonName": "Northern long-eared bat",
+            },
+        )
+        variants = _ecos_query_variants(query, planner=planner)
+        raw_sci_idx = next(
+            (i for i, (_v, a, o) in enumerate(variants) if a == "species_scientific_name" and o == "raw"),
+            None,
+        )
+        planner_sci_idx = next(
+            (i for i, (_v, a, o) in enumerate(variants) if a == "species_scientific_name" and o == "planner"),
+            None,
+        )
+        assert raw_sci_idx is not None, "regex should have extracted Myotis lucifugus"
+        assert planner_sci_idx is not None
+        assert raw_sci_idx < planner_sci_idx
 
 
 class TestPlannerLlmRegulatoryIntentAuthority:
