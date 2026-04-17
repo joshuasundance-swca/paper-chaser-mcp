@@ -2364,9 +2364,7 @@ def _guided_journal_or_publisher(payload: dict[str, Any]) -> str | None:
     return provider or None
 
 
-_AUTHORITATIVE_PROVIDERS: frozenset[str] = frozenset(
-    {"govinfo", "federal_register", "ecos", "gov_info"}
-)
+_AUTHORITATIVE_PROVIDERS: frozenset[str] = frozenset({"govinfo", "federal_register", "ecos", "gov_info"})
 
 
 def _is_authoritative_source(source: dict[str, Any]) -> bool:
@@ -2507,13 +2505,15 @@ def _trust_revision_narrative(
     if not sources and not evidence_gaps and degradation_reason is None:
         return None
     has_on_topic = any(item.get("topicalRelevance") == "on_topic" for item in sources)
-    authoritative_weak = [item for item in sources if _is_authoritative_source(item) and not has_on_topic
-                          and str(item.get("topicalRelevance") or "") in {"weak_match", "off_topic"}]
+    authoritative_weak = [
+        item
+        for item in sources
+        if _is_authoritative_source(item)
+        and not has_on_topic
+        and str(item.get("topicalRelevance") or "") in {"weak_match", "off_topic"}
+    ]
     if degradation_reason == "deterministic_synthesis_fallback":
-        return (
-            "Model-backed synthesis was unavailable; deterministic fallback summarized "
-            "available evidence."
-        )
+        return "Model-backed synthesis was unavailable; deterministic fallback summarized available evidence."
     if sources and not has_on_topic and authoritative_weak:
         return (
             "Authoritative primary sources were retrieved, but none specifically address "
@@ -2601,9 +2601,7 @@ def _guided_trust_summary(
         breakdown_fragments.append(f"{strong_on_topic_count} strong on-topic verified {noun}")
     if authoritative_but_weak_count:
         noun = "source" if authoritative_but_weak_count == 1 else "sources"
-        breakdown_fragments.append(
-            f"{authoritative_but_weak_count} authoritative but weak-match {noun}"
-        )
+        breakdown_fragments.append(f"{authoritative_but_weak_count} authoritative but weak-match {noun}")
         remaining_weak = max(weak_match_bucket_count - authoritative_but_weak_count, 0)
         if remaining_weak:
             noun = "lead" if remaining_weak == 1 else "leads"
@@ -3368,9 +3366,7 @@ def _direct_read_recommendations(source: dict[str, Any], *, tool_profile: str) -
     return [entry["recommendation"] for entry in _direct_read_recommendation_entries(source, tool_profile=tool_profile)]
 
 
-def _direct_read_recommendation_details(
-    source: dict[str, Any], *, tool_profile: str
-) -> list[dict[str, Any]]:
+def _direct_read_recommendation_details(source: dict[str, Any], *, tool_profile: str) -> list[dict[str, Any]]:
     """Parallel to :func:`_direct_read_recommendations` returning dicts with
     trustLevel/whyRecommended/cautions fields. Order matches.
     """
@@ -3380,9 +3376,7 @@ def _direct_read_recommendation_details(
     ]
 
 
-def _direct_read_recommendation_entries(
-    source: dict[str, Any], *, tool_profile: str
-) -> list[dict[str, Any]]:
+def _direct_read_recommendation_entries(source: dict[str, Any], *, tool_profile: str) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     topical_relevance = str(source.get("topicalRelevance") or "").strip()
     verification_status = str(source.get("verificationStatus") or "").strip()
@@ -3391,10 +3385,7 @@ def _direct_read_recommendation_entries(
     cautions: list[str] = []
     if topical_relevance == "on_topic" and verification_status == "verified_primary_source":
         trust_level = "high"
-        why = (
-            "Authoritative and directly responsive to the saved query; safe to cite with "
-            "direct-read verification."
-        )
+        why = "Authoritative and directly responsive to the saved query; safe to cite with direct-read verification."
         text = (
             "This source is authoritative and directly responsive to the query; direct reading is the safest next step."
         )
@@ -3438,60 +3429,74 @@ def _direct_read_recommendation_entries(
         why = "Source relevance is unclassified; inspect directly before relying on it."
         text = "Inspect this source directly before citing specific claims."
 
-    entries.append({
-        "recommendation": text,
-        "trustLevel": trust_level,
-        "whyRecommended": why,
-        "cautions": list(cautions),
-    })
+    entries.append(
+        {
+            "recommendation": text,
+            "trustLevel": trust_level,
+            "whyRecommended": why,
+            "cautions": list(cautions),
+        }
+    )
     canonical_url = str(source.get("canonicalUrl") or source.get("retrievedUrl") or "").strip()
     if canonical_url:
-        entries.append({
-            "recommendation": f"Open the canonical source: {canonical_url}",
-            "trustLevel": trust_level,
-            "whyRecommended": "Direct link to the canonical copy of this source.",
-            "cautions": [],
-        })
+        entries.append(
+            {
+                "recommendation": f"Open the canonical source: {canonical_url}",
+                "trustLevel": trust_level,
+                "whyRecommended": "Direct link to the canonical copy of this source.",
+                "cautions": [],
+            }
+        )
     provider = str(source.get("provider") or "")
     if tool_profile != "guided" and provider == "govinfo":
-        entries.append({
-            "recommendation": "Use get_cfr_text for authoritative CFR follow-through.",
-            "trustLevel": "high",
-            "whyRecommended": "GovInfo-backed CFR text is the authoritative regulatory source.",
-            "cautions": [],
-        })
+        entries.append(
+            {
+                "recommendation": "Use get_cfr_text for authoritative CFR follow-through.",
+                "trustLevel": "high",
+                "whyRecommended": "GovInfo-backed CFR text is the authoritative regulatory source.",
+                "cautions": [],
+            }
+        )
     elif tool_profile != "guided" and provider == "federal_register":
-        entries.append({
-            "recommendation": "Use get_federal_register_document to read the full Federal Register item.",
-            "trustLevel": "high",
-            "whyRecommended": "The Federal Register document is the primary rulemaking source.",
-            "cautions": [],
-        })
+        entries.append(
+            {
+                "recommendation": "Use get_federal_register_document to read the full Federal Register item.",
+                "trustLevel": "high",
+                "whyRecommended": "The Federal Register document is the primary rulemaking source.",
+                "cautions": [],
+            }
+        )
     elif tool_profile != "guided" and provider == "ecos":
-        entries.append({
-            "recommendation": "Use get_document_text_ecos for the full ECOS document text when available.",
-            "trustLevel": "high",
-            "whyRecommended": "ECOS primary documents provide species-specific regulatory context.",
-            "cautions": [],
-        })
+        entries.append(
+            {
+                "recommendation": "Use get_document_text_ecos for the full ECOS document text when available.",
+                "trustLevel": "high",
+                "whyRecommended": "ECOS primary documents provide species-specific regulatory context.",
+                "cautions": [],
+            }
+        )
     elif tool_profile != "guided" and provider in {"semantic_scholar", "openalex", "arxiv", "core", "scholarapi"}:
-        entries.append({
-            "recommendation": (
-                "Use expert paper-detail tools if you need the full provider payload or citation expansion."
-            ),
-            "trustLevel": "medium",
-            "whyRecommended": "Expert paper-detail tools expose provider-specific metadata and citation graphs.",
-            "cautions": [],
-        })
+        entries.append(
+            {
+                "recommendation": (
+                    "Use expert paper-detail tools if you need the full provider payload or citation expansion."
+                ),
+                "trustLevel": "medium",
+                "whyRecommended": "Expert paper-detail tools expose provider-specific metadata and citation graphs.",
+                "cautions": [],
+            }
+        )
     if tool_profile == "guided":
-        entries.append({
-            "recommendation": (
-                "Use inspect_source to compare provenance, scope, and access signals before citing this source."
-            ),
-            "trustLevel": trust_level,
-            "whyRecommended": "inspect_source is the guided way to audit a single source's provenance.",
-            "cautions": [],
-        })
+        entries.append(
+            {
+                "recommendation": (
+                    "Use inspect_source to compare provenance, scope, and access signals before citing this source."
+                ),
+                "trustLevel": trust_level,
+                "whyRecommended": "inspect_source is the guided way to audit a single source's provenance.",
+                "cautions": [],
+            }
+        )
     return entries[:3]
 
 
@@ -5806,21 +5811,15 @@ async def dispatch_tool(
             if isinstance(inspect_session_state, dict)
             else []
         )
-        inspect_strategy_metadata = cast(
-            dict[str, Any] | None, (inspect_session_state or {}).get("strategyMetadata")
-        )
-        why_classified_weak = _compose_why_classified_weak_match(
-            source, strategy_metadata=inspect_strategy_metadata
-        )
+        inspect_strategy_metadata = cast(dict[str, Any] | None, (inspect_session_state or {}).get("strategyMetadata"))
+        why_classified_weak = _compose_why_classified_weak_match(source, strategy_metadata=inspect_strategy_metadata)
         inspect_response: dict[str, Any] = {
             "searchSessionId": inspect_args.search_session_id,
             "source": source,
             "evidenceId": source.get("sourceId"),
             "selectedEvidenceIds": [str(source.get("sourceId") or "").strip()],
             "directReadRecommendations": _direct_read_recommendations(source, tool_profile=tool_profile),
-            "directReadRecommendationDetails": _direct_read_recommendation_details(
-                source, tool_profile=tool_profile
-            ),
+            "directReadRecommendationDetails": _direct_read_recommendation_details(source, tool_profile=tool_profile),
             "confidenceSignals": _guided_confidence_signals(
                 status="succeeded",
                 sources=[source],

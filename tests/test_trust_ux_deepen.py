@@ -9,6 +9,7 @@ Covers additive fields exposed by :mod:`paper_chaser_mcp.dispatch`:
 * quality-aware ``directReadRecommendationDetails``
 * improved trust-summary prose
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -32,8 +33,7 @@ def _fr_weak_source() -> dict[str, Any]:
         "topicalRelevance": "weak_match",
         "classificationRationale": "Notice mentions endangered species broadly, not desert tortoise.",
         "whyClassifiedAsWeakMatch": (
-            "Authoritative notice, but it does not specifically address the desert "
-            "tortoise dossier or recovery plan."
+            "Authoritative notice, but it does not specifically address the desert tortoise dossier or recovery plan."
         ),
         "canonicalUrl": "https://example.com/fr-weak",
         "note": "Authoritative notice, but not species-specific enough.",
@@ -78,9 +78,7 @@ def test_evidence_quality_detail_weak_authoritative_only() -> None:
 
 
 def test_evidence_quality_detail_mixed() -> None:
-    profile = dispatch_module._evidence_quality_detail(
-        [_on_topic_primary_source(), _fr_weak_source()]
-    )
+    profile = dispatch_module._evidence_quality_detail([_on_topic_primary_source(), _fr_weak_source()])
     assert profile == "mixed"
 
 
@@ -150,9 +148,7 @@ def test_trust_summary_prose_differentiates_strong_and_weak_authority() -> None:
 
 
 def test_trust_summary_backcompat_when_all_on_topic() -> None:
-    summary = dispatch_module._guided_trust_summary(
-        [_on_topic_primary_source()], evidence_gaps=[]
-    )
+    summary = dispatch_module._guided_trust_summary([_on_topic_primary_source()], evidence_gaps=[])
     assert summary["authoritativeButWeak"] == []
     assert summary["trustRationale"] == summary["strengthExplanation"]
 
@@ -182,9 +178,7 @@ def test_compose_why_classified_weak_match_uses_subject_chain_gaps() -> None:
         "classificationRationale": "Authoritative but generic.",
     }
     strategy_metadata = {"subjectChainGaps": ["species-specific evidence missing"]}
-    sentence = dispatch_module._compose_why_classified_weak_match(
-        source, strategy_metadata=strategy_metadata
-    )
+    sentence = dispatch_module._compose_why_classified_weak_match(source, strategy_metadata=strategy_metadata)
     assert sentence is not None
     assert "species-specific evidence missing" in sentence
 
@@ -195,9 +189,7 @@ def test_compose_why_classified_weak_match_returns_none_for_on_topic() -> None:
 
 
 def test_direct_read_recommendation_details_low_authoritative_but_weak() -> None:
-    details = dispatch_module._direct_read_recommendation_details(
-        _fr_weak_source(), tool_profile="guided"
-    )
+    details = dispatch_module._direct_read_recommendation_details(_fr_weak_source(), tool_profile="guided")
     assert details
     first = details[0]
     assert first["trustLevel"] == "low_authoritative_but_weak"
@@ -206,17 +198,13 @@ def test_direct_read_recommendation_details_low_authoritative_but_weak() -> None
 
 
 def test_direct_read_recommendation_details_high_for_on_topic_primary() -> None:
-    details = dispatch_module._direct_read_recommendation_details(
-        _on_topic_primary_source(), tool_profile="guided"
-    )
+    details = dispatch_module._direct_read_recommendation_details(_on_topic_primary_source(), tool_profile="guided")
     assert details[0]["trustLevel"] == "high"
 
 
 def test_direct_read_recommendations_stringlist_unchanged() -> None:
     # Backward-compat: list[str] shape is preserved
-    recs = dispatch_module._direct_read_recommendations(
-        _fr_weak_source(), tool_profile="guided"
-    )
+    recs = dispatch_module._direct_read_recommendations(_fr_weak_source(), tool_profile="guided")
     assert all(isinstance(item, str) for item in recs)
     assert recs[0].startswith("This source is only a weak match")
 
