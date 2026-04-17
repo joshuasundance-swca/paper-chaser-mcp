@@ -1150,7 +1150,10 @@ class AgenticRuntime:
             ambiguityLevel=planner.ambiguity_level,
             queryType=planner.query_type,
             regulatorySubintent=planner.regulatory_subintent,
+            regulatoryIntent=planner.regulatory_intent,
             entityCard=planner.entity_card,
+            subjectCard=planner.subject_card,
+            subjectChainGaps=list(planner.subject_chain_gaps),
             intentFamily=planner.intent_family,
             breadthEstimate=planner.breadth_estimate,
             firstPassMode=planner.first_pass_mode,
@@ -2445,6 +2448,18 @@ class AgenticRuntime:
         agency_facet_terms: list[set[str]] = _agency_guidance_facet_terms(query) if agency_guidance_mode else []
         prefer_recent_guidance = agency_guidance_mode and _guidance_query_prefers_recency(query)
         cultural_resource_boost = planner.intent_family == "heritage_cultural_resources"
+        # LLM-first subject-card grounding for document-family ranking and
+        # species-dossier weak-match demotion. Prefer the subject_card already
+        # resolved by classify_query when available.
+        from .subject_grounding import (
+            compute_subject_chain_gaps,
+            resolve_subject_card,
+            species_mentioned,
+        )
+
+        _subject_card = planner.subject_card or resolve_subject_card(query=query, planner=planner)
+        _requested_family: str | None = _subject_card.requested_document_family if _subject_card else None
+        _species_dossier_mode = planner.regulatory_intent == "species_dossier"
         filtered_document_count = 0
         species_anchor_type: str | None = None
 
@@ -2468,6 +2483,7 @@ class AgenticRuntime:
                         prefer_guidance=True,
                         prefer_recent=prefer_recent_guidance,
                         cultural_resource_boost=cultural_resource_boost,
+                        requested_document_family=_requested_family,
                     )
                     for document in ranked_documents[:limit]:
                         if not isinstance(document, dict):
@@ -2865,6 +2881,39 @@ class AgenticRuntime:
                 )
 
         structured_sources = _dedupe_structured_sources(structured_sources)
+        # Species-dossier demotion: when the planner says we are answering a
+        # species dossier question, regulatory hits that do NOT mention the
+        # species must not be presented as on_topic evidence.
+        if _species_dossier_mode and _subject_card is not None:
+            demoted_sources: list[StructuredSourceRecord] = []
+            species_demotion_count = 0
+            for src_record in structured_sources:
+                if src_record.topical_relevance != "on_topic":
+                    demoted_sources.append(src_record)
+                    continue
+                doc_stub = {
+                    "title": src_record.title or "",
+                    "summary": src_record.note or "",
+                    "citation": src_record.citation_text or "",
+                }
+                if species_mentioned(doc_stub, _subject_card):
+                    demoted_sources.append(src_record)
+                    continue
+                species_demotion_count += 1
+                demoted_sources.append(
+                    src_record.model_copy(
+                        update={
+                            "topical_relevance": "weak_match",
+                            "why_classified_as_weak_match": ("species_not_specifically_addressed"),
+                        }
+                    )
+                )
+            structured_sources = demoted_sources
+            if species_demotion_count:
+                evidence_gaps.append(
+                    "Some regulatory documents were demoted to weak_match because "
+                    "they do not specifically address the subject species."
+                )
         timeline_events = sorted(timeline_events, key=lambda event: str(event.event_date or "9999-99-99"))
         if not timeline_events:
             evidence_gaps.append(
@@ -2974,6 +3023,36 @@ class AgenticRuntime:
             history_requested=history_requested,
             agency_guidance_mode=agency_guidance_mode,
         )
+        # Ensure hybrid policy+science questions surface a dedicated hypothesis
+        # so downstream tools can see that both regulatory and literature
+        # providers should be consulted.
+        if planner.regulatory_intent == "hybrid_regulatory_plus_literature" and not any(
+            "hybrid_policy_science" in str(entry) for entry in retrieval_hypotheses
+        ):
+            retrieval_hypotheses.append(
+                "hybrid_policy_science: combine regulatory primary sources (Federal Register, CFR, "
+                "agency guidance) with peer-reviewed literature to answer policy+evidence questions."
+            )
+        # Compute subject-chain evidence gaps from the regulatory hits we
+        # retrieved. This surfaces e.g. "ECOS dossier found but no recovery
+        # plan in primary sources" so the caller knows which rung is missing.
+        subject_chain_gap_notes: list[str] = []
+        if _subject_card is not None:
+            document_stubs = [
+                {
+                    "title": record.title or "",
+                    "summary": record.note or "",
+                    "citation": record.citation_text or "",
+                }
+                for record in structured_sources
+            ]
+            subject_chain_gap_notes = compute_subject_chain_gaps(
+                card=_subject_card,
+                regulatory_intent=planner.regulatory_intent,
+                documents=document_stubs,
+            )
+            if subject_chain_gap_notes:
+                evidence_gaps.extend(subject_chain_gap_notes)
         strategy_metadata = SearchStrategyMetadata(
             intent=planner_intent,
             intentSource=planner.intent_source,
@@ -2984,6 +3063,10 @@ class AgenticRuntime:
             querySpecificity=planner.query_specificity,
             ambiguityLevel=planner.ambiguity_level,
             intentFamily=planner.intent_family,
+            regulatoryIntent=planner.regulatory_intent,
+            regulatorySubintent=planner.regulatory_subintent,
+            subjectCard=_subject_card,
+            subjectChainGaps=subject_chain_gap_notes,
             intentRationale=planner.intent_rationale,
             latencyProfile=latency_profile,
             normalizedQuery=query,
@@ -3214,6 +3297,7 @@ class AgenticRuntime:
             querySpecificity=planner.query_specificity,
             ambiguityLevel=planner.ambiguity_level,
             intentFamily=planner.intent_family,
+            regulatoryIntent=planner.regulatory_intent,
             intentRationale=planner.intent_rationale,
             latencyProfile=latency_profile,
             normalizedQuery=query,
@@ -3503,6 +3587,7 @@ class AgenticRuntime:
             querySpecificity=planner.query_specificity,
             ambiguityLevel=planner.ambiguity_level,
             intentFamily=planner.intent_family,
+            regulatoryIntent=planner.regulatory_intent,
             intentRationale=planner.intent_rationale,
             latencyProfile=latency_profile,
             normalizedQuery=query,
@@ -3842,6 +3927,7 @@ def _source_record_from_regulatory_document(
     *,
     provider: str,
     topical_relevance: Literal["on_topic", "weak_match", "off_topic"] | None = "on_topic",
+    why_classified_as_weak_match: str | None = None,
 ) -> StructuredSourceRecord:
     title = str(
         document.get("title") or document.get("citation") or document.get("documentNumber") or "Regulatory source"
@@ -3874,6 +3960,8 @@ def _source_record_from_regulatory_document(
             or ("Authoritative CFR text" if document.get("markdown") else "GovInfo primary-source discovery hit")
         )
     has_full_text = bool(document.get("markdown") or document.get("contentSource"))
+    family_match = document.get("_documentFamilyMatch")
+    family_boost = document.get("_documentFamilyBoost")
     return StructuredSourceRecord(
         sourceId=source_id,
         title=title,
@@ -3902,6 +3990,9 @@ def _source_record_from_regulatory_document(
         ),
         date=str(date or "") or None,
         note=note,
+        whyClassifiedAsWeakMatch=why_classified_as_weak_match,
+        documentFamilyMatch=str(family_match) if family_match else None,
+        documentFamilyBoost=float(family_boost) if isinstance(family_boost, (int, float)) else None,
     )
 
 
@@ -4605,7 +4696,10 @@ def _rank_regulatory_documents(
     prefer_guidance: bool,
     prefer_recent: bool,
     cultural_resource_boost: bool = False,
+    requested_document_family: str | None = None,
 ) -> list[dict[str, Any]]:
+    from .subject_grounding import detect_document_family_match
+
     def _score(document: dict[str, Any]) -> tuple[int, str]:
         title = str(document.get("title") or "")
         summary = str(document.get("abstract") or document.get("excerpt") or document.get("summary") or "")
@@ -4633,6 +4727,13 @@ def _rank_regulatory_documents(
         cultural_overlap = len(tokens & _CULTURAL_RESOURCE_DOCUMENT_TERMS) if cultural_resource_boost else 0
         cultural_title_overlap = len(title_tokens & _CULTURAL_RESOURCE_DOCUMENT_TERMS) if cultural_resource_boost else 0
         cultural_bonus = (cultural_title_overlap * 6) + (cultural_overlap * 3)
+        family_match, family_boost_fraction = detect_document_family_match(document, requested_document_family)
+        family_bonus = int(round(family_boost_fraction * 24)) if family_match else 0
+        if family_match:
+            # Annotate the document so the source-record builder can surface
+            # documentFamilyMatch / documentFamilyBoost to callers.
+            document["_documentFamilyMatch"] = family_match
+            document["_documentFamilyBoost"] = round(family_boost_fraction, 3)
         score = (
             (title_overlap * 5)
             + (overlap * 2)
@@ -4643,6 +4744,7 @@ def _rank_regulatory_documents(
             + notice_bonus
             + recency_bonus
             + cultural_bonus
+            + family_bonus
             - discussion_form_penalty
         )
         return score, publication_date

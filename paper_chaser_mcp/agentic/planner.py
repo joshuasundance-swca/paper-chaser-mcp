@@ -17,6 +17,7 @@ from .models import (
     IntentLabel,
     PlannerDecision,
     PlannerQueryType,
+    RegulatoryIntentLabel,
 )
 from .providers import COMMON_QUERY_WORDS, ModelProviderBundle
 
@@ -468,6 +469,65 @@ def _infer_regulatory_subintent(query: str, focus: str | None = None) -> str | N
     return "rulemaking_history"
 
 
+_VALID_REGULATORY_INTENTS: frozenset[str] = frozenset(
+    {
+        "current_cfr_text",
+        "rulemaking_history",
+        "species_dossier",
+        "guidance_lookup",
+        "hybrid_regulatory_plus_literature",
+    },
+)
+
+
+def _derive_regulatory_intent(
+    *,
+    planner: PlannerDecision,
+    query: str,
+    focus: str | None,
+) -> RegulatoryIntentLabel | None:
+    """Map LLM planner signals + deterministic cues to a canonical regulatory intent.
+
+    LLM-first: the planner's own ``regulatory_subintent`` (set from its
+    ``queryType``/``retrievalHypotheses``/``intent`` fields when available) is
+    the preferred source. Deterministic heuristics only fire when the planner
+    did not emit a canonical label. When the query is clearly regulatory but
+    none of the specific labels match, returns ``"unspecified"``. Returns
+    ``None`` for non-regulatory queries.
+    """
+
+    existing = planner.regulatory_subintent
+    if existing and existing in _VALID_REGULATORY_INTENTS:
+        return cast(RegulatoryIntentLabel, existing)
+
+    is_regulatory = planner.intent == "regulatory" or detect_regulatory_intent(query, focus)
+    if not is_regulatory:
+        return None
+
+    # Consider hybrid literature + regulatory cues from retrieval hypotheses
+    # and search angles the LLM already produced.
+    llm_signal_text = " ".join(
+        str(entry).lower()
+        for bucket in (planner.retrieval_hypotheses, planner.search_angles, planner.candidate_concepts)
+        for entry in bucket
+    )
+    if any(
+        marker in llm_signal_text
+        for marker in (
+            "policy and literature",
+            "regulatory and literature",
+            "scientific and regulatory",
+            "hybrid",
+        )
+    ) and detect_literature_intent(query, focus):
+        return "hybrid_regulatory_plus_literature"
+
+    inferred = _infer_regulatory_subintent(query, focus)
+    if inferred and inferred in _VALID_REGULATORY_INTENTS:
+        return cast(RegulatoryIntentLabel, inferred)
+    return "unspecified"
+
+
 def _infer_entity_card(query: str, focus: str | None = None) -> dict[str, str] | None:
     normalized = normalize_query(" ".join(part for part in [query, focus or ""] if part))
     lowered = normalized.lower()
@@ -897,6 +957,12 @@ async def classify_query(
                     planner.query_type == "broad_concept"
                     and (planner.query_specificity == "low" or planner.ambiguity_level == "high")
                 )
+                # Exact-title-looking queries with no identifier and high
+                # ambiguity are common cultural-resource / regulatory traps
+                # (e.g. "Section 106 consultation for offshore wind") — keep
+                # known-item reasoning active as a secondary pass but stop
+                # force-routing them into pure title-match recovery.
+                or (looks_like_exact_title(normalized) and planner.ambiguity_level == "high")
             )
         ):
             previous_intent = planner.intent
@@ -949,6 +1015,26 @@ async def classify_query(
             planner.regulatory_subintent = _infer_regulatory_subintent(query, focus)
         if planner.entity_card is None:
             planner.entity_card = _infer_entity_card(query, focus)
+    if planner.regulatory_intent is None:
+        planner.regulatory_intent = _derive_regulatory_intent(planner=planner, query=query, focus=focus)
+    if planner.subject_card is None and planner.regulatory_intent is not None:
+        # LLM-first subject card; uses planner.entity_card / candidate_concepts
+        # and falls back to deterministic extraction when needed.
+        from .subject_grounding import resolve_subject_card
+
+        planner.subject_card = resolve_subject_card(
+            query=query,
+            focus=focus,
+            planner=planner,
+            llm_bundle_available=planner.intent_source == "planner",
+        )
+    if planner.regulatory_intent == "hybrid_regulatory_plus_literature":
+        hybrid_marker = (
+            "hybrid_policy_science: fuse regulatory primary sources (Federal Register, CFR, agency guidance) "
+            "with peer-reviewed literature to answer questions that mix policy and scientific evidence."
+        )
+        if not any("hybrid_policy_science" in str(entry) for entry in planner.retrieval_hypotheses):
+            planner.retrieval_hypotheses.append(hybrid_marker)
     if not planner.intent_family and _detect_cultural_resource_intent(query, focus):
         planner.intent_family = "heritage_cultural_resources"
     if not planner.search_angles and planner.retrieval_hypotheses:

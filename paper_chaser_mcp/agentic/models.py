@@ -34,6 +34,58 @@ RETRIEVAL_MODE_TARGETED: Final[PlannerFirstPassMode] = "targeted"
 RETRIEVAL_MODE_BROAD: Final[PlannerFirstPassMode] = "broad"
 RETRIEVAL_MODE_MIXED: Final[PlannerFirstPassMode] = "mixed"
 
+# Canonical regulatory-intent split surfaced on PlannerDecision and
+# SearchStrategyMetadata. Populated LLM-first from planner signals (intent,
+# retrievalHypotheses, candidateConcepts) with a deterministic fallback in
+# ``planner.py``. See docs/environmental-science-remediation-plan.md §B.
+RegulatoryIntentLabel = Literal[
+    "current_cfr_text",
+    "rulemaking_history",
+    "species_dossier",
+    "guidance_lookup",
+    "hybrid_regulatory_plus_literature",
+    "unspecified",
+]
+
+# Document families practitioners expect from regulatory retrieval. Used by
+# ``SubjectCard.requestedDocumentFamily`` and the document-family ranking boost
+# in ``graphs._rank_regulatory_documents``.
+DocumentFamilyLabel = Literal[
+    "recovery_plan",
+    "critical_habitat",
+    "listing_rule",
+    "consultation_guidance",
+    "cfr_current_text",
+    "rulemaking_notice",
+    "programmatic_agreement",
+    "tribal_policy",
+    "agency_guidance",
+    "unspecified",
+]
+
+SubjectCardConfidence = Literal["high", "medium", "low", "deterministic_fallback"]
+
+
+class SubjectCard(ApiModel):
+    """LLM-resolved subject card for regulatory / known-item retrieval.
+
+    Populated LLM-first from planner outputs (``entity_card``,
+    ``candidate_concepts``, ``anchor_value``). When the planner ran in
+    deterministic-fallback mode, the card is still emitted but
+    ``confidence`` is set to ``"deterministic_fallback"``.
+    """
+
+    common_name: str | None = Field(default=None, alias="commonName")
+    scientific_name: str | None = Field(default=None, alias="scientificName")
+    agency: str | None = None
+    requested_document_family: DocumentFamilyLabel | None = Field(
+        default=None,
+        alias="requestedDocumentFamily",
+    )
+    subject_terms: list[str] = Field(default_factory=list, alias="subjectTerms")
+    confidence: SubjectCardConfidence = "deterministic_fallback"
+    source: Literal["planner_llm", "deterministic_fallback", "hybrid"] = "deterministic_fallback"
+
 
 class AgentHints(ApiModel):
     """Agent-facing next-step cues included on read-tool responses."""
@@ -126,7 +178,18 @@ class SearchStrategyMetadata(ApiModel):
         alias="queryType",
     )
     regulatory_subintent: str | None = Field(default=None, alias="regulatorySubintent")
+    regulatory_intent: RegulatoryIntentLabel | None = Field(
+        default=None,
+        alias="regulatoryIntent",
+        description=(
+            "Canonical regulatory-intent split (current_cfr_text, rulemaking_history, "
+            "species_dossier, guidance_lookup, hybrid_regulatory_plus_literature, "
+            "unspecified). LLM-first with deterministic fallback."
+        ),
+    )
     entity_card: dict[str, Any] | None = Field(default=None, alias="entityCard")
+    subject_card: SubjectCard | None = Field(default=None, alias="subjectCard")
+    subject_chain_gaps: list[str] = Field(default_factory=list, alias="subjectChainGaps")
     intent_family: str | None = Field(default=None, alias="intentFamily")
     breadth_estimate: int = Field(
         default=2,
@@ -324,6 +387,8 @@ class StructuredSourceRecord(ApiModel):
     relevance_confidence: float | None = Field(default=None, alias="relevanceConfidence")
     relevance_reason: str | None = Field(default=None, alias="relevanceReason")
     classification_rationale: str | None = Field(default=None, alias="classificationRationale")
+    document_family_match: str | None = Field(default=None, alias="documentFamilyMatch")
+    document_family_boost: float | None = Field(default=None, alias="documentFamilyBoost")
 
 
 class ScoreBreakdown(ApiModel):
@@ -616,7 +681,17 @@ class PlannerDecision(ApiModel):
         alias="queryType",
     )
     regulatory_subintent: str | None = Field(default=None, alias="regulatorySubintent")
+    regulatory_intent: RegulatoryIntentLabel | None = Field(
+        default=None,
+        alias="regulatoryIntent",
+        description=(
+            "Canonical regulatory-intent split surfaced to strategy metadata. "
+            "LLM-first from planner signals with deterministic fallback."
+        ),
+    )
     entity_card: dict[str, Any] | None = Field(default=None, alias="entityCard")
+    subject_card: SubjectCard | None = Field(default=None, alias="subjectCard")
+    subject_chain_gaps: list[str] = Field(default_factory=list, alias="subjectChainGaps")
     intent_family: str | None = Field(default=None, alias="intentFamily")
     breadth_estimate: int = Field(
         default=2,
