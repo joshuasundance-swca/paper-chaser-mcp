@@ -53,11 +53,13 @@ def _planner(
         "intent": "regulatory",
         "regulatoryIntent": regulatory_intent,
     }
-    if llm and "subjectCard" not in extra:
-        payload["subjectCard"] = {
-            "confidence": "high",
-            "source": "planner_llm",
-        }
+    if llm:
+        if "subjectCard" not in extra:
+            payload["subjectCard"] = {
+                "confidence": "high",
+                "source": "planner_llm",
+            }
+        payload.setdefault("plannerSource", "llm")
     payload.update(extra)
     return PlannerDecision.model_validate(payload)
 
@@ -220,3 +222,45 @@ class TestEcosQueryVariantsPlannerFirst:
         # The regex noise-removal still surfaces "northern long-eared bat".
         common_values = [value for value, anchor in variants_with if anchor == "species_common_name"]
         assert any("northern long-eared bat" in value.lower() for value in common_values)
+
+
+class TestPlannerLlmRegulatoryIntentAuthority:
+    """Finding 1 regression: LLM planner's `regulatoryIntent` must be
+    authoritative whenever `planner_source == "llm"`, even if the LLM
+    omitted subject-card grounding fields (which causes `classify_query`
+    to stamp the subject card as `deterministic_fallback`)."""
+
+    def test_llm_regulatory_intent_honored_without_subject_card_grounding(self) -> None:
+        query = "Tell me about the listing history of the Pallid Sturgeon"
+        # Baseline: deterministic helper misfires.
+        assert _query_requests_regulatory_history(query) is True
+
+        # LLM planner emitted regulatoryIntent but NO grounding signals, so
+        # subject-card stamping falls back to `deterministic_fallback`.
+        planner = PlannerDecision.model_validate(
+            {
+                "intent": "regulatory",
+                "regulatoryIntent": "species_dossier",
+                "plannerSource": "llm",
+                "subjectCard": {
+                    "confidence": "deterministic_fallback",
+                    "source": "deterministic_fallback",
+                },
+            }
+        )
+        flags = _derive_regulatory_query_flags(query=query, planner=planner)
+        # `species_dossier` must suppress the rulemaking-history route even
+        # though subject-card provenance is deterministic_fallback.
+        assert flags == (False, False, False)
+
+    def test_llm_regulatory_intent_honored_with_no_subject_card_at_all(self) -> None:
+        query = "Current text of 40 CFR 403.5"
+        planner = PlannerDecision.model_validate(
+            {
+                "intent": "regulatory",
+                "regulatoryIntent": "current_cfr_text",
+                "plannerSource": "llm",
+            }
+        )
+        flags = _derive_regulatory_query_flags(query=query, planner=planner)
+        assert flags == (True, False, False)

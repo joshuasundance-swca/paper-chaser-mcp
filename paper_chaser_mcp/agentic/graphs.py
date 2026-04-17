@@ -4416,18 +4416,23 @@ def _derive_regulatory_query_flags(
     """Map ``planner.regulatory_intent`` into the three routing booleans.
 
     LLM-first: when the planner bundle actually ran a real LLM (signalled by
-    ``planner.subject_card.source in {"planner_llm", "hybrid"}``) and emitted
-    a definitive ``regulatoryIntent`` label, trust it authoritatively so the
-    LLM signal wins over query keywords (e.g. "listing history of the Pallid
-    Sturgeon" tagged ``species_dossier`` must NOT also activate the
-    rulemaking-history route).
+    ``planner.planner_source == "llm"``) and emitted a definitive
+    ``regulatoryIntent`` label, trust it authoritatively so the LLM signal
+    wins over query keywords (e.g. "listing history of the Pallid Sturgeon"
+    tagged ``species_dossier`` must NOT also activate the rulemaking-history
+    route). Provenance is keyed off ``planner_source`` rather than
+    ``subject_card.source`` because an LLM planner can legitimately emit
+    ``regulatoryIntent`` without also supplying subject-card grounding
+    fields; in that case ``classify_query`` stamps the subject card as
+    ``deterministic_fallback``, but the LLM's regulatory label is still
+    authoritative.
 
     Falls back to the deterministic keyword/regex helpers when:
 
-    * the bundle is deterministic (``subject_card.source == "deterministic_fallback"``
-      or ``subject_card is None``) — in that case ``regulatoryIntent`` itself
-      came from deterministic heuristics and is no more reliable than the
-      keyword helpers, so we prefer the keyword helpers to avoid losing
+    * the bundle is deterministic (``planner_source`` is ``"deterministic"``
+      or ``"deterministic_fallback"``) — in that case ``regulatoryIntent``
+      itself came from deterministic heuristics and is no more reliable than
+      the keyword helpers, so we prefer the keyword helpers to avoid losing
       secondary routes on queries like "Regulatory history ... under 50 CFR ...";
     * the LLM emitted ``unspecified`` / ``hybrid_regulatory_plus_literature``
       / ``None`` — mixed or uncommitted intent, so every keyword-matched
@@ -4439,8 +4444,8 @@ def _derive_regulatory_query_flags(
     intent = planner.regulatory_intent if planner is not None else None
     llm_authoritative = (
         planner is not None
-        and planner.subject_card is not None
-        and planner.subject_card.source in ("planner_llm", "hybrid")
+        and planner.planner_source == "llm"
+        and intent is not None
     )
     if llm_authoritative:
         if intent == "current_cfr_text":
