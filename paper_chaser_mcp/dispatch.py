@@ -3907,6 +3907,21 @@ def _guided_session_state(
         sources=sources,
         evidence_gaps=evidence_gaps,
     )
+    # Forward ``subjectChainGaps`` recorded on the original
+    # ``strategyMetadata`` so that the rebuilt ``trustSummary`` surfaces the
+    # same regulatory subject-chain gap explanation seen on the initial
+    # research turn. Without this, saved-session follow-ups silently lose the
+    # "subject chain incomplete" trust signal.
+    strategy_metadata_payload = payload.get("strategyMetadata")
+    subject_chain_gaps = (
+        [
+            str(item).strip()
+            for item in strategy_metadata_payload.get("subjectChainGaps") or []
+            if str(item).strip()
+        ]
+        if isinstance(strategy_metadata_payload, dict)
+        else []
+    )
     return {
         "searchSessionId": record.search_session_id,
         "query": str(record.query or payload.get("query") or ""),
@@ -3916,7 +3931,11 @@ def _guided_session_state(
         "unverifiedLeads": unverified_leads,
         "verifiedFindings": verified_findings,
         "evidenceGaps": evidence_gaps,
-        "trustSummary": _guided_trust_summary(sources, evidence_gaps),
+        "trustSummary": _guided_trust_summary(
+            sources,
+            evidence_gaps,
+            subject_chain_gaps=subject_chain_gaps or None,
+        ),
         "coverage": coverage,
         "failureSummary": failure_summary,
         "resultMeaning": payload.get("resultMeaning")
