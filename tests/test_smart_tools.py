@@ -5207,6 +5207,53 @@ async def test_rerank_candidates_llm_weak_match_halves_concept_bonus_gate() -> N
     breakdown = ranked[0]["scoreBreakdown"]
     assert breakdown["relevanceClassification"] == "weak_match"
     assert breakdown["conceptBonusGateScale"] == 0.5
+    weak_bonus = breakdown.get("conceptCoverageBonus")
+    assert isinstance(weak_bonus, (int, float))
+    assert weak_bonus >= 0.0
+
+    # Effect assertion (post-critique): a parallel on_topic run with identical
+    # inputs must produce a concept bonus approximately twice as large, proving
+    # the gate scale is actually multiplied through to the stored value rather
+    # than merely echoed in metadata.
+    provider_bundle_on = resolve_provider_bundle(
+        _deterministic_config(),
+        openai_api_key=None,
+    )
+
+    async def _on_topic_batch(**_: object) -> dict[str, dict[str, str]]:
+        return {"weak-paper": {"classification": "on_topic", "rationale": "Matches."}}
+
+    provider_bundle_on.aclassify_relevance_batch = _on_topic_batch  # type: ignore[method-assign]
+
+    ranked_on = await rerank_candidates(
+        query="nitrate loading in headwater streams",
+        merged_candidates=[
+            {
+                "paper": {
+                    "paperId": "weak-paper",
+                    "title": "Nitrate Loading in Headwater Streams",
+                    "abstract": "Discusses nitrate and headwater streams.",
+                    "year": 2024,
+                    "authors": [{"name": "Weak Author"}],
+                    "source": "semantic_scholar",
+                },
+                "providers": ["semantic_scholar"],
+                "variants": ["nitrate loading"],
+                "variantSources": ["from_input"],
+                "providerRanks": {"semantic_scholar": 1},
+                "retrievalCount": 1,
+            }
+        ],
+        provider_bundle=provider_bundle_on,
+        candidate_concepts=["nitrate loading", "headwater streams"],
+        routing_confidence="medium",
+        query_specificity="medium",
+        ambiguity_level="low",
+    )
+    on_bonus = ranked_on[0]["scoreBreakdown"].get("conceptCoverageBonus")
+    assert isinstance(on_bonus, (int, float))
+    assert on_bonus > 0.0
+    assert abs(weak_bonus - 0.5 * on_bonus) < 1e-6
 
 
 @pytest.mark.asyncio
@@ -5500,3 +5547,93 @@ async def test_search_papers_smart_can_use_scholarapi_when_enabled() -> None:
     assert payload["strategyMetadata"]["synthesisModelSource"] == "deterministic"
     assert payload["strategyMetadata"]["providerBudgetApplied"]["maxScholarApiCalls"] == 1
     assert scholarapi.calls
+
+
+@pytest.mark.asyncio
+async def test_rerank_candidates_pool_size_over_inclusive_preserves_llm_first_signal() -> None:
+    """Finding #1 (post-critique): candidate_pool_size pre-trim must be
+    deliberately over-inclusive so that the LLM relevance classification can
+    still see a wide net and reject off-topic-but-high-prior candidates.
+    """
+    provider_bundle = resolve_provider_bundle(
+        _deterministic_config(),
+        openai_api_key=None,
+    )
+
+    async def _classify(**kwargs: object) -> dict[str, dict[str, str]]:
+        papers = cast(list[dict[str, Any]], kwargs.get("papers") or [])
+        out: dict[str, dict[str, str]] = {}
+        for paper in papers:
+            pid = str(paper.get("paperId") or "")
+            if pid.startswith("on-"):
+                out[pid] = {"classification": "on_topic", "rationale": "On."}
+            else:
+                out[pid] = {"classification": "off_topic", "rationale": "Off."}
+        return out
+
+    provider_bundle.aclassify_relevance_batch = _classify  # type: ignore[method-assign]
+
+    # Build a heavily lopsided pool: one on_topic paper with weak priors, and
+    # many off_topic high-citation-count papers with strong provider priors.
+    # Under the old strict pre-trim, the on_topic paper would be pruned out
+    # before LLM classification; under the new over-inclusive trim it survives.
+    candidates = [
+        {
+            "paper": {
+                "paperId": "on-1",
+                "title": "Niche Historical Topic",
+                "abstract": "Niche historical topic abstract.",
+                "year": 1995,
+                "authors": [{"name": "Obscure Author"}],
+                "citationCount": 0,
+                "source": "semantic_scholar",
+            },
+            "providers": ["semantic_scholar"],
+            "variants": ["niche historical topic"],
+            "variantSources": ["from_input"],
+            "providerRanks": {"semantic_scholar": 25},
+            "retrievalCount": 1,
+        },
+    ]
+    for i in range(30):
+        candidates.append(
+            {
+                "paper": {
+                    "paperId": f"off-{i}",
+                    "title": f"Popular Unrelated Topic {i}",
+                    "abstract": "Popular recent work on an unrelated popular topic.",
+                    "year": 2024,
+                    "authors": [{"name": f"Popular Author {i}"}],
+                    "citationCount": 500 + i,
+                    "source": "semantic_scholar",
+                },
+                "providers": ["semantic_scholar", "openalex"],
+                "variants": ["popular topic"],
+                "variantSources": ["from_input"],
+                "providerRanks": {"semantic_scholar": 1 + i, "openalex": 1 + i},
+                "retrievalCount": 2,
+            }
+        )
+
+    ranked = await rerank_candidates(
+        query="niche historical topic",
+        merged_candidates=candidates,
+        provider_bundle=provider_bundle,
+        candidate_concepts=["niche historical topic"],
+        candidate_pool_size=5,  # Narrow final cap; over-inclusive trim = 10.
+        routing_confidence="medium",
+        query_specificity="medium",
+        ambiguity_level="low",
+    )
+
+    # The on_topic paper must have been preserved through the over-inclusive
+    # pre-trim and reached the LLM classification step.
+    ranked_ids = [item["paper"]["paperId"] for item in ranked]
+    assert "on-1" in ranked_ids, (
+        "on_topic candidate was pruned before LLM relevance classification; over-inclusive pre-trim is not wide enough"
+    )
+    # And the on_topic paper must rank ahead of every off_topic paper.
+    on_index = ranked_ids.index("on-1")
+    off_indices = [i for i, pid in enumerate(ranked_ids) if pid.startswith("off-")]
+    if off_indices:
+        assert on_index < min(off_indices), "on_topic paper did not outrank off_topic priors after LLM-first rerank"

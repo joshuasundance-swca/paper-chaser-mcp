@@ -2960,8 +2960,18 @@ async def test_inspect_source_unresolved_inspectable_saved_session_recommends_in
         query="Attention Is All You Need",
         payload={
             "sources": [
-                {"sourceId": "paper-a", "title": "Attention", "topicalRelevance": "on_topic"},
-                {"sourceId": "paper-b", "title": "Transformer", "topicalRelevance": "on_topic"},
+                {
+                    "sourceId": "paper-a",
+                    "title": "Attention",
+                    "topicalRelevance": "on_topic",
+                    "canonicalUrl": "https://example.test/paper-a",
+                },
+                {
+                    "sourceId": "paper-b",
+                    "title": "Transformer",
+                    "topicalRelevance": "on_topic",
+                    "abstractObserved": True,
+                },
             ]
         },
     )
@@ -3033,6 +3043,45 @@ async def test_inspect_source_unresolved_all_off_topic_exposes_candidates_withou
     assert resolution["candidatesHaveInspectable"] is False
     # Recommendation stays research because nothing is inspectable.
     assert payload["failureSummary"]["recommendedNextAction"] == "research"
+
+
+@pytest.mark.asyncio
+async def test_inspect_source_unresolved_on_topic_without_urls_is_not_inspectable() -> None:
+    # Regression (post-critique): on_topic candidates with no URL/abstract must
+    # NOT flip candidatesHaveInspectable to True. The field must mirror the
+    # same on-topic-AND-URL predicate that drives _has_inspectable_sources.
+    isolated_registry = WorkspaceRegistry()
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-on-topic-no-urls",
+        query="Attention Is All You Need",
+        payload={
+            "sources": [
+                {"sourceId": "paper-a", "title": "Attention", "topicalRelevance": "on_topic"},
+                {"sourceId": "paper-b", "title": "Transformer", "topicalRelevance": "weak_match"},
+            ]
+        },
+    )
+
+    original_registry = server.workspace_registry
+    server.workspace_registry = isolated_registry
+    try:
+        payload = _payload(
+            await server.call_tool(
+                "inspect_source",
+                {
+                    "searchSessionId": "ssn-on-topic-no-urls",
+                    "sourceId": "missing-source",
+                },
+            )
+        )
+    finally:
+        server.workspace_registry = original_registry
+
+    resolution = payload["sourceResolution"]
+    assert set(resolution["availableSourceIds"]) == {"paper-a", "paper-b"}
+    assert resolution["candidatesHaveInspectable"] is False
+    assert payload["resultState"]["hasInspectableSources"] is False
 
 
 def test_guided_abstention_details_partial_status_emits_refinement_hints() -> None:

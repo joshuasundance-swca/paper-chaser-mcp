@@ -1663,13 +1663,20 @@ def _guided_inspect_session_resolution(
 
 
 def _guided_compact_source_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
-    """Project a saved-session source candidate to its disambiguation-critical fields."""
+    """Project a saved-session source candidate to its disambiguation-critical fields.
+
+    Includes inspectability-signaling fields (canonicalUrl / retrievedUrl /
+    fullTextUrlFound / abstractObserved) so agents can verify a candidate
+    would be inspectable without a round trip.
+    """
     keep_keys = (
         "sourceId",
         "title",
         "topicalRelevance",
         "canonicalUrl",
         "retrievedUrl",
+        "fullTextUrlFound",
+        "abstractObserved",
         "confidence",
         "accessStatus",
         "verificationStatus",
@@ -1681,6 +1688,18 @@ def _guided_compact_source_candidate(candidate: dict[str, Any]) -> dict[str, Any
         if value not in (None, "", [], {}):
             projected[key] = value
     return projected
+
+
+def _candidate_is_inspectable(candidate: dict[str, Any]) -> bool:
+    """Mirror graphs._has_inspectable_sources: on-topic AND has URL/abstract."""
+    if candidate.get("topicalRelevance") == "off_topic":
+        return False
+    return bool(
+        candidate.get("canonicalUrl")
+        or candidate.get("retrievedUrl")
+        or candidate.get("fullTextUrlFound")
+        or candidate.get("abstractObserved")
+    )
 
 
 def _guided_source_resolution_payload(
@@ -1701,9 +1720,7 @@ def _guided_source_resolution_payload(
             if projection.get("sourceId"):
                 compact_candidates.append(projection)
     if candidates_have_inspectable is None:
-        candidates_have_inspectable = any(
-            candidate.get("topicalRelevance") != "off_topic" for candidate in compact_candidates
-        )
+        candidates_have_inspectable = any(_candidate_is_inspectable(candidate) for candidate in compact_candidates)
     resolution = SourceResolution(
         requestedSourceId=_guided_normalize_whitespace(requested_source_id),
         resolvedSourceId=_guided_normalize_whitespace(resolved_source_id),
@@ -3567,6 +3584,7 @@ def _guided_result_state(
     search_session_id: str | None,
     saved_session_has_sources: bool = False,
     saved_session_all_off_topic: bool = False,
+    saved_session_inspectable_override: bool | None = None,
 ) -> dict[str, Any]:
     has_sources = bool(sources)
     all_sources_off_topic = has_sources and all(
@@ -3595,7 +3613,11 @@ def _guided_result_state(
     # bestNextInternalAction. When the current response is empty but the saved
     # session still carries on_topic/weak_match evidence, the saved candidates
     # remain reachable via inspect_source, so the flag has to reflect that.
-    saved_session_inspectable = saved_session_has_sources and not saved_session_all_off_topic
+    saved_session_inspectable = (
+        saved_session_inspectable_override
+        if saved_session_inspectable_override is not None
+        else (saved_session_has_sources and not saved_session_all_off_topic)
+    )
     current_inspectable = has_sources and not all_sources_off_topic
     inspectable_sources = current_inspectable or saved_session_inspectable
     # Ninth rubber-duck pass (finding 1): canAnswerFollowUp must reflect whether
@@ -6305,7 +6327,11 @@ async def dispatch_tool(
                     available_ids = []
                     saved_candidates = []
             saved_has_sources, saved_all_off_topic = _guided_saved_session_topicality(saved_candidates)
-            saved_inspectable = saved_has_sources and not saved_all_off_topic
+            saved_inspectable = (
+                saved_has_sources
+                and not saved_all_off_topic
+                and any(_candidate_is_inspectable(candidate) for candidate in saved_candidates)
+            )
             evidence_gaps = [
                 "Could not find sourceId "
                 f"{inspect_args.source_id!r} in searchSessionId "
@@ -6368,6 +6394,7 @@ async def dispatch_tool(
                     search_session_id=inspect_args.search_session_id,
                     saved_session_has_sources=saved_has_sources,
                     saved_session_all_off_topic=saved_all_off_topic,
+                    saved_session_inspectable_override=saved_inspectable,
                 ),
                 "sessionResolution": session_resolution,
                 "sourceResolution": _guided_source_resolution_payload(
