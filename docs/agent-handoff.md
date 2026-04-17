@@ -222,9 +222,39 @@ following additions on top of `main`:
   `ask_result_set` actually reaches an LLM classifier in production
   instead of the no-op base stub.
 
-#### Validation baseline (HEAD `0776faf`)
+#### Phase 7.5 — Two more critique + UX remediation rounds
 
-- `python -m pytest -q` => **1228 passed, 2 skipped** (live-only)
+- **Follow-up next-action alignment** (`1796a94`):
+  `_guided_best_next_internal_action` now returns `"research"` when
+  `sources=[]` on weak statuses, so `follow_up_research` without an
+  inferable session no longer contradicts itself with an
+  `inspect_source` hint.
+- **Abstention details on partial results** (`5f19a89`): `research`
+  responses with `status="partial"` now populate
+  `abstentionDetails.refinementHints` with concrete retry strategies
+  (`weak_topical_match` / `narrow_evidence_pool`), eliminating the
+  silent "partial means you figure it out" UX.
+- **LLM regulatoryIntent honored without subject-card grounding**
+  (`42f519c`): `_derive_regulatory_query_flags` now keys authority off
+  `planner_source == "llm"` (plus non-null `regulatory_intent`) rather
+  than `subject_card.source`, so an LLM that emits regulatoryIntent
+  without grounding fields no longer gets overridden by keyword
+  heuristics.
+- **Planner-time hybrid corroboration matches dispatch** (`5cf7cca`):
+  `_has_literature_corroboration` now accepts
+  `hybrid_policy_science` / `literature` / `peer-reviewed` markers in
+  `retrievalHypotheses`, mirroring `_guided_should_add_review_pass`
+  so valid hybrid labels are not stripped before dispatch sees them.
+- **ECOS provenance + raw-first variant order** (`156e3c8`):
+  `_ecos_query_variants` now emits raw/regex-derived candidates first
+  with planner names as fallback; each variant is tagged with an
+  `origin` field, and winning hits carry `_ecosProvenance`
+  (`corroborated` vs `planner_only`) so downstream ranking can
+  down-weight hallucinated planner-only matches.
+
+#### Validation baseline (HEAD `156e3c8`)
+
+- `python -m pytest -q` => **1237 passed, 2 skipped** (live-only)
 - `python -m ruff check .` clean
 - `python -m mypy --config-file pyproject.toml` clean across **171** source files
 - `python -m bandit -c pyproject.toml -r paper_chaser_mcp` clean
