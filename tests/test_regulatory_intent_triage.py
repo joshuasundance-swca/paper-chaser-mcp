@@ -28,6 +28,7 @@ from paper_chaser_mcp.agentic.graphs import (
     _derive_regulatory_query_flags,
     _ecos_query_variants,
     _is_agency_guidance_query,
+    _is_opaque_query,
     _is_current_cfr_text_request,
     _query_requests_regulatory_history,
 )
@@ -259,6 +260,78 @@ class TestEcosQueryVariantsPlannerFirst:
         assert raw_sci_idx is not None, "regex should have extracted Myotis lucifugus"
         assert planner_sci_idx is not None
         assert raw_sci_idx < planner_sci_idx
+
+
+class TestOpaqueQueryEcosVariantOrdering:
+    """Finding 3 (4th rubber-duck pass): when the query is opaque (a DOI, a
+    bare URL, an arXiv id, or an identifier-shaped token), the raw full-query
+    variant tagged ``regulatory_subject_terms`` is meaningless to ECOS and can
+    incidentally match an unrelated species. The break-on-first ECOS loop
+    would then lock onto that noise before trying the planner-supplied names.
+    For opaque queries the raw full-query variant must be deferred until
+    AFTER the planner fallbacks."""
+
+    def test_opaque_doi_defers_raw_subject_terms_after_planner(self) -> None:
+        query = "10.1234/ecosystem.2020.123"
+        planner = _planner(
+            "species_dossier",
+            entityCard={
+                "scientificName": "Scaphirhynchus albus",
+                "commonName": "Pallid Sturgeon",
+            },
+        )
+        variants = _ecos_query_variants(query, planner=planner)
+
+        subject_terms_idx = next(
+            (i for i, (_v, a, _o) in enumerate(variants) if a == "regulatory_subject_terms"),
+            None,
+        )
+        planner_sci_idx = next(
+            (i for i, (_v, a, o) in enumerate(variants) if a == "species_scientific_name" and o == "planner"),
+            None,
+        )
+        assert subject_terms_idx is not None
+        assert planner_sci_idx is not None
+        assert planner_sci_idx < subject_terms_idx, (
+            "planner species variant must precede opaque raw subject-terms variant"
+        )
+
+    def test_non_opaque_query_preserves_raw_subject_terms_first(self) -> None:
+        query = "Pallid Sturgeon critical habitat designation"
+        planner = _planner(
+            "species_dossier",
+            entityCard={"scientificName": "Scaphirhynchus albus"},
+        )
+        variants = _ecos_query_variants(query, planner=planner)
+        origins_by_anchor = [(a, o) for _v, a, o in variants]
+        # Raw full-query (regulatory_subject_terms, raw) appears before any
+        # planner variant.
+        raw_subj_idx = next(
+            (i for i, (a, o) in enumerate(origins_by_anchor) if a == "regulatory_subject_terms" and o == "raw"),
+            None,
+        )
+        planner_idx = next(
+            (i for i, (a, o) in enumerate(origins_by_anchor) if o == "planner"),
+            None,
+        )
+        assert raw_subj_idx is not None
+        assert planner_idx is not None
+        assert raw_subj_idx < planner_idx
+
+
+class TestIsOpaqueQuery:
+    def test_doi_is_opaque(self) -> None:
+        assert _is_opaque_query("10.1038/s41586-022-04567-8") is True
+
+    def test_arxiv_id_is_opaque(self) -> None:
+        assert _is_opaque_query("arXiv:2301.12345") is True
+
+    def test_url_is_opaque(self) -> None:
+        assert _is_opaque_query("https://example.com/paper.pdf") is True
+
+    def test_prose_query_is_not_opaque(self) -> None:
+        assert _is_opaque_query("Pallid Sturgeon critical habitat designation") is False
+        assert _is_opaque_query("40 CFR 403.5 current text") is False
 
 
 class TestPlannerLlmRegulatoryIntentAuthority:

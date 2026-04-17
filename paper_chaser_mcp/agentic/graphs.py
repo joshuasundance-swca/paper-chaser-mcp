@@ -4356,11 +4356,23 @@ def _ecos_query_variants(
         seen.add(marker)
         variants.append((normalized, anchor_type, origin))
 
-    # Raw / regex-derived variants are emitted first so ECOS corroborates
-    # planner-supplied names via the query itself where possible.
+    opaque = _is_opaque_query(query)
+
+    # Raw / regex-derived scientific/common-name variants stay first: even for
+    # opaque queries (DOIs / URLs) the extractor almost never fires on them,
+    # but when it does the name is query-grounded and beats any planner
+    # fallback.
     _add(_extract_scientific_name_candidate(query), "species_scientific_name", "raw")
     _add(_extract_common_name_candidate(query), "species_common_name", "raw")
-    _add(query, "regulatory_subject_terms", "raw")
+
+    # For opaque queries the raw full-query variant is an identifier — it can
+    # incidentally match ECOS (e.g. a DOI fragment overlapping a species code)
+    # and lock the loop onto real-but-wrong data before the planner names
+    # ever run. Defer the raw-full-query probe until after the planner
+    # fallbacks when the query is opaque. Non-opaque queries keep the
+    # historical ordering so query-grounded subject terms still run first.
+    if not opaque:
+        _add(query, "regulatory_subject_terms", "raw")
 
     # Planner-supplied names run as a fallback for genus-only / subspecies
     # prose the regex cannot recover. Downstream callers stamp hits from
@@ -4382,7 +4394,42 @@ def _ecos_query_variants(
             _add(planner.subject_card.scientific_name, "species_scientific_name", "planner")
             _add(planner.subject_card.common_name, "species_common_name", "planner")
 
+    if opaque:
+        _add(query, "regulatory_subject_terms", "raw")
+
     return variants
+
+
+_OPAQUE_DOI_RE = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Za-z0-9]+\b")
+_OPAQUE_ARXIV_RE = re.compile(r"\barxiv[:\s]*\d{4}\.\d{4,5}\b", re.IGNORECASE)
+
+
+def _is_opaque_query(query: str) -> bool:
+    """Return True when ``query`` looks like an identifier rather than prose.
+
+    Opaque queries (DOIs, arXiv ids, bare URLs, identifier-like tokens with
+    almost no letters) are meaningless as ECOS ``regulatory_subject_terms``
+    probes and tend to match ECOS entries incidentally. The caller uses this
+    to defer the raw full-query variant until after planner-supplied names.
+    """
+
+    text = (query or "").strip()
+    if not text:
+        return False
+    if _OPAQUE_DOI_RE.search(text) or _OPAQUE_ARXIV_RE.search(text):
+        return True
+    lowered = text.lower()
+    if lowered.startswith(("http://", "https://", "www.")):
+        return True
+    # Dense identifier-like tokens: mostly non-alpha, or a single long token
+    # with punctuation characteristic of identifiers.
+    alpha = sum(1 for ch in text if ch.isalpha())
+    total = len(text)
+    if total >= 8 and alpha / total < 0.4:
+        return True
+    if " " not in text and any(ch in text for ch in "/:._") and alpha / max(total, 1) < 0.6:
+        return True
+    return False
 
 
 def _query_requests_regulatory_history(query: str) -> bool:
