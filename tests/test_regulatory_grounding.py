@@ -92,7 +92,38 @@ async def test_regulatory_intent_unspecified_for_generic_regulatory_query() -> N
         focus=None,
         provider_bundle=_StubBundle(seed),  # type: ignore[arg-type]
     )
-    assert planner.regulatory_intent in {"unspecified", "rulemaking_history"}
+    assert planner.regulatory_intent == "unspecified"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query",
+    [
+        "federal regulation policy overview",
+        "broad regulatory framework summary",
+        "general regulatory landscape for environmental policy",
+    ],
+)
+async def test_generic_regulatory_queries_do_not_default_to_rulemaking_history(query: str) -> None:
+    """Generic regulatory asks must not be hard-routed to ``rulemaking_history``.
+
+    Regression for ws-regulatory-unspecified: ``_infer_regulatory_subintent``
+    previously returned ``"rulemaking_history"`` as a terminal default, which
+    biased broad regulatory queries onto the Federal Register/timeline path
+    and prevented ``_derive_regulatory_intent`` from emitting its documented
+    ``unspecified`` fallback.
+    """
+    seed = PlannerDecision(intent="regulatory", followUpMode="qa")
+    _, planner = await classify_query(
+        query=query,
+        mode="auto",
+        year=None,
+        venue=None,
+        focus=None,
+        provider_bundle=_StubBundle(seed),  # type: ignore[arg-type]
+    )
+    assert planner.regulatory_intent == "unspecified"
+    assert planner.regulatory_subintent != "rulemaking_history"
 
 
 @pytest.mark.asyncio

@@ -466,7 +466,7 @@ def _infer_regulatory_subintent(query: str, focus: str | None = None) -> str | N
         return "rulemaking_history"
     if detect_literature_intent(query, focus):
         return "hybrid_regulatory_plus_literature"
-    return "rulemaking_history"
+    return None
 
 
 _VALID_REGULATORY_INTENTS: frozenset[str] = frozenset(
