@@ -252,9 +252,34 @@ following additions on top of `main`:
   (`corroborated` vs `planner_only`) so downstream ranking can
   down-weight hallucinated planner-only matches.
 
-#### Validation baseline (HEAD `156e3c8`)
+#### Phase 7.6 — Fourth rubber-duck round
 
-- `python -m pytest -q` => **1237 passed, 2 skipped** (live-only)
+- **Prefer `inspect_source` when saved session is still inspectable**
+  (`de553a4`): `_guided_best_next_internal_action` now accepts a
+  `saved_session_has_sources` signal so follow-ups with empty response
+  `sources` but a usable saved session no longer contradict
+  `failureSummary.recommendedNextAction`.
+- **Route all-off-topic results to `research`** (`9ee3168`): when every
+  returned source is weak/off-topic, `bestNextInternalAction` defaults
+  to `research` instead of wasting a call on `inspect_source`.
+- **`regulatory_intent_source` stamped separately from `planner_source`**
+  (`b231e47`): planner now tracks whether `regulatoryIntent` was
+  actually emitted by the LLM (`regulatory_intent_source="llm"`) vs
+  deterministically backfilled so the LLM-authoritative route in
+  `_derive_regulatory_query_flags` cannot be triggered by a keyword
+  fallback masquerading as LLM output.
+- **Defer raw full-query ECOS variant for opaque queries** (`8498e26`):
+  `_is_opaque_query` detects DOI/URL/arXiv-shaped inputs and orders
+  planner species variants first so opaque prose doesn't starve
+  legitimate LLM-supplied names.
+- **Rank ECOS variants by `hits × provenance_factor`** (`f616b71`):
+  raw variants keep factor 1.0, planner-only variants get 0.9, so the
+  previously-unused `_ecosProvenance` metadata now genuinely
+  influences selection.
+
+#### Validation baseline (HEAD `f616b71`)
+
+- `python -m pytest -q` => **1253 passed, 2 skipped** (live-only)
 - `python -m ruff check .` clean
 - `python -m mypy --config-file pyproject.toml` clean across **171** source files
 - `python -m bandit -c pyproject.toml -r paper_chaser_mcp` clean
