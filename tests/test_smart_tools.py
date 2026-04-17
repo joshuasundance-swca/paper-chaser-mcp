@@ -339,11 +339,7 @@ async def test_search_papers_smart_routes_regulatory_queries_to_primary_sources(
             # describe it (or carry the "regulatory history" subject terms);
             # return an empty payload otherwise.
             lowered = query.lower()
-            relevant = (
-                "regulatory history" in lowered
-                or "california condor" in lowered
-                or "condor" in lowered
-            )
+            relevant = "regulatory history" in lowered or "california condor" in lowered or "condor" in lowered
             if not relevant:
                 return {"query": query, "matchMode": "auto", "total": 0, "data": []}
             return {
@@ -5114,6 +5110,96 @@ async def test_rerank_candidates_anchored_broad_wildfire_cultural_resource() -> 
     assert diagnostics[0]["paperId"] == "on-topic-cultural"
     assert "scoreBreakdown" in diagnostics[0]
     assert diagnostics[0]["scoreBreakdown"]["broadQueryRegime"] == "anchored_broad"
+
+
+@pytest.mark.asyncio
+async def test_rerank_candidates_llm_off_topic_zeroes_concept_bonus_gate() -> None:
+    """LLM-first gate: when aclassify_relevance_batch returns off_topic, conceptCoverageBonus is gated to zero."""
+    provider_bundle = resolve_provider_bundle(
+        _deterministic_config(),
+        openai_api_key=None,
+    )
+
+    async def _off_topic_batch(**_: object) -> dict[str, dict[str, str]]:
+        return {"off-topic-paper": {"classification": "off_topic", "rationale": "LLM flagged off-topic."}}
+
+    provider_bundle.aclassify_relevance_batch = _off_topic_batch  # type: ignore[method-assign]
+
+    ranked = await rerank_candidates(
+        query="nitrate loading in headwater streams",
+        merged_candidates=[
+            {
+                "paper": {
+                    "paperId": "off-topic-paper",
+                    "title": "Nitrate Loading in Headwater Streams of Agricultural Watersheds",
+                    "abstract": "Discusses nitrate loading in headwater streams.",
+                    "year": 2024,
+                    "authors": [{"name": "Off Topic Author"}],
+                    "source": "semantic_scholar",
+                },
+                "providers": ["semantic_scholar"],
+                "variants": ["nitrate loading"],
+                "variantSources": ["from_input"],
+                "providerRanks": {"semantic_scholar": 1},
+                "retrievalCount": 1,
+            }
+        ],
+        provider_bundle=provider_bundle,
+        candidate_concepts=["nitrate loading", "headwater streams"],
+        routing_confidence="medium",
+        query_specificity="medium",
+        ambiguity_level="low",
+    )
+
+    breakdown = ranked[0]["scoreBreakdown"]
+    assert breakdown["relevanceClassification"] == "off_topic"
+    assert breakdown["relevanceClassificationFallback"] is False
+    assert breakdown["conceptBonusGateScale"] == 0.0
+    assert breakdown["conceptCoverageBonus"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_rerank_candidates_llm_weak_match_halves_concept_bonus_gate() -> None:
+    """LLM-first gate: weak_match relevance halves the concept coverage bonus."""
+    provider_bundle = resolve_provider_bundle(
+        _deterministic_config(),
+        openai_api_key=None,
+    )
+
+    async def _weak_batch(**_: object) -> dict[str, dict[str, str]]:
+        return {"weak-paper": {"classification": "weak_match", "rationale": "Partial match."}}
+
+    provider_bundle.aclassify_relevance_batch = _weak_batch  # type: ignore[method-assign]
+
+    ranked = await rerank_candidates(
+        query="nitrate loading in headwater streams",
+        merged_candidates=[
+            {
+                "paper": {
+                    "paperId": "weak-paper",
+                    "title": "Nitrate Loading in Headwater Streams",
+                    "abstract": "Discusses nitrate and headwater streams.",
+                    "year": 2024,
+                    "authors": [{"name": "Weak Author"}],
+                    "source": "semantic_scholar",
+                },
+                "providers": ["semantic_scholar"],
+                "variants": ["nitrate loading"],
+                "variantSources": ["from_input"],
+                "providerRanks": {"semantic_scholar": 1},
+                "retrievalCount": 1,
+            }
+        ],
+        provider_bundle=provider_bundle,
+        candidate_concepts=["nitrate loading", "headwater streams"],
+        routing_confidence="medium",
+        query_specificity="medium",
+        ambiguity_level="low",
+    )
+
+    breakdown = ranked[0]["scoreBreakdown"]
+    assert breakdown["relevanceClassification"] == "weak_match"
+    assert breakdown["conceptBonusGateScale"] == 0.5
 
 
 @pytest.mark.asyncio

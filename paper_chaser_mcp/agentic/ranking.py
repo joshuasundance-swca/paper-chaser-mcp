@@ -209,7 +209,7 @@ async def rerank_candidates(
     facets = query_facets(query)
     terms = query_terms(query)
     anchor_terms = [term for term in terms if term not in GENERIC_RESEARCH_TERMS]
-    broad_query_mode = query_specificity == "low" or ambiguity_level != "low" or len(facets) >= 2
+    broad_query_mode = query_specificity == "low" or ambiguity_level != "low"
     has_planner_anchor = bool(
         (planner_anchor_type and str(planner_anchor_type).strip())
         or (planner_anchor_value and str(planner_anchor_value).strip())
@@ -336,6 +336,13 @@ async def rerank_candidates(
         elif relevance_classification == "weak_match" and broad_query_mode and title_anchor_coverage == 0.0:
             relevance_bonus = -0.03
 
+        concept_bonus_gate_scale = 1.0
+        if relevance_classification == "off_topic" and not relevance_fallback:
+            concept_bonus_gate_scale = 0.0
+        elif relevance_classification == "weak_match" and not relevance_fallback:
+            concept_bonus_gate_scale = 0.5
+        concept_bonus *= concept_bonus_gate_scale
+
         if broad_query_mode and title_anchor_coverage == 0.0 and anchor_coverage < 0.34:
             facet_penalty += 0.08
         if broad_query_mode and title_facet_coverage == 0.0 and query_similarity < 0.35:
@@ -368,6 +375,7 @@ async def rerank_candidates(
             "fusedRankScore": round(fused_rank_score, 6),
             "querySimilarity": round(query_similarity, 6),
             "conceptCoverageBonus": round(concept_bonus, 6),
+            "conceptBonusGateScale": round(concept_bonus_gate_scale, 6),
             "providerConsensusBonus": round(provider_bonus, 6),
             "bridgeCoverageBonus": round(bridge_bonus, 6),
             "relevanceClassificationBonus": round(relevance_bonus, 6),
