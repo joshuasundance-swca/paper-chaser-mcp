@@ -269,6 +269,23 @@ _AGENCY_GUIDANCE_DISCUSSION_TERMS = {
     "proposals",
     "proposed",
 }
+_CULTURAL_RESOURCE_DOCUMENT_TERMS = {
+    "106",
+    "achp",
+    "archaeological",
+    "archaeology",
+    "consultation",
+    "cultural",
+    "heritage",
+    "historic",
+    "nagpra",
+    "nhpa",
+    "preservation",
+    "sacred",
+    "shpo",
+    "thpo",
+    "tribal",
+}
 _REGULATORY_QUERY_NOISE_TERMS = {
     "address",
     "actions",
@@ -1134,6 +1151,7 @@ class AgenticRuntime:
             queryType=planner.query_type,
             regulatorySubintent=planner.regulatory_subintent,
             entityCard=planner.entity_card,
+            intentFamily=planner.intent_family,
             breadthEstimate=planner.breadth_estimate,
             firstPassMode=planner.first_pass_mode,
             intentRationale=planner.intent_rationale,
@@ -1577,7 +1595,13 @@ class AgenticRuntime:
                             "fallback": bool(entry.get("fallback")),
                             "provenance": str(entry.get("provenance") or "model").strip() or "model",
                         }
-                        for key in ("relevanceSource", "relevanceConfidence", "relevanceReason", "degradedTrigger"):
+                        for key in (
+                            "relevanceSource",
+                            "relevanceConfidence",
+                            "relevanceReason",
+                            "classificationRationale",
+                            "degradedTrigger",
+                        ):
                             if entry.get(key) is not None:
                                 normalized_entry[key] = entry.get(key)
                         question_relevance_cache[normalized_paper_id] = normalized_entry
@@ -1630,6 +1654,11 @@ class AgenticRuntime:
                     ),
                     relevance_reason=(
                         str(relevance_entry.get("relevanceReason")) if relevance_entry.get("relevanceReason") else None
+                    ),
+                    classification_rationale=(
+                        str(relevance_entry.get("classificationRationale"))
+                        if relevance_entry.get("classificationRationale")
+                        else None
                     ),
                 )
             )
@@ -2415,6 +2444,7 @@ class AgenticRuntime:
         )
         agency_facet_terms: list[set[str]] = _agency_guidance_facet_terms(query) if agency_guidance_mode else []
         prefer_recent_guidance = agency_guidance_mode and _guidance_query_prefers_recency(query)
+        cultural_resource_boost = planner.intent_family == "heritage_cultural_resources"
         filtered_document_count = 0
         species_anchor_type: str | None = None
 
@@ -2437,6 +2467,7 @@ class AgenticRuntime:
                         facet_terms=agency_facet_terms,
                         prefer_guidance=True,
                         prefer_recent=prefer_recent_guidance,
+                        cultural_resource_boost=cultural_resource_boost,
                     )
                     for document in ranked_documents[:limit]:
                         if not isinstance(document, dict):
@@ -2952,6 +2983,7 @@ class AgenticRuntime:
             routingConfidence=planner.routing_confidence,
             querySpecificity=planner.query_specificity,
             ambiguityLevel=planner.ambiguity_level,
+            intentFamily=planner.intent_family,
             intentRationale=planner.intent_rationale,
             latencyProfile=latency_profile,
             normalizedQuery=query,
@@ -3181,6 +3213,7 @@ class AgenticRuntime:
             routingConfidence=planner.routing_confidence,
             querySpecificity=planner.query_specificity,
             ambiguityLevel=planner.ambiguity_level,
+            intentFamily=planner.intent_family,
             intentRationale=planner.intent_rationale,
             latencyProfile=latency_profile,
             normalizedQuery=query,
@@ -3464,6 +3497,7 @@ class AgenticRuntime:
             routingConfidence=planner.routing_confidence,
             querySpecificity=planner.query_specificity,
             ambiguityLevel=planner.ambiguity_level,
+            intentFamily=planner.intent_family,
             intentRationale=planner.intent_rationale,
             latencyProfile=latency_profile,
             normalizedQuery=query,
@@ -3768,6 +3802,7 @@ def _source_record_from_paper(
     relevance_source: str | None = None,
     relevance_confidence: float | None = None,
     relevance_reason: str | None = None,
+    classification_rationale: str | None = None,
 ) -> StructuredSourceRecord:
     source_id = str(paper.canonical_id or paper.paper_id or "") or None
     return StructuredSourceRecord(
@@ -3792,6 +3827,7 @@ def _source_record_from_paper(
         relevanceSource=cast(Any, relevance_source) if relevance_source else None,
         relevanceConfidence=relevance_confidence,
         relevanceReason=relevance_reason,
+        classificationRationale=classification_rationale,
     )
 
 
@@ -4562,6 +4598,7 @@ def _rank_regulatory_documents(
     facet_terms: list[set[str]],
     prefer_guidance: bool,
     prefer_recent: bool,
+    cultural_resource_boost: bool = False,
 ) -> list[dict[str, Any]]:
     def _score(document: dict[str, Any]) -> tuple[int, str]:
         title = str(document.get("title") or "")
@@ -4587,6 +4624,11 @@ def _rank_regulatory_documents(
         )
         notice_bonus = 1 if document_type in {"notice", "rule"} else 0
         recency_bonus = max((publication_year - 2010) * 2, 0) if prefer_recent else 0
+        cultural_overlap = len(tokens & _CULTURAL_RESOURCE_DOCUMENT_TERMS) if cultural_resource_boost else 0
+        cultural_title_overlap = (
+            len(title_tokens & _CULTURAL_RESOURCE_DOCUMENT_TERMS) if cultural_resource_boost else 0
+        )
+        cultural_bonus = (cultural_title_overlap * 6) + (cultural_overlap * 3)
         score = (
             (title_overlap * 5)
             + (overlap * 2)
@@ -4596,6 +4638,7 @@ def _rank_regulatory_documents(
             + guidance_bonus
             + notice_bonus
             + recency_bonus
+            + cultural_bonus
             - discussion_form_penalty
         )
         return score, publication_date

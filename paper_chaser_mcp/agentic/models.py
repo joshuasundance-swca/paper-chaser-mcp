@@ -126,6 +126,7 @@ class SearchStrategyMetadata(ApiModel):
     )
     regulatory_subintent: str | None = Field(default=None, alias="regulatorySubintent")
     entity_card: dict[str, Any] | None = Field(default=None, alias="entityCard")
+    intent_family: str | None = Field(default=None, alias="intentFamily")
     breadth_estimate: int = Field(
         default=2,
         ge=1,
@@ -313,6 +314,7 @@ class StructuredSourceRecord(ApiModel):
     )
     relevance_confidence: float | None = Field(default=None, alias="relevanceConfidence")
     relevance_reason: str | None = Field(default=None, alias="relevanceReason")
+    classification_rationale: str | None = Field(default=None, alias="classificationRationale")
 
 
 class ScoreBreakdown(ApiModel):
@@ -391,6 +393,7 @@ class SmartPaperHit(ApiModel):
     )
     relevance_confidence: float | None = Field(default=None, alias="relevanceConfidence")
     relevance_reason: str | None = Field(default=None, alias="relevanceReason")
+    classification_rationale: str | None = Field(default=None, alias="classificationRationale")
     score_breakdown: ScoreBreakdown = Field(
         default_factory=ScoreBreakdown,
         alias="scoreBreakdown",
@@ -605,6 +608,7 @@ class PlannerDecision(ApiModel):
     )
     regulatory_subintent: str | None = Field(default=None, alias="regulatorySubintent")
     entity_card: dict[str, Any] | None = Field(default=None, alias="entityCard")
+    intent_family: str | None = Field(default=None, alias="intentFamily")
     breadth_estimate: int = Field(
         default=2,
         ge=1,

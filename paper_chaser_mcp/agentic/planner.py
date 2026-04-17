@@ -217,6 +217,7 @@ REGULATORY_QUERY_TERMS = {
 }
 
 _CULTURAL_RESOURCE_MARKERS = {
+    "archaeological",
     "archaeology",
     "cultural resources",
     "cultural landscape",
@@ -890,6 +891,8 @@ async def classify_query(
             planner.regulatory_subintent = _infer_regulatory_subintent(query, focus)
         if planner.entity_card is None:
             planner.entity_card = _infer_entity_card(query, focus)
+    if not planner.intent_family and _detect_cultural_resource_intent(query, focus):
+        planner.intent_family = "heritage_cultural_resources"
     if not planner.search_angles and planner.retrieval_hypotheses:
         planner.search_angles = list(planner.retrieval_hypotheses)
     if not planner.retrieval_hypotheses and planner.search_angles:

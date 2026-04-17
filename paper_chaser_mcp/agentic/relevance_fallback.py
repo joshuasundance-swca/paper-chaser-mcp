@@ -63,6 +63,52 @@ def _confidence_for(label: RelevanceLabel, profile: dict[str, float]) -> float:
     return round(max(0.2, min(0.9, base)), 3)
 
 
+_RATIONALE_MAX_CHARS = 150
+
+
+def _compose_classification_rationale(label: RelevanceLabel, profile: dict[str, float]) -> str:
+    """Compose a compact (<150 char) user-facing rationale from signal profile.
+
+    Parameterized over already-computed signals (similarity, anchor/facet
+    coverage) so this stays domain-agnostic. Distinct from the verbose
+    ``relevanceReason`` debug string kept for diagnostics.
+    """
+    similarity = profile["similarity"]
+    title_anchor = profile["title_anchor_coverage"]
+    body_anchor = profile["body_anchor_coverage"]
+    title_facet = profile["title_facet_coverage"]
+    body_facet = profile["body_facet_coverage"]
+    if label == "on_topic":
+        text = (
+            f"Strong topical overlap: title anchors {title_anchor:.0%}, facet coverage {title_facet:.0%}."
+        )
+    elif label == "off_topic":
+        if title_anchor == 0 and body_anchor == 0:
+            text = "No query-term overlap in title or abstract; low lexical similarity."
+        else:
+            text = (
+                f"Low topical overlap: lexical similarity {similarity:.2f}, "
+                f"title anchors {title_anchor:.0%}."
+            )
+    else:  # weak_match
+        if title_anchor == 0 and body_anchor > 0:
+            text = (
+                f"Query terms appear only in abstract (body anchors {body_anchor:.0%}); "
+                "title lacks direct overlap."
+            )
+        elif 0.0 < title_facet < 1.0:
+            text = (
+                f"Partial facet coverage ({title_facet:.0%}); some query aspects missing in title."
+            )
+        elif body_facet > 0 and title_facet == 0:
+            text = f"Facets mentioned in abstract ({body_facet:.0%}) but absent from title."
+        else:
+            text = (
+                f"Borderline match: similarity {similarity:.2f}, title anchors {title_anchor:.0%}."
+            )
+    return text[:_RATIONALE_MAX_CHARS]
+
+
 def classify_paper_deterministic(
     *,
     query: str,
@@ -95,6 +141,7 @@ def classify_paper_deterministic(
             "relevanceSource": "deterministic_tier",
             "relevanceConfidence": confidence,
             "relevanceReason": relevance_reason,
+            "classificationRationale": _compose_classification_rationale(label, profile),
             "degradedTrigger": reason,
         }
     )
@@ -135,6 +182,7 @@ def annotate_llm_entry(
     rationale = str(entry.get("rationale") or "").strip()
     if rationale:
         entry.setdefault("relevanceReason", rationale)
+        entry.setdefault("classificationRationale", rationale[:_RATIONALE_MAX_CHARS].rstrip())
     return entry
 
 
@@ -180,4 +228,5 @@ __all__ = [
     "classification_provenance_counts",
     "classify_batch_deterministic",
     "classify_paper_deterministic",
+    "_compose_classification_rationale",
 ]

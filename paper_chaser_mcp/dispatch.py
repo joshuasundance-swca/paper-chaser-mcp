@@ -2389,6 +2389,18 @@ def _guided_trust_summary(
         if source.get("topicalRelevance") == "off_topic"
         and str(source.get("whyClassifiedAsWeakMatch") or source.get("note") or "").strip()
     ]
+    weak_match_rationales = [
+        str(source.get("classificationRationale") or "").strip()
+        for source in sources
+        if source.get("topicalRelevance") == "weak_match"
+        and str(source.get("classificationRationale") or "").strip()
+    ]
+    off_topic_rationales = [
+        str(source.get("classificationRationale") or "").strip()
+        for source in sources
+        if source.get("topicalRelevance") == "off_topic"
+        and str(source.get("classificationRationale") or "").strip()
+    ]
     if verified_primary_source_count > 0 and on_topic_source_count > 0:
         strength_explanation = "Verified primary sources provide direct on-topic support."
     elif verified_metadata_source_count > 0 and on_topic_source_count > 0:
@@ -2415,8 +2427,21 @@ def _guided_trust_summary(
             "weakMatch": weak_match_reasons[:3],
             "offTopic": off_topic_reasons[:3],
         },
+        "classificationRationaleByBucket": {
+            "weakMatch": weak_match_rationales[:3],
+            "offTopic": off_topic_rationales[:3],
+        },
         "strengthExplanation": strength_explanation,
     }
+    top_rationale: str | None = None
+    if off_topic_rationales:
+        top_rationale = f"Off-topic example: {off_topic_rationales[0]}"
+    elif weak_match_rationales:
+        top_rationale = f"Weak-match example: {weak_match_rationales[0]}"
+    if top_rationale:
+        summary["trustRationale"] = f"{strength_explanation} {top_rationale}".strip()[:280]
+    else:
+        summary["trustRationale"] = strength_explanation
     if classification_provenance and classification_provenance.get("total"):
         summary["classificationProvenance"] = classification_provenance
         summary["degradedClassification"] = bool(classification_provenance.get("degradedClassification"))
