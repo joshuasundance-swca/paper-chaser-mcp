@@ -2150,6 +2150,49 @@ def test_guided_best_next_internal_action_no_sources_weak_status_returns_researc
     )
 
 
+def test_guided_abstention_details_partial_status_emits_refinement_hints() -> None:
+    # Regression (Finding 2): status="partial" with weak sources must populate
+    # abstentionDetails.refinementHints as a concrete, non-empty list.
+    weak_sources = [{"sourceId": "p1", "title": "Tangential result"}]
+    evidence_gaps = ["Only weak topical matches were surfaced for the query."]
+    trust_summary = {
+        "onTopicSourceCount": 1,
+        "weakMatchCount": 3,
+        "offTopicCount": 0,
+    }
+    details = dispatch_module._guided_abstention_details_payload(
+        status="partial",
+        sources=weak_sources,
+        evidence_gaps=evidence_gaps,
+        trust_summary=trust_summary,
+    )
+    assert details is not None
+    assert details["category"] in {"weak_topical_match", "narrow_evidence_pool", "coverage_gap"}
+    assert isinstance(details["refinementHints"], list)
+    assert details["refinementHints"], "refinementHints must not be empty for partial status"
+    assert all(isinstance(hint, str) and hint.strip() for hint in details["refinementHints"])
+
+
+def test_guided_abstention_details_partial_status_narrow_pool_hints() -> None:
+    # Regression (Finding 2): narrow-pool partial results should emit concrete hints
+    # that mention follow_up_research or resolve_reference.
+    sources = [{"sourceId": "p1"}, {"sourceId": "p2"}]
+    details = dispatch_module._guided_abstention_details_payload(
+        status="partial",
+        sources=sources,
+        evidence_gaps=["Narrow evidence pool."],
+        trust_summary={
+            "onTopicSourceCount": 2,
+            "weakMatchCount": 0,
+            "offTopicCount": 0,
+        },
+    )
+    assert details is not None
+    assert details["category"] == "narrow_evidence_pool"
+    joined = " ".join(details["refinementHints"]).lower()
+    assert "resolve_reference" in joined or "follow_up_research" in joined or "broaden" in joined
+
+
 @pytest.mark.asyncio
 async def test_follow_up_research_passes_server_owned_latency_profile_to_ask_result_set(
     monkeypatch: pytest.MonkeyPatch,

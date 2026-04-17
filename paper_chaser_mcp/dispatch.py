@@ -1676,9 +1676,17 @@ def _guided_abstention_details_payload(
     evidence_gaps: list[str],
     trust_summary: dict[str, Any],
 ) -> dict[str, Any] | None:
-    if status not in {"abstained", "needs_disambiguation", "insufficient_evidence"}:
+    if status not in {"abstained", "needs_disambiguation", "insufficient_evidence", "partial"}:
         return None
     category = _guided_missing_evidence_type(status=status, evidence_gaps=evidence_gaps, sources=sources)
+    weak_match_count = int(trust_summary.get("weakMatchCount") or 0)
+    off_topic_count = int(trust_summary.get("offTopicCount") or 0)
+    on_topic_source_count = int(trust_summary.get("onTopicSourceCount") or 0)
+    if status == "partial" and category == "coverage_gap":
+        if weak_match_count and weak_match_count >= max(on_topic_source_count, 1):
+            category = "weak_topical_match"
+        elif on_topic_source_count and on_topic_source_count < 3:
+            category = "narrow_evidence_pool"
     if category == "anchor_missing":
         refinement_hints = ["Add a specific title, DOI, species name, agency, venue, or year range."]
     elif category == "off_topic_only":
@@ -1686,6 +1694,23 @@ def _guided_abstention_details_payload(
     elif category == "provider_gap":
         refinement_hints = [
             "Retry later or compare get_runtime_status if provider behavior differs across environments.",
+        ]
+    elif category == "weak_topical_match":
+        refinement_hints = [
+            "Add a year range or venue to reduce weak topical matches.",
+            "Specify the exact species (common or scientific name), agency, or concept you care about.",
+            "Try resolve_reference if you have a DOI, arXiv id, URL, or full citation.",
+        ]
+    elif category == "narrow_evidence_pool":
+        refinement_hints = [
+            "Broaden the query with synonyms or a wider year range to recover more evidence.",
+            "Run follow_up_research on the saved session to reuse the grounded sources you already have.",
+            "Try resolve_reference if you have a DOI, arXiv id, URL, or full citation.",
+        ]
+    elif status == "partial" and sources:
+        refinement_hints = [
+            "Inspect the returned sources before treating the result as settled.",
+            "Add a specific anchor (title, DOI, species, agency, venue, or year range) and retry research.",
         ]
     elif sources:
         refinement_hints = ["Inspect the returned sources before treating the result as settled."]
@@ -1697,9 +1722,9 @@ def _guided_abstention_details_payload(
             evidence_gaps[0] if evidence_gaps else "The current evidence was not strong enough to ground an answer."
         ),
         inspectableSourceCount=len(sources),
-        onTopicSourceCount=int(trust_summary.get("onTopicSourceCount") or 0),
-        weakMatchCount=int(trust_summary.get("weakMatchCount") or 0),
-        offTopicCount=int(trust_summary.get("offTopicCount") or 0),
+        onTopicSourceCount=on_topic_source_count,
+        weakMatchCount=weak_match_count,
+        offTopicCount=off_topic_count,
         canInspectSources=bool(sources),
         refinementHints=refinement_hints,
     )
