@@ -2186,6 +2186,48 @@ def test_guided_best_next_internal_action_saved_session_has_inspectable_sources(
     )
 
 
+def test_guided_best_next_internal_action_all_off_topic_prefers_research() -> None:
+    # Regression (Finding 5, 4th pass): when every returned source is off_topic,
+    # the agent must be told to refine the query via research rather than waste
+    # calls on inspect_source over confirmed-irrelevant evidence.
+    assert (
+        dispatch_module._guided_best_next_internal_action(
+            status="partial",
+            has_sources=True,
+            search_session_id="ssn-off",
+            all_sources_off_topic=True,
+        )
+        == "research"
+    )
+    # When at least one source is NOT off_topic, inspect_source still wins.
+    assert (
+        dispatch_module._guided_best_next_internal_action(
+            status="partial",
+            has_sources=True,
+            search_session_id="ssn-mixed",
+            all_sources_off_topic=False,
+        )
+        == "inspect_source"
+    )
+
+
+def test_guided_result_state_all_off_topic_sources_research_action() -> None:
+    # Regression (Finding 5, 4th pass) via the public helper: when every source
+    # carries topicalRelevance=="off_topic", the computed resultState must
+    # surface research, not inspect_source.
+    sources = [
+        {"sourceId": "s1", "topicalRelevance": "off_topic"},
+        {"sourceId": "s2", "topicalRelevance": "off_topic"},
+    ]
+    state = dispatch_module._guided_result_state(
+        status="partial",
+        sources=sources,
+        evidence_gaps=["All results were off-topic."],
+        search_session_id="ssn-off",
+    )
+    assert state["bestNextInternalAction"] == "research"
+
+
 def test_guided_result_state_saved_session_inspectable_overrides_research() -> None:
     # Regression (Finding 1, 4th pass) via the public helper.
     state = dispatch_module._guided_result_state(

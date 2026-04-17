@@ -3326,6 +3326,7 @@ def _guided_best_next_internal_action(
     has_sources: bool,
     search_session_id: str | None,
     saved_session_has_sources: bool = False,
+    all_sources_off_topic: bool = False,
 ) -> str:
     normalized_status = str(status or "").strip().lower()
     weak_statuses = {
@@ -3335,7 +3336,10 @@ def _guided_best_next_internal_action(
         "insufficient_evidence",
         "partial",
     }
-    if has_sources and search_session_id:
+    # When every returned source is off-topic, inspect_source cannot rescue the
+    # result; the agent should refine the query instead of chasing irrelevant
+    # evidence.
+    if has_sources and search_session_id and not all_sources_off_topic:
         return "inspect_source"
     # The CURRENT response may have no sources (e.g., smart runtime unavailable
     # or inspect_source retry with a wrong sourceId), yet the SAVED SESSION may
@@ -3347,6 +3351,8 @@ def _guided_best_next_internal_action(
     # over the same (empty) session can progress: keep the guidance aligned with the
     # failureSummary's recommended retry instead of looping the agent.
     if not has_sources and normalized_status in weak_statuses:
+        return "research"
+    if all_sources_off_topic:
         return "research"
     if search_session_id:
         return "follow_up_research"
@@ -3364,6 +3370,11 @@ def _guided_result_state(
     saved_session_has_sources: bool = False,
 ) -> dict[str, Any]:
     has_sources = bool(sources)
+    all_sources_off_topic = has_sources and all(
+        str(source.get("topicalRelevance") or "").strip().lower() == "off_topic"
+        for source in sources
+        if isinstance(source, dict)
+    )
     normalized_status = str(status or "").strip() or "unknown"
     if normalized_status in {"succeeded", "answered"} and has_sources:
         groundedness = "grounded"
@@ -3385,6 +3396,7 @@ def _guided_result_state(
             has_sources=has_sources,
             search_session_id=search_session_id,
             saved_session_has_sources=saved_session_has_sources,
+            all_sources_off_topic=all_sources_off_topic,
         ),
         missingEvidenceType=_guided_missing_evidence_type(
             status=normalized_status,
