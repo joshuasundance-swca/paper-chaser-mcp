@@ -2926,6 +2926,25 @@ def test_guided_result_meaning_all_off_topic_describes_off_topic_pool() -> None:
     assert "relevant evidence" not in lowered
 
 
+def test_guided_summary_all_off_topic_does_not_tell_caller_to_inspect() -> None:
+    # R12 finding: _guided_summary used to say "inspect the source before
+    # relying on it" for any non-empty sources list, even when all sources
+    # were off_topic — contradicting the research-next routing elsewhere.
+    off_topic_sources = [
+        {"sourceId": "s1", "title": "Unrelated paper", "topicalRelevance": "off_topic"},
+        {"sourceId": "s2", "title": "Another off-topic", "topicalRelevance": "off_topic"},
+    ]
+    summary = dispatch_module._guided_summary(
+        "literature",
+        "partial",
+        [],
+        off_topic_sources,
+    )
+    lowered = summary.lower()
+    assert "inspect" not in lowered, "All-off-topic summary must not ask the caller to inspect the source"
+    assert "off-topic" in lowered
+
+
 @pytest.mark.asyncio
 async def test_follow_up_research_passes_server_owned_latency_profile_to_ask_result_set(
     monkeypatch: pytest.MonkeyPatch,

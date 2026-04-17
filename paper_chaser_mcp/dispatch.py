@@ -3282,6 +3282,7 @@ def _guided_summary(
     routing_summary: dict[str, Any] | None = None,
     pass_modes: list[str] | None = None,
 ) -> str:
+    all_sources_off_topic = _guided_sources_all_off_topic(sources)
     if findings:
         top_claim = str(findings[0].get("claim") or "").strip()
         additional_count = max(len(findings) - 1, 0)
@@ -3289,6 +3290,13 @@ def _guided_summary(
             summary = f"Top result: {top_claim}. Verified support includes {additional_count} additional source(s)."
         else:
             summary = f"Top result: {top_claim}."
+    elif sources and all_sources_off_topic:
+        # R12 finding: when every source is off_topic, do NOT tell callers to
+        # "inspect the source" — that contradicts research-next routing.
+        summary = (
+            "The search returned sources, but every candidate was off-topic for the request. "
+            "Tighten the anchor (exact title, DOI, species, agency, venue, or year range) and rerun research."
+        )
     elif sources:
         top_title = str(sources[0].get("title") or sources[0].get("sourceId") or "").strip()
         if top_title:
