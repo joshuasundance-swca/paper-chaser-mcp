@@ -277,11 +277,32 @@ following additions on top of `main`:
   previously-unused `_ecosProvenance` metadata now genuinely
   influences selection.
 
-#### Validation baseline (HEAD `f616b71`)
+#### Phase 7.7 — Fifth rubber-duck round (regression hardening)
 
-- `python -m pytest -q` => **1253 passed, 2 skipped** (live-only)
+- **Two-bool saved-session signal** (`251334a`): replaces the bare
+  `saved_session_has_sources` bool with
+  `(saved_session_has_sources, saved_session_all_off_topic)` so an
+  all-off-topic saved session no longer bypasses the
+  "all off-topic → research" routing fix.
+- **Machine failure payload honors saved-session signal** (`9d2f2de`):
+  `_guided_machine_failure_payload` now threads the same signal so
+  follow-up failure paths behave consistently with the response-level
+  fallbacks.
+- **`hasInspectableSources` agrees with saved-session routing**
+  (`236a22d`): regression test pins that when
+  `bestNextInternalAction="inspect_source"` via the saved-session
+  path, `hasInspectableSources` is also True.
+- **Strict provenance-first ECOS ranking** (`7a5e460`): sort key is
+  now `(has_hits, provenance, hit_count, variant_idx)` so any
+  corroborated variant with ≥1 hit beats any planner-only variant,
+  regardless of hit count.
+
+#### Validation baseline (HEAD `7a5e460`)
+
+- `python -m pytest -q` => **1259 passed, 2 skipped** (live-only)
 - `python -m ruff check .` clean
 - `python -m mypy --config-file pyproject.toml` clean across **171** source files
+- `python -m bandit -c pyproject.toml -r paper_chaser_mcp` clean (0 Medium, 0 High)
 - `python -m bandit -c pyproject.toml -r paper_chaser_mcp` clean
 - `pre-commit run --all-files` clean (ruff/ruff-format/mypy/bandit/checkov/
   hadolint/PSRule/secret-scan/typos/etc.)
