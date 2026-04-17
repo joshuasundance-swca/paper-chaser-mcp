@@ -63,6 +63,14 @@ async def _execute_provider_call(**kwargs: Any) -> Any:
 class LangChainChatProviderBundle(DeterministicProviderBundle):
     """Chat-only provider bundle built on LangChain structured outputs."""
 
+    @property
+    def is_deterministic(self) -> bool:
+        # Concrete LLM-backed bundle. Override DeterministicProviderBundle's
+        # default so provenance consumers treat this (and subclasses like
+        # Anthropic/Google/Mistral/...) as LLM-capable. Subclasses inherit
+        # ``False`` automatically.
+        return False
+
     def __init__(
         self,
         config: AgenticConfig,

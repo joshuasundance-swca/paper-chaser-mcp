@@ -62,6 +62,15 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
 
     _ANSWER_TEXT_FALLBACK_MAX_OUTPUT_TOKENS = 400
 
+    @property
+    def is_deterministic(self) -> bool:
+        # Concrete LLM-backed bundle. Override DeterministicProviderBundle's
+        # default so provenance consumers (e.g. planner/subject_grounding) can
+        # stamp ``source="planner_llm"`` rather than ``deterministic_fallback``
+        # when this bundle actually issues LLM calls. Subclasses inherit False
+        # unless they are themselves offline shims.
+        return False
+
     def __init__(
         self,
         config: AgenticConfig,

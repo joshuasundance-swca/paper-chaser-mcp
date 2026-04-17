@@ -81,14 +81,20 @@ def resolve_subject_card(
     focus: str | None = None,
     planner: PlannerDecision | None = None,
     llm_bundle_available: bool = False,
+    llm_emitted_grounding_signals: bool | None = None,
 ) -> SubjectCard:
     """Resolve a query into a :class:`SubjectCard`.
 
     Prefers LLM-derived planner signals. Falls back to the deterministic
-    ``_infer_entity_card`` extractor. ``llm_bundle_available`` lets callers
-    mark the card as LLM-grounded even when ``planner.entity_card`` was not
-    populated by the model (for example when the LLM emitted only
-    ``candidateConcepts``).
+    ``_infer_entity_card`` extractor. ``llm_bundle_available`` indicates that
+    an LLM-capable bundle was used. ``llm_emitted_grounding_signals`` is a
+    snapshot captured by the caller **before** deterministic fallback mutated
+    ``planner.entity_card`` / ``planner.candidate_concepts``; it tells this
+    resolver whether the LLM itself actually produced any phase-4 grounding
+    signal. Only when both flags are true is the card stamped
+    ``source="planner_llm"``. When ``llm_emitted_grounding_signals`` is left
+    at ``None`` we fall back to the legacy derived check for backwards
+    compatibility.
     """
 
     entity_card = (planner.entity_card if planner else None) or {}
@@ -122,10 +128,20 @@ def resolve_subject_card(
                 seen.add(token.lower())
 
     # Provenance rule: ``planner_llm`` may only be stamped when the caller
-    # confirms an LLM-backed bundle produced (or could have produced) the
-    # underlying signals. ``entity_card`` / ``candidate_concepts`` alone do not
-    # imply LLM origin — the deterministic shim populates them too.
-    has_signals = bool(planner and (planner.entity_card or planner.candidate_concepts))
+    # confirms an LLM-backed bundle produced the underlying signals.
+    # ``entity_card`` / ``candidate_concepts`` populated at resolve-time alone
+    # do not imply LLM origin — the deterministic shim (and deterministic
+    # post-processing in ``classify_query``) populates them too. Callers pass
+    # ``llm_emitted_grounding_signals`` as a snapshot taken before any
+    # deterministic mutation so we can tell them apart.
+    if llm_emitted_grounding_signals is None:
+        # Legacy behaviour for callers that have not migrated yet. This is
+        # deliberately conservative: it will stamp ``planner_llm`` based on
+        # any post-fallback signals, which may over-attribute. New callers
+        # should always pass the snapshot.
+        has_signals = bool(planner and (planner.entity_card or planner.candidate_concepts))
+    else:
+        has_signals = bool(llm_emitted_grounding_signals)
     confidence: SubjectCardConfidence
     source: str
     if llm_bundle_available and has_signals:

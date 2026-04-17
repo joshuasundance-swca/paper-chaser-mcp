@@ -871,6 +871,14 @@ async def classify_query(
         request_outcomes=request_outcomes,
         request_id=request_id,
     )
+    # Snapshot LLM-originated grounding signals BEFORE any deterministic
+    # fallback mutates ``planner.entity_card`` / ``planner.candidate_concepts``
+    # / ``planner.subject_card``. ``resolve_subject_card`` needs this to tell
+    # apart "LLM emitted phase-4 signals" from "deterministic extractor
+    # populated these fields after the LLM returned nothing".
+    llm_emitted_grounding_signals = bool(
+        planner.entity_card or planner.candidate_concepts or planner.subject_card
+    )
     planner.intent_source = "planner"
     planner.intent_confidence = "medium"
     intent_candidates = list(planner.intent_candidates)
@@ -1031,6 +1039,7 @@ async def classify_query(
             focus=focus,
             planner=planner,
             llm_bundle_available=(planner.intent_source == "planner" and not _bundle_is_deterministic),
+            llm_emitted_grounding_signals=llm_emitted_grounding_signals,
         )
     if planner.regulatory_intent == "hybrid_regulatory_plus_literature":
         hybrid_marker = (

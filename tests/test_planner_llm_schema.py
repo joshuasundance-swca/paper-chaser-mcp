@@ -114,19 +114,47 @@ async def test_legacy_llm_response_without_new_fields_triggers_fallback() -> Non
         "hybrid_regulatory_plus_literature",
     }
     assert planner.subject_card is not None
-    # Provenance contract: an LLM bundle was available (the stub provided a
-    # PlannerDecision via aplan_search). Even though the LLM itself omitted
-    # ``subjectCard``, the downstream resolver derives the card from the
-    # LLM-backed planner signals (entity_card / candidate_concepts / planner
-    # context). Per the ws-subject-grounding fix (commit df918df) the stamp
-    # must therefore be ``planner_llm`` — the deterministic-fallback label is
-    # reserved for the case where no LLM bundle is available at all (see the
-    # DeterministicProviderBundle test in test_phase4_signal_integration.py).
-    # Pin strictly so a future regression that confuses these two paths fails
-    # loudly rather than masking behind an `in {...}` set.
+    # Provenance contract: an LLM bundle was reported available, BUT this
+    # legacy-style response omits all phase-4 subject-grounding fields
+    # (``subjectCard`` / ``entityCard`` / ``candidateConcepts``). Per the
+    # ws-subject-grounding provenance fix, ``resolve_subject_card`` must
+    # stamp ``deterministic_fallback`` in that case rather than silently
+    # attributing the deterministic extractor's output to the LLM.
+    assert planner.subject_card.source == "deterministic_fallback", (
+        f"Legacy LLM response with no subject-grounding fields must resolve "
+        f"to a deterministic_fallback card; got {planner.subject_card.source!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 2b) LLM emits real grounding signals -> planner_llm (positive counterpart)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_llm_response_with_grounding_signals_stamps_planner_llm() -> None:
+    # LLM returns ``candidateConcepts`` (and no ``subjectCard``) — this is
+    # the LLM-emitted-grounding case where the post-hoc resolver derives the
+    # card from LLM signals and should stamp ``planner_llm``.
+    seed = _llm_planner_decision(
+        candidateConcepts=["desert tortoise", "recovery plan", "ESA"],
+    )
+    assert seed.subject_card is None
+    assert seed.candidate_concepts  # LLM-emitted signal
+
+    _, planner = await classify_query(
+        query="Desert tortoise recovery plan under the ESA",
+        mode="auto",
+        year=None,
+        venue=None,
+        focus=None,
+        provider_bundle=_StubBundle(seed),  # type: ignore[arg-type]
+    )
+
+    assert planner.subject_card is not None
     assert planner.subject_card.source == "planner_llm", (
-        f"With an LLM bundle present (StubBundle), the post-hoc subject-card "
-        f"resolver must stamp source='planner_llm'; got {planner.subject_card.source!r}"
+        "LLM-emitted candidateConcepts are a valid phase-4 grounding signal; "
+        "resolver must stamp planner_llm"
     )
 
 
