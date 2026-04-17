@@ -2364,7 +2364,12 @@ def _guided_journal_or_publisher(payload: dict[str, Any]) -> str | None:
     return provider or None
 
 
-def _guided_trust_summary(sources: list[dict[str, Any]], evidence_gaps: list[str]) -> dict[str, Any]:
+def _guided_trust_summary(
+    sources: list[dict[str, Any]],
+    evidence_gaps: list[str],
+    *,
+    classification_provenance: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     verified_primary_source_count = sum(
         1 for source in sources if source.get("verificationStatus") == "verified_primary_source"
     )
@@ -2398,7 +2403,7 @@ def _guided_trust_summary(sources: list[dict[str, Any]], evidence_gaps: list[str
         strength_explanation = "Available sources are mostly off-topic for the saved query."
     else:
         strength_explanation = "No strong verified support was recorded for the saved query."
-    return {
+    summary = {
         "verifiedSourceCount": verified_primary_source_count + verified_metadata_source_count,
         "verifiedPrimarySourceCount": verified_primary_source_count,
         "verifiedMetadataSourceCount": verified_metadata_source_count,
@@ -2412,6 +2417,10 @@ def _guided_trust_summary(sources: list[dict[str, Any]], evidence_gaps: list[str
         },
         "strengthExplanation": strength_explanation,
     }
+    if classification_provenance and classification_provenance.get("total"):
+        summary["classificationProvenance"] = classification_provenance
+        summary["degradedClassification"] = bool(classification_provenance.get("degradedClassification"))
+    return summary
 
 
 def _guided_confidence_signals(
@@ -5131,7 +5140,11 @@ async def dispatch_tool(
         answer_status = str(ask.get("answerStatus") or "answered")
         guided_status = "partial" if answer_status == "insufficient_evidence" else answer_status
         verified_findings = _guided_findings_from_sources(sources)
-        trust_summary = _guided_trust_summary(sources, evidence_gaps)
+        trust_summary = _guided_trust_summary(
+            sources,
+            evidence_gaps,
+            classification_provenance=cast(dict[str, Any] | None, ask.get("classificationProvenance")),
+        )
         failure_summary = _guided_failure_summary(
             failure_summary=cast(dict[str, Any] | None, ask.get("failureSummary")),
             status=guided_status,

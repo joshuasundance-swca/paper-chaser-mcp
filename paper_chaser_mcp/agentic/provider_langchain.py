@@ -33,6 +33,7 @@ from .provider_helpers import (
     _ReviseStrategySchema,
     _sanitize_provider_plan,
 )
+from .relevance_fallback import annotate_llm_entry, classify_batch_deterministic
 
 logger = logging.getLogger("paper-chaser-mcp")
 
@@ -1057,6 +1058,60 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
             request_id=request_id,
         )
 
+    async def _aclassify_relevance_call(
+        self,
+        *,
+        query: str,
+        papers: list[dict[str, Any]],
+        answer_model: Any,
+        simple: bool,
+        request_id: str | None,
+    ) -> dict[str, dict[str, Any]] | None:
+        paper_items = [
+            {
+                "paperId": relevance_paper_identifier(paper, i),
+                "title": str(paper.get("title") or ""),
+                "abstract": str(paper.get("abstract") or "")[: 240 if simple else 500],
+            }
+            for i, paper in enumerate(papers)
+        ]
+        if simple:
+            system_prompt = (
+                "Classify each paper's relevance to the research query as on_topic, weak_match, or "
+                "off_topic. Provide a short rationale. Return a classification for every paper."
+            )
+        else:
+            system_prompt = (
+                "You are a scientific literature relevance classifier. For each paper in the list, "
+                "classify its relevance to the research query as:\n"
+                "- on_topic: the paper directly addresses the query's core research question\n"
+                "- weak_match: the paper is related but does not directly address the query\n"
+                "- off_topic: the paper is not relevant to the query\n"
+                "Base classification on the paper title and abstract. For each paper, also provide a "
+                "one-sentence rationale explaining why it is on-topic, weak_match, or off_topic. Return "
+                "a classification and rationale for every paper."
+            )
+        result = await self._structured_async(
+            endpoint="structured:relevance_batch",
+            model=answer_model,
+            response_model=_RelevanceBatchSchema,
+            system_prompt=system_prompt,
+            payload={"query": query, "papers": paper_items},
+            request_id=request_id,
+        )
+        if result is None:
+            return None
+        return {
+            item.paper_id: {
+                "classification": cast(Literal["on_topic", "weak_match", "off_topic"], item.classification),
+                "rationale": str(item.rationale or "").strip(),
+                "fallback": False,
+                "provenance": "model",
+            }
+            for item in result.classifications
+            if item.paper_id
+        }
+
     async def aclassify_relevance_batch(
         self,
         *,
@@ -1068,53 +1123,55 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
             return {}
         _, answer_model = self._load_models()
         try:
-            paper_items = [
-                {
-                    "paperId": relevance_paper_identifier(paper, i),
-                    "title": str(paper.get("title") or ""),
-                    "abstract": str(paper.get("abstract") or "")[:500],
-                }
-                for i, paper in enumerate(papers)
-            ]
-            system_prompt = (
-                "You are a scientific literature relevance classifier. For each paper in the list, "
-                "classify its relevance to the research query as:\n"
-                "- on_topic: the paper directly addresses the query's core research question\n"
-                "- weak_match: the paper is related but does not directly address the query\n"
-                "- off_topic: the paper is not relevant to the query\n"
-                "Base classification on the paper title and abstract. For each paper, also provide a one-sentence "
-                "rationale explaining why it is on-topic, weak_match, or off_topic. Return a classification and "
-                "rationale for every paper."
+            primary = await self._aclassify_relevance_call(
+                query=query, papers=papers, answer_model=answer_model, simple=False, request_id=request_id
             )
-            result = await self._structured_async(
-                endpoint="structured:relevance_batch",
-                model=answer_model,
-                response_model=_RelevanceBatchSchema,
-                system_prompt=system_prompt,
-                payload={"query": query, "papers": paper_items},
-                request_id=request_id,
-            )
-            if result is not None:
-                self._mark_provider_used()
-                return {
-                    item.paper_id: {
-                        "classification": cast(Literal["on_topic", "weak_match", "off_topic"], item.classification),
-                        "rationale": str(item.rationale or "").strip(),
-                        "fallback": False,
-                        "provenance": "model",
-                    }
-                    for item in result.classifications
-                    if item.paper_id
-                }
         except Exception:
-            logger.exception("Relevance batch classification failed; falling back to weak_match.")
-        return {
-            relevance_paper_identifier(paper, i): classify_relevance_without_llm(
-                query=query,
-                paper=paper,
-            )
-            for i, paper in enumerate(papers)
-        }
+            logger.exception("Relevance batch classification failed; attempting retry.")
+            primary = None
+        if primary:
+            self._mark_provider_used()
+            return {
+                pid: annotate_llm_entry(entry, source="llm", confidence=0.88)
+                for pid, entry in primary.items()
+            }
+
+        midpoint = max(1, (len(papers) + 1) // 2)
+        halves = [papers[:midpoint], papers[midpoint:]] if len(papers) > 1 else [papers]
+        combined: dict[str, dict[str, Any]] = {}
+        any_retry_success = False
+        for half in halves:
+            if not half:
+                continue
+            try:
+                retry_result = await self._aclassify_relevance_call(
+                    query=query,
+                    papers=half,
+                    answer_model=answer_model,
+                    simple=True,
+                    request_id=request_id,
+                )
+            except Exception:
+                logger.exception("Relevance batch retry failed for sub-batch; falling back.")
+                retry_result = None
+            if retry_result:
+                any_retry_success = True
+                for pid, entry in retry_result.items():
+                    combined[pid] = annotate_llm_entry(entry, source="llm_retry", confidence=0.72)
+            else:
+                deterministic = classify_batch_deterministic(
+                    query=query, papers=half, reason="batch_classifier_retry_failed"
+                )
+                combined.update(deterministic)
+        if any_retry_success:
+            self._mark_provider_used()
+        for i, paper in enumerate(papers):
+            pid = relevance_paper_identifier(paper, i)
+            if pid and pid not in combined:
+                combined[pid] = classify_batch_deterministic(
+                    query=query, papers=[paper], reason="batch_classifier_missing_entry"
+                ).get(pid, classify_relevance_without_llm(query=query, paper=paper))
+        return combined
 
     async def aassess_result_adequacy(
         self,

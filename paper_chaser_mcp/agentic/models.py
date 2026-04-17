@@ -268,6 +268,10 @@ class SearchStrategyMetadata(ApiModel):
         default=None,
         alias="bestNextInternalAction",
     )
+    ranking_diagnostics: list[dict[str, Any]] = Field(
+        default_factory=list,
+        alias="rankingDiagnostics",
+    )
 
 
 class StructuredSourceRecord(ApiModel):
@@ -303,6 +307,12 @@ class StructuredSourceRecord(ApiModel):
     why_classified_as_weak_match: str | None = Field(default=None, alias="whyClassifiedAsWeakMatch")
     lead_reason: str | None = Field(default=None, alias="leadReason")
     why_not_verified: str | None = Field(default=None, alias="whyNotVerified")
+    relevance_source: Literal["llm", "llm_retry", "deterministic_tier", "hybrid"] | None = Field(
+        default=None,
+        alias="relevanceSource",
+    )
+    relevance_confidence: float | None = Field(default=None, alias="relevanceConfidence")
+    relevance_reason: str | None = Field(default=None, alias="relevanceReason")
 
 
 class ScoreBreakdown(ApiModel):
@@ -375,6 +385,12 @@ class SmartPaperHit(ApiModel):
         default=None,
         alias="topicalRelevance",
     )
+    relevance_source: Literal["llm", "llm_retry", "deterministic_tier", "hybrid"] | None = Field(
+        default=None,
+        alias="relevanceSource",
+    )
+    relevance_confidence: float | None = Field(default=None, alias="relevanceConfidence")
+    relevance_reason: str | None = Field(default=None, alias="relevanceReason")
     score_breakdown: ScoreBreakdown = Field(
         default_factory=ScoreBreakdown,
         alias="scoreBreakdown",
@@ -460,6 +476,11 @@ class AskResultSetResponse(ApiModel):
     provider_used: str = Field(default="deterministic", alias="providerUsed")
     degradation_reason: str | None = Field(default=None, alias="degradationReason")
     evidence_use_plan: dict[str, Any] | None = Field(default=None, alias="evidenceUsePlan")
+    classification_provenance: dict[str, Any] | None = Field(
+        default=None,
+        alias="classificationProvenance",
+    )
+    degraded_classification: bool | None = Field(default=None, alias="degradedClassification")
 
 
 class LandscapeTheme(ApiModel):

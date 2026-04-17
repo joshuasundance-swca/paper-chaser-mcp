@@ -33,7 +33,11 @@ from paper_chaser_mcp.agentic.providers import (
     NvidiaProviderBundle,
     OpenAIProviderBundle,
 )
-from paper_chaser_mcp.agentic.ranking import merge_candidates, rerank_candidates
+from paper_chaser_mcp.agentic.ranking import (
+    merge_candidates,
+    rerank_candidates,
+    summarize_ranking_diagnostics,
+)
 from paper_chaser_mcp.agentic.retrieval import (
     RetrievedCandidate,
     provider_limits,
@@ -4897,6 +4901,206 @@ async def test_rerank_candidates_demotes_generic_bridge_hit_without_anchor_or_ti
     assert generic_breakdown["titleFacetCoverage"] == 0.0
     assert generic_breakdown["titleAnchorCoverage"] == 0.0
     assert generic_breakdown["relevanceClassificationBonus"] <= 0.0
+
+
+@pytest.mark.asyncio
+async def test_rerank_candidates_anchored_broad_nitrate_headwater_stream() -> None:
+    provider_bundle = resolve_provider_bundle(
+        _deterministic_config(),
+        openai_api_key=None,
+    )
+    ranked = await rerank_candidates(
+        query="nitrate loading in headwater streams agricultural watersheds",
+        merged_candidates=[
+            {
+                "paper": {
+                    "paperId": "on-topic-anchor",
+                    "title": "Nitrate Loading Dynamics in Headwater Streams of Agricultural Watersheds",
+                    "abstract": (
+                        "We quantify nitrate loading across headwater streams draining "
+                        "agricultural watersheds and identify riparian buffer controls."
+                    ),
+                    "year": 2024,
+                    "authors": [{"name": "River Scientist"}],
+                    "source": "semantic_scholar",
+                },
+                "providers": ["semantic_scholar", "openalex"],
+                "variants": ["nitrate loading in headwater streams agricultural watersheds"],
+                "variantSources": ["from_input"],
+                "providerRanks": {"semantic_scholar": 1, "openalex": 2},
+                "retrievalCount": 2,
+            },
+            {
+                "paper": {
+                    "paperId": "drift-generic-stream",
+                    "title": "General Review of Stream Ecology and Biogeochemistry",
+                    "abstract": (
+                        "A broad overview of stream ecology and biogeochemistry across "
+                        "biomes with no specific treatment of nitrate or headwater systems."
+                    ),
+                    "year": 2023,
+                    "authors": [{"name": "Generalist Reviewer"}],
+                    "source": "openalex",
+                },
+                "providers": ["openalex", "semantic_scholar", "crossref"],
+                "variants": ["stream ecology"],
+                "variantSources": ["hypothesis"],
+                "providerRanks": {"openalex": 1, "semantic_scholar": 1, "crossref": 1},
+                "retrievalCount": 3,
+            },
+        ],
+        provider_bundle=provider_bundle,
+        candidate_concepts=["nitrate loading", "headwater streams", "agricultural watersheds"],
+        routing_confidence="medium",
+        query_specificity="low",
+        ambiguity_level="medium",
+    )
+
+    assert ranked[0]["paper"]["paperId"] == "on-topic-anchor"
+    on_topic_breakdown = ranked[0]["scoreBreakdown"]
+    drift_breakdown = next(
+        item for item in ranked if item["paper"]["paperId"] == "drift-generic-stream"
+    )["scoreBreakdown"]
+    assert on_topic_breakdown["broadQueryRegime"] == "anchored_broad"
+    assert drift_breakdown["broadQueryRegime"] == "anchored_broad"
+    assert drift_breakdown["anchoredIntentPenalty"] > 0
+    assert on_topic_breakdown["finalScore"] > drift_breakdown["finalScore"]
+
+
+@pytest.mark.asyncio
+async def test_rerank_candidates_anchored_broad_pesticide_pollinator() -> None:
+    provider_bundle = resolve_provider_bundle(
+        _deterministic_config(),
+        openai_api_key=None,
+    )
+    ranked = await rerank_candidates(
+        query="pesticide mixture exposure effects on pollinator health",
+        merged_candidates=[
+            {
+                "paper": {
+                    "paperId": "on-topic-pollinator",
+                    "title": "Pesticide Mixture Exposure Reduces Pollinator Colony Health",
+                    "abstract": (
+                        "Field trials show pesticide mixture exposure degrades pollinator "
+                        "health outcomes across honeybee and bumblebee colonies."
+                    ),
+                    "year": 2024,
+                    "authors": [{"name": "Bee Ecologist"}],
+                    "source": "semantic_scholar",
+                },
+                "providers": ["semantic_scholar", "openalex"],
+                "variants": ["pesticide mixture exposure effects on pollinator health"],
+                "variantSources": ["from_input"],
+                "providerRanks": {"semantic_scholar": 1, "openalex": 3},
+                "retrievalCount": 2,
+            },
+            {
+                "paper": {
+                    "paperId": "drift-agri-economics",
+                    "title": "Agricultural Economics of Crop Production Systems",
+                    "abstract": (
+                        "An economic analysis of crop production systems and market "
+                        "dynamics across global agricultural supply chains."
+                    ),
+                    "year": 2022,
+                    "authors": [{"name": "Economist"}],
+                    "source": "openalex",
+                },
+                "providers": ["openalex", "semantic_scholar", "crossref"],
+                "variants": ["agricultural economics"],
+                "variantSources": ["hypothesis"],
+                "providerRanks": {"openalex": 1, "semantic_scholar": 1, "crossref": 1},
+                "retrievalCount": 3,
+            },
+        ],
+        provider_bundle=provider_bundle,
+        candidate_concepts=["pesticide mixture", "pollinator health"],
+        routing_confidence="medium",
+        query_specificity="low",
+        ambiguity_level="medium",
+    )
+
+    assert ranked[0]["paper"]["paperId"] == "on-topic-pollinator"
+    on_topic_breakdown = ranked[0]["scoreBreakdown"]
+    drift_breakdown = next(
+        item for item in ranked if item["paper"]["paperId"] == "drift-agri-economics"
+    )["scoreBreakdown"]
+    assert on_topic_breakdown["broadQueryRegime"] == "anchored_broad"
+    assert drift_breakdown["broadQueryRegime"] == "anchored_broad"
+    assert drift_breakdown["semanticFitGate"] < 1.0
+    assert drift_breakdown["anchoredIntentPenalty"] > 0
+    assert on_topic_breakdown["finalScore"] > drift_breakdown["finalScore"]
+
+
+@pytest.mark.asyncio
+async def test_rerank_candidates_anchored_broad_wildfire_cultural_resource() -> None:
+    provider_bundle = resolve_provider_bundle(
+        _deterministic_config(),
+        openai_api_key=None,
+    )
+    ranked = await rerank_candidates(
+        query="wildfire impacts on cultural resource preservation",
+        merged_candidates=[
+            {
+                "paper": {
+                    "paperId": "on-topic-cultural",
+                    "title": "Wildfire Impacts on Cultural Resource Preservation in Public Lands",
+                    "abstract": (
+                        "Post-fire assessments document wildfire damage to cultural "
+                        "resource sites and propose preservation mitigation strategies."
+                    ),
+                    "year": 2024,
+                    "authors": [{"name": "Heritage Scholar"}],
+                    "source": "semantic_scholar",
+                },
+                "providers": ["semantic_scholar", "openalex"],
+                "variants": ["wildfire impacts on cultural resource preservation"],
+                "variantSources": ["from_input"],
+                "providerRanks": {"semantic_scholar": 1, "openalex": 2},
+                "retrievalCount": 2,
+            },
+            {
+                "paper": {
+                    "paperId": "drift-forestry-generic",
+                    "title": "Forestry Practices and Timber Yield Optimization",
+                    "abstract": (
+                        "A study of silvicultural forestry practices aimed at optimizing "
+                        "timber yield across temperate forest plantations."
+                    ),
+                    "year": 2023,
+                    "authors": [{"name": "Forester"}],
+                    "source": "openalex",
+                },
+                "providers": ["openalex", "semantic_scholar", "crossref"],
+                "variants": ["forestry practices"],
+                "variantSources": ["hypothesis"],
+                "providerRanks": {"openalex": 1, "semantic_scholar": 1, "crossref": 1},
+                "retrievalCount": 3,
+            },
+        ],
+        provider_bundle=provider_bundle,
+        candidate_concepts=["wildfire impacts", "cultural resource preservation"],
+        routing_confidence="medium",
+        query_specificity="low",
+        ambiguity_level="medium",
+        planner_anchor_type="query_concepts",
+        planner_anchor_value="cultural resource preservation",
+    )
+
+    assert ranked[0]["paper"]["paperId"] == "on-topic-cultural"
+    on_topic_breakdown = ranked[0]["scoreBreakdown"]
+    drift_breakdown = next(
+        item for item in ranked if item["paper"]["paperId"] == "drift-forestry-generic"
+    )["scoreBreakdown"]
+    assert on_topic_breakdown["broadQueryRegime"] == "anchored_broad"
+    assert drift_breakdown["broadQueryRegime"] == "anchored_broad"
+    assert drift_breakdown["anchoredIntentPenalty"] > 0
+    assert on_topic_breakdown["finalScore"] > drift_breakdown["finalScore"]
+    diagnostics = summarize_ranking_diagnostics(ranked, top_n=5)
+    assert diagnostics
+    assert diagnostics[0]["paperId"] == "on-topic-cultural"
+    assert "scoreBreakdown" in diagnostics[0]
+    assert diagnostics[0]["scoreBreakdown"]["broadQueryRegime"] == "anchored_broad"
 
 
 @pytest.mark.asyncio

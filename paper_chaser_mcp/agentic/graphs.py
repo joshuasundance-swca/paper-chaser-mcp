@@ -39,6 +39,11 @@ from ..provider_runtime import (
     provider_is_paywalled,
 )
 from ..search import _enrich_ss_paper
+from .answer_modes import (
+    SYNTHESIS_MODES,
+    build_evidence_use_plan,
+    evidence_pool_is_weak,
+)
 from .config import AgenticConfig, LatencyProfile
 from .models import (
     AgentHints,
@@ -74,7 +79,12 @@ from .providers import (
     DeterministicProviderBundle,
     ModelProviderBundle,
 )
-from .ranking import evaluate_speculative_variants, merge_candidates, rerank_candidates
+from .ranking import (
+    evaluate_speculative_variants,
+    merge_candidates,
+    rerank_candidates,
+    summarize_ranking_diagnostics,
+)
 from .retrieval import (
     SMART_RETRIEVAL_FIELDS,
     RetrievalBatch,
@@ -142,86 +152,6 @@ _THEME_LABEL_STOPWORDS = _GRAPH_GENERIC_TERMS | {
     "using",
     "with",
 }
-
-
-def _follow_up_answer_subtype(question: str, answer_mode: str) -> str:
-    lowered = question.lower()
-    if answer_mode == "comparison" or any(
-        marker in lowered for marker in {"compare", "versus", " vs ", "tradeoff", "trade-off"}
-    ):
-        return "comparison"
-    if any(marker in lowered for marker in {"mechanism", "pathway", "causal", "how does"}):
-        return "mechanism_summary"
-    if any(
-        marker in lowered
-        for marker in {"timeline", "rulemaking", "listing history", "regulatory history", "critical habitat"}
-    ):
-        return "regulatory_chain"
-    if any(marker in lowered for marker in {"tradeoff", "trade-off", "practical implications"}):
-        return "intervention_tradeoff"
-    if answer_mode == "claim_check":
-        return "evidence_planning"
-    return "qa"
-
-
-def _build_evidence_use_plan(
-    *,
-    question: str,
-    answer_mode: str,
-    evidence: list[EvidenceItem],
-    source_records: list[StructuredSourceRecord],
-    unsupported_asks: list[str],
-) -> dict[str, Any] | None:
-    subtype = _follow_up_answer_subtype(question, answer_mode)
-    if subtype == "qa":
-        return None
-
-    strong_ids: list[str] = []
-    unsupported_components = list(unsupported_asks)
-    for item, source in zip(evidence, source_records, strict=False):
-        evidence_id = str(item.evidence_id or item.paper.paper_id or item.paper.canonical_id or "").strip()
-        if not evidence_id:
-            continue
-        if source.topical_relevance == "on_topic" and float(item.relevance_score) >= 0.25:
-            strong_ids.append(evidence_id)
-
-    sufficiency: Literal["sufficient", "thin", "insufficient"] = "thin"
-    confidence: Literal["high", "medium", "low"] = "medium"
-    if subtype == "comparison":
-        if len(strong_ids) >= 2:
-            sufficiency = "sufficient"
-        elif len(evidence) >= 2 and not unsupported_asks:
-            sufficiency = "thin"
-        elif len(strong_ids) == 1:
-            sufficiency = "insufficient"
-            confidence = "low"
-            unsupported_components.append(
-                "Comparison requested, but fewer than two directly responsive sources were retrieved."
-            )
-        else:
-            sufficiency = "insufficient"
-            confidence = "low"
-            unsupported_components.append("Comparison requested, but no directly responsive sources were retrieved.")
-    else:
-        if len(strong_ids) >= 2:
-            sufficiency = "sufficient"
-            confidence = "high"
-        elif len(strong_ids) == 1:
-            sufficiency = "thin"
-        else:
-            sufficiency = "insufficient"
-            confidence = "low"
-            unsupported_components.append("The saved evidence does not directly support the requested synthesis.")
-
-    return {
-        "answerSubtype": subtype,
-        "directlyResponsiveIds": strong_ids,
-        "unsupportedComponents": list(
-            dict.fromkeys(component for component in unsupported_components if str(component).strip())
-        ),
-        "retrievalSufficiency": sufficiency,
-        "confidence": confidence,
-    }
 
 
 def _paid_providers_used(providers: list[str]) -> list[str]:
@@ -1078,6 +1008,8 @@ class AgenticRuntime:
             candidate_pool_size=candidate_pool_size,
             request_outcomes=provider_outcomes,
             request_id=request_id,
+            planner_anchor_type=getattr(planner, "anchor_type", None),
+            planner_anchor_value=getattr(planner, "anchor_value", None),
         )
         _finish_stage("rerank", rerank_started)
         (
@@ -1189,6 +1121,7 @@ class AgenticRuntime:
             provider_selection=provider_selection,
             provider_outcomes=provider_outcomes,
         )
+        ranking_diagnostics = summarize_ranking_diagnostics(reranked, top_n=10)
         strategy_metadata = SearchStrategyMetadata(
             intent=planner.intent,
             intentSource=planner.intent_source,
@@ -1233,6 +1166,7 @@ class AgenticRuntime:
             normalizationWarnings=normalization_warnings,
             repairedInputs=repaired_inputs,
             bestNextInternalAction=("ask_result_set" if filtered_ranked else "search_papers_smart"),
+            rankingDiagnostics=ranking_diagnostics,
             **provider_selection,
         )
 
@@ -1299,6 +1233,11 @@ class AgenticRuntime:
                     matchedConcepts=candidate.get("matchedConcepts") or [],
                     retrievedBy=candidate["providers"],
                     topicalRelevance=topical_relevance,
+                    relevanceSource=cast(Any, relevance_entry.get("relevanceSource"))
+                    if relevance_entry.get("relevanceSource")
+                    else None,
+                    relevanceConfidence=relevance_entry.get("relevanceConfidence"),
+                    relevanceReason=relevance_entry.get("relevanceReason"),
                     scoreBreakdown=score_breakdown,
                 )
             )
@@ -1638,10 +1577,18 @@ class AgenticRuntime:
                             "fallback": bool(entry.get("fallback")),
                             "provenance": str(entry.get("provenance") or "model").strip() or "model",
                         }
+                        for key in ("relevanceSource", "relevanceConfidence", "relevanceReason", "degradedTrigger"):
+                            if entry.get(key) is not None:
+                                normalized_entry[key] = entry.get(key)
                         question_relevance_cache[normalized_paper_id] = normalized_entry
                         llm_relevance[normalized_paper_id] = normalized_entry
                 except Exception:
                     llm_relevance = {}
+
+        from .relevance_fallback import classification_provenance_counts
+
+        classification_provenance = classification_provenance_counts(llm_relevance)
+        degraded_classification = bool(classification_provenance.get("degradedClassification"))
 
         for item in evidence:
             paper_id = str(item.paper.paper_id or item.paper.canonical_id or item.evidence_id or "").strip()
@@ -1673,6 +1620,17 @@ class AgenticRuntime:
                         )
                     ),
                     topical_relevance=topical_relevance,
+                    relevance_source=(
+                        str(relevance_entry.get("relevanceSource")) if relevance_entry.get("relevanceSource") else None
+                    ),
+                    relevance_confidence=(
+                        float(cast(Any, relevance_entry.get("relevanceConfidence")))
+                        if relevance_entry.get("relevanceConfidence") is not None
+                        else None
+                    ),
+                    relevance_reason=(
+                        str(relevance_entry.get("relevanceReason")) if relevance_entry.get("relevanceReason") else None
+                    ),
                 )
             )
 
@@ -1699,13 +1657,16 @@ class AgenticRuntime:
                 )
                 if identifier
             ]
-        evidence_use_plan = _build_evidence_use_plan(
+        evidence_use_plan = build_evidence_use_plan(
             question=question,
             answer_mode=answer_mode,
             evidence=evidence,
             source_records=source_records,
             unsupported_asks=unsupported_asks,
+            llm_relevance=llm_relevance,
         )
+        question_mode = str(evidence_use_plan.get("answerMode") or "unknown")
+        plan_sufficient = bool(evidence_use_plan.get("sufficient"))
         answerability = str(synthesis.get("answerability") or "limited")
         if answerability not in {"grounded", "limited", "insufficient"}:
             answerability = "limited"
@@ -1715,13 +1676,33 @@ class AgenticRuntime:
             answerability = "insufficient"
         elif answer_status == "abstained" or not selected_evidence_ids:
             answerability = "limited" if (evidence or unsupported_asks or follow_up_questions) else "insufficient"
-        if evidence_use_plan is not None and evidence_use_plan.get("retrievalSufficiency") == "insufficient":
+        # Evidence-pool quality gate: for synthesis-heavy modes, a pool
+        # dominated by weak_match / off_topic classifications cannot support a
+        # polished answer.
+        weak_pool = evidence_pool_is_weak(source_records)
+        if question_mode in SYNTHESIS_MODES and weak_pool:
+            answer_status = "insufficient_evidence"
+            answer_payload = None
+            answerability = "insufficient"
+        # Strict synthesis gate: when the plan says the evidence is
+        # insufficient for the requested synthesis mode, never emit a polished
+        # answer. Prefer ``abstained`` when we have unsupported_asks to
+        # surface (we have data but not for this ask), else
+        # ``insufficient_evidence``.
+        if question_mode in SYNTHESIS_MODES and not plan_sufficient:
+            if unsupported_asks:
+                answer_status = "abstained"
+                answerability = "limited"
+            else:
+                answer_status = "insufficient_evidence"
+                answerability = "insufficient"
+            answer_payload = None
+        elif evidence_use_plan.get("retrievalSufficiency") == "insufficient":
             answer_status = "insufficient_evidence"
             answer_payload = None
             answerability = "insufficient"
         elif (
-            evidence_use_plan is not None
-            and evidence_use_plan.get("answerSubtype") == "comparison"
+            question_mode == "comparison"
             and evidence_use_plan.get("retrievalSufficiency") == "thin"
             and answer_status == "insufficient_evidence"
             and not unsupported_asks
@@ -1745,9 +1726,12 @@ class AgenticRuntime:
             for entry in llm_relevance.values()
             if bool(entry.get("fallback")) and str(entry.get("classification") or "") == "on_topic"
         ]
+        # Generalize the fallback-only gate to all synthesis modes: if the
+        # only on-topic signal came from deterministic fallbacks (LLM call
+        # failed), do not allow a synthesis-heavy answer to stand.
         if (
             answer_status == "answered"
-            and answer_mode == "comparison"
+            and question_mode in SYNTHESIS_MODES
             and len(fallback_selected) >= max(on_topic_evidence, 1)
         ):
             answer_status = "insufficient_evidence"
@@ -1756,6 +1740,22 @@ class AgenticRuntime:
         if unsupported_asks and answer_status == "insufficient_evidence":
             answer_status = "abstained"
             answerability = "limited"
+        if (
+            degraded_classification
+            and answer_status == "answered"
+            and provider_used != "deterministic"
+            and classification_provenance.get("total", 0) >= 2
+            and on_topic_evidence <= 1
+            and max_relevance < 0.35
+        ):
+            answer_status = "insufficient_evidence"
+            answer_payload = None
+            answerability = "insufficient"
+            degraded_gap = (
+                "degraded_classification: relevance classifier retried/fell back; require more on-topic evidence."
+            )
+            if degraded_gap not in unsupported_asks:
+                unsupported_asks = unsupported_asks + [degraded_gap]
         await self._emit_tool_progress(
             ctx=ctx,
             progress=2,
@@ -1818,6 +1818,8 @@ class AgenticRuntime:
             providerUsed=provider_used,
             degradationReason=degradation_reason,
             evidenceUsePlan=evidence_use_plan,
+            classificationProvenance=classification_provenance if classification_provenance.get("total") else None,
+            degradedClassification=degraded_classification if classification_provenance.get("total") else None,
         )
         if self._config.enable_trace_log:
             self._workspace_registry.record_trace(
@@ -3761,6 +3763,9 @@ def _source_record_from_paper(
     *,
     note: str | None = None,
     topical_relevance: Literal["on_topic", "weak_match", "off_topic"] | None = None,
+    relevance_source: str | None = None,
+    relevance_confidence: float | None = None,
+    relevance_reason: str | None = None,
 ) -> StructuredSourceRecord:
     source_id = str(paper.canonical_id or paper.paper_id or "") or None
     return StructuredSourceRecord(
@@ -3782,6 +3787,9 @@ def _source_record_from_paper(
         citation=_citation_record_from_paper(paper),
         date=str(paper.publication_date or paper.year or "") or None,
         note=note,
+        relevanceSource=cast(Any, relevance_source) if relevance_source else None,
+        relevanceConfidence=relevance_confidence,
+        relevanceReason=relevance_reason,
     )
 
 

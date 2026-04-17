@@ -152,6 +152,8 @@ async def rerank_candidates(
     candidate_pool_size: int | None = None,
     request_outcomes: list[dict[str, Any]] | None = None,
     request_id: str | None = None,
+    planner_anchor_type: str | None = None,
+    planner_anchor_value: str | None = None,
 ) -> list[dict[str, Any]]:
     """Score and rank the merged candidate pool."""
     if not merged_candidates:
@@ -208,8 +210,28 @@ async def rerank_candidates(
     terms = query_terms(query)
     anchor_terms = [term for term in terms if term not in GENERIC_RESEARCH_TERMS]
     broad_query_mode = query_specificity == "low" or ambiguity_level != "low" or len(facets) >= 2
-    provider_bonus_scale = 0.55 if broad_query_mode else 1.0
-    facet_penalty_scale = 0.65 if broad_query_mode else 1.0
+    has_planner_anchor = bool(
+        (planner_anchor_type and str(planner_anchor_type).strip())
+        or (planner_anchor_value and str(planner_anchor_value).strip())
+    )
+    anchored_broad = broad_query_mode and (
+        len(anchor_terms) >= 2
+        or bool([c for c in candidate_concepts if c and str(c).strip()])
+        or has_planner_anchor
+    )
+    exploratory_broad = broad_query_mode and not anchored_broad
+    if anchored_broad:
+        broad_query_regime = "anchored_broad"
+        provider_bonus_scale = 0.85
+        facet_penalty_scale = 1.0
+    elif exploratory_broad:
+        broad_query_regime = "exploratory_broad"
+        provider_bonus_scale = 0.55
+        facet_penalty_scale = 0.65
+    else:
+        broad_query_regime = "not_broad"
+        provider_bonus_scale = 1.0
+        facet_penalty_scale = 1.0
 
     for item, paper_text, query_similarity in zip(
         merged_candidates,
@@ -299,6 +321,8 @@ async def rerank_candidates(
                 bridge_bonus += 0.03
         if broad_query_mode and title_anchor_coverage == 0.0:
             bridge_bonus *= 0.4
+        if broad_query_mode and anchor_coverage == 0.0 and title_anchor_coverage == 0.0:
+            bridge_bonus = 0.0
 
         paper_id = str(
             paper.get("paperId") or paper.get("paper_id") or paper.get("canonicalId") or paper.get("sourceId") or ""
@@ -321,6 +345,15 @@ async def rerank_candidates(
         if broad_query_mode and query_similarity < 0.2:
             provider_bonus *= 0.5
             citation_bonus *= 0.5
+        anchored_intent_penalty = 0.0
+        if anchored_broad and anchor_terms and anchor_coverage < 0.5:
+            anchored_intent_penalty = (0.5 - anchor_coverage) * 0.24
+            facet_penalty += anchored_intent_penalty
+        semantic_fit_scale = 1.0
+        if anchored_broad and anchor_terms and max(anchor_coverage, title_anchor_coverage) < 0.25:
+            semantic_fit_scale = 0.3
+            provider_bonus *= semantic_fit_scale
+            citation_bonus *= semantic_fit_scale
         final_score = (
             fused_rank_score
             + query_similarity
@@ -350,6 +383,11 @@ async def rerank_candidates(
             "driftPenalty": round(drift_penalty, 6),
             "queryFacetPenalty": round(facet_penalty * facet_penalty_scale, 6),
             "broadQueryMode": broad_query_mode,
+            "broadQueryRegime": broad_query_regime,
+            "anchoredIntentPenalty": round(anchored_intent_penalty, 6),
+            "semanticFitGate": round(semantic_fit_scale, 6),
+            "providerBonusScale": round(provider_bonus_scale, 6),
+            "facetPenaltyScale": round(facet_penalty_scale, 6),
             "relevanceClassification": relevance_classification,
             "relevanceClassificationFallback": relevance_fallback,
             "finalScore": round(final_score, 6),
@@ -514,3 +552,45 @@ def _dedupe_strings(values: list[str]) -> list[str]:
         seen.add(lowered)
         deduped.append(value)
     return deduped
+
+
+def summarize_ranking_diagnostics(
+    ranked_candidates: list[dict[str, Any]],
+    top_n: int = 10,
+) -> list[dict[str, Any]]:
+    """Return a compact top-N snapshot of ranking diagnostics for eval/curation.
+
+    Intended for attaching pre-filter scoring context onto abstained, insufficient-
+    evidence, or failed result payloads so eval curation can replay the decision.
+    """
+    if top_n <= 0 or not ranked_candidates:
+        return []
+    snapshot: list[dict[str, Any]] = []
+    for candidate in ranked_candidates[:top_n]:
+        paper = candidate.get("paper") if isinstance(candidate, dict) else None
+        paper_dict = paper if isinstance(paper, dict) else {}
+        paper_id = str(
+            paper_dict.get("paperId")
+            or paper_dict.get("canonicalId")
+            or paper_dict.get("sourceId")
+            or ""
+        ).strip()
+        title = str(paper_dict.get("title") or "").strip()
+        providers = candidate.get("providers") if isinstance(candidate, dict) else None
+        if isinstance(providers, (list, tuple, set)):
+            providers_list = sorted({str(provider) for provider in providers if provider})
+        else:
+            providers_list = []
+        score_breakdown = candidate.get("scoreBreakdown") if isinstance(candidate, dict) else None
+        score_breakdown_dict = score_breakdown if isinstance(score_breakdown, dict) else {}
+        snapshot.append(
+            {
+                "paperId": paper_id,
+                "title": title,
+                "providers": providers_list,
+                "finalScore": candidate.get("finalScore") if isinstance(candidate, dict) else None,
+                "querySimilarity": candidate.get("querySimilarity") if isinstance(candidate, dict) else None,
+                "scoreBreakdown": dict(score_breakdown_dict),
+            }
+        )
+    return snapshot

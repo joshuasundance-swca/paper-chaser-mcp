@@ -431,13 +431,13 @@ class ModelProviderBundle:
     ) -> dict[str, dict[str, Any]]:
         """Return a mapping of paperId -> classification/rationale for the batch."""
         del request_id
-        return {
-            relevance_paper_identifier(paper, index): classify_relevance_without_llm(
-                query=query,
-                paper=paper,
-            )
-            for index, paper in enumerate(papers)
-        }
+        from .relevance_fallback import classify_batch_deterministic
+
+        return classify_batch_deterministic(
+            query=query,
+            papers=papers,
+            reason="deterministic_provider",
+        )
 
     async def aassess_result_adequacy(
         self,
