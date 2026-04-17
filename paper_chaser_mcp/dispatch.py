@@ -3205,6 +3205,7 @@ def _guided_machine_failure_payload(
             search_session_id=search_session_id,
             status="partial",
             has_sources=False,
+            saved_session_inspectable=saved_session_inspectable,
         ),
         "resultState": _guided_result_state(
             status="partial",
@@ -3289,9 +3290,15 @@ def _guided_next_actions(
     status: str,
     has_sources: bool,
     calling_tool: str | None = None,
+    saved_session_inspectable: bool = False,
 ) -> list[str]:
     actions: list[str] = []
-    if search_session_id and has_sources and calling_tool != "inspect_source":
+    # Sixth rubber-duck pass (finding 2): even when the current response has no
+    # sources, a saved session can still hold inspectable candidates. Surface
+    # inspect_source in nextActions so it agrees with the failure-summary and
+    # machine-failure bestNextInternalAction routing.
+    inspect_relevant = has_sources or saved_session_inspectable
+    if search_session_id and inspect_relevant and calling_tool != "inspect_source":
         actions.append(
             f"Use inspect_source with searchSessionId='{search_session_id}' and one sourceId to inspect evidence."
         )
@@ -5588,16 +5595,34 @@ async def dispatch_tool(
                 except Exception:
                     saved_session_has_sources = False
                     saved_session_all_off_topic = False
+            saved_session_inspectable = saved_session_has_sources and not saved_session_all_off_topic
+            # Sixth rubber-duck pass (finding 1): align failureSummary with the
+            # two-bool saved-session signal already feeding resultState so the
+            # recommendation does not contradict bestNextInternalAction.
+            if saved_session_inspectable:
+                what_still_worked = "The saved search session can still be inspected source by source."
+                recommended_next_action = "inspect_source"
+            elif saved_session_has_sources:
+                what_still_worked = (
+                    "The saved session exists but every stored candidate was classified off_topic, "
+                    "so a fresh research call is the productive recovery path."
+                )
+                recommended_next_action = "research"
+            else:
+                what_still_worked = (
+                    "No saved grounded evidence is available; run research again to rebuild the session."
+                )
+                recommended_next_action = "research"
             failure_summary = _guided_failure_summary(
                 failure_summary={
                     "outcome": "total_failure",
                     "whatFailed": "Grounded follow-up requires the smart runtime to be enabled.",
-                    "whatStillWorked": "The saved search session can still be inspected source by source.",
+                    "whatStillWorked": what_still_worked,
                     "fallbackAttempted": False,
                     "fallbackMode": None,
                     "primaryPathFailureReason": "smart_runtime_unavailable",
                     "completenessImpact": "No grounded synthesis was attempted.",
-                    "recommendedNextAction": "inspect_source",
+                    "recommendedNextAction": recommended_next_action,
                 },
                 status="partial",
                 sources=[],
@@ -5629,6 +5654,7 @@ async def dispatch_tool(
                     search_session_id=follow_up_args.search_session_id,
                     status="partial",
                     has_sources=False,
+                    saved_session_inspectable=saved_session_inspectable,
                 ),
                 "resultState": _guided_result_state(
                     status="partial",
@@ -6050,22 +6076,43 @@ async def dispatch_tool(
                     available_ids = []
                     saved_candidates = []
             saved_has_sources, saved_all_off_topic = _guided_saved_session_topicality(saved_candidates)
+            saved_inspectable = saved_has_sources and not saved_all_off_topic
             evidence_gaps = [
                 "Could not find sourceId "
                 f"{inspect_args.source_id!r} in searchSessionId "
                 f"{inspect_args.search_session_id!r}."
             ]
             trust_summary = _guided_trust_summary([], evidence_gaps)
+            # Sixth rubber-duck pass (finding 1): when the saved session has no
+            # inspectable candidates (empty or all off_topic), recommend
+            # research instead of inspect_source so the failure summary agrees
+            # with resultState.bestNextInternalAction.
+            if saved_inspectable:
+                recommended_next_action = "inspect_source"
+                what_still_worked = "The server returned available source IDs for explicit retry."
+                next_actions = [
+                    "Provide an exact sourceId from the saved session.",
+                    "Use inspect_source again after choosing one of the available source IDs.",
+                ]
+            else:
+                recommended_next_action = "research"
+                what_still_worked = (
+                    "The saved session has no inspectable on-topic candidates; "
+                    "run research again to rebuild grounded evidence."
+                )
+                next_actions = [
+                    "Use research to rebuild a grounded session with on-topic sources before inspecting.",
+                ]
             failure_summary = _guided_failure_summary(
                 failure_summary={
                     "outcome": "needs_clarification",
                     "whatFailed": "inspect_source_source_resolution",
-                    "whatStillWorked": "The server returned available source IDs for explicit retry.",
+                    "whatStillWorked": what_still_worked,
                     "fallbackAttempted": False,
                     "fallbackMode": None,
                     "primaryPathFailureReason": match_type,
                     "completenessImpact": evidence_gaps[0],
-                    "recommendedNextAction": "inspect_source",
+                    "recommendedNextAction": recommended_next_action,
                 },
                 status="needs_disambiguation",
                 sources=[],
@@ -6075,10 +6122,7 @@ async def dispatch_tool(
                 "searchSessionId": inspect_args.search_session_id,
                 "source": None,
                 "directReadRecommendations": [],
-                "nextActions": [
-                    "Provide an exact sourceId from the saved session.",
-                    "Use inspect_source again after choosing one of the available source IDs.",
-                ],
+                "nextActions": next_actions,
                 "failureSummary": failure_summary,
                 "resultMeaning": _guided_result_meaning(
                     status="needs_disambiguation",

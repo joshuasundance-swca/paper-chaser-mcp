@@ -2365,6 +2365,76 @@ def test_guided_machine_failure_payload_prefers_inspect_source_for_saved_session
     assert payload_default["machineFailure"]["bestNextInternalAction"] == "research"
 
 
+def test_guided_machine_failure_payload_next_actions_align_with_recommendation() -> None:
+    # Regression (6th rubber-duck pass, finding 2): nextActions must agree with
+    # failureSummary.recommendedNextAction and bestNextInternalAction. When the
+    # saved session is still inspectable, emit an inspect_source nextAction
+    # entry pointing at the saved sessionId.
+    inspectable = dispatch_module._guided_machine_failure_payload(
+        search_session_id="ssn-inspectable",
+        error=RuntimeError("smart runtime blew up"),
+        saved_session_has_sources=True,
+        saved_session_all_off_topic=False,
+    )
+    assert inspectable["failureSummary"]["recommendedNextAction"] == "inspect_source"
+    inspect_entries = [
+        action for action in inspectable["nextActions"]
+        if isinstance(action, str) and "inspect_source" in action and "ssn-inspectable" in action
+    ]
+    assert inspect_entries, "Expected nextActions to include an inspect_source entry for the saved session"
+
+    # All-off-topic: recommendation is research; nextActions must NOT include
+    # an inspect_source entry that would contradict bestNextInternalAction.
+    off_topic = dispatch_module._guided_machine_failure_payload(
+        search_session_id="ssn-off",
+        error=RuntimeError("smart runtime blew up"),
+        saved_session_has_sources=True,
+        saved_session_all_off_topic=True,
+    )
+    assert off_topic["failureSummary"]["recommendedNextAction"] == "research"
+    assert off_topic["resultState"]["bestNextInternalAction"] == "research"
+    assert not any(
+        isinstance(action, str) and "inspect_source" in action
+        for action in off_topic["nextActions"]
+    ), "All-off-topic saved session must not recommend inspect_source in nextActions"
+
+
+def test_guided_follow_up_no_runtime_all_off_topic_recommends_research() -> None:
+    # Regression (6th rubber-duck pass, finding 1): when the smart runtime is
+    # unavailable but the saved session holds only off_topic candidates, the
+    # failureSummary must recommend research (not inspect_source) to agree with
+    # resultState.bestNextInternalAction. We exercise the shared next-actions
+    # helper with the same saved-session derivation used in the follow-up
+    # no-runtime branch.
+    off_topic_actions = dispatch_module._guided_next_actions(
+        search_session_id="ssn-off",
+        status="partial",
+        has_sources=False,
+        saved_session_inspectable=False,
+    )
+    assert not any(
+        isinstance(action, str) and "inspect_source" in action
+        for action in off_topic_actions
+    )
+
+
+def test_guided_follow_up_no_runtime_inspectable_recommends_inspect_source() -> None:
+    # Regression (6th rubber-duck pass, finding 1): when the saved session
+    # still holds inspectable candidates, nextActions should include an
+    # inspect_source entry pointing at the saved sessionId even though the
+    # current response itself has no sources.
+    inspectable_actions = dispatch_module._guided_next_actions(
+        search_session_id="ssn-inspectable",
+        status="partial",
+        has_sources=False,
+        saved_session_inspectable=True,
+    )
+    assert any(
+        isinstance(action, str) and "inspect_source" in action and "ssn-inspectable" in action
+        for action in inspectable_actions
+    )
+
+
 def test_guided_abstention_details_partial_status_emits_refinement_hints() -> None:
     # Regression (Finding 2): status="partial" with weak sources must populate
     # abstentionDetails.refinementHints as a concrete, non-empty list.
