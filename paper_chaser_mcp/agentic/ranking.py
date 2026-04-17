@@ -231,6 +231,23 @@ async def rerank_candidates(
         provider_bonus_scale = 1.0
         facet_penalty_scale = 1.0
 
+    # Finding #3: relax anchor-match thresholds for broad / high-ambiguity queries
+    # so anchor-identity-strict matching is not required when planner signals the
+    # query is not narrowly scoped. Stays strict (1.0) when planner reports a
+    # narrow/known-item query or when signals are absent (fallback-safe default).
+    anchor_threshold_scale = 1.0
+    if query_specificity == "low" or ambiguity_level == "high":
+        anchor_threshold_scale = 0.6
+
+    # Finding #4: dampen year-recency and citation-count priors when planner
+    # routing confidence is low or the query is explicitly broad, so ranking
+    # does not over-favor recent/popular papers for historical/niche intents.
+    year_decay_scale = 1.0
+    citation_decay_scale = 1.0
+    if routing_confidence == "low" or query_specificity == "low":
+        year_decay_scale = 0.5
+        citation_decay_scale = 0.5
+
     for item, paper_text, query_similarity in zip(
         merged_candidates,
         paper_texts,
@@ -274,13 +291,15 @@ async def rerank_candidates(
         provider_bonus += min(max(len(item["providers"]) - 1, 0) * 0.02, 0.06)
         provider_bonus *= provider_bonus_scale
         citation_count = paper.get("citationCount")
-        citation_bonus = 0.0
+        citation_count_bonus_raw = 0.0
+        year_recency_bonus_raw = 0.0
         if isinstance(citation_count, int) and citation_count > 0:
-            citation_bonus += min(math.log1p(citation_count) / 25.0, 0.12)
+            citation_count_bonus_raw = min(math.log1p(citation_count) / 25.0, 0.12)
         year = paper.get("year")
         if isinstance(year, int) and year <= current_year:
             age = max(current_year - year, 0)
-            citation_bonus += max(0.0, 0.05 - min(age * 0.004, 0.05))
+            year_recency_bonus_raw = max(0.0, 0.05 - min(age * 0.004, 0.05))
+        citation_bonus = citation_count_bonus_raw * citation_decay_scale + year_recency_bonus_raw * year_decay_scale
 
         drift_penalty = 0.0
         if "speculative" in item["variantSources"] and query_similarity < 0.12:
@@ -343,7 +362,7 @@ async def rerank_candidates(
             concept_bonus_gate_scale = 0.5
         concept_bonus *= concept_bonus_gate_scale
 
-        if broad_query_mode and title_anchor_coverage == 0.0 and anchor_coverage < 0.34:
+        if broad_query_mode and title_anchor_coverage == 0.0 and anchor_coverage < 0.34 * anchor_threshold_scale:
             facet_penalty += 0.08
         if broad_query_mode and title_facet_coverage == 0.0 and query_similarity < 0.35:
             facet_penalty += 0.05
@@ -351,11 +370,13 @@ async def rerank_candidates(
             provider_bonus *= 0.5
             citation_bonus *= 0.5
         anchored_intent_penalty = 0.0
-        if anchored_broad and anchor_terms and anchor_coverage < 0.5:
-            anchored_intent_penalty = (0.5 - anchor_coverage) * 0.24
+        anchored_intent_threshold = 0.5 * anchor_threshold_scale
+        if anchored_broad and anchor_terms and anchor_coverage < anchored_intent_threshold:
+            anchored_intent_penalty = (anchored_intent_threshold - anchor_coverage) * 0.24
             facet_penalty += anchored_intent_penalty
         semantic_fit_scale = 1.0
-        if anchored_broad and anchor_terms and max(anchor_coverage, title_anchor_coverage) < 0.25:
+        semantic_fit_threshold = 0.25 * anchor_threshold_scale
+        if anchored_broad and anchor_terms and max(anchor_coverage, title_anchor_coverage) < semantic_fit_threshold:
             semantic_fit_scale = 0.3
             provider_bonus *= semantic_fit_scale
             citation_bonus *= semantic_fit_scale
@@ -392,6 +413,9 @@ async def rerank_candidates(
             "broadQueryRegime": broad_query_regime,
             "anchoredIntentPenalty": round(anchored_intent_penalty, 6),
             "semanticFitGate": round(semantic_fit_scale, 6),
+            "anchorThresholdScale": round(anchor_threshold_scale, 6),
+            "yearDecayScale": round(year_decay_scale, 6),
+            "citationDecayScale": round(citation_decay_scale, 6),
             "providerBonusScale": round(provider_bonus_scale, 6),
             "facetPenaltyScale": round(facet_penalty_scale, 6),
             "relevanceClassification": relevance_classification,

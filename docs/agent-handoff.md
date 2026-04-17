@@ -361,6 +361,29 @@ following additions on top of `main`:
   emits distinct `nextActions` for `resolved` vs `multiple_candidates`
   (previously shared), and `golden-paths.md` documents the full status
   set including `needs_disambiguation` (previously undocumented).
+- **Adaptive anchor thresholds + planner-gated decay priors**
+  (Finding #3 + Finding #4 of the LLM-first ranking audit):
+  `agentic/ranking.py` now derives `anchorThresholdScale`
+  (`0.6` when planner `query_specificity=="low"` or
+  `ambiguity_level=="high"`, else `1.0`) and applies it to the three
+  anchor-match thresholds (`0.34`, `0.5`, `0.25`). It also derives
+  `yearDecayScale` / `citationDecayScale` (`0.5` when
+  `routing_confidence=="low"` or `query_specificity=="low"`, else
+  `1.0`) and splits the combined citation/year prior so each decay can
+  be dampened independently. All three scales are exposed in
+  `scoreBreakdown` and fall back to strict defaults when planner
+  signals are absent. Pinned by two new regression tests in
+  `test_smart_tools.py` plus an updated assertion on the existing
+  anchored-broad nitrate/headwater test (the drift candidate now
+  clears the relaxed threshold — on-topic still wins on title-anchor
+  coverage).
+
+#### Validation baseline (HEAD pending Finding #3/#4 commit)
+
+- `python -m pytest -q` => **1290 passed, 2 skipped** (live-only)
+- `python -m ruff check .` clean
+- `python -m mypy --config-file pyproject.toml` clean
+- `pre-commit run --all-files` clean
 
 #### Validation baseline (HEAD `ccff280`)
 

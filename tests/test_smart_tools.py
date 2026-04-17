@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 import types
 from typing import Any, cast
 
@@ -4972,7 +4973,13 @@ async def test_rerank_candidates_anchored_broad_nitrate_headwater_stream() -> No
     ]
     assert on_topic_breakdown["broadQueryRegime"] == "anchored_broad"
     assert drift_breakdown["broadQueryRegime"] == "anchored_broad"
-    assert drift_breakdown["anchoredIntentPenalty"] > 0
+    # Finding #3: anchor threshold scales down under broad/ambiguous planner
+    # signal. Drift paper's partial anchor coverage (nitrate+headwater mentioned
+    # incidentally) now clears the relaxed threshold, so the anchored-intent
+    # penalty is zero — but the on-topic paper still wins via title-anchor
+    # coverage and broader concept bonus.
+    assert drift_breakdown["anchorThresholdScale"] == 0.6
+    assert drift_breakdown["anchoredIntentPenalty"] == 0.0
     assert on_topic_breakdown["finalScore"] > drift_breakdown["finalScore"]
 
 
@@ -5200,6 +5207,118 @@ async def test_rerank_candidates_llm_weak_match_halves_concept_bonus_gate() -> N
     breakdown = ranked[0]["scoreBreakdown"]
     assert breakdown["relevanceClassification"] == "weak_match"
     assert breakdown["conceptBonusGateScale"] == 0.5
+
+
+@pytest.mark.asyncio
+async def test_rerank_candidates_relaxes_anchor_threshold_for_broad_query() -> None:
+    """Finding #3: broad / high-ambiguity planner signal scales anchor thresholds down."""
+    provider_bundle = resolve_provider_bundle(
+        _deterministic_config(),
+        openai_api_key=None,
+    )
+
+    candidate = {
+        "paper": {
+            "paperId": "broad-anchor-paper",
+            "title": "Community Resilience Case Study",
+            "abstract": "Discusses community resilience frameworks in rural settings.",
+            "year": 2023,
+            "authors": [{"name": "Broad Author"}],
+            "source": "semantic_scholar",
+        },
+        "providers": ["semantic_scholar"],
+        "variants": ["community resilience"],
+        "variantSources": ["from_input"],
+        "providerRanks": {"semantic_scholar": 1},
+        "retrievalCount": 1,
+    }
+
+    ranked_broad = await rerank_candidates(
+        query="community resilience adaptation rural coastal flooding",
+        merged_candidates=[dict(candidate)],
+        provider_bundle=provider_bundle,
+        candidate_concepts=["community resilience"],
+        routing_confidence="medium",
+        query_specificity="low",
+        ambiguity_level="high",
+        planner_anchor_type="topic",
+        planner_anchor_value="community resilience",
+    )
+    ranked_narrow = await rerank_candidates(
+        query="community resilience adaptation rural coastal flooding",
+        merged_candidates=[dict(candidate)],
+        provider_bundle=provider_bundle,
+        candidate_concepts=["community resilience"],
+        routing_confidence="high",
+        query_specificity="high",
+        ambiguity_level="low",
+        planner_anchor_type="topic",
+        planner_anchor_value="community resilience",
+    )
+
+    broad_breakdown = ranked_broad[0]["scoreBreakdown"]
+    narrow_breakdown = ranked_narrow[0]["scoreBreakdown"]
+    assert broad_breakdown["anchorThresholdScale"] == 0.6
+    assert narrow_breakdown["anchorThresholdScale"] == 1.0
+    # Relaxed threshold should produce a smaller anchored-intent penalty for
+    # the same partially-anchored candidate.
+    assert broad_breakdown["anchoredIntentPenalty"] <= narrow_breakdown["anchoredIntentPenalty"]
+
+
+@pytest.mark.asyncio
+async def test_rerank_candidates_dampens_year_citation_decay_for_low_routing_confidence() -> None:
+    """Finding #4: low routing_confidence or broad specificity halves year/citation priors."""
+    provider_bundle = resolve_provider_bundle(
+        _deterministic_config(),
+        openai_api_key=None,
+    )
+
+    candidate = {
+        "paper": {
+            "paperId": "recent-highly-cited",
+            "title": "Nitrate Loading in Headwater Streams",
+            "abstract": "Discusses nitrate loading in headwater streams of agricultural watersheds.",
+            "year": time.gmtime().tm_year,
+            "citationCount": 500,
+            "authors": [{"name": "Recent Author"}],
+            "source": "semantic_scholar",
+        },
+        "providers": ["semantic_scholar"],
+        "variants": ["nitrate loading"],
+        "variantSources": ["from_input"],
+        "providerRanks": {"semantic_scholar": 1},
+        "retrievalCount": 1,
+    }
+
+    ranked_low = await rerank_candidates(
+        query="nitrate loading in headwater streams",
+        merged_candidates=[dict(candidate)],
+        provider_bundle=provider_bundle,
+        candidate_concepts=["nitrate loading", "headwater streams"],
+        routing_confidence="low",
+        query_specificity="medium",
+        ambiguity_level="low",
+    )
+    ranked_high = await rerank_candidates(
+        query="nitrate loading in headwater streams",
+        merged_candidates=[dict(candidate)],
+        provider_bundle=provider_bundle,
+        candidate_concepts=["nitrate loading", "headwater streams"],
+        routing_confidence="high",
+        query_specificity="medium",
+        ambiguity_level="low",
+    )
+
+    low_breakdown = ranked_low[0]["scoreBreakdown"]
+    high_breakdown = ranked_high[0]["scoreBreakdown"]
+    assert low_breakdown["yearDecayScale"] == 0.5
+    assert low_breakdown["citationDecayScale"] == 0.5
+    assert high_breakdown["yearDecayScale"] == 1.0
+    assert high_breakdown["citationDecayScale"] == 1.0
+    # Dampened priors should produce a strictly smaller citationRecencyPrior for
+    # the same recent/highly-cited paper.
+    assert low_breakdown["citationRecencyPrior"] < high_breakdown["citationRecencyPrior"]
+    assert low_breakdown["citationRecencyPrior"] == pytest.approx(high_breakdown["citationRecencyPrior"] * 0.5)
 
 
 @pytest.mark.asyncio
