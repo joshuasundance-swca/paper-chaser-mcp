@@ -2150,6 +2150,54 @@ def test_guided_best_next_internal_action_no_sources_weak_status_returns_researc
     )
 
 
+def test_guided_best_next_internal_action_saved_session_has_inspectable_sources() -> None:
+    # Regression (Finding 1, 4th pass): when the CURRENT response has no sources
+    # but the SAVED SESSION is still inspectable (smart runtime unavailable,
+    # inspect_source retry with wrong sourceId), bestNextInternalAction must
+    # agree with failureSummary.recommendedNextAction=="inspect_source" rather
+    # than send the agent back to research.
+    assert (
+        dispatch_module._guided_best_next_internal_action(
+            status="partial",
+            has_sources=False,
+            search_session_id="ssn-saved",
+            saved_session_has_sources=True,
+        )
+        == "inspect_source"
+    )
+    assert (
+        dispatch_module._guided_best_next_internal_action(
+            status="needs_disambiguation",
+            has_sources=False,
+            search_session_id="ssn-saved",
+            saved_session_has_sources=True,
+        )
+        == "inspect_source"
+    )
+    # Saved session without stored sources still falls back to research.
+    assert (
+        dispatch_module._guided_best_next_internal_action(
+            status="partial",
+            has_sources=False,
+            search_session_id="ssn-saved",
+            saved_session_has_sources=False,
+        )
+        == "research"
+    )
+
+
+def test_guided_result_state_saved_session_inspectable_overrides_research() -> None:
+    # Regression (Finding 1, 4th pass) via the public helper.
+    state = dispatch_module._guided_result_state(
+        status="partial",
+        sources=[],
+        evidence_gaps=["Smart runtime unavailable."],
+        search_session_id="ssn-saved",
+        saved_session_has_sources=True,
+    )
+    assert state["bestNextInternalAction"] == "inspect_source"
+
+
 def test_guided_abstention_details_partial_status_emits_refinement_hints() -> None:
     # Regression (Finding 2): status="partial" with weak sources must populate
     # abstentionDetails.refinementHints as a concrete, non-empty list.

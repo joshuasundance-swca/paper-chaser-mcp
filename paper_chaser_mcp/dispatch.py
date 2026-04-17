@@ -3325,6 +3325,7 @@ def _guided_best_next_internal_action(
     status: str,
     has_sources: bool,
     search_session_id: str | None,
+    saved_session_has_sources: bool = False,
 ) -> str:
     normalized_status = str(status or "").strip().lower()
     weak_statuses = {
@@ -3335,6 +3336,12 @@ def _guided_best_next_internal_action(
         "partial",
     }
     if has_sources and search_session_id:
+        return "inspect_source"
+    # The CURRENT response may have no sources (e.g., smart runtime unavailable
+    # or inspect_source retry with a wrong sourceId), yet the SAVED SESSION may
+    # still be inspectable. In that case prefer inspect_source over research so
+    # resultState agrees with the failureSummary's recommended retry.
+    if not has_sources and saved_session_has_sources and search_session_id:
         return "inspect_source"
     # Without inspectable sources, neither inspect_source nor another follow_up_research
     # over the same (empty) session can progress: keep the guidance aligned with the
@@ -3354,6 +3361,7 @@ def _guided_result_state(
     sources: list[dict[str, Any]],
     evidence_gaps: list[str],
     search_session_id: str | None,
+    saved_session_has_sources: bool = False,
 ) -> dict[str, Any]:
     has_sources = bool(sources)
     normalized_status = str(status or "").strip() or "unknown"
@@ -3376,6 +3384,7 @@ def _guided_result_state(
             status=normalized_status,
             has_sources=has_sources,
             search_session_id=search_session_id,
+            saved_session_has_sources=saved_session_has_sources,
         ),
         missingEvidenceType=_guided_missing_evidence_type(
             status=normalized_status,
@@ -5510,6 +5519,14 @@ async def dispatch_tool(
         if agentic_runtime is None:
             evidence_gaps = [follow_up_args.question]
             trust_summary = _guided_trust_summary([], evidence_gaps)
+            saved_session_has_sources = False
+            if workspace_registry is not None and follow_up_args.search_session_id:
+                try:
+                    record = workspace_registry.get(follow_up_args.search_session_id)
+                    if record is not None:
+                        saved_session_has_sources = bool(_guided_record_source_candidates(record))
+                except Exception:
+                    saved_session_has_sources = False
             failure_summary = _guided_failure_summary(
                 failure_summary={
                     "outcome": "total_failure",
@@ -5557,6 +5574,7 @@ async def dispatch_tool(
                     sources=[],
                     evidence_gaps=evidence_gaps,
                     search_session_id=follow_up_args.search_session_id,
+                    saved_session_has_sources=saved_session_has_sources,
                 ),
                 "sessionResolution": session_resolution,
                 "executionProvenance": _guided_execution_provenance_payload(
@@ -5993,6 +6011,7 @@ async def dispatch_tool(
                     sources=[],
                     evidence_gaps=evidence_gaps,
                     search_session_id=inspect_args.search_session_id,
+                    saved_session_has_sources=bool(available_ids),
                 ),
                 "sessionResolution": session_resolution,
                 "sourceResolution": _guided_source_resolution_payload(
