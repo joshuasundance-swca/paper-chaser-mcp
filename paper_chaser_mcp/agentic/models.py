@@ -345,6 +345,16 @@ class SearchStrategyMetadata(ApiModel):
         default_factory=list,
         alias="rankingDiagnostics",
     )
+    llm_classification_overrides: int = Field(
+        default=0,
+        alias="llmClassificationOverrides",
+        description=(
+            "Count of smart-ranked candidates where the deterministic fast-path "
+            "gate produced a clear verdict that disagreed with an available LLM "
+            "classification. The deterministic verdict is kept as the effective "
+            "label; this counter surfaces how often the LLM signal was ignored."
+        ),
+    )
 
 
 class StructuredSourceRecord(ApiModel):
@@ -360,6 +370,26 @@ class StructuredSourceRecord(ApiModel):
     topical_relevance: Literal["on_topic", "weak_match", "off_topic"] | None = Field(
         default=None,
         alias="topicalRelevance",
+    )
+    llm_classification: Literal["on_topic", "weak_match", "off_topic"] | None = Field(
+        default=None,
+        alias="llmClassification",
+        description=(
+            "Raw LLM topical-relevance verdict when the relevance classifier ran "
+            "for this source. May differ from topicalRelevance when the "
+            "deterministic fast-path gate overrode the LLM signal."
+        ),
+    )
+    classification_source: Literal["deterministic", "llm", "llm_tiebreaker"] | None = Field(
+        default=None,
+        alias="classificationSource",
+        description=(
+            "Provenance of topicalRelevance: 'deterministic' when the heuristic "
+            "gate produced the verdict (including when it overrode an available "
+            "LLM signal), 'llm_tiebreaker' when the deterministic verdict was "
+            "weak_match and the LLM broke the tie, or 'llm' when the LLM supplied "
+            "the effective verdict outside a clear deterministic fast-path."
+        ),
     )
     confidence: str | None = None
     is_primary_source: bool | None = Field(default=None, alias="isPrimarySource")
@@ -460,6 +490,24 @@ class SmartPaperHit(ApiModel):
     topical_relevance: Literal["on_topic", "weak_match", "off_topic"] | None = Field(
         default=None,
         alias="topicalRelevance",
+    )
+    llm_classification: Literal["on_topic", "weak_match", "off_topic"] | None = Field(
+        default=None,
+        alias="llmClassification",
+        description=(
+            "Raw LLM topical-relevance verdict, when the relevance classifier ran "
+            "for this hit. Kept alongside topicalRelevance so callers can tell "
+            "when the deterministic gate overrode the LLM signal."
+        ),
+    )
+    classification_source: Literal["deterministic", "llm", "llm_tiebreaker"] | None = Field(
+        default=None,
+        alias="classificationSource",
+        description=(
+            "Provenance of topicalRelevance: 'deterministic', 'llm_tiebreaker', "
+            "or 'llm'. See StructuredSourceRecord.classificationSource for the "
+            "full semantics."
+        ),
     )
     relevance_source: Literal["llm", "llm_retry", "deterministic_tier", "hybrid"] | None = Field(
         default=None,

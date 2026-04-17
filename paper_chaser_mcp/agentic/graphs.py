@@ -7,6 +7,7 @@ import logging
 import re
 import statistics
 import time
+from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Any, Literal, cast
 from uuid import uuid4
@@ -1226,22 +1227,33 @@ class AgenticRuntime:
             except Exception:
                 borderline_relevance = {}
         smart_hits: list[SmartPaperHit] = []
+        llm_classification_overrides = 0
         for index, (candidate, score_breakdown, paper_id, deterministic_topical_relevance) in enumerate(
             candidate_relevance_inputs,
             start=1,
         ):
             relevance_entry = borderline_relevance.get(paper_id) or {}
-            topical_relevance = _classify_topical_relevance_for_paper(
+            llm_classification_raw = relevance_entry.get("classification")
+            llm_classification = cast(Any, llm_classification_raw) if llm_classification_raw else None
+            classification_result = _classify_topical_relevance_with_provenance(
                 query=normalized_query,
                 paper=candidate["paper"],
                 query_similarity=score_breakdown.query_similarity,
                 score_breakdown=score_breakdown,
-                llm_classification=(
-                    cast(Any, relevance_entry.get("classification"))
-                    if deterministic_topical_relevance == "weak_match"
-                    else None
-                ),
+                llm_classification=llm_classification,
             )
+            topical_relevance = classification_result.effective
+            if classification_result.llm_override_ignored:
+                llm_classification_overrides += 1
+                logger.info(
+                    "llm_classification_override_ignored",
+                    extra={
+                        "query": normalized_query,
+                        "paperId": paper_id,
+                        "deterministic": classification_result.deterministic,
+                        "llmClassification": classification_result.llm,
+                    },
+                )
             smart_hits.append(
                 SmartPaperHit(
                     paper=Paper.model_validate(candidate["paper"]),
@@ -1254,6 +1266,8 @@ class AgenticRuntime:
                     matchedConcepts=candidate.get("matchedConcepts") or [],
                     retrievedBy=candidate["providers"],
                     topicalRelevance=topical_relevance,
+                    llmClassification=classification_result.llm,
+                    classificationSource=classification_result.source,
                     relevanceSource=cast(Any, relevance_entry.get("relevanceSource"))
                     if relevance_entry.get("relevanceSource")
                     else None,
@@ -1262,6 +1276,8 @@ class AgenticRuntime:
                     scoreBreakdown=score_breakdown,
                 )
             )
+        if llm_classification_overrides:
+            strategy_metadata.llm_classification_overrides = llm_classification_overrides
         if include_enrichment and self._enrichment_service is not None and smart_hits:
             await self._emit_smart_search_status(
                 ctx=ctx,
@@ -1286,6 +1302,8 @@ class AgenticRuntime:
                 hit.paper,
                 note=hit.why_matched,
                 topical_relevance=hit.topical_relevance,
+                llm_classification=hit.llm_classification,
+                classification_source=hit.classification_source,
             )
             for hit in smart_hits
         ]
@@ -1303,6 +1321,8 @@ class AgenticRuntime:
                 hit.paper,
                 note=hit.why_matched,
                 topical_relevance=hit.topical_relevance,
+                llm_classification=hit.llm_classification,
+                classification_source=hit.classification_source,
             )
             for hit in smart_hits
         ]
@@ -1622,12 +1642,23 @@ class AgenticRuntime:
             relevance_entry = llm_relevance.get(paper_id) or {}
             relevance_rationale = str(relevance_entry.get("rationale") or "").strip()
             relevance_provenance = str(relevance_entry.get("provenance") or "model").strip() or "model"
-            topical_relevance = _classify_topical_relevance_for_paper(
+            classification_result = _classify_topical_relevance_with_provenance(
                 query=question,
                 paper=item.paper,
                 query_similarity=float(item.relevance_score),
                 llm_classification=cast(Any, relevance_entry.get("classification")),
             )
+            topical_relevance = classification_result.effective
+            if classification_result.llm_override_ignored:
+                logger.info(
+                    "llm_classification_override_ignored",
+                    extra={
+                        "query": question,
+                        "paperId": paper_id,
+                        "deterministic": classification_result.deterministic,
+                        "llmClassification": classification_result.llm,
+                    },
+                )
             if topical_relevance == "on_topic":
                 on_topic_evidence += 1
             source_records.append(
@@ -1647,6 +1678,8 @@ class AgenticRuntime:
                         )
                     ),
                     topical_relevance=topical_relevance,
+                    llm_classification=classification_result.llm,
+                    classification_source=classification_result.source,
                     relevance_source=(
                         str(relevance_entry.get("relevanceSource")) if relevance_entry.get("relevanceSource") else None
                     ),
@@ -3890,6 +3923,8 @@ def _source_record_from_paper(
     *,
     note: str | None = None,
     topical_relevance: Literal["on_topic", "weak_match", "off_topic"] | None = None,
+    llm_classification: Literal["on_topic", "weak_match", "off_topic"] | None = None,
+    classification_source: Literal["deterministic", "llm", "llm_tiebreaker"] | None = None,
     relevance_source: str | None = None,
     relevance_confidence: float | None = None,
     relevance_reason: str | None = None,
@@ -3904,6 +3939,8 @@ def _source_record_from_paper(
         verificationStatus=paper.verification_status,
         accessStatus=paper.access_status,
         topicalRelevance=topical_relevance,
+        llmClassification=llm_classification,
+        classificationSource=classification_source,
         confidence=paper.confidence,
         isPrimarySource=paper.is_primary_source,
         canonicalUrl=paper.canonical_url,
@@ -4418,6 +4455,46 @@ def _classify_topical_relevance_for_paper(
     score_breakdown: ScoreBreakdown | None = None,
     llm_classification: Literal["on_topic", "weak_match", "off_topic"] | None = None,
 ) -> Literal["on_topic", "weak_match", "off_topic"]:
+    return _classify_topical_relevance_with_provenance(
+        query=query,
+        paper=paper,
+        query_similarity=query_similarity,
+        score_breakdown=score_breakdown,
+        llm_classification=llm_classification,
+    ).effective
+
+
+@dataclass(frozen=True)
+class TopicalRelevanceClassification:
+    """Provenance-aware result of the topical-relevance gate.
+
+    ``effective`` is the verdict callers should act on; it matches what the
+    legacy ``_classify_topical_relevance_for_paper`` returned. ``deterministic``
+    is the raw heuristic verdict, ``llm`` is the classifier verdict when
+    available, and ``source`` records which signal produced ``effective``.
+
+    ``llm_override_ignored`` is True exactly when the deterministic fast-path
+    produced a clear on_topic/off_topic verdict and an LLM classification was
+    available but disagreed. The effective verdict is still the deterministic
+    one in that case — the flag is purely for observability so callers can log
+    the override or surface a counter.
+    """
+
+    effective: Literal["on_topic", "weak_match", "off_topic"]
+    deterministic: Literal["on_topic", "weak_match", "off_topic"]
+    llm: Literal["on_topic", "weak_match", "off_topic"] | None
+    source: Literal["deterministic", "llm", "llm_tiebreaker"]
+    llm_override_ignored: bool
+
+
+def _classify_topical_relevance_with_provenance(
+    *,
+    query: str,
+    paper: dict[str, Any] | Paper,
+    query_similarity: float,
+    score_breakdown: ScoreBreakdown | None = None,
+    llm_classification: Literal["on_topic", "weak_match", "off_topic"] | None = None,
+) -> TopicalRelevanceClassification:
     title = str((paper.title if isinstance(paper, Paper) else paper.get("title")) or "")
     body_text = _paper_text(paper.model_dump(by_alias=True) if isinstance(paper, Paper) else paper)
     title_tokens = _graph_topic_tokens(title)
@@ -4458,17 +4535,40 @@ def _classify_topical_relevance_for_paper(
         query_facet_coverage=query_facet_coverage,
         query_anchor_coverage=query_anchor_coverage,
     )
-    # Fast paths: deterministic verdict is clear — don't override it
-    if deterministic == "on_topic" and query_similarity > 0.5:
-        return "on_topic"
     has_title_signal = (title_facet_coverage > 0.0) or (title_anchor_coverage > 0.0)
     has_title_or_body_signal = has_title_signal or (query_facet_coverage > 0.0) or (query_anchor_coverage > 0.0)
-    if deterministic == "off_topic" and query_similarity < 0.12 and not has_title_or_body_signal:
-        return "off_topic"
-    # Middle zone: use LLM classification if available
-    if llm_classification is not None:
-        return llm_classification
-    return deterministic
+    fast_path_on_topic = deterministic == "on_topic" and query_similarity > 0.5
+    fast_path_off_topic = (
+        deterministic == "off_topic" and query_similarity < 0.12 and not has_title_or_body_signal
+    )
+
+    effective: Literal["on_topic", "weak_match", "off_topic"]
+    source: Literal["deterministic", "llm", "llm_tiebreaker"]
+    llm_override_ignored = False
+    if fast_path_on_topic:
+        effective = "on_topic"
+        source = "deterministic"
+        if llm_classification is not None and llm_classification != "on_topic":
+            llm_override_ignored = True
+    elif fast_path_off_topic:
+        effective = "off_topic"
+        source = "deterministic"
+        if llm_classification is not None and llm_classification != "off_topic":
+            llm_override_ignored = True
+    elif llm_classification is not None:
+        effective = llm_classification
+        source = "llm_tiebreaker" if deterministic == "weak_match" else "llm"
+    else:
+        effective = deterministic
+        source = "deterministic"
+
+    return TopicalRelevanceClassification(
+        effective=effective,
+        deterministic=deterministic,
+        llm=llm_classification,
+        source=source,
+        llm_override_ignored=llm_override_ignored,
+    )
 
 
 def _extract_subject_terms(*names: str | None) -> set[str]:
