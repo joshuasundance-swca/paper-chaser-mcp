@@ -3301,11 +3301,24 @@ def _guided_best_next_internal_action(
     has_sources: bool,
     search_session_id: str | None,
 ) -> str:
+    normalized_status = str(status or "").strip().lower()
+    weak_statuses = {
+        "abstained",
+        "needs_disambiguation",
+        "failed",
+        "insufficient_evidence",
+        "partial",
+    }
     if has_sources and search_session_id:
         return "inspect_source"
+    # Without inspectable sources, neither inspect_source nor another follow_up_research
+    # over the same (empty) session can progress: keep the guidance aligned with the
+    # failureSummary's recommended retry instead of looping the agent.
+    if not has_sources and normalized_status in weak_statuses:
+        return "research"
     if search_session_id:
         return "follow_up_research"
-    if status in {"abstained", "needs_disambiguation", "failed"}:
+    if normalized_status in weak_statuses:
         return "research"
     return "research"
 

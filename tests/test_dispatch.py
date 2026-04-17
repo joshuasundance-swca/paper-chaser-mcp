@@ -2105,6 +2105,49 @@ async def test_follow_up_research_without_session_returns_session_candidates_and
     assert len(payload["sessionResolution"]["candidates"]) == 2
     assert payload["executionProvenance"]["latencyProfileApplied"] == server.settings.guided_follow_up_latency_profile
     assert payload["abstentionDetails"]["category"] == "no_sources"
+    # Regression (Finding 1): surfaced nextActions must point the agent back to research
+    # (not to inspect_source or follow_up_research against an empty/ambiguous session).
+    joined_next_actions = " ".join(payload.get("nextActions") or []).lower()
+    assert "research" in joined_next_actions
+    assert "inspect_source" not in joined_next_actions
+
+
+def test_guided_best_next_internal_action_no_sources_weak_status_returns_research() -> None:
+    # Regression (Finding 1): without inspectable sources, neither inspect_source nor
+    # follow_up_research can make progress on weak statuses — must return "research".
+    assert (
+        dispatch_module._guided_best_next_internal_action(
+            status="partial",
+            has_sources=False,
+            search_session_id=None,
+        )
+        == "research"
+    )
+    assert (
+        dispatch_module._guided_best_next_internal_action(
+            status="partial",
+            has_sources=False,
+            search_session_id="ssn-weak",
+        )
+        == "research"
+    )
+    assert (
+        dispatch_module._guided_best_next_internal_action(
+            status="insufficient_evidence",
+            has_sources=False,
+            search_session_id="ssn-weak",
+        )
+        == "research"
+    )
+    # Inspectable sources with a session still prefer inspect_source.
+    assert (
+        dispatch_module._guided_best_next_internal_action(
+            status="partial",
+            has_sources=True,
+            search_session_id="ssn-ok",
+        )
+        == "inspect_source"
+    )
 
 
 @pytest.mark.asyncio
