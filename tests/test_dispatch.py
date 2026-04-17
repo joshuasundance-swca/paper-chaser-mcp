@@ -2884,6 +2884,48 @@ def test_guided_abstention_details_all_off_topic_is_not_inspectable() -> None:
     assert details["inspectableSourceCount"] == 0
 
 
+def test_guided_abstention_details_all_off_topic_forces_off_topic_category() -> None:
+    # R11 finding 1: when sources are all off_topic but evidence_gaps text does
+    # not say "off-topic", the category used to fall through to coverage_gap
+    # with "Inspect the returned sources..." hints. That contradicted
+    # resultState which routes to research. Force off_topic_only category.
+    off_topic_sources = [
+        {"sourceId": "s1", "topicalRelevance": "off_topic"},
+        {"sourceId": "s2", "topicalRelevance": "off_topic"},
+    ]
+    details = dispatch_module._guided_abstention_details_payload(
+        status="partial",
+        sources=off_topic_sources,
+        evidence_gaps=["The evidence was not sufficient to answer."],
+        trust_summary={
+            "onTopicSourceCount": 0,
+            "weakMatchCount": 0,
+            "offTopicCount": 2,
+        },
+    )
+    assert details is not None
+    assert details["category"] == "off_topic_only"
+    joined = " ".join(details["refinementHints"]).lower()
+    assert "inspect" not in joined, "All-off-topic hints must not tell agents to inspect sources"
+
+
+def test_guided_result_meaning_all_off_topic_describes_off_topic_pool() -> None:
+    # R11 finding 2: resultMeaning used to claim "some relevant evidence" for
+    # all-off-topic pools even though bestNextInternalAction routes to research.
+    meaning = dispatch_module._guided_result_meaning(
+        status="partial",
+        verified_findings=[],
+        evidence_gaps=["All results were off-topic."],
+        coverage=None,
+        failure_summary={"outcome": "no_failure"},
+        source_count=3,
+        all_sources_off_topic=True,
+    )
+    lowered = meaning.lower()
+    assert "off-topic" in lowered
+    assert "relevant evidence" not in lowered
+
+
 @pytest.mark.asyncio
 async def test_follow_up_research_passes_server_owned_latency_profile_to_ask_result_set(
     monkeypatch: pytest.MonkeyPatch,

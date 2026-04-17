@@ -1679,6 +1679,12 @@ def _guided_abstention_details_payload(
     if status not in {"abstained", "needs_disambiguation", "insufficient_evidence", "partial"}:
         return None
     category = _guided_missing_evidence_type(status=status, evidence_gaps=evidence_gaps, sources=sources)
+    all_sources_off_topic = _guided_sources_all_off_topic(sources)
+    # R11 finding 1: when every source is off_topic, agent-facing hints must
+    # not tell the caller to inspect the returned sources — they aren't useful.
+    # Force the off_topic_only category so the hints route to tighten-query.
+    if sources and all_sources_off_topic and category != "off_topic_only":
+        category = "off_topic_only"
     weak_match_count = int(trust_summary.get("weakMatchCount") or 0)
     off_topic_count = int(trust_summary.get("offTopicCount") or 0)
     on_topic_source_count = int(trust_summary.get("onTopicSourceCount") or 0)
@@ -1716,7 +1722,6 @@ def _guided_abstention_details_payload(
         refinement_hints = ["Inspect the returned sources before treating the result as settled."]
     else:
         refinement_hints = ["Narrow the request so the server can recover a stronger initial anchor."]
-    all_sources_off_topic = _guided_sources_all_off_topic(sources)
     effective_inspectable_count = 0 if all_sources_off_topic else len(sources)
     can_inspect = bool(sources) and not all_sources_off_topic
     details = AbstentionDetails(
@@ -2961,11 +2966,17 @@ def _guided_result_meaning(
     coverage: dict[str, Any] | None,
     failure_summary: dict[str, Any],
     source_count: int = 0,
+    all_sources_off_topic: bool = False,
 ) -> str:
     if verified_findings:
         return f"This result contains {len(verified_findings)} verified finding(s) grounded in the returned sources."
     if status == "partial":
-        if source_count <= 0:
+        if source_count <= 0 or all_sources_off_topic:
+            if all_sources_off_topic:
+                return (
+                    "This result returned sources, but all were off-topic for the query. "
+                    "Tighten the anchor (exact title, DOI, species, agency, venue, or year range) and rerun research."
+                )
             return (
                 "This result is currently metadata-only and did not include inspectable sources. "
                 "Use follow_up_research or rerun research with a tighter anchor."
@@ -4139,6 +4150,7 @@ def _guided_session_state(
             coverage=coverage,
             failure_summary=failure_summary,
             source_count=len(sources),
+            all_sources_off_topic=_guided_sources_all_off_topic(sources),
         ),
         "nextActions": payload.get("nextActions")
         or _guided_next_actions(
@@ -5036,6 +5048,7 @@ async def dispatch_tool(
                     coverage=None,
                     failure_summary=failure_summary,
                     source_count=len(sources),
+                    all_sources_off_topic=_guided_sources_all_off_topic(sources),
                 ),
                 "nextActions": _guided_next_actions(
                     search_session_id=cast(str | None, resolved.get("searchSessionId")),
@@ -5390,6 +5403,7 @@ async def dispatch_tool(
                     coverage=merged_coverage,
                     failure_summary=failure_summary,
                     source_count=len(sources),
+                    all_sources_off_topic=_guided_sources_all_off_topic(sources),
                 ),
                 "nextActions": _guided_next_actions(
                     search_session_id=search_session_id,
@@ -5500,6 +5514,7 @@ async def dispatch_tool(
                 coverage=cast(dict[str, Any] | None, raw.get("coverageSummary")),
                 failure_summary=failure_summary,
                 source_count=len(sources),
+                all_sources_off_topic=_guided_sources_all_off_topic(sources),
             ),
             "nextActions": _guided_next_actions(
                 search_session_id=cast(str | None, raw.get("searchSessionId")),
@@ -5953,6 +5968,7 @@ async def dispatch_tool(
                 coverage=cast(dict[str, Any] | None, ask.get("coverageSummary")),
                 failure_summary=failure_summary,
                 source_count=len(sources),
+                all_sources_off_topic=follow_up_all_off_topic,
             ),
             "nextActions": _guided_next_actions(
                 search_session_id=follow_up_args.search_session_id,
@@ -6054,6 +6070,7 @@ async def dispatch_tool(
                 coverage=cast(dict[str, Any] | None, ask.get("coverageSummary")),
                 failure_summary=failure_summary,
                 source_count=len(sources),
+                all_sources_off_topic=follow_up_all_off_topic,
             )
             response["resultState"] = _guided_result_state(
                 status="partial",
