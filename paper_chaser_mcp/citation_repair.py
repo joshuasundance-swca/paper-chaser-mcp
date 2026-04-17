@@ -335,6 +335,19 @@ def build_match_metadata(
         resolution_strategy=ranked.resolution_strategy,
         title_similarity=ranked.title_similarity,
     )
+    resolution_state = classify_known_item_resolution_state(
+        resolution_confidence=confidence,
+        resolution_strategy=ranked.resolution_strategy,
+        matched_fields=ranked.matched_fields,
+        conflicting_fields=ranked.conflicting_fields,
+        title_similarity=ranked.title_similarity,
+        year_delta=ranked.year_delta,
+        author_overlap=ranked.author_overlap,
+        best_score=ranked.score,
+        runner_up_score=None,
+        candidate_count=candidate_count if candidate_count is not None else 1,
+        has_best_match=True,
+    )
     return {
         "matchConfidence": confidence,
         "matchedFields": ranked.matched_fields,
@@ -342,6 +355,7 @@ def build_match_metadata(
         "yearDelta": ranked.year_delta,
         "authorOverlap": ranked.author_overlap,
         "candidateCount": candidate_count if candidate_count is not None else 1,
+        "knownItemResolutionState": resolution_state,
     }
 
 
@@ -572,6 +586,19 @@ def _serialize_citation_response(
     serializable_candidates = ([best] if best is not None else []) if not abstain else alternatives
     if not abstain and best is not None:
         serializable_candidates = [best, *alternatives]
+    resolution_state = classify_known_item_resolution_state(
+        resolution_confidence=confidence,
+        resolution_strategy=best.resolution_strategy if best is not None else "none",
+        matched_fields=best.matched_fields if best is not None else [],
+        conflicting_fields=best.conflicting_fields if best is not None else [],
+        title_similarity=best.title_similarity if best is not None else None,
+        year_delta=best.year_delta if best is not None else None,
+        author_overlap=best.author_overlap if best is not None else None,
+        best_score=best.score if best is not None else None,
+        runner_up_score=runner_up_score,
+        candidate_count=len(candidates),
+        has_best_match=best_for_response is not None,
+    )
     response = CitationResolutionResponse(
         bestMatch=_to_candidate_model(best_for_response) if best_for_response is not None else None,
         alternatives=[_to_candidate_model(candidate) for candidate in alternatives],
@@ -583,6 +610,7 @@ def _serialize_citation_response(
         extractedFields=_parsed_fields_payload(parsed),
         inferredFields=_inferred_fields_payload(parsed, serializable_candidates),
         candidateCount=len(serializable_candidates),
+        knownItemResolutionState=resolution_state,
         message=_resolution_message(
             parsed=parsed,
             candidates=serializable_candidates,
@@ -1214,6 +1242,80 @@ def _why_selected(
     if parsed.looks_like_non_paper:
         return f"{title} is the nearest paper-like candidate, but the input may describe a non-paper output."
     return f"{title} is a weak fallback candidate from {resolution_strategy}."
+
+
+def classify_known_item_resolution_state(
+    *,
+    resolution_confidence: Literal["high", "medium", "low"],
+    resolution_strategy: str,
+    matched_fields: list[str] | None,
+    conflicting_fields: list[str] | None,
+    title_similarity: float | None,
+    year_delta: int | None,
+    author_overlap: int | None,
+    best_score: float | None,
+    runner_up_score: float | None,
+    candidate_count: int | None,
+    has_best_match: bool = True,
+) -> Literal["resolved_exact", "resolved_probable", "needs_disambiguation"]:
+    """Classify a known-item / resolve_reference outcome into one of three
+    execution-provenance labels.
+
+    Rules (ordered):
+
+    * ``needs_disambiguation`` when there is no best match, when the best score
+      is implausibly low, or when a runner-up sits within a small epsilon of
+      the best candidate (the agent should clarify).
+    * ``resolved_exact`` when an identifier round-trip succeeded without a
+      title conflict, OR when a fuzzy/exact-title match has very high title
+      similarity AND at least one corroborating field (author or year) AND no
+      conflicts on key bibliographic fields.
+    * ``resolved_probable`` otherwise when confidence is ``high`` but a key
+      field conflicts, or when confidence is ``medium``, or when a fuzzy hit
+      lands in the 0.72–0.9 title-similarity band.
+    * Fall back to ``needs_disambiguation`` when confidence is ``low``.
+    """
+    matched = set(matched_fields or [])
+    conflicting = set(conflicting_fields or [])
+    key_conflicts = {"author", "year", "venue"} & conflicting
+    title_conflict = "title" in conflicting
+
+    if not has_best_match:
+        return "needs_disambiguation"
+    if best_score is not None and best_score < 0.5 and "identifier" not in matched:
+        return "needs_disambiguation"
+    if (
+        best_score is not None
+        and runner_up_score is not None
+        and (best_score - runner_up_score) < 0.05
+        and "identifier" not in matched
+    ):
+        return "needs_disambiguation"
+    if (candidate_count or 0) >= 2 and resolution_confidence == "low":
+        return "needs_disambiguation"
+
+    if resolution_confidence == "high":
+        if resolution_strategy.startswith("identifier") and "identifier" in matched and not title_conflict:
+            return "resolved_exact"
+        if (
+            title_similarity is not None
+            and title_similarity >= 0.9
+            and (year_delta == 0 or (author_overlap or 0) >= 1)
+            and not key_conflicts
+            and not title_conflict
+        ):
+            return "resolved_exact"
+        # Confidence is high but a key field disagrees — treat as probable,
+        # not exact.
+        return "resolved_probable"
+
+    if resolution_confidence == "medium":
+        return "resolved_probable"
+
+    # resolution_confidence == "low"
+    if title_similarity is not None and title_similarity >= 0.72 and (author_overlap or 0) >= 1 and not title_conflict:
+        return "resolved_probable"
+    return "needs_disambiguation"
 
 
 def _classify_resolution_confidence(

@@ -1131,10 +1131,7 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
             primary = None
         if primary:
             self._mark_provider_used()
-            return {
-                pid: annotate_llm_entry(entry, source="llm", confidence=0.88)
-                for pid, entry in primary.items()
-            }
+            return {pid: annotate_llm_entry(entry, source="llm", confidence=0.88) for pid, entry in primary.items()}
 
         midpoint = max(1, (len(papers) + 1) // 2)
         halves = [papers[:midpoint], papers[midpoint:]] if len(papers) > 1 else [papers]

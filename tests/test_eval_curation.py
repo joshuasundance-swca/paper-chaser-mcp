@@ -307,5 +307,3 @@ def test_maybe_capture_eval_candidate_omits_ranking_diagnostics_for_succeeded_ca
 
     text = trace_path.read_text(encoding="utf-8")
     assert '"rankingDiagnostics"' not in text
-
-

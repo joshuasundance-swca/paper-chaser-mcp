@@ -2392,14 +2392,12 @@ def _guided_trust_summary(
     weak_match_rationales = [
         str(source.get("classificationRationale") or "").strip()
         for source in sources
-        if source.get("topicalRelevance") == "weak_match"
-        and str(source.get("classificationRationale") or "").strip()
+        if source.get("topicalRelevance") == "weak_match" and str(source.get("classificationRationale") or "").strip()
     ]
     off_topic_rationales = [
         str(source.get("classificationRationale") or "").strip()
         for source in sources
-        if source.get("topicalRelevance") == "off_topic"
-        and str(source.get("classificationRationale") or "").strip()
+        if source.get("topicalRelevance") == "off_topic" and str(source.get("classificationRationale") or "").strip()
     ]
     if verified_primary_source_count > 0 and on_topic_source_count > 0:
         strength_explanation = "Verified primary sources provide direct on-topic support."

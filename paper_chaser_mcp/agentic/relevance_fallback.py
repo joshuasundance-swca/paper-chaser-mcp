@@ -79,33 +79,21 @@ def _compose_classification_rationale(label: RelevanceLabel, profile: dict[str, 
     title_facet = profile["title_facet_coverage"]
     body_facet = profile["body_facet_coverage"]
     if label == "on_topic":
-        text = (
-            f"Strong topical overlap: title anchors {title_anchor:.0%}, facet coverage {title_facet:.0%}."
-        )
+        text = f"Strong topical overlap: title anchors {title_anchor:.0%}, facet coverage {title_facet:.0%}."
     elif label == "off_topic":
         if title_anchor == 0 and body_anchor == 0:
             text = "No query-term overlap in title or abstract; low lexical similarity."
         else:
-            text = (
-                f"Low topical overlap: lexical similarity {similarity:.2f}, "
-                f"title anchors {title_anchor:.0%}."
-            )
+            text = f"Low topical overlap: lexical similarity {similarity:.2f}, title anchors {title_anchor:.0%}."
     else:  # weak_match
         if title_anchor == 0 and body_anchor > 0:
-            text = (
-                f"Query terms appear only in abstract (body anchors {body_anchor:.0%}); "
-                "title lacks direct overlap."
-            )
+            text = f"Query terms appear only in abstract (body anchors {body_anchor:.0%}); title lacks direct overlap."
         elif 0.0 < title_facet < 1.0:
-            text = (
-                f"Partial facet coverage ({title_facet:.0%}); some query aspects missing in title."
-            )
+            text = f"Partial facet coverage ({title_facet:.0%}); some query aspects missing in title."
         elif body_facet > 0 and title_facet == 0:
             text = f"Facets mentioned in abstract ({body_facet:.0%}) but absent from title."
         else:
-            text = (
-                f"Borderline match: similarity {similarity:.2f}, title anchors {title_anchor:.0%}."
-            )
+            text = f"Borderline match: similarity {similarity:.2f}, title anchors {title_anchor:.0%}."
     return text[:_RATIONALE_MAX_CHARS]
 
 
@@ -133,9 +121,7 @@ def classify_paper_deterministic(
         f"bodyFacetCoverage={profile['body_facet_coverage']:.2f}, "
         f"lexicalSimilarity={profile['similarity']:.2f}"
     )
-    relevance_reason = (
-        f"Deterministic three-way tier (trigger={reason}). {base['rationale']} Signals: {signals}."
-    )
+    relevance_reason = f"Deterministic three-way tier (trigger={reason}). {base['rationale']} Signals: {signals}."
     base.update(
         {
             "relevanceSource": "deterministic_tier",

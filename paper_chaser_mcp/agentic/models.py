@@ -8,6 +8,7 @@ from pydantic import AliasChoices, Field
 
 from ..models.common import ApiModel, CitationRecord, CoverageSummary, FailureSummary, OpenAccessRoute, Paper
 from ..models.regulations import RegulatoryTimeline
+from ..models.tools import KnownItemResolutionState
 
 IntentLabel = Literal[
     "discovery",
@@ -244,6 +245,14 @@ class SearchStrategyMetadata(ApiModel):
     anchored_subject: str | None = Field(
         default=None,
         alias="anchoredSubject",
+    )
+    known_item_resolution_state: KnownItemResolutionState | None = Field(
+        default=None,
+        alias="knownItemResolutionState",
+        description=(
+            "Execution-provenance label for known-item / resolve_reference outcomes. "
+            "One of resolved_exact, resolved_probable, needs_disambiguation."
+        ),
     )
     normalization_warnings: list[str] = Field(
         default_factory=list,

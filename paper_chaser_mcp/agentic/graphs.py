@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from fastmcp import Context
 
-from ..citation_repair import parse_citation, resolve_citation
+from ..citation_repair import build_match_metadata, parse_citation, resolve_citation
 from ..compat import build_agent_hints, build_resource_uris
 from ..enrichment import (
     PaperEnrichmentService,
@@ -3239,6 +3239,11 @@ class AgenticRuntime:
             anchorType=resolution_strategy,
             anchorStrength=_anchor_strength_for_resolution(resolution_strategy),
             anchoredSubject=str(known_item.get("title") or query),
+            knownItemResolutionState=_known_item_resolution_state_for_strategy(
+                resolution_strategy=resolution_strategy,
+                known_item=known_item,
+                query=query,
+            ),
             normalizationWarnings=normalization_warnings,
             repairedInputs=repaired_inputs,
             bestNextInternalAction="get_paper_details",
@@ -3523,6 +3528,7 @@ class AgenticRuntime:
             anchorType="candidate_set",
             anchorStrength="low",
             anchoredSubject=query,
+            knownItemResolutionState="needs_disambiguation",
             normalizationWarnings=normalization_warnings,
             repairedInputs=repaired_inputs,
             bestNextInternalAction=("ask_result_set" if smart_hits else "search_papers_smart"),
@@ -4625,9 +4631,7 @@ def _rank_regulatory_documents(
         notice_bonus = 1 if document_type in {"notice", "rule"} else 0
         recency_bonus = max((publication_year - 2010) * 2, 0) if prefer_recent else 0
         cultural_overlap = len(tokens & _CULTURAL_RESOURCE_DOCUMENT_TERMS) if cultural_resource_boost else 0
-        cultural_title_overlap = (
-            len(title_tokens & _CULTURAL_RESOURCE_DOCUMENT_TERMS) if cultural_resource_boost else 0
-        )
+        cultural_title_overlap = len(title_tokens & _CULTURAL_RESOURCE_DOCUMENT_TERMS) if cultural_resource_boost else 0
         cultural_bonus = (cultural_title_overlap * 6) + (cultural_overlap * 3)
         score = (
             (title_overlap * 5)
@@ -4941,6 +4945,41 @@ def _anchor_strength_for_resolution(resolution_strategy: str) -> Literal["high",
     if resolution_strategy in {"semantic_title_match", "openalex_autocomplete"}:
         return "medium"
     return "low"
+
+
+def _known_item_resolution_state_for_strategy(
+    *,
+    resolution_strategy: str,
+    known_item: dict[str, Any],
+    query: str,
+) -> Literal["resolved_exact", "resolved_probable", "needs_disambiguation"]:
+    """Derive a :data:`KnownItemResolutionState` for a resolved known-item payload.
+
+    Uses the shared citation-repair metadata when available (``citation_resolution``
+    round-trip) and falls back to deterministic title-similarity bands for the
+    secondary resolution strategies.
+    """
+    title = str(known_item.get("title") or "")
+    similarity = _known_item_title_similarity(query, title) if title else 0.0
+    if resolution_strategy == "citation_resolution":
+        metadata = build_match_metadata(
+            query=query,
+            paper=known_item,
+            candidate_count=1,
+            resolution_strategy=resolution_strategy,
+        )
+        state = metadata.get("knownItemResolutionState")
+        if isinstance(state, str) and state in {
+            "resolved_exact",
+            "resolved_probable",
+            "needs_disambiguation",
+        }:
+            return cast(Literal["resolved_exact", "resolved_probable", "needs_disambiguation"], state)
+    if similarity >= 0.9:
+        return "resolved_exact"
+    if similarity >= 0.72:
+        return "resolved_probable"
+    return "needs_disambiguation"
 
 
 def _known_item_recovery_warning(resolution_strategy: str) -> str:

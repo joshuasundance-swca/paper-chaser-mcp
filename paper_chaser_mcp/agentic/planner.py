@@ -16,6 +16,7 @@ from .models import (
     IntentCandidate,
     IntentLabel,
     PlannerDecision,
+    PlannerQueryType,
 )
 from .providers import COMMON_QUERY_WORDS, ModelProviderBundle
 
@@ -584,7 +585,18 @@ def _estimate_query_specificity(
     focus: str | None,
     year: str | None,
     venue: str | None,
+    planner_query_type: PlannerQueryType | None = None,
+    planner_specificity: Literal["high", "medium", "low"] | None = None,
 ) -> Literal["high", "medium", "low"]:
+    """Estimate how specific a query is.
+
+    When the LLM-authored ``planner_query_type`` or ``planner_specificity`` are
+    provided we prefer them over raw text heuristics. The title/citation
+    regex-based "high" promotion is suppressed whenever the LLM signalled a
+    broad-concept query or already chose ``low`` specificity — this avoids the
+    "long conceptual question happens to look title-like" false-positive that
+    used to force those queries into known-item recovery.
+    """
     terms = query_terms(normalized_query)
     broad_concept_signal = _looks_broad_concept_query(
         normalized_query=normalized_query,
@@ -595,13 +607,23 @@ def _estimate_query_specificity(
     )
     if _strong_known_item_signal(normalized_query) or _strong_regulatory_signal(normalized_query, focus):
         return "high"
-    if not broad_concept_signal and (
-        looks_like_exact_title(normalized_query) or looks_like_citation_query(normalized_query)
+    llm_disagrees_with_title_heuristic = planner_query_type == "broad_concept" or planner_specificity == "low"
+    if (
+        not broad_concept_signal
+        and not llm_disagrees_with_title_heuristic
+        and (looks_like_exact_title(normalized_query) or looks_like_citation_query(normalized_query))
     ):
         return "high"
     has_constraints = bool(focus or year or venue)
     if broad_concept_signal:
         return "low"
+    if planner_specificity is not None:
+        # Honor an explicit low/high label from the planner whenever we have
+        # not already short-circuited above.
+        if planner_specificity == "low":
+            return "low"
+        if planner_specificity == "high":
+            return "high"
     if has_constraints and len(terms) <= 5:
         return "high"
     if _query_starts_broad(normalized_query) and len(terms) >= 6:
@@ -856,6 +878,42 @@ async def classify_query(
                 planner.intent_source = "heuristic_override"
                 planner.intent_confidence = heuristic_override_confidence
                 planner.intent_rationale = heuristic_rationale
+        elif (
+            planner.intent == "known_item"
+            and planner.intent_source == "planner"
+            and not strong_known_item_signal
+            and (
+                # Either the deterministic text heuristic says broad-concept, or
+                # the LLM itself labelled the query as broad / low-specificity /
+                # highly ambiguous. Trust the planner's own signals first and
+                # only fall back to heuristics for missing/low-confidence cases.
+                _looks_broad_concept_query(
+                    normalized_query=normalized,
+                    focus=focus,
+                    year=year,
+                    venue=venue,
+                )
+                or (
+                    planner.query_type == "broad_concept"
+                    and (planner.query_specificity == "low" or planner.ambiguity_level == "high")
+                )
+            )
+        ):
+            previous_intent = planner.intent
+            fallback_intent: IntentLabel = "discovery"
+            for candidate in planner.intent_candidates:
+                if candidate.intent != "known_item" and candidate.confidence in {"high", "medium"}:
+                    fallback_intent = candidate.intent
+                    break
+            planner.intent = fallback_intent
+            planner.intent_source = "heuristic_override"
+            planner.intent_confidence = "medium"
+            planner.intent_rationale = (
+                f"Planner selected '{previous_intent}' but the query looks like a broad conceptual "
+                "question (no DOI/arXiv/URL, planner specificity/ambiguity signals disagree); "
+                f"demoted to '{fallback_intent}' to avoid force-routing discovery work into "
+                "known-item recovery."
+            )
         elif planner.intent_rationale.strip() == "":
             planner.intent_rationale = "Planner intent selected without a strong deterministic override."
 

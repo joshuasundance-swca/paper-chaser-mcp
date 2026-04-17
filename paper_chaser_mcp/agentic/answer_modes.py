@@ -147,8 +147,7 @@ def _metadata_facets(lowered_question: str) -> list[str]:
     if any(marker in lowered_question for marker in ("publication year", "what year", "year published")):
         facets.append("year")
     if any(
-        marker in lowered_question
-        for marker in ("what records", "what sources", "which documents", "what documents")
+        marker in lowered_question for marker in ("what records", "what sources", "which documents", "what documents")
     ):
         facets.append("inventory")
     return facets
@@ -227,9 +226,7 @@ def build_evidence_use_plan(
     fallback_only_on_topic = 0
     on_topic_count = 0
     for item, source in zip(evidence, source_records, strict=False):
-        evidence_id = str(
-            item.evidence_id or item.paper.paper_id or item.paper.canonical_id or ""
-        ).strip()
+        evidence_id = str(item.evidence_id or item.paper.paper_id or item.paper.canonical_id or "").strip()
         if not evidence_id:
             continue
         on_topic = _is_on_topic(source) and float(item.relevance_score) >= 0.25
@@ -243,9 +240,7 @@ def build_evidence_use_plan(
             continue
         responsive_ids.append(evidence_id)
 
-    unsupported_components: list[str] = [
-        component for component in (unsupported_asks or []) if str(component).strip()
-    ]
+    unsupported_components: list[str] = [component for component in (unsupported_asks or []) if str(component).strip()]
 
     sufficient = True
     retrieval_sufficiency: Literal["sufficient", "thin", "insufficient"] = "sufficient"
@@ -256,17 +251,12 @@ def build_evidence_use_plan(
         if len(responsive_ids) >= _SYNTHESIS_MIN_RESPONSIVE and len(unsupported_components) <= 1:
             retrieval_sufficiency = "sufficient"
             confidence = "high"
-            rationale = (
-                f"{len(responsive_ids)} non-fallback on-topic sources support the requested {mode}."
-            )
+            rationale = f"{len(responsive_ids)} non-fallback on-topic sources support the requested {mode}."
         elif len(responsive_ids) == 1 and mode != "comparison" and not unsupported_components:
             retrieval_sufficiency = "thin"
             confidence = "low"
             sufficient = False
-            rationale = (
-                "Only one non-fallback on-topic source is available; "
-                "synthesis would lean on a single paper."
-            )
+            rationale = "Only one non-fallback on-topic source is available; synthesis would lean on a single paper."
             unsupported_components.append(
                 "Only one directly responsive source is available for this synthesis request."
             )
@@ -275,19 +265,11 @@ def build_evidence_use_plan(
             confidence = "low"
             sufficient = False
             if mode == "comparison":
-                rationale = (
-                    "Comparison requested, but fewer than two non-fallback on-topic sources were retrieved."
-                )
-                unsupported_components.append(
-                    "Comparison requires at least two directly responsive sources."
-                )
+                rationale = "Comparison requested, but fewer than two non-fallback on-topic sources were retrieved."
+                unsupported_components.append("Comparison requires at least two directly responsive sources.")
             else:
-                rationale = (
-                    f"{mode} requested, but the saved evidence does not directly support the synthesis."
-                )
-                unsupported_components.append(
-                    "The saved evidence does not directly support the requested synthesis."
-                )
+                rationale = f"{mode} requested, but the saved evidence does not directly support the synthesis."
+                unsupported_components.append("The saved evidence does not directly support the requested synthesis.")
             if fallback_only_on_topic:
                 unsupported_components.append(
                     f"{fallback_only_on_topic} on-topic classification(s) relied on a deterministic "
@@ -319,8 +301,7 @@ def build_evidence_use_plan(
                 confidence = "medium"
                 sufficient = True
                 rationale = (
-                    "Unclassified follow-up with on-topic evidence; "
-                    "deferring to downstream answer-status heuristics."
+                    "Unclassified follow-up with on-topic evidence; deferring to downstream answer-status heuristics."
                 )
             else:
                 retrieval_sufficiency = "thin"

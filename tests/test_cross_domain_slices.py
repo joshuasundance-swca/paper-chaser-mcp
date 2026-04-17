@@ -139,10 +139,7 @@ async def test_natural_science_pfas_positive_control_is_grounded(
     )
     monkeypatch.setattr(server, "agentic_runtime", _make_fake_runtime(result))
 
-    query = (
-        "What does the literature say about PFAS bioaccumulation in freshwater "
-        "fish across U.S. watersheds?"
-    )
+    query = "What does the literature say about PFAS bioaccumulation in freshwater fish across U.S. watersheds?"
     payload = _payload(
         await server.call_tool(
             "research",
@@ -269,8 +266,7 @@ async def test_heritage_archaeology_off_topic_noise_stays_in_leads(
             "research",
             {
                 "query": (
-                    "Post-wildfire effects on lithic and ceramic surface archaeological sites "
-                    "in the Intermountain West"
+                    "Post-wildfire effects on lithic and ceramic surface archaeological sites in the Intermountain West"
                 )
             },
         )
@@ -357,9 +353,7 @@ async def test_known_item_recovery_vaswani_reports_resolved(
     monkeypatch.setattr(server, "enable_semantic_scholar", True)
     monkeypatch.setattr(server, "enable_openalex", False)
 
-    payload = _payload(
-        await server.call_tool("resolve_reference", {"reference": "arXiv:1706.03762"})
-    )
+    payload = _payload(await server.call_tool("resolve_reference", {"reference": "arXiv:1706.03762"}))
 
     assert payload.get("status") == "resolved"
     assert payload.get("resolutionType") == "paper_identifier"

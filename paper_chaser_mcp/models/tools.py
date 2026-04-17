@@ -21,6 +21,21 @@ OPAQUE_CURSOR_FIELD_DESCRIPTION = (
     "different tool or query flow. Omit to start from the beginning."
 )
 
+KnownItemResolutionState = Literal[
+    "resolved_exact",
+    "resolved_probable",
+    "needs_disambiguation",
+]
+"""Execution-provenance label for known-item / resolve_reference outcomes.
+
+- ``resolved_exact``: a single high-confidence match (identifier round-trip, or
+  exact-title match with strongly corroborating author/year fields).
+- ``resolved_probable``: one best match but with weaker agreement (fuzzy title,
+  mid-range confidence, or a single conflicting metadata field).
+- ``needs_disambiguation``: multiple near-tie candidates, no best match, or a
+  lone candidate that fails the probable threshold."""
+
+
 SUPPORTED_AUTHOR_FIELDS_TEXT = ", ".join(SUPPORTED_AUTHOR_FIELDS)
 SUPPORTED_PAPER_FIELDS_TEXT = ", ".join(SUPPORTED_PAPER_FIELDS)
 AUTHOR_FIELDS_DESCRIPTION = "Fields to return. Supported values: " + SUPPORTED_AUTHOR_FIELDS_TEXT

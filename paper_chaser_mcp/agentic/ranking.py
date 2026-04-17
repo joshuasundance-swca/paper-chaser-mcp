@@ -215,9 +215,7 @@ async def rerank_candidates(
         or (planner_anchor_value and str(planner_anchor_value).strip())
     )
     anchored_broad = broad_query_mode and (
-        len(anchor_terms) >= 2
-        or bool([c for c in candidate_concepts if c and str(c).strip()])
-        or has_planner_anchor
+        len(anchor_terms) >= 2 or bool([c for c in candidate_concepts if c and str(c).strip()]) or has_planner_anchor
     )
     exploratory_broad = broad_query_mode and not anchored_broad
     if anchored_broad:
@@ -570,10 +568,7 @@ def summarize_ranking_diagnostics(
         paper = candidate.get("paper") if isinstance(candidate, dict) else None
         paper_dict = paper if isinstance(paper, dict) else {}
         paper_id = str(
-            paper_dict.get("paperId")
-            or paper_dict.get("canonicalId")
-            or paper_dict.get("sourceId")
-            or ""
+            paper_dict.get("paperId") or paper_dict.get("canonicalId") or paper_dict.get("sourceId") or ""
         ).strip()
         title = str(paper_dict.get("title") or "").strip()
         providers = candidate.get("providers") if isinstance(candidate, dict) else None

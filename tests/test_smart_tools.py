@@ -4958,9 +4958,9 @@ async def test_rerank_candidates_anchored_broad_nitrate_headwater_stream() -> No
 
     assert ranked[0]["paper"]["paperId"] == "on-topic-anchor"
     on_topic_breakdown = ranked[0]["scoreBreakdown"]
-    drift_breakdown = next(
-        item for item in ranked if item["paper"]["paperId"] == "drift-generic-stream"
-    )["scoreBreakdown"]
+    drift_breakdown = next(item for item in ranked if item["paper"]["paperId"] == "drift-generic-stream")[
+        "scoreBreakdown"
+    ]
     assert on_topic_breakdown["broadQueryRegime"] == "anchored_broad"
     assert drift_breakdown["broadQueryRegime"] == "anchored_broad"
     assert drift_breakdown["anchoredIntentPenalty"] > 0
@@ -5022,9 +5022,9 @@ async def test_rerank_candidates_anchored_broad_pesticide_pollinator() -> None:
 
     assert ranked[0]["paper"]["paperId"] == "on-topic-pollinator"
     on_topic_breakdown = ranked[0]["scoreBreakdown"]
-    drift_breakdown = next(
-        item for item in ranked if item["paper"]["paperId"] == "drift-agri-economics"
-    )["scoreBreakdown"]
+    drift_breakdown = next(item for item in ranked if item["paper"]["paperId"] == "drift-agri-economics")[
+        "scoreBreakdown"
+    ]
     assert on_topic_breakdown["broadQueryRegime"] == "anchored_broad"
     assert drift_breakdown["broadQueryRegime"] == "anchored_broad"
     assert drift_breakdown["semanticFitGate"] < 1.0
@@ -5089,9 +5089,9 @@ async def test_rerank_candidates_anchored_broad_wildfire_cultural_resource() -> 
 
     assert ranked[0]["paper"]["paperId"] == "on-topic-cultural"
     on_topic_breakdown = ranked[0]["scoreBreakdown"]
-    drift_breakdown = next(
-        item for item in ranked if item["paper"]["paperId"] == "drift-forestry-generic"
-    )["scoreBreakdown"]
+    drift_breakdown = next(item for item in ranked if item["paper"]["paperId"] == "drift-forestry-generic")[
+        "scoreBreakdown"
+    ]
     assert on_topic_breakdown["broadQueryRegime"] == "anchored_broad"
     assert drift_breakdown["broadQueryRegime"] == "anchored_broad"
     assert drift_breakdown["anchoredIntentPenalty"] > 0

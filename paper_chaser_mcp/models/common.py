@@ -7,6 +7,16 @@ from typing import Any, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, RootModel, model_validator
 
+# Mirrors :data:`paper_chaser_mcp.models.tools.KnownItemResolutionState`. We redefine
+# the Literal alias locally to avoid a ``common <- tools <- ecos <- common`` import
+# cycle; the two aliases are structurally identical (Literal types are nominal by
+# value, not by name).
+KnownItemResolutionState = Literal[
+    "resolved_exact",
+    "resolved_probable",
+    "needs_disambiguation",
+]
+
 
 class ApiModel(BaseModel):
     """Base model that preserves unknown provider fields during normalization."""
@@ -942,6 +952,14 @@ class CitationResolutionResponse(ApiModel):
     candidate_count: int = Field(
         default=0,
         alias="candidateCount",
+    )
+    known_item_resolution_state: KnownItemResolutionState | None = Field(
+        default=None,
+        alias="knownItemResolutionState",
+        description=(
+            "Execution-provenance label for resolve_reference outcomes. "
+            "One of resolved_exact, resolved_probable, needs_disambiguation."
+        ),
     )
     message: str = ""
 
