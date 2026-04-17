@@ -1,0 +1,286 @@
+{
+  "schemaVersion": 1,
+  "slice": "env-sci",
+  "description": "Environmental-science benchmark pack for Workstream D. Each row encodes an expected behavior for the guided paper-chaser tool surface across literature discovery, regulatory discovery, grounded follow-up, source inspection, and ECOS-style species-dossier retrieval. Rows are consumed by tests/test_env_sci_eval_slices.py and the run_eval_autopilot.py --slice env-sci flag.",
+  "failureFamilies": [
+    "thin_deterministic_salvage",
+    "species_specificity_failure",
+    "regulatory_primary_source_mixing",
+    "archaeology_crossover_drift",
+    "management_intervention_comparison"
+  ],
+  "rows": [
+    {
+      "id": "env_sci_lit_discovery_pfas_broad_review",
+      "domain": "literature_discovery",
+      "failureFamily": null,
+      "query": "Find recent research on PFAS remediation in groundwater, especially adsorption, ion exchange, electrochemical treatment, and destruction methods.",
+      "expectedIntentFamily": "discovery",
+      "expectedRegulatoryIntent": null,
+      "mustSurfaceFeatures": [
+        "peer_reviewed_evidence",
+        "provider_plan_includes_literature_backbone"
+      ],
+      "mustNotSurface": [
+        "regulatory_primary_source_as_evidence_only"
+      ],
+      "expectedAbstentionSignal": null,
+      "notes": "Positive control: broad literature review should route through openalex/semantic_scholar and surface peer-reviewed evidence."
+    },
+    {
+      "id": "env_sci_lit_discovery_wildfire_anchored_review",
+      "domain": "literature_discovery",
+      "failureFamily": null,
+      "query": "Map the peer-reviewed literature on post-wildfire vegetation recovery in Intermountain West sagebrush steppe since 2015.",
+      "expectedIntentFamily": "discovery",
+      "expectedRegulatoryIntent": null,
+      "mustSurfaceFeatures": [
+        "peer_reviewed_evidence",
+        "anchored_time_or_place"
+      ],
+      "mustNotSurface": [
+        "generic_wildfire_notice_as_evidence"
+      ],
+      "expectedAbstentionSignal": null,
+      "notes": "Anchored review: the time bound and place anchor must survive routing without being quietly dropped."
+    },
+    {
+      "id": "env_sci_reg_discovery_cfr_current_text",
+      "domain": "regulatory_discovery",
+      "failureFamily": null,
+      "query": "Retrieve the current text of 50 CFR 17.95 for the desert tortoise critical habitat designation.",
+      "expectedIntentFamily": "regulatory",
+      "expectedRegulatoryIntent": "cfr_current_text",
+      "mustSurfaceFeatures": [
+        "cfr_primary_source",
+        "govinfo_or_ecfr_provider"
+      ],
+      "mustNotSurface": [
+        "peer_reviewed_article_as_primary_regulatory_source"
+      ],
+      "expectedAbstentionSignal": null,
+      "notes": "CFR current-text recovery must return primary regulatory material, not literature review."
+    },
+    {
+      "id": "env_sci_reg_discovery_rulemaking_history",
+      "domain": "regulatory_discovery",
+      "failureFamily": null,
+      "query": "Trace the Federal Register rulemaking history for the California condor critical habitat actions under the ESA.",
+      "expectedIntentFamily": "regulatory",
+      "expectedRegulatoryIntent": "rulemaking_history",
+      "mustSurfaceFeatures": [
+        "federal_register_primary_source",
+        "subject_anchored_to_california_condor"
+      ],
+      "mustNotSurface": [
+        "unrelated_species_notices_in_verified_findings"
+      ],
+      "expectedAbstentionSignal": null,
+      "notes": "Rulemaking history must stay subject-anchored; unrelated species notices belong in leads, not evidence."
+    },
+    {
+      "id": "env_sci_reg_discovery_guidance_lookup",
+      "domain": "regulatory_discovery",
+      "failureFamily": null,
+      "query": "Find USFWS guidance documents for incidental take permits associated with the northern long-eared bat.",
+      "expectedIntentFamily": "regulatory",
+      "expectedRegulatoryIntent": "agency_guidance",
+      "mustSurfaceFeatures": [
+        "agency_guidance_document",
+        "subject_anchored_to_northern_long_eared_bat"
+      ],
+      "mustNotSurface": [
+        "generic_endangered_species_summary_as_guidance"
+      ],
+      "expectedAbstentionSignal": null,
+      "notes": "Agency guidance routing is distinct from CFR text and rulemaking history."
+    },
+    {
+      "id": "env_sci_follow_up_pfas_comparison_hybrid",
+      "domain": "grounded_follow_up",
+      "failureFamily": "management_intervention_comparison",
+      "query": "For the saved PFAS remediation session, compare adsorption, membrane, and destruction methods and name the single best intervention.",
+      "expectedIntentFamily": "follow_up",
+      "expectedRegulatoryIntent": null,
+      "mustSurfaceFeatures": [
+        "explicit_comparative_scope",
+        "per_method_evidence_sufficiency_flag"
+      ],
+      "mustNotSurface": [
+        "single_winner_claim_from_thin_evidence"
+      ],
+      "expectedAbstentionSignal": "insufficient_evidence",
+      "notes": "Comparative intervention question over thin evidence must abstain or flag insufficient evidence, never pick a winner."
+    },
+    {
+      "id": "env_sci_follow_up_esa_regulatory_plus_science",
+      "domain": "grounded_follow_up",
+      "failureFamily": null,
+      "query": "From the saved desert tortoise session, summarize what the regulatory record and the peer-reviewed literature each say about Mojave population recovery, keeping the two evidence types separate.",
+      "expectedIntentFamily": "follow_up",
+      "expectedRegulatoryIntent": "hybrid_literature_plus_regulatory",
+      "mustSurfaceFeatures": [
+        "separate_regulatory_bucket",
+        "separate_literature_bucket"
+      ],
+      "mustNotSurface": [
+        "regulatory_and_literature_fused_into_one_claim"
+      ],
+      "expectedAbstentionSignal": null,
+      "notes": "Hybrid follow-up must preserve primary-source separation from peer-reviewed synthesis."
+    },
+    {
+      "id": "env_sci_inspect_authoritative_but_weak",
+      "domain": "source_inspection",
+      "failureFamily": "species_specificity_failure",
+      "query": "Inspect a Federal Register notice titled 'Endangered and Threatened Wildlife and Plants; 12-Month Findings' returned for a desert tortoise search and explain why it is authoritative but not species-specific enough.",
+      "expectedIntentFamily": "provenance",
+      "expectedRegulatoryIntent": null,
+      "mustSurfaceFeatures": [
+        "authoritative_source_type_primary_regulatory",
+        "weak_match_rationale_cites_species_specificity"
+      ],
+      "mustNotSurface": [
+        "authoritative_implies_on_topic"
+      ],
+      "expectedAbstentionSignal": null,
+      "notes": "Weak-match rationale must explicitly cite species-specificity, not lean on source authority."
+    },
+    {
+      "id": "env_sci_inspect_weak_offshore_wind_section_106",
+      "domain": "source_inspection",
+      "failureFamily": "archaeology_crossover_drift",
+      "query": "Inspect a broad offshore wind Section 106 programmatic agreement returned for a tribal cultural-resources guidance search and explain why the scope is too broad.",
+      "expectedIntentFamily": "provenance",
+      "expectedRegulatoryIntent": null,
+      "mustSurfaceFeatures": [
+        "scope_mismatch_rationale",
+        "distinct_from_species_specific_records"
+      ],
+      "mustNotSurface": [
+        "generic_env_review_accepted_as_cultural_resource_guidance"
+      ],
+      "expectedAbstentionSignal": null,
+      "notes": "Cultural-resources scope must not silently inherit broad environmental review language."
+    },
+    {
+      "id": "env_sci_species_dossier_desert_tortoise",
+      "domain": "species_dossier",
+      "failureFamily": null,
+      "query": "Retrieve the ECOS species profile and ESA regulatory chronology for the desert tortoise (Gopherus agassizii).",
+      "expectedIntentFamily": "regulatory",
+      "expectedRegulatoryIntent": "species_dossier",
+      "mustSurfaceFeatures": [
+        "ecos_dossier_present",
+        "species_specific_evidence"
+      ],
+      "mustNotSurface": [
+        "unrelated_species_notice_as_evidence"
+      ],
+      "expectedAbstentionSignal": null,
+      "notes": "ECOS dossier lookup must yield a species-anchored dossier, not a generic wildlife notice."
+    },
+    {
+      "id": "env_sci_species_dossier_california_condor",
+      "domain": "species_dossier",
+      "failureFamily": "regulatory_primary_source_mixing",
+      "query": "Retrieve the California condor (Gymnogyps californianus) ECOS dossier and keep ESA primary-source milestones separate from peer-reviewed recovery literature.",
+      "expectedIntentFamily": "regulatory",
+      "expectedRegulatoryIntent": "species_dossier",
+      "mustSurfaceFeatures": [
+        "ecos_dossier_present",
+        "primary_source_bucket_separate_from_literature"
+      ],
+      "mustNotSurface": [
+        "peer_reviewed_recovery_paper_labelled_primary_source"
+      ],
+      "expectedAbstentionSignal": null,
+      "notes": "Dossier retrieval must keep the primary-source bucket separate from peer-reviewed literature."
+    },
+    {
+      "id": "env_sci_species_dossier_northern_long_eared_bat",
+      "domain": "species_dossier",
+      "failureFamily": "species_specificity_failure",
+      "query": "Retrieve the northern long-eared bat (Myotis septentrionalis) species dossier and reject generic wildlife notices that are not species-anchored.",
+      "expectedIntentFamily": "regulatory",
+      "expectedRegulatoryIntent": "species_dossier",
+      "mustSurfaceFeatures": [
+        "ecos_dossier_present",
+        "species_specific_evidence"
+      ],
+      "mustNotSurface": [
+        "generic_wildlife_notice_labelled_on_topic"
+      ],
+      "expectedAbstentionSignal": null,
+      "notes": "Named species prompt must reject generic wildlife notices as on-topic."
+    },
+    {
+      "id": "env_sci_species_dossier_northern_spotted_owl",
+      "domain": "species_dossier",
+      "failureFamily": null,
+      "query": "Retrieve the northern spotted owl (Strix occidentalis caurina) ECOS dossier and ESA critical habitat chronology.",
+      "expectedIntentFamily": "regulatory",
+      "expectedRegulatoryIntent": "species_dossier",
+      "mustSurfaceFeatures": [
+        "ecos_dossier_present",
+        "species_specific_evidence"
+      ],
+      "mustNotSurface": [
+        "unrelated_raptor_notice_as_evidence"
+      ],
+      "expectedAbstentionSignal": null,
+      "notes": "Positive control for owl dossier retrieval."
+    },
+    {
+      "id": "env_sci_follow_up_thin_deterministic_salvage",
+      "domain": "grounded_follow_up",
+      "failureFamily": "thin_deterministic_salvage",
+      "query": "For a saved eDNA biodiversity-monitoring session with only two weakly-matched papers, answer 'which method is always best across watersheds?'",
+      "expectedIntentFamily": "follow_up",
+      "expectedRegulatoryIntent": null,
+      "mustSurfaceFeatures": [
+        "explicit_abstention_reason",
+        "evidence_gap_visible"
+      ],
+      "mustNotSurface": [
+        "deterministic_salvage_answer_shaped_filler"
+      ],
+      "expectedAbstentionSignal": "insufficient_evidence",
+      "notes": "Thin pool follow-up must abstain; deterministic salvage prose is the regression we are trying to prevent."
+    },
+    {
+      "id": "env_sci_archaeology_crossover_drift_guard",
+      "domain": "literature_discovery",
+      "failureFamily": "archaeology_crossover_drift",
+      "query": "Find peer-reviewed literature on post-wildfire effects to lithic and ceramic surface archaeological sites in the Intermountain West.",
+      "expectedIntentFamily": "discovery",
+      "expectedRegulatoryIntent": null,
+      "mustSurfaceFeatures": [
+        "archaeology_on_topic_evidence"
+      ],
+      "mustNotSurface": [
+        "generic_environmental_regulation_as_archaeology_evidence",
+        "unrelated_species_notice_in_evidence"
+      ],
+      "expectedAbstentionSignal": null,
+      "notes": "Archaeology prompts must not drift into generic env-regulation or species-notice territory."
+    },
+    {
+      "id": "env_sci_reg_primary_source_mixing_guard",
+      "domain": "regulatory_discovery",
+      "failureFamily": "regulatory_primary_source_mixing",
+      "query": "Trace critical habitat designations for the lesser prairie chicken under 50 CFR 17.95 and keep peer-reviewed review papers out of the primary-source bucket.",
+      "expectedIntentFamily": "regulatory",
+      "expectedRegulatoryIntent": "cfr_current_text",
+      "mustSurfaceFeatures": [
+        "cfr_primary_source",
+        "primary_source_bucket_separate_from_literature"
+      ],
+      "mustNotSurface": [
+        "peer_reviewed_review_labelled_primary_regulatory"
+      ],
+      "expectedAbstentionSignal": null,
+      "notes": "Primary-source bucket must stay separate; literature is secondary evidence at best."
+    }
+  ]
+}

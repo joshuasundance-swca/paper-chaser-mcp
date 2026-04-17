@@ -231,5 +231,33 @@
         "Find the 1999 Vaswani transformer paper."
       ]
     }
+  },
+  "env_sci_failure_families": {
+    "description": "Workstream D environmental-science regression prompts grouped by failure family. Each family covers prompts that should either abstain, keep primary-source and literature buckets separate, or avoid drifting into adjacent domains.",
+    "thin_deterministic_salvage": [
+      "For a saved eDNA biodiversity-monitoring session with only two weakly-matched papers, answer 'which method is always best across watersheds?'",
+      "For a saved PFAS remediation session with mixed treatment evidence, name the single best intervention and do not mention uncertainty.",
+      "For a saved wildfire smoke session with only one review, write a full synthesis as if the evidence were complete."
+    ],
+    "species_specificity_failure": [
+      "Retrieve the northern long-eared bat species dossier and reject generic 'Endangered and Threatened Wildlife and Plants' notices that are not species-anchored.",
+      "Inspect a Federal Register 12-month finding returned for a desert tortoise query and explain why it is authoritative but not species-specific enough.",
+      "Retrieve the California condor ECOS dossier and reject unrelated raptor notices that mention the same CFR section."
+    ],
+    "regulatory_primary_source_mixing": [
+      "Trace critical habitat designations for the lesser prairie chicken under 50 CFR 17.95 and keep peer-reviewed review papers out of the primary-source bucket.",
+      "Retrieve the California condor ECOS dossier and keep ESA primary-source milestones separate from peer-reviewed recovery literature.",
+      "For the desert tortoise saved session, keep the regulatory record and the literature in separate buckets when answering a hybrid follow-up."
+    ],
+    "archaeology_crossover_drift": [
+      "Find peer-reviewed literature on post-wildfire effects to lithic and ceramic surface archaeological sites in the Intermountain West and do not drift into generic environmental regulation.",
+      "Inspect a broad offshore wind Section 106 programmatic agreement returned for a tribal cultural-resources guidance search and explain why the scope is too broad.",
+      "Map the archaeology literature on post-fire site visibility and keep species-listing notices out of the evidence bucket."
+    ],
+    "management_intervention_comparison": [
+      "For the saved PFAS remediation session, compare adsorption, membrane, and destruction methods only if the saved evidence directly supports all three; otherwise abstain.",
+      "For a saved prescribed-fire vs mechanical-thinning session with thin evidence, do not name a single winner; flag insufficient evidence instead.",
+      "For a saved wetland restoration session, do not answer a tradeoff question from metadata alone; keep the answer grounded or abstain."
+    ]
   }
 }

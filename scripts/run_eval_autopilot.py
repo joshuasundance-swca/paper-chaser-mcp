@@ -69,6 +69,28 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional autopilot policy override.",
     )
+    parser.add_argument(
+        "--slice",
+        dest="slice_name",
+        choices=["general", "env-sci"],
+        default="general",
+        help=(
+            "Benchmark slice selector. 'general' (default) preserves the existing "
+            "autopilot behavior. 'env-sci' additionally loads the environmental-science "
+            "benchmark pack and judge-rubric template so downstream judges (if wired) "
+            "can score env-sci-specific roles."
+        ),
+    )
+    parser.add_argument(
+        "--env-sci-pack",
+        default=None,
+        help="Override path to the env-sci benchmark pack JSON (only used when --slice env-sci).",
+    )
+    parser.add_argument(
+        "--env-sci-rubric",
+        default=None,
+        help="Override path to the env-sci judge-rubric template JSON (only used when --slice env-sci).",
+    )
     return parser
 
 
@@ -406,6 +428,50 @@ def run_command(
     return status
 
 
+def resolve_slice_metadata(args: argparse.Namespace) -> dict[str, Any]:
+    """Resolve slice-aware metadata for the run manifest.
+
+    The ``general`` slice (default) preserves pre-existing autopilot behavior
+    by emitting a minimal metadata block. The ``env-sci`` slice additionally
+    loads the environmental-science benchmark pack and judge-rubric template
+    so downstream judge harnesses can pick them up without having to re-discover
+    the fixture paths.
+    """
+
+    slice_name = str(getattr(args, "slice_name", "general") or "general")
+    metadata: dict[str, Any] = {"name": slice_name}
+    if slice_name != "env-sci":
+        return metadata
+
+    # Import lazily so the general path does not require paper_chaser_mcp on sys.path.
+    repo_root = Path(__file__).resolve().parent.parent
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from paper_chaser_mcp.eval_curation import (  # noqa: WPS433 - local import by design
+        DEFAULT_ENV_SCI_BENCHMARK_PACK,
+        DEFAULT_ENV_SCI_JUDGE_RUBRIC,
+        ENV_SCI_JUDGE_ROLES,
+        load_env_sci_benchmark_pack,
+        load_env_sci_judge_rubric_template,
+    )
+
+    pack_path = Path(getattr(args, "env_sci_pack", None) or DEFAULT_ENV_SCI_BENCHMARK_PACK)
+    rubric_path = Path(getattr(args, "env_sci_rubric", None) or DEFAULT_ENV_SCI_JUDGE_RUBRIC)
+    pack = load_env_sci_benchmark_pack(pack_path)
+    rubric = load_env_sci_judge_rubric_template(rubric_path)
+    metadata.update(
+        {
+            "benchmarkPackPath": str(pack_path),
+            "judgeRubricPath": str(rubric_path),
+            "rowCount": len(pack.get("rows") or []),
+            "failureFamilies": list(pack.get("failureFamilies") or []),
+            "judgeRoles": list(ENV_SCI_JUDGE_ROLES),
+            "judgeRoleIds": [role.get("id") for role in rubric.get("roles") or [] if isinstance(role, dict)],
+        }
+    )
+    return metadata
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -430,16 +496,16 @@ def main(argv: list[str] | None = None) -> int:
     generate_command = build_generate_command(args, profile, paths)
     workflow_command = build_workflow_command(args, profile, paths)
     commands = {"generate": generate_command, "workflow": workflow_command}
-    _write_json(
-        paths["manifest_json"],
-        {
-            "profile": args.profile,
-            "profileFile": str(profile_file),
-            "dryRun": args.dry_run,
-            "commands": commands,
-            "artifacts": {name: str(path) for name, path in paths.items()},
-        },
-    )
+    slice_metadata = resolve_slice_metadata(args)
+    manifest_payload: dict[str, Any] = {
+        "profile": args.profile,
+        "profileFile": str(profile_file),
+        "dryRun": args.dry_run,
+        "commands": commands,
+        "artifacts": {name: str(path) for name, path in paths.items()},
+        "slice": slice_metadata,
+    }
+    _write_json(paths["manifest_json"], manifest_payload)
 
     generate_status = run_command(
         generate_command,
