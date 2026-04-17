@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 from collections import Counter
@@ -9,7 +10,16 @@ from typing import Any, Literal, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .models import ExpansionCandidate, PlannerDecision
+from .models import (
+    DocumentFamilyLabel,
+    ExpansionCandidate,
+    PlannerDecision,
+    RegulatoryIntentLabel,
+    SubjectCard,
+    SubjectCardConfidence,
+)
+
+logger = logging.getLogger(__name__)
 
 _ResponseModelT = TypeVar("_ResponseModelT", bound=BaseModel)
 
@@ -171,6 +181,39 @@ _ANCHOR_TYPES = {
 }
 _SUCCESS_CRITERIA = {"current_text_required", "timeline_required", "dossier_required", "guidance_doc_required"}
 
+# Enum sets used by the optional planner-LLM schema extensions for
+# ``regulatoryIntent`` and ``subjectCard``. Kept here (not imported from
+# ``planner.py``) to avoid a circular import; kept in sync with
+# ``RegulatoryIntentLabel`` / ``DocumentFamilyLabel`` in ``models.py``.
+_VALID_REGULATORY_INTENT_VALUES: frozenset[str] = frozenset(
+    {
+        "current_cfr_text",
+        "rulemaking_history",
+        "species_dossier",
+        "guidance_lookup",
+        "hybrid_regulatory_plus_literature",
+        "unspecified",
+    },
+)
+_VALID_DOCUMENT_FAMILY_VALUES: frozenset[str] = frozenset(
+    {
+        "recovery_plan",
+        "critical_habitat",
+        "listing_rule",
+        "consultation_guidance",
+        "cfr_current_text",
+        "rulemaking_notice",
+        "programmatic_agreement",
+        "tribal_policy",
+        "agency_guidance",
+        "unspecified",
+    },
+)
+# The LLM may only self-report high/medium/low. The "deterministic_fallback"
+# sentinel is reserved for the deterministic extractor and must not be set
+# from an LLM response.
+_VALID_LLM_SUBJECT_CARD_CONFIDENCE: frozenset[str] = frozenset({"high", "medium", "low"})
+
 
 class _PlannerConstraintsSchema(BaseModel):
     """OpenAI Structured Outputs-compatible planner constraints."""
@@ -178,6 +221,36 @@ class _PlannerConstraintsSchema(BaseModel):
     year: str | None = None
     venue: str | None = None
     focus: str | None = None
+
+
+class _PlannerSubjectCardSchema(BaseModel):
+    """Optional LLM-native subject card emitted by the planner.
+
+    Additive: legacy planner responses that omit this object continue to
+    parse. When present, ``to_planner_decision`` materializes a
+    :class:`SubjectCard` with ``source="planner_llm"`` so the deterministic
+    fallback in ``classify_query`` is skipped.
+    """
+
+    commonName: str | None = None
+    scientificName: str | None = None
+    agency: str | None = None
+    requestedDocumentFamily: str | None = None
+    subjectTerms: list[str] = Field(default_factory=list)
+    confidence: str | None = None
+
+    def has_signal(self) -> bool:
+        if any(
+            isinstance(value, str) and value.strip()
+            for value in (
+                self.commonName,
+                self.scientificName,
+                self.agency,
+                self.requestedDocumentFamily,
+            )
+        ):
+            return True
+        return bool([term for term in self.subjectTerms if isinstance(term, str) and term.strip()])
 
 
 class _PlannerResponseSchema(BaseModel):
@@ -202,6 +275,10 @@ class _PlannerResponseSchema(BaseModel):
     firstPassMode: str = Field(default="targeted")
     retrievalHypotheses: list[str] = Field(default_factory=list)
     followUpMode: Literal["qa", "claim_check", "comparison"] = "qa"
+    # Additive LLM-native fields for regulatory intent + subject grounding.
+    # Optional so legacy planner responses without them still parse.
+    regulatoryIntent: str | None = None
+    subjectCard: _PlannerSubjectCardSchema | None = None
 
     def to_planner_decision(self) -> PlannerDecision:
         intent = self.intent if self.intent in _PLANNER_INTENTS else "discovery"
@@ -233,6 +310,8 @@ class _PlannerResponseSchema(BaseModel):
             str(hypothesis).strip() for hypothesis in self.retrievalHypotheses if str(hypothesis).strip()
         ][:4]
         uncertainty_flags = [str(flag).strip() for flag in self.uncertaintyFlags if str(flag).strip()][:6]
+        regulatory_intent = self._coerce_regulatory_intent()
+        subject_card = self._coerce_subject_card()
         return PlannerDecision(
             intent=intent,
             querySpecificity=self.querySpecificity,
@@ -253,6 +332,83 @@ class _PlannerResponseSchema(BaseModel):
             firstPassMode=first_pass_mode,
             retrievalHypotheses=retrieval_hypotheses,
             followUpMode=self.followUpMode,
+            regulatoryIntent=regulatory_intent,
+            subjectCard=subject_card,
+        )
+
+    def _coerce_regulatory_intent(self) -> RegulatoryIntentLabel | None:
+        raw = self.regulatoryIntent
+        if raw is None:
+            return None
+        value = str(raw).strip()
+        if not value:
+            return None
+        if value in _VALID_REGULATORY_INTENT_VALUES:
+            return cast(RegulatoryIntentLabel, value)
+        logger.warning(
+            "Planner LLM returned invalid regulatoryIntent=%r; falling back to deterministic derivation.",
+            value,
+        )
+        return None
+
+    def _coerce_subject_card(self) -> SubjectCard | None:
+        card = self.subjectCard
+        if card is None or not card.has_signal():
+            return None
+
+        def _clean(value: str | None) -> str | None:
+            if value is None:
+                return None
+            cleaned = str(value).strip()
+            return cleaned or None
+
+        requested_family_raw = _clean(card.requestedDocumentFamily)
+        requested_family: DocumentFamilyLabel | None
+        if requested_family_raw is None:
+            requested_family = None
+        elif requested_family_raw in _VALID_DOCUMENT_FAMILY_VALUES:
+            requested_family = cast(DocumentFamilyLabel, requested_family_raw)
+        else:
+            logger.warning(
+                "Planner LLM returned invalid subjectCard.requestedDocumentFamily=%r; dropping field.",
+                requested_family_raw,
+            )
+            requested_family = None
+
+        confidence_raw = _clean(card.confidence)
+        confidence: SubjectCardConfidence
+        if confidence_raw is None:
+            confidence = "medium"
+        elif confidence_raw in _VALID_LLM_SUBJECT_CARD_CONFIDENCE:
+            confidence = cast(SubjectCardConfidence, confidence_raw)
+        else:
+            logger.warning(
+                "Planner LLM returned invalid subjectCard.confidence=%r; defaulting to 'medium'.",
+                confidence_raw,
+            )
+            confidence = "medium"
+
+        subject_terms: list[str] = []
+        seen_terms: set[str] = set()
+        for term in card.subjectTerms:
+            if not isinstance(term, str):
+                continue
+            cleaned = term.strip()
+            lowered = cleaned.lower()
+            if not cleaned or lowered in seen_terms:
+                continue
+            seen_terms.add(lowered)
+            subject_terms.append(cleaned)
+        subject_terms = subject_terms[:6]
+
+        return SubjectCard(
+            commonName=_clean(card.commonName),
+            scientificName=_clean(card.scientificName),
+            agency=_clean(card.agency),
+            requestedDocumentFamily=requested_family,
+            subjectTerms=subject_terms,
+            confidence=confidence,
+            source="planner_llm",
         )
 
 

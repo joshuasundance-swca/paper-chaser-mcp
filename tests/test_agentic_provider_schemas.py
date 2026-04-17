@@ -34,6 +34,8 @@ def test_planner_response_schema_is_openai_strict_compatible() -> None:
         "firstPassMode",
         "retrievalHypotheses",
         "followUpMode",
+        "regulatoryIntent",
+        "subjectCard",
     ]
 
     constraints_ref = schema["properties"]["constraints"]["$ref"]

@@ -351,6 +351,15 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
                 "federal_register, govinfo, tavily, perplexity). Prefer semantic_scholar and openalex for "
                 "peer-reviewed literature. Add tavily or perplexity only for grey literature needs.\n"
                 "\n"
+                "regulatoryIntent (optional): when the query is regulatory, classify into one of \n"
+                "current_cfr_text|rulemaking_history|species_dossier|guidance_lookup|\n"
+                "hybrid_regulatory_plus_literature|unspecified. Omit for non-regulatory queries.\n"
+                "subjectCard (optional): for regulatory/species/known-item queries, emit a compact \n"
+                "object with commonName, scientificName, agency, requestedDocumentFamily (one of \n"
+                "recovery_plan|critical_habitat|listing_rule|consultation_guidance|cfr_current_text|\n"
+                "rulemaking_notice|programmatic_agreement|tribal_policy|agency_guidance|unspecified), \n"
+                "subjectTerms (2-6 anchor terms), and confidence (high|medium|low). Omit the object \n"
+                "entirely when the query has no concrete subject.\n"
                 "candidateConcepts: list 3-6 key concepts/noun phrases that should anchor retrieval.\n"
                 "successCriteria: list 2-3 concrete conditions that would make this search successful.\n"
                 "Return compact structured output only."
@@ -389,7 +398,15 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
                         '"providerPlan":["semantic_scholar"],"authorityFirst":true,'
                         '"anchorType":"optional","anchorValue":"optional",'
                         '"requiredPrimarySources":["optional"],"successCriteria":["optional"],'
-                        '"followUpMode":"qa|claim_check|comparison"}'
+                        '"followUpMode":"qa|claim_check|comparison",'
+                        '"regulatoryIntent":"optional one of current_cfr_text|rulemaking_history|'
+                        'species_dossier|guidance_lookup|hybrid_regulatory_plus_literature|unspecified",'
+                        '"subjectCard":{"commonName":"optional","scientificName":"optional",'
+                        '"agency":"optional","requestedDocumentFamily":"optional one of '
+                        "recovery_plan|critical_habitat|listing_rule|consultation_guidance|"
+                        "cfr_current_text|rulemaking_notice|programmatic_agreement|tribal_policy|"
+                        'agency_guidance|unspecified","subjectTerms":["optional"],'
+                        '"confidence":"high|medium|low"}}'
                     ),
                 ),
                 payload={
@@ -449,6 +466,15 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
                 "federal_register, govinfo, tavily, perplexity). Prefer semantic_scholar and openalex for "
                 "peer-reviewed literature. Add tavily or perplexity only for grey literature needs.\n"
                 "\n"
+                "regulatoryIntent (optional): when the query is regulatory, classify into one of \n"
+                "current_cfr_text|rulemaking_history|species_dossier|guidance_lookup|\n"
+                "hybrid_regulatory_plus_literature|unspecified. Omit for non-regulatory queries.\n"
+                "subjectCard (optional): for regulatory/species/known-item queries, emit a compact \n"
+                "object with commonName, scientificName, agency, requestedDocumentFamily (one of \n"
+                "recovery_plan|critical_habitat|listing_rule|consultation_guidance|cfr_current_text|\n"
+                "rulemaking_notice|programmatic_agreement|tribal_policy|agency_guidance|unspecified), \n"
+                "subjectTerms (2-6 anchor terms), and confidence (high|medium|low). Omit the object \n"
+                "entirely when the query has no concrete subject.\n"
                 "candidateConcepts: list 3-6 key concepts/noun phrases that should anchor retrieval.\n"
                 "successCriteria: list 2-3 concrete conditions that would make this search successful.\n"
                 "Return compact structured output only."
@@ -489,7 +515,15 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
                         '"providerPlan":["semantic_scholar"],"authorityFirst":true,'
                         '"anchorType":"optional","anchorValue":"optional",'
                         '"requiredPrimarySources":["optional"],"successCriteria":["optional"],'
-                        '"followUpMode":"qa|claim_check|comparison"}'
+                        '"followUpMode":"qa|claim_check|comparison",'
+                        '"regulatoryIntent":"optional one of current_cfr_text|rulemaking_history|'
+                        'species_dossier|guidance_lookup|hybrid_regulatory_plus_literature|unspecified",'
+                        '"subjectCard":{"commonName":"optional","scientificName":"optional",'
+                        '"agency":"optional","requestedDocumentFamily":"optional one of '
+                        "recovery_plan|critical_habitat|listing_rule|consultation_guidance|"
+                        "cfr_current_text|rulemaking_notice|programmatic_agreement|tribal_policy|"
+                        'agency_guidance|unspecified","subjectTerms":["optional"],'
+                        '"confidence":"high|medium|low"}}'
                     ),
                 ),
                 payload={
