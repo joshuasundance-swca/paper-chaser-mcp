@@ -492,15 +492,32 @@ def _has_literature_corroboration(
     for regulation-only asks (e.g. "what does EPA require for stormwater
     discharges?"). Trusting that label alone causes the guided workflow to
     tack on an unnecessary literature review pass. This helper checks the
-    independent keyword signal on the query and planner-emitted secondary
-    intents, so downstream consumers can demand corroboration before
-    honoring the hybrid route.
+    independent keyword signal on the query, planner-emitted secondary
+    intents, and retrieval hypotheses so downstream consumers can demand
+    corroboration before honoring the hybrid route.
+
+    Kept in sync with ``dispatch._guided_should_add_review_pass`` so valid
+    hybrid labels are not stripped at planner-time only to be accepted at
+    dispatch-time (or vice versa).
     """
     if detect_literature_intent(query, focus):
         return True
     for secondary in planner.secondary_intents:
         label = str(secondary).strip().lower()
         if label in {"review", "literature"}:
+            return True
+    literature_hypothesis_markers = (
+        "literature",
+        "peer-review",
+        "peer review",
+        "peer-reviewed",
+        "systematic review",
+        "meta-analysis",
+        "hybrid_policy_science",
+    )
+    for hypothesis in planner.retrieval_hypotheses:
+        lowered = str(hypothesis).lower()
+        if any(marker in lowered for marker in literature_hypothesis_markers):
             return True
     return False
 

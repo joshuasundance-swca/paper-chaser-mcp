@@ -32,6 +32,7 @@ from paper_chaser_mcp.agentic.graphs import (
     _query_requests_regulatory_history,
 )
 from paper_chaser_mcp.agentic.models import PlannerDecision
+from paper_chaser_mcp.agentic.planner import _has_literature_corroboration
 
 
 def _planner(
@@ -264,3 +265,49 @@ class TestPlannerLlmRegulatoryIntentAuthority:
         )
         flags = _derive_regulatory_query_flags(query=query, planner=planner)
         assert flags == (True, False, False)
+
+
+class TestPlannerLiteratureCorroborationHybridHypothesis:
+    """Finding 2 regression: planner-time `_has_literature_corroboration`
+    must accept `hybrid_policy_science` (and literature-shaped markers) in
+    `retrievalHypotheses` as corroboration, matching the dispatch-time
+    gate in `dispatch._guided_should_add_review_pass`. Otherwise valid
+    hybrid labels are stripped at planner-time before they reach dispatch."""
+
+    def test_hybrid_policy_science_hypothesis_is_corroboration(self) -> None:
+        query = "What does EPA require for PFAS discharges?"
+        planner = PlannerDecision.model_validate(
+            {
+                "intent": "regulatory",
+                "regulatoryIntent": "hybrid_regulatory_plus_literature",
+                "plannerSource": "llm",
+                "retrievalHypotheses": [
+                    "hybrid_policy_science: fuse regulatory primary sources with peer-reviewed studies",
+                ],
+            }
+        )
+        assert _has_literature_corroboration(planner=planner, query=query, focus=None) is True
+
+    def test_literature_marker_in_hypothesis_is_corroboration(self) -> None:
+        query = "EPA stormwater discharge standards"
+        planner = PlannerDecision.model_validate(
+            {
+                "intent": "regulatory",
+                "plannerSource": "llm",
+                "retrievalHypotheses": [
+                    "Peer-reviewed literature on discharge efficacy",
+                ],
+            }
+        )
+        assert _has_literature_corroboration(planner=planner, query=query, focus=None) is True
+
+    def test_no_corroboration_without_any_literature_signal(self) -> None:
+        query = "What does EPA require for stormwater discharges?"
+        planner = PlannerDecision.model_validate(
+            {
+                "intent": "regulatory",
+                "plannerSource": "llm",
+                "retrievalHypotheses": ["regulatory primary sources only"],
+            }
+        )
+        assert _has_literature_corroboration(planner=planner, query=query, focus=None) is False
