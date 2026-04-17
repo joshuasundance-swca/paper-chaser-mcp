@@ -754,6 +754,25 @@ class PlannerDecision(ApiModel):
             "LLM-first from planner signals with deterministic fallback."
         ),
     )
+    regulatory_intent_source: Literal[
+        "llm",
+        "deterministic_fallback",
+        "unspecified",
+    ] = Field(
+        default="unspecified",
+        alias="regulatoryIntentSource",
+        description=(
+            "Provenance of ``regulatory_intent``: ``llm`` when the planner LLM "
+            "emitted a valid label, ``deterministic_fallback`` when it was "
+            "derived by deterministic heuristics (the LLM omitted or malformed "
+            "the field), and ``unspecified`` when neither produced a label. "
+            "Downstream gates that treat LLM-authored regulatoryIntent as "
+            "authoritative (e.g. ``_derive_regulatory_query_flags``) must key "
+            "off this field rather than the combination of ``planner_source`` "
+            "and non-None ``regulatory_intent``, which otherwise mistakes "
+            "deterministic backfill for an LLM emission."
+        ),
+    )
     entity_card: dict[str, Any] | None = Field(default=None, alias="entityCard")
     subject_card: SubjectCard | None = Field(default=None, alias="subjectCard")
     subject_chain_gaps: list[str] = Field(default_factory=list, alias="subjectChainGaps")

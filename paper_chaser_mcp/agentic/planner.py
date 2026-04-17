@@ -1074,6 +1074,8 @@ async def classify_query(
             planner.entity_card = _infer_entity_card(query, focus)
     if planner.regulatory_intent is None:
         planner.regulatory_intent = _derive_regulatory_intent(planner=planner, query=query, focus=focus)
+        if planner.regulatory_intent is not None and planner.regulatory_intent_source != "llm":
+            planner.regulatory_intent_source = "deterministic_fallback"
     elif planner.regulatory_intent == "hybrid_regulatory_plus_literature" and not _has_literature_corroboration(
         planner=planner, query=query, focus=focus
     ):
@@ -1081,6 +1083,13 @@ async def classify_query(
         # corroboration as the deterministic derivation path to avoid
         # forcing a literature review pass onto regulation-only asks.
         planner.regulatory_intent = _derive_regulatory_intent(planner=planner, query=query, focus=focus)
+        # The LLM's original hybrid emission failed corroboration, so the
+        # final label is deterministically derived -- record the downgrade so
+        # downstream gates don't treat it as LLM-authoritative.
+        if planner.regulatory_intent is not None:
+            planner.regulatory_intent_source = "deterministic_fallback"
+        else:
+            planner.regulatory_intent_source = "unspecified"
     if planner.subject_card is None and planner.regulatory_intent is not None:
         # LLM-first subject card; uses planner.entity_card / candidate_concepts
         # and falls back to deterministic extraction when needed. The

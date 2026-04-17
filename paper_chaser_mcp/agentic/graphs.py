@@ -4472,6 +4472,7 @@ def _derive_regulatory_query_flags(
     llm_authoritative = (
         planner is not None
         and planner.planner_source == "llm"
+        and planner.regulatory_intent_source == "llm"
         and intent is not None
     )
     if llm_authoritative:

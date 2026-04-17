@@ -61,6 +61,8 @@ def _planner(
                 "source": "planner_llm",
             }
         payload.setdefault("plannerSource", "llm")
+        if regulatory_intent is not None:
+            payload.setdefault("regulatoryIntentSource", "llm")
     payload.update(extra)
     return PlannerDecision.model_validate(payload)
 
@@ -276,6 +278,7 @@ class TestPlannerLlmRegulatoryIntentAuthority:
             {
                 "intent": "regulatory",
                 "regulatoryIntent": "species_dossier",
+                "regulatoryIntentSource": "llm",
                 "plannerSource": "llm",
                 "subjectCard": {
                     "confidence": "deterministic_fallback",
@@ -294,11 +297,60 @@ class TestPlannerLlmRegulatoryIntentAuthority:
             {
                 "intent": "regulatory",
                 "regulatoryIntent": "current_cfr_text",
+                "regulatoryIntentSource": "llm",
                 "plannerSource": "llm",
             }
         )
         flags = _derive_regulatory_query_flags(query=query, planner=planner)
         assert flags == (True, False, False)
+
+    def test_deterministic_fallback_regulatory_intent_does_not_claim_llm_authority(self) -> None:
+        """Regression (Finding 2, 4th pass): when the LLM omits or malforms
+        ``regulatoryIntent`` it is coerced to ``None`` and then derived by the
+        deterministic fallback. That derived value must NOT masquerade as
+        LLM-authoritative and suppress the keyword helpers. The gate keys off
+        ``regulatory_intent_source`` rather than the (``planner_source==llm`` +
+        non-None regulatory_intent) combination."""
+
+        query = "Regulatory history of California condor under 50 CFR 17.95"
+        expected = (
+            _is_current_cfr_text_request(query),
+            _query_requests_regulatory_history(query),
+            _is_agency_guidance_query(query),
+        )
+        # Deterministic-fallback label on an LLM planner: must defer to
+        # keyword helpers even though ``planner_source`` is ``llm``.
+        planner = PlannerDecision.model_validate(
+            {
+                "intent": "regulatory",
+                "regulatoryIntent": "species_dossier",
+                "regulatoryIntentSource": "deterministic_fallback",
+                "plannerSource": "llm",
+                "subjectCard": {
+                    "confidence": "high",
+                    "source": "planner_llm",
+                },
+            }
+        )
+        flags = _derive_regulatory_query_flags(query=query, planner=planner)
+        assert flags == expected
+        # Unspecified source also defers to keyword helpers.
+        planner_unspecified = PlannerDecision.model_validate(
+            {
+                "intent": "regulatory",
+                "regulatoryIntent": "species_dossier",
+                "regulatoryIntentSource": "unspecified",
+                "plannerSource": "llm",
+                "subjectCard": {
+                    "confidence": "high",
+                    "source": "planner_llm",
+                },
+            }
+        )
+        assert (
+            _derive_regulatory_query_flags(query=query, planner=planner_unspecified)
+            == expected
+        )
 
 
 class TestPlannerLiteratureCorroborationHybridHypothesis:

@@ -311,6 +311,7 @@ class _PlannerResponseSchema(BaseModel):
         ][:4]
         uncertainty_flags = [str(flag).strip() for flag in self.uncertaintyFlags if str(flag).strip()][:6]
         regulatory_intent = self._coerce_regulatory_intent()
+        regulatory_intent_source = "llm" if regulatory_intent is not None else "unspecified"
         subject_card = self._coerce_subject_card()
         return PlannerDecision(
             intent=intent,
@@ -333,6 +334,7 @@ class _PlannerResponseSchema(BaseModel):
             retrievalHypotheses=retrieval_hypotheses,
             followUpMode=self.followUpMode,
             regulatoryIntent=regulatory_intent,
+            regulatoryIntentSource=regulatory_intent_source,
             subjectCard=subject_card,
         )
 
