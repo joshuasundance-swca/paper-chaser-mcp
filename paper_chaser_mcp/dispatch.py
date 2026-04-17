@@ -1810,6 +1810,12 @@ def _guided_should_add_review_pass(
         dict[str, Any],
         primary_smart.get("strategyMetadata") if isinstance(primary_smart.get("strategyMetadata"), dict) else {},
     )
+    # LLM-first: when the planner classifies the query as hybrid regulatory+literature
+    # (either from the LLM or its deterministic fallback), honor that signal before any
+    # keyword heuristic. Mirrors the regulatoryIntent consumption pattern used elsewhere.
+    regulatory_intent = str(metadata.get("regulatoryIntent") or "").strip()
+    if regulatory_intent == "hybrid_regulatory_plus_literature":
+        return True, "planner_hybrid_regulatory_plus_literature"
     secondary_intents = {str(item).strip() for item in metadata.get("secondaryIntents") or [] if str(item).strip()}
     query_specificity = str(metadata.get("querySpecificity") or "").strip()
     ambiguity_level = str(metadata.get("ambiguityLevel") or "").strip()
@@ -2161,7 +2167,20 @@ def _guided_mentions_literature(query: str, focus: str | None = None) -> bool:
     return bool(re.search(r"\b(?:doi|systematic review|meta-analysis|peer-reviewed|scientific reports?)\b", normalized))
 
 
-def _guided_is_mixed_intent_query(query: str, focus: str | None = None) -> bool:
+def _guided_is_mixed_intent_query(
+    query: str,
+    focus: str | None = None,
+    *,
+    planner_regulatory_intent: str | None = None,
+) -> bool:
+    # LLM-first: when the planner has already classified this query as
+    # ``hybrid_regulatory_plus_literature`` (either from the LLM or from the
+    # planner's deterministic fallback), trust that signal directly and skip the
+    # keyword heuristic. Callers without planner context (the current default at
+    # the top of guided research dispatch, before any smart pass has run) fall
+    # back to the deterministic regulatory + literature keyword check below.
+    if planner_regulatory_intent == "hybrid_regulatory_plus_literature":
+        return True
     return detect_regulatory_intent(query, focus) and _guided_mentions_literature(query, focus)
 
 
