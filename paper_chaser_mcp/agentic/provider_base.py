@@ -485,6 +485,25 @@ class ModelProviderBundle:
         del query, answer_text, evidence_count, request_id
         return None
 
+    async def aclassify_answer_mode(
+        self,
+        *,
+        question: str,
+        modes: tuple[str, ...],
+        request_id: str | None = None,
+    ) -> str | None:
+        """Classify a follow-up ``question`` into one of ``modes``.
+
+        Returns ``None`` when this bundle has no LLM capability to route the
+        classification (e.g. the deterministic shim), in which case callers
+        should fall back to :func:`answer_modes._classify_question_mode_keyword`.
+        Concrete LLM-backed bundles override this to perform a lightweight
+        structured call. The wrapper returns ``None`` rather than raising so
+        that classification hiccups never block the rest of ``ask_result_set``.
+        """
+        del question, modes, request_id
+        return None
+
     async def agenerate_evidence_gaps(
         self,
         *,

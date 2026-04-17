@@ -42,6 +42,7 @@ from ..provider_runtime import (
 from ..search import _enrich_ss_paper
 from .answer_modes import (
     SYNTHESIS_MODES,
+    aclassify_question_mode,
     build_evidence_use_plan,
     evidence_pool_is_weak,
 )
@@ -1722,6 +1723,30 @@ class AgenticRuntime:
                 )
                 if identifier
             ]
+        # LLM-first follow-up answer-mode classification. The deterministic
+        # keyword classifier misses paraphrased synthesis asks such as
+        # "what do these papers say?" (no SYNTHESIS_SHAPE_MARKERS hit, so it
+        # reports ``unknown``). Consult the provider bundle's classifier
+        # first; fall back to the keyword heuristic when no LLM is available.
+        session_followup_metadata: dict[str, Any] | None = None
+        session_strategy_metadata = record.payload.get("strategyMetadata") if isinstance(record.payload, dict) else None
+        if isinstance(session_strategy_metadata, dict):
+            session_followup_metadata = {
+                "followUpMode": session_strategy_metadata.get("followUpMode"),
+            }
+
+        async def _llm_mode_classifier(q: str, modes: tuple[str, ...]) -> str | None:
+            try:
+                return await provider_bundle.aclassify_answer_mode(question=q, modes=modes)
+            except Exception:  # pragma: no cover - defensive
+                return None
+
+        resolved_question_mode = await aclassify_question_mode(
+            question,
+            session_followup_metadata,
+            llm_classifier=_llm_mode_classifier,
+        )
+
         evidence_use_plan = build_evidence_use_plan(
             question=question,
             answer_mode=answer_mode,
@@ -1729,6 +1754,7 @@ class AgenticRuntime:
             source_records=source_records,
             unsupported_asks=unsupported_asks,
             llm_relevance=llm_relevance,
+            question_mode=resolved_question_mode,
         )
         question_mode = str(evidence_use_plan.get("answerMode") or "unknown")
         plan_sufficient = bool(evidence_use_plan.get("sufficient"))
