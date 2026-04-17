@@ -2466,6 +2466,182 @@ def test_guided_failure_summary_all_off_topic_sources_recommend_research() -> No
     assert mixed["recommendedNextAction"] == "inspect_source"
 
 
+def test_guided_failure_summary_all_off_topic_what_still_worked_not_inspectable() -> None:
+    # Regression (9th rubber-duck pass, finding 2): the default whatStillWorked
+    # text must not claim inspectable sources when every returned source is
+    # off_topic, because the run's effective-inspectable predicate is False.
+    off_topic_sources = [{"sourceId": "p1", "topicalRelevance": "off_topic"}]
+    summary = dispatch_module._guided_failure_summary(
+        failure_summary=None,
+        status="partial",
+        sources=off_topic_sources,
+        evidence_gaps=["Only off-topic matches were surfaced."],
+        all_sources_off_topic=True,
+    )
+    assert "inspectable" not in summary["whatStillWorked"].lower()
+    assert "off-topic" in summary["whatStillWorked"].lower()
+
+    # Mixed pool (or unflagged) continues to advertise inspectable sources.
+    mixed = dispatch_module._guided_failure_summary(
+        failure_summary=None,
+        status="partial",
+        sources=off_topic_sources,
+        evidence_gaps=["Mixed pool."],
+        all_sources_off_topic=False,
+    )
+    assert "inspectable" in mixed["whatStillWorked"].lower()
+
+    # No-sources case keeps the original non-inspectable wording.
+    empty = dispatch_module._guided_failure_summary(
+        failure_summary=None,
+        status="abstained",
+        sources=[],
+        evidence_gaps=[],
+        all_sources_off_topic=False,
+    )
+    assert "inspectable" not in empty["whatStillWorked"].lower()
+
+
+def test_guided_result_state_all_off_topic_blocks_can_answer_follow_up() -> None:
+    # Regression (9th rubber-duck pass, finding 1): canAnswerFollowUp must use
+    # the effective inspectable predicate so an all-off-topic current pool is
+    # not claimed as answerable.
+    off_topic_sources = [{"sourceId": "p1", "topicalRelevance": "off_topic"}]
+    state = dispatch_module._guided_result_state(
+        status="partial",
+        sources=off_topic_sources,
+        evidence_gaps=["Only off-topic matches were surfaced."],
+        search_session_id="ssn-off",
+    )
+    assert state["canAnswerFollowUp"] is False
+    assert state["hasInspectableSources"] is False
+
+
+def test_guided_result_state_saved_session_inspectable_enables_can_answer_follow_up() -> None:
+    # Regression (9th rubber-duck pass, finding 1): canAnswerFollowUp must be
+    # True when the current response has no sources but the saved session still
+    # carries on-topic candidates — otherwise the flag contradicts
+    # hasInspectableSources and bestNextInternalAction="inspect_source".
+    state = dispatch_module._guided_result_state(
+        status="insufficient_evidence",
+        sources=[],
+        evidence_gaps=[],
+        search_session_id="ssn-saved",
+        saved_session_has_sources=True,
+        saved_session_all_off_topic=False,
+    )
+    assert state["hasInspectableSources"] is True
+    assert state["canAnswerFollowUp"] is True
+    assert state["bestNextInternalAction"] == "inspect_source"
+
+
+def test_guided_result_state_answered_all_off_topic_not_grounded() -> None:
+    # Regression (9th rubber-duck pass, finding 3): status="answered" with
+    # every source off_topic must not report groundedness="grounded" — that
+    # contradicts bestNextInternalAction="research". Downgrade to
+    # "insufficient_evidence" and normalize missingEvidenceType.
+    off_topic_sources = [
+        {"sourceId": "p1", "topicalRelevance": "off_topic"},
+        {"sourceId": "p2", "topicalRelevance": "off_topic"},
+    ]
+    state = dispatch_module._guided_result_state(
+        status="answered",
+        sources=off_topic_sources,
+        evidence_gaps=[],
+        search_session_id="ssn-off",
+    )
+    assert state["groundedness"] in {"partial", "insufficient_evidence"}
+    assert state["groundedness"] != "grounded"
+    assert state["missingEvidenceType"] != "none"
+    assert state["bestNextInternalAction"] == "research"
+
+    # Sanity: a normal answered + on-topic case still grounds cleanly.
+    on_topic_sources = [{"sourceId": "p1", "topicalRelevance": "on_topic"}]
+    grounded_state = dispatch_module._guided_result_state(
+        status="answered",
+        sources=on_topic_sources,
+        evidence_gaps=[],
+        search_session_id="ssn-on",
+    )
+    assert grounded_state["groundedness"] == "grounded"
+
+
+@pytest.mark.asyncio
+async def test_follow_up_research_current_all_off_topic_saved_inspectable_recommends_inspect_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression (9th rubber-duck pass, finding 4): when the current
+    # follow_up_research response HAS structuredSources but every one is
+    # off_topic, the saved-session signal must still be consulted so an
+    # inspectable saved session is not stranded by all-off-topic current
+    # sources. resultState/failureSummary/nextActions must route to
+    # inspect_source, not research.
+    isolated_registry = WorkspaceRegistry()
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-current-off-saved-on",
+        query="Attention Is All You Need",
+        payload={
+            "sources": [
+                {
+                    "sourceId": "paper-a",
+                    "title": "Attention is All you Need",
+                    "topicalRelevance": "on_topic",
+                }
+            ]
+        },
+    )
+
+    class _FakeRuntime:
+        async def ask_result_set(self, **kwargs: Any) -> dict[str, Any]:
+            return {
+                "answerStatus": "insufficient_evidence",
+                "answer": None,
+                "evidence": [],
+                "unsupportedAsks": [],
+                "followUpQuestions": [],
+                "structuredSources": [
+                    {
+                        "sourceId": "off-1",
+                        "title": "Unrelated paper",
+                        "topicalRelevance": "off_topic",
+                    }
+                ],
+                "candidateLeads": [],
+                "evidenceGaps": ["Only off-topic sources were surfaced."],
+                "coverageSummary": None,
+                "failureSummary": None,
+            }
+
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+    original_registry = server.workspace_registry
+    server.workspace_registry = isolated_registry
+    try:
+        payload = _payload(
+            await server.call_tool(
+                "follow_up_research",
+                {
+                    "searchSessionId": "ssn-current-off-saved-on",
+                    "question": "What does the saved session say about attention?",
+                },
+            )
+        )
+    finally:
+        server.workspace_registry = original_registry
+
+    # Saved session must not be stranded: nextActions must include the saved
+    # session's inspect_source hint even when the ask_result_set response
+    # returned only off-topic sources. (The insufficient_evidence branch
+    # compacts failureSummary/resultState out of the payload, so nextActions
+    # is the durable surface for this assertion.)
+    assert any(
+        isinstance(action, str)
+        and "inspect_source" in action
+        and "ssn-current-off-saved-on" in action
+        for action in payload["nextActions"]
+    ), f"saved session stranded; nextActions={payload['nextActions']}"
+
+
 def test_guided_next_actions_all_off_topic_sources_suppress_inspect_source_entry() -> None:
     # Regression (7th rubber-duck pass, finding 2): when every current source
     # is off_topic and there is no inspectable saved session, nextActions

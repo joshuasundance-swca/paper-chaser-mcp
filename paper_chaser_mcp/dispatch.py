@@ -2921,11 +2921,18 @@ def _guided_failure_summary(
         completeness_impact = evidence_gaps[0]
     what_still_worked = summary.get("whatStillWorked")
     if not what_still_worked:
-        what_still_worked = (
-            "The guided run still returned inspectable sources."
-            if sources
-            else "No provider failures were recorded, but the evidence was not strong enough to ground a result."
-        )
+        if effective_has_inspectable:
+            what_still_worked = "The guided run still returned inspectable sources."
+        elif sources:
+            # Ninth rubber-duck pass (finding 2): an all-off-topic pool is not
+            # "inspectable" in the routing sense — do not claim otherwise.
+            what_still_worked = (
+                "The guided run returned sources, but all were off-topic for the question."
+            )
+        else:
+            what_still_worked = (
+                "No provider failures were recorded, but the evidence was not strong enough to ground a result."
+            )
     fallback_attempted = bool(summary.get("fallbackAttempted"))
     fallback_mode = summary.get("fallbackMode")
     # Invariant: if fallbackMode is non-null, fallbackAttempted must be True
@@ -3448,7 +3455,7 @@ def _guided_result_state(
         if isinstance(source, dict)
     )
     normalized_status = str(status or "").strip() or "unknown"
-    if normalized_status in {"succeeded", "answered"} and has_sources:
+    if normalized_status in {"succeeded", "answered"} and has_sources and not all_sources_off_topic:
         groundedness = "grounded"
     elif normalized_status == "answered":
         groundedness = "partial"
@@ -3458,6 +3465,12 @@ def _guided_result_state(
         groundedness = "insufficient_evidence"
     else:
         groundedness = "unknown"
+    # Ninth rubber-duck pass (finding 3): when the status claims success but
+    # every returned source is off_topic, the result is not actually grounded
+    # in on-topic evidence. Downgrade groundedness to "insufficient_evidence"
+    # so it agrees with bestNextInternalAction="research".
+    if all_sources_off_topic and normalized_status in {"succeeded", "answered"}:
+        groundedness = "insufficient_evidence"
     # Fifth rubber-duck pass (finding 3): hasInspectableSources must agree with
     # bestNextInternalAction. When the current response is empty but the saved
     # session still carries on_topic/weak_match evidence, the saved candidates
@@ -3465,11 +3478,24 @@ def _guided_result_state(
     saved_session_inspectable = saved_session_has_sources and not saved_session_all_off_topic
     current_inspectable = has_sources and not all_sources_off_topic
     inspectable_sources = current_inspectable or saved_session_inspectable
+    # Ninth rubber-duck pass (finding 1): canAnswerFollowUp must reflect whether
+    # inspectable evidence is actually reachable. An all-off-topic current pool
+    # cannot ground a follow-up, while a saved-session-inspectable case can.
+    missing_evidence_type = _guided_missing_evidence_type(
+        status=normalized_status,
+        evidence_gaps=evidence_gaps,
+        sources=sources,
+    )
+    # Ninth rubber-duck pass (finding 3): normalize missingEvidenceType for the
+    # all-off-topic success/answered case so it reflects the off-topic gap
+    # instead of advertising "none".
+    if all_sources_off_topic and missing_evidence_type == "none":
+        missing_evidence_type = "off_topic_only"
     state = GuidedResultState(
         status=normalized_status,
         groundedness=groundedness,
         hasInspectableSources=inspectable_sources,
-        canAnswerFollowUp=bool(search_session_id) and has_sources,
+        canAnswerFollowUp=bool(search_session_id) and inspectable_sources,
         bestNextInternalAction=_guided_best_next_internal_action(
             status=normalized_status,
             has_sources=has_sources,
@@ -3478,11 +3504,7 @@ def _guided_result_state(
             saved_session_all_off_topic=saved_session_all_off_topic,
             all_sources_off_topic=all_sources_off_topic,
         ),
-        missingEvidenceType=_guided_missing_evidence_type(
-            status=normalized_status,
-            evidence_gaps=evidence_gaps,
-            sources=sources,
-        ),
+        missingEvidenceType=missing_evidence_type,
     )
     return state.model_dump(by_alias=True, exclude_none=True)
 
@@ -5861,9 +5883,19 @@ async def dispatch_tool(
         # holds inspectable candidates, failureSummary/nextActions/resultState
         # must route to inspect_source instead of research — matching the
         # no-runtime and exception branches and bestNextInternalAction.
+        # Ninth rubber-duck pass (finding 4): also honor the saved-session
+        # signal when the current response HAS sources but every one is
+        # off_topic. Without this, an all-off-topic current pool strands the
+        # saved session and routes to research even though inspect_source can
+        # still reach on-topic saved candidates.
+        follow_up_all_off_topic = _guided_sources_all_off_topic(sources)
         follow_up_saved_has_sources = False
         follow_up_saved_all_off_topic = False
-        if not sources and workspace_registry is not None and follow_up_args.search_session_id:
+        if (
+            (not sources or follow_up_all_off_topic)
+            and workspace_registry is not None
+            and follow_up_args.search_session_id
+        ):
             try:
                 _follow_up_saved_record = workspace_registry.get(follow_up_args.search_session_id)
                 if _follow_up_saved_record is not None:
@@ -5878,7 +5910,6 @@ async def dispatch_tool(
         follow_up_saved_inspectable = (
             follow_up_saved_has_sources and not follow_up_saved_all_off_topic
         )
-        follow_up_all_off_topic = _guided_sources_all_off_topic(sources)
         failure_summary = _guided_failure_summary(
             failure_summary=cast(dict[str, Any] | None, ask.get("failureSummary")),
             status=guided_status,
