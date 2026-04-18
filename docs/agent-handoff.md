@@ -75,7 +75,9 @@ next steps without re-discovering project state.
   expert diagnostics should agree on `effectiveProfile`, smart-provider state,
   and active/disabled provider sets. `configuredSmartProvider` is the configured
   smart bundle; `activeSmartProvider` is the latest effective execution path,
-  including deterministic fallback when smart execution degrades.
+  including deterministic fallback when smart execution degrades. Cold-start
+  snapshots should warn when smart-provider selection is still provisional
+  instead of falsely reporting deterministic fallback.
 - The repo now includes a **portable eval curation funnel**. Live trace capture,
   review-queue generation, trace promotion, portable exports, service-specific
   publish helpers, and expert batch artifact generation are all checked in.

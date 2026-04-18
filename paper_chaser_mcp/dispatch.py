@@ -649,7 +649,15 @@ def _runtime_provider_order(
     ]
 
 
-def _smart_runtime_provider_state(agentic_runtime: Any) -> tuple[dict[str, bool], list[str], str | None, str | None]:
+def _smart_runtime_provider_state(
+    agentic_runtime: Any,
+) -> tuple[
+    dict[str, bool],
+    list[str],
+    str | None,
+    str | None,
+    bool,
+]:
     smart_provider_enabled = {
         "openai": False,
         "azure-openai": False,
@@ -672,6 +680,7 @@ def _smart_runtime_provider_state(agentic_runtime: Any) -> tuple[dict[str, bool]
     ]
     configured_smart_provider: str | None = None
     active_smart_provider: str | None = None
+    provider_selection_settled = True
     if agentic_runtime is not None and hasattr(agentic_runtime, "smart_provider_diagnostics"):
         smart_provider_enabled, smart_provider_order = agentic_runtime.smart_provider_diagnostics()
     provider_bundle = getattr(agentic_runtime, "_provider_bundle", None)
@@ -681,7 +690,21 @@ def _smart_runtime_provider_state(agentic_runtime: Any) -> tuple[dict[str, bool]
         active_value = selection.get("activeSmartProvider")
         configured_smart_provider = str(configured_value) if configured_value else None
         active_smart_provider = str(active_value) if active_value else None
-    return smart_provider_enabled, smart_provider_order, configured_smart_provider, active_smart_provider
+        settled_reader = getattr(provider_bundle, "provider_selection_settled", None)
+        if callable(settled_reader):
+            try:
+                provider_selection_settled = bool(settled_reader())
+            except Exception:
+                provider_selection_settled = True
+        elif hasattr(provider_bundle, "_provider_selection_settled"):
+            provider_selection_settled = bool(getattr(provider_bundle, "_provider_selection_settled"))
+    return (
+        smart_provider_enabled,
+        smart_provider_order,
+        configured_smart_provider,
+        active_smart_provider,
+        provider_selection_settled,
+    )
 
 
 def _build_provider_diagnostics_snapshot(
@@ -726,6 +749,7 @@ def _build_provider_diagnostics_snapshot(
         smart_provider_order,
         configured_smart_provider,
         active_smart_provider,
+        provider_selection_settled,
     ) = _smart_runtime_provider_state(agentic_runtime)
     enabled_state = {
         "semantic_scholar": enable_semantic_scholar,
@@ -847,6 +871,22 @@ def _build_provider_diagnostics_snapshot(
             severity="info",
             subject="openrouter",
         )
+    provisional_smart_provider = bool(
+        configured_smart_provider
+        and configured_smart_provider != "deterministic"
+        and smart_provider_enabled.get(configured_smart_provider, False)
+        and active_smart_provider == "deterministic"
+        and not provider_selection_settled
+    )
+    if provisional_smart_provider:
+        active_smart_provider = configured_smart_provider
+        _warn(
+            f"Configured smart provider '{configured_smart_provider}' has not completed a smart call yet, "
+            "so activeSmartProvider is provisional until initialization settles.",
+            code="smart_provider_unsettled",
+            severity="info",
+            subject=configured_smart_provider,
+        )
     fallback_active = bool(
         configured_smart_provider
         and configured_smart_provider != "deterministic"
@@ -871,6 +911,8 @@ def _build_provider_diagnostics_snapshot(
         health_status: RuntimeHealthStatus = "critical"
     elif fallback_active:
         health_status = "fallback_active"
+    elif provisional_smart_provider:
+        health_status = "degraded"
     elif _non_smart_disabled:
         health_status = "degraded"
     else:
@@ -2288,15 +2330,7 @@ def _guided_normalize_inspect_arguments(
         workspace_registry=workspace_registry,
         search_session_id=normalized_search_session_id,
     ):
-        inferred_id, _ = _guided_resolve_session_id_for_source(workspace_registry, normalized_source_id)
-        if inferred_id is not None:
-            warnings.append(
-                "searchSessionId "
-                f"'{normalized_search_session_id}' was unavailable; using source-bearing session '{inferred_id}'."
-            )
-            normalized_search_session_id = inferred_id
-        else:
-            inferred_id = _guided_infer_single_session_id(workspace_registry)
+        inferred_id = _guided_infer_single_session_id(workspace_registry)
         if inferred_id is not None:
             warnings.append(
                 "searchSessionId "
@@ -2309,13 +2343,8 @@ def _guided_normalize_inspect_arguments(
             )
             normalized_search_session_id = None
     if not normalized_search_session_id:
-        inferred_id, _ = _guided_resolve_session_id_for_source(workspace_registry, normalized_source_id)
+        inferred_id = _guided_infer_single_session_id(workspace_registry)
         if inferred_id is not None:
-            normalized_search_session_id = inferred_id
-            warnings.append(f"searchSessionId was missing; inferred source-bearing session '{inferred_id}'.")
-        else:
-            inferred_id = _guided_infer_single_session_id(workspace_registry)
-        if inferred_id is not None and not normalized_search_session_id:
             normalized_search_session_id = inferred_id
             warnings.append(f"searchSessionId was missing; inferred active session '{inferred_id}'.")
         elif len(_guided_candidate_records(workspace_registry)) > 1:
@@ -2331,14 +2360,6 @@ def _guided_normalize_inspect_arguments(
         reason="session_id_normalization",
     )
 
-    if not normalized_search_session_id:
-        inferred_session_id, _ = _guided_resolve_session_id_for_source(workspace_registry, normalized_source_id)
-        if inferred_session_id is not None:
-            normalized_search_session_id = inferred_session_id
-            normalized_args["searchSessionId"] = normalized_search_session_id
-            warnings.append(
-                f"searchSessionId was missing; inferred source-bearing session '{normalized_search_session_id}'."
-            )
     if not normalized_source_id and normalized_search_session_id and workspace_registry is not None:
         record = None
         try:

@@ -88,7 +88,7 @@ environments even though the server still supports those tools in expert mode.
   - `guidedPolicy`
   - `guidedResearchLatencyProfile`
   - `guidedFollowUpLatencyProfile`
-  - where `activeSmartProvider` means the latest effective execution path, including deterministic fallback
+  - where `activeSmartProvider` means the latest effective execution path, including deterministic fallback after the runtime has actually settled on fallback
   - internally consistent active/disabled provider sets.
 
 ## Release-Readiness Checks

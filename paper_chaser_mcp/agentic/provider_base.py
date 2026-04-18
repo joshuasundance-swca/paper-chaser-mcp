@@ -175,10 +175,15 @@ class ModelProviderBundle:
             return "deterministic"
         return str(getattr(self, "_last_effective_provider_name", getattr(self, "_provider_name", "deterministic")))
 
+    def provider_selection_settled(self) -> bool:
+        return bool(getattr(self, "_provider_selection_settled", True))
+
     def _mark_provider_used(self, provider_name: str | None = None) -> None:
+        self._provider_selection_settled = True
         self._last_effective_provider_name = provider_name or getattr(self, "_provider_name", "deterministic")
 
     def _mark_deterministic_fallback(self) -> None:
+        self._provider_selection_settled = True
         self._last_effective_provider_name = "deterministic"
 
     def supports_embeddings(self) -> bool:
@@ -541,6 +546,7 @@ class DeterministicProviderBundle(ModelProviderBundle):
         self._config = config
         self._configured_provider = config.provider
         self._provider_name = "deterministic"
+        self._provider_selection_settled = True
         self._last_effective_provider_name = "deterministic"
         self.planner_model_name = f"{config.provider}:deterministic-planner"
         self.synthesis_model_name = f"{config.provider}:deterministic-synthesizer"

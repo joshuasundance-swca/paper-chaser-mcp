@@ -199,11 +199,8 @@ def _classify_question_mode_keyword(question: str) -> str:
     planner hint and optional LLM classifier have been considered.
     """
     lowered = (question or "").lower()
-    metadata_facets = _metadata_facets(lowered)
     if _looks_like_relevance_triage(lowered):
         return "relevance_triage"
-    if metadata_facets:
-        return "metadata"
     # Selection markers are checked before the generic compare/versus branch so
     # single-best questions ("which is best", "most recent", "beginner-friendly")
     # route to ``selection`` rather than being swallowed by the broader
@@ -224,7 +221,13 @@ def _classify_question_mode_keyword(question: str) -> str:
             "most influential",
             "easiest to",
             "should i start with",
+            "start with first",
+            "which source should i start with",
+            "which paper should i start with",
             "where should i start",
+            "which source should i read first",
+            "which paper should i read first",
+            "read first",
             "most accessible",
             "most up to date",
             "most up-to-date",
@@ -233,6 +236,9 @@ def _classify_question_mode_keyword(question: str) -> str:
         )
     ):
         return "selection"
+    metadata_facets = _metadata_facets(lowered)
+    if metadata_facets:
+        return "metadata"
     if any(marker in lowered for marker in ("compare", "versus", " vs ", " vs.", "tradeoff", "trade-off")):
         if "trade" in lowered and "intervent" in lowered:
             return "intervention_tradeoff"

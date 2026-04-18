@@ -88,6 +88,7 @@ class LangChainChatProviderBundle(DeterministicProviderBundle):
         self._provider_registry = provider_registry
         self._structured_output_method = structured_output_method
         self._timeout_seconds = config.openai_timeout_seconds
+        self._provider_selection_settled = False
         self.planner_model_name = config.planner_model
         self.synthesis_model_name = config.synthesis_model
         self.embedding_model_name = config.embedding_model

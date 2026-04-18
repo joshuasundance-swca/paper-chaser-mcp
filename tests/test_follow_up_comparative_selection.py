@@ -31,6 +31,8 @@ from tests.test_smart_tools import (  # type: ignore[import-untyped]
         ("Which is the most cited paper?", "authority"),
         ("Which is the most beginner-friendly paper?", "beginner"),
         ("What is the best starting point for this topic?", "beginner"),
+        ("Which source should I start with first?", "beginner"),
+        ("Which source should I read first?", "beginner"),
         ("Which paper is the most comprehensive review?", "coverage"),
     ],
 )
@@ -174,6 +176,7 @@ async def test_ask_result_set_populates_top_recommendation_for_selection_mode() 
 
     record = registry.save_result_set(
         source_tool="search_papers_smart",
+        query="retrieval-augmented agents",
         payload={
             "data": [
                 {
@@ -210,9 +213,122 @@ async def test_ask_result_set_populates_top_recommendation_for_selection_mode() 
     top = ask["topRecommendation"]
     assert top is not None
     assert top["sourceId"] == "paper-new"
+    assert top["comparativeAxis"] == "recency"
+    assert top["recommendationReason"]
+    assert top["axisScore"] > 0.0
+    assert isinstance(top["alternativeRecommendations"], list)
     assert top["axis"] == "recency"
-    assert top["score"] > 0.0
-    assert isinstance(top["alternatives"], list)
+    assert top["rationale"] == top["recommendationReason"]
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Which source should I start with first?",
+        "Which source should I read first?",
+    ],
+)
+@pytest.mark.asyncio
+async def test_ask_result_set_populates_beginner_recommendation_for_start_phrasing(question: str) -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    registry, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
+
+    record = registry.save_result_set(
+        source_tool="search_papers_smart",
+        query="retrieval-augmented agents",
+        payload={
+            "data": [
+                {
+                    "paperId": "survey",
+                    "title": "A Survey of Retrieval-Augmented Agents",
+                    "abstract": "A review of retrieval-grounded agent architectures.",
+                    "source": "semantic_scholar",
+                    "year": 2024,
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "full_text_verified",
+                },
+                {
+                    "paperId": "technical",
+                    "title": "Dense Retrieval Calibration for Agent Planning",
+                    "abstract": "Technical treatment of retrieval calibration.",
+                    "source": "semantic_scholar",
+                    "year": 2023,
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "full_text_verified",
+                },
+            ]
+        },
+    )
+    _attach_stubs(runtime, ["survey", "technical"])
+
+    ask = await runtime.ask_result_set(
+        search_session_id=record.search_session_id,
+        question=question,
+        top_k=2,
+        answer_mode="comparison",
+    )
+
+    assert ask["answerStatus"] == "answered"
+    top = ask["topRecommendation"]
+    assert top is not None
+    assert top["sourceId"] == "survey"
+    assert top["comparativeAxis"] == "beginner_friendly"
+    assert "beginner-friendly" in top["recommendationReason"].lower()
+
+
+@pytest.mark.asyncio
+async def test_ask_result_set_populates_regulatory_start_recommendation() -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    registry, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
+
+    record = registry.save_result_set(
+        source_tool="search_papers_smart",
+        query="california condor recovery rulemaking",
+        payload={
+            "data": [
+                {
+                    "paperId": "condor-overview",
+                    "title": "Overview of California Condor Recovery Actions",
+                    "abstract": "Introductory overview of recovery and rulemaking milestones.",
+                    "source": "federal_register",
+                    "sourceType": "primary_regulatory",
+                    "year": 2024,
+                    "verificationStatus": "verified_primary_source",
+                    "accessStatus": "full_text_verified",
+                    "isPrimarySource": True,
+                },
+                {
+                    "paperId": "condor-rule",
+                    "title": "Final Rule Revising Critical Habitat for California Condor",
+                    "abstract": "Detailed final rule text for the California condor.",
+                    "source": "federal_register",
+                    "sourceType": "primary_regulatory",
+                    "year": 2023,
+                    "verificationStatus": "verified_primary_source",
+                    "accessStatus": "full_text_verified",
+                    "isPrimarySource": True,
+                },
+            ],
+            "strategyMetadata": {"intent": "regulatory"},
+        },
+    )
+    _attach_stubs(runtime, ["condor-overview", "condor-rule"])
+
+    ask = await runtime.ask_result_set(
+        search_session_id=record.search_session_id,
+        question="Which source should I start with first?",
+        top_k=2,
+        answer_mode="comparison",
+    )
+
+    assert ask["answerStatus"] == "answered"
+    top = ask["topRecommendation"]
+    assert top is not None
+    assert top["sourceId"] == "condor-overview"
+    assert top["comparativeAxis"] == "beginner_friendly"
+    assert top["recommendationReason"]
 
 
 @pytest.mark.asyncio

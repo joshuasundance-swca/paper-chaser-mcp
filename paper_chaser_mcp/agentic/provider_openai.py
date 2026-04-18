@@ -89,6 +89,7 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
         self._timeout_seconds = config.openai_timeout_seconds
         self._api_key = api_key
         self._provider_registry = provider_registry
+        self._provider_selection_settled = False
         self._openai_client: Any | None = None
         self._async_openai_client: Any | None = None
         self._planner: Any | None = None

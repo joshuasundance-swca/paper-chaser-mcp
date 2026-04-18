@@ -201,12 +201,12 @@ follow_up_research(searchSessionId="...", question="What evaluation tradeoffs sh
 2. Check `runtimeSummary.effectiveProfile`, transport, smart provider status,
    provider visibility, and warnings.
 3. Use this before troubleshooting with expert diagnostics.
-4. Interpret `configuredSmartProvider` as the configured bundle and `activeSmartProvider` as the latest effective execution path, including deterministic fallback.
+4. Interpret `configuredSmartProvider` as the configured bundle and `activeSmartProvider` as the latest effective execution path, including deterministic fallback after a confirmed fallback. Before the first smart call settles, expect an explicit provisional warning instead of a fallback claim.
 5. Prefer the consolidated structured health fields over string-parsing:
    - `runtimeSummary.healthStatus` is one of
      `nominal | degraded | fallback_active | critical`.
      - `nominal`: configured smart provider healthy and no optional providers disabled.
-     - `degraded`: smart provider healthy, but one or more optional providers are disabled or suppressed.
+      - `degraded`: smart provider is still provisional, or one or more optional providers are disabled or suppressed.
      - `fallback_active`: configured smart provider is unavailable and deterministic fallback is in use.
      - `critical`: the smart layer failed to initialize and no usable smart fallback is present.
    - `runtimeSummary.fallbackActive` is a boolean mirror of the fallback state; when true,
@@ -214,7 +214,7 @@ follow_up_research(searchSessionId="...", question="What evaluation tradeoffs sh
    - `runtimeSummary.structuredWarnings` is a list of
      `{code, severity, message, subject}` entries. `severity` is one of
      `info | warning | critical`. Known `code` values include
-     `smart_provider_fallback`, `provider_disabled`, `chat_only_smart_provider`,
+      `smart_provider_fallback`, `smart_provider_unsettled`, `provider_disabled`, `chat_only_smart_provider`,
      `tools_hidden`, `stdio_transport`, `ecos_tls_disabled`,
      `guided_hides_expert`, and `narrow_provider_order`.
    - The legacy `runtimeSummary.warnings: list[str]` (also mirrored as the

@@ -1744,6 +1744,31 @@ def test_guided_normalize_inspect_arguments_repairs_invalid_session_and_missing_
     assert any("inferred the only inspectable source" in warning.lower() for warning in meta["warnings"])
 
 
+def test_guided_normalize_inspect_arguments_does_not_infer_source_session_when_multiple_sessions_exist() -> None:
+    isolated_registry = WorkspaceRegistry()
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-first",
+        query="Attention Is All You Need",
+        payload={"sources": [{"sourceId": "10.48550/arXiv.2602.05892", "title": "Attention is All you Need"}]},
+    )
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-second",
+        query="RAG",
+        payload={"sources": [{"sourceId": "paper-b", "title": "RAG Overview"}]},
+    )
+
+    normalized, meta = dispatch_module._guided_normalize_inspect_arguments(
+        {"sourceId": "10.48550/arXiv.2602.05892"},
+        workspace_registry=isolated_registry,
+    )
+
+    assert not normalized["searchSessionId"]
+    assert normalized["sourceId"] == "10.48550/arXiv.2602.05892"
+    assert any("multiple active sessions exist" in warning.lower() for warning in meta["warnings"])
+
+
 def test_guided_normalize_follow_up_arguments_repairs_invalid_session_to_unique_active_session() -> None:
     isolated_registry = WorkspaceRegistry()
     isolated_registry.save_result_set(
@@ -1762,7 +1787,7 @@ def test_guided_normalize_follow_up_arguments_repairs_invalid_session_to_unique_
     assert any("was unavailable; using active session" in warning.lower() for warning in meta["warnings"])
 
 
-def test_guided_normalize_inspect_arguments_infers_source_bearing_session_from_source_id() -> None:
+def test_guided_normalize_inspect_arguments_requires_explicit_session_when_multiple_sessions_exist() -> None:
     isolated_registry = WorkspaceRegistry()
     isolated_registry.save_result_set(
         source_tool="search_papers_smart",
@@ -1782,9 +1807,9 @@ def test_guided_normalize_inspect_arguments_infers_source_bearing_session_from_s
         workspace_registry=isolated_registry,
     )
 
-    assert normalized["searchSessionId"] == "ssn-source-bearing"
+    assert not normalized["searchSessionId"]
     assert normalized["sourceId"] == "paper-a"
-    assert any("inferred source-bearing session" in warning.lower() for warning in meta["warnings"])
+    assert any("multiple active sessions exist" in warning.lower() for warning in meta["warnings"])
 
 
 def test_guided_source_metadata_answers_support_alias_and_multiple_fields() -> None:
@@ -1962,6 +1987,57 @@ async def test_get_runtime_status_fallback_active_reflects_deterministic_smart_p
     )
     assert payload["warnings"], "legacy warnings list must still be populated"
     assert any("deterministic fallback is active" in warning for warning in payload["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_get_runtime_status_treats_unsettled_enabled_smart_provider_as_provisional(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeBundle:
+        _provider_selection_settled = False
+
+        def selection_metadata(self) -> dict[str, object]:
+            return {
+                "configuredSmartProvider": "openai",
+                "activeSmartProvider": "deterministic",
+            }
+
+        def provider_selection_settled(self) -> bool:
+            return self._provider_selection_settled
+
+    class _FakeRuntime:
+        _provider_bundle = _FakeBundle()
+
+        @staticmethod
+        def smart_provider_diagnostics() -> tuple[dict[str, bool], list[str]]:
+            return (
+                {
+                    "openai": True,
+                    "azure-openai": False,
+                    "anthropic": False,
+                    "nvidia": False,
+                    "google": False,
+                    "mistral": False,
+                    "huggingface": False,
+                    "openrouter": False,
+                },
+                ["openai", "azure-openai", "anthropic", "nvidia", "google", "mistral", "huggingface", "openrouter"],
+            )
+
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(await server.call_tool("get_runtime_status", {}))
+    summary = payload["runtimeSummary"]
+
+    assert summary["configuredSmartProvider"] == "openai"
+    assert summary["activeSmartProvider"] == "openai"
+    assert summary["fallbackActive"] is False
+    assert summary["healthStatus"] == "degraded"
+    assert any(
+        entry.get("code") == "smart_provider_unsettled" and entry.get("severity") == "info"
+        for entry in summary.get("structuredWarnings", [])
+    )
+    assert any("activeSmartProvider is provisional" in warning for warning in payload["warnings"])
 
 
 @pytest.mark.asyncio
@@ -3637,6 +3713,36 @@ async def test_inspect_source_returns_structured_disambiguation_when_session_is_
     assert payload["sessionResolution"]["resolutionMode"] == "ambiguous"
     assert payload["sourceResolution"]["matchType"] == "missing_session_id"
     assert payload["resultState"]["status"] == "needs_disambiguation"
+
+
+@pytest.mark.asyncio
+async def test_inspect_source_does_not_infer_unique_source_session_when_multiple_sessions_exist() -> None:
+    isolated_registry = WorkspaceRegistry()
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-03baf7096bbe",
+        query="Attention Is All You Need",
+        payload={"sources": [{"sourceId": "10.48550/arXiv.2602.05892", "title": "Attention is All you Need"}]},
+    )
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-other",
+        query="RAG",
+        payload={"sources": [{"sourceId": "paper-b", "title": "RAG Overview"}]},
+    )
+
+    original_registry = server.workspace_registry
+    server.workspace_registry = isolated_registry
+    try:
+        payload = _payload(await server.call_tool("inspect_source", {"sourceId": "10.48550/arXiv.2602.05892"}))
+    finally:
+        server.workspace_registry = original_registry
+
+    assert payload["searchSessionId"] is None
+    assert payload["source"] is None
+    assert payload["sessionResolution"]["resolutionMode"] == "ambiguous"
+    assert payload["sourceResolution"]["matchType"] == "missing_session_id"
+    assert any("provide an explicit searchsessionid" in step.lower() for step in payload["nextActions"])
 
 
 @pytest.mark.asyncio

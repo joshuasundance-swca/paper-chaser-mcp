@@ -44,6 +44,7 @@ from .answer_modes import (
     SYNTHESIS_MODES,
     aclassify_question_mode,
     build_evidence_use_plan,
+    classify_question_mode,
     evidence_pool_is_weak,
 )
 from .config import AgenticConfig, LatencyProfile
@@ -1469,6 +1470,18 @@ class AgenticRuntime:
             if profile_settings.use_embedding_rerank and provider_bundle.supports_embeddings()
             else self._deterministic_bundle
         )
+        session_followup_metadata: dict[str, Any] | None = None
+        session_strategy_metadata = record.payload.get("strategyMetadata") if isinstance(record.payload, dict) else None
+        if isinstance(session_strategy_metadata, dict):
+            session_followup_metadata = {
+                "followUpMode": session_strategy_metadata.get("followUpMode"),
+            }
+        initial_question_mode = classify_question_mode(question, session_followup_metadata)
+        contextual_question = _contextualize_follow_up_question(
+            question=question,
+            record=record,
+            question_mode=initial_question_mode,
+        )
 
         await self._emit_tool_progress(
             ctx=ctx,
@@ -1479,7 +1492,7 @@ class AgenticRuntime:
         selected_papers = (
             await self._workspace_registry.asearch_papers(
                 search_session_id,
-                question,
+                contextual_question,
                 top_k=top_k,
                 # Use semantic retrieval whenever a smart model-backed provider is active.
                 allow_model_similarity=(self._provider_bundle.configured_provider_name() != "deterministic"),
@@ -1535,7 +1548,7 @@ class AgenticRuntime:
                 answer_mode=answer_mode,
             ),
             similarity_bundle.abatched_similarity(
-                question,
+                contextual_question,
                 evidence_texts,
             ),
         )
@@ -1546,7 +1559,7 @@ class AgenticRuntime:
                 paper=Paper.model_validate(paper),
                 excerpt=str(paper.get("abstract") or paper.get("title") or "")[:600],
                 whyRelevant=_why_matched(
-                    query=question,
+                    query=contextual_question,
                     paper=paper,
                     matched_concepts=[],
                 ),
@@ -1584,7 +1597,7 @@ class AgenticRuntime:
 
         # LLM batch relevance pre-pass for papers in the middle-zone similarity range.
         relevance_cache = cast(dict[str, Any], record.metadata.setdefault("relevanceCache", {}))
-        relevance_cache_key = " ".join(str(question or "").lower().split())
+        relevance_cache_key = " ".join(str(contextual_question or "").lower().split())
         question_relevance_cache = cast(dict[str, Any], relevance_cache.setdefault(relevance_cache_key, {}))
         llm_relevance: dict[str, dict[str, Any]] = {}
         if hasattr(provider_bundle, "aclassify_relevance_batch"):
@@ -1611,7 +1624,7 @@ class AgenticRuntime:
             if middle_zone_papers:
                 try:
                     batch_relevance = await provider_bundle.aclassify_relevance_batch(
-                        query=question,
+                        query=contextual_question,
                         papers=middle_zone_papers,
                     )
                     for paper_id, entry in batch_relevance.items():
@@ -1649,7 +1662,7 @@ class AgenticRuntime:
             relevance_rationale = str(relevance_entry.get("rationale") or "").strip()
             relevance_provenance = str(relevance_entry.get("provenance") or "model").strip() or "model"
             classification_result = _classify_topical_relevance_with_provenance(
-                query=question,
+                query=contextual_question,
                 paper=item.paper,
                 query_similarity=float(item.relevance_score),
                 llm_classification=cast(Any, relevance_entry.get("classification")),
@@ -1762,18 +1775,12 @@ class AgenticRuntime:
                 )
                 if identifier
             ]
+
         # LLM-first follow-up answer-mode classification. The deterministic
         # keyword classifier misses paraphrased synthesis asks such as
         # "what do these papers say?" (no SYNTHESIS_SHAPE_MARKERS hit, so it
         # reports ``unknown``). Consult the provider bundle's classifier
         # first; fall back to the keyword heuristic when no LLM is available.
-        session_followup_metadata: dict[str, Any] | None = None
-        session_strategy_metadata = record.payload.get("strategyMetadata") if isinstance(record.payload, dict) else None
-        if isinstance(session_strategy_metadata, dict):
-            session_followup_metadata = {
-                "followUpMode": session_strategy_metadata.get("followUpMode"),
-            }
-
         async def _llm_mode_classifier(q: str, modes: tuple[str, ...]) -> str | None:
             try:
                 return await provider_bundle.aclassify_answer_mode(question=q, modes=modes)
@@ -1796,6 +1803,24 @@ class AgenticRuntime:
             question_mode=resolved_question_mode,
         )
         question_mode = str(evidence_use_plan.get("answerMode") or "unknown")
+        if (
+            question_mode == "selection"
+            and not bool(evidence_use_plan.get("sufficient"))
+            and not unsupported_asks
+            and answer_text
+            and len(strong_evidence_ids) >= 2
+        ):
+            evidence_use_plan = {
+                **evidence_use_plan,
+                "sufficient": True,
+                "retrievalSufficiency": "thin",
+                "confidence": "medium",
+                "rationale": (
+                    "Selection follow-up can be answered from two strong on-topic sources "
+                    "using deterministic ranking signals."
+                ),
+                "unsupportedComponents": [],
+            }
         plan_sufficient = bool(evidence_use_plan.get("sufficient"))
         answerability = str(synthesis.get("answerability") or "limited")
         if answerability not in {"grounded", "limited", "insufficient"}:
@@ -4256,13 +4281,34 @@ def _compute_top_recommendation(
         None,
     )
     rationale = _build_top_recommendation_rationale(primary_axis, primary_score, primary_item)
+    comparative_axis = _top_recommendation_axis_label(primary_axis)
+    alternative_recommendations = [
+        {
+            "sourceId": str(entry.get("sourceId") or "").strip(),
+            "comparativeAxis": _top_recommendation_axis_label(str(entry.get("axis") or "")),
+            "axisScore": entry.get("score"),
+        }
+        for entry in alternatives
+        if str(entry.get("sourceId") or "").strip()
+    ]
     return {
         "sourceId": primary_pid,
+        "comparativeAxis": comparative_axis,
+        "recommendationReason": rationale,
+        "axisScore": round(primary_score, 4),
+        "alternativeRecommendations": alternative_recommendations,
         "axis": primary_axis,
         "score": round(primary_score, 4),
         "rationale": rationale,
         "alternatives": alternatives,
     }
+
+
+def _top_recommendation_axis_label(axis: str) -> str:
+    return {
+        "beginner": "beginner_friendly",
+        "relevance_fallback": "relevance",
+    }.get(axis, axis)
 
 
 def _build_top_recommendation_rationale(
@@ -5917,6 +5963,27 @@ def _graph_intent_text(
             if isinstance(candidate, str) and candidate.strip():
                 return candidate.strip()
     return ""
+
+
+def _contextualize_follow_up_question(
+    *,
+    question: str,
+    record: Any | None,
+    question_mode: str,
+) -> str:
+    normalized_question = str(question or "").strip()
+    if question_mode not in {"comparison", "selection"}:
+        return normalized_question
+    session_intent = _graph_intent_text(record, [])
+    if not session_intent:
+        return normalized_question
+    lowered_question = normalized_question.lower()
+    lowered_intent = session_intent.lower()
+    if lowered_intent and lowered_intent in lowered_question:
+        return normalized_question
+    if not normalized_question:
+        return session_intent
+    return f"{normalized_question} about {session_intent}"
 
 
 def _filter_graph_frontier(

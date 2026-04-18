@@ -65,7 +65,7 @@ be hard to misuse and explicit about trust.
   is only accepted when one compatible saved session exists.
 - **Runtime truth**: `get_runtime_status` surfaces active profile/transport and
   provider-state warnings without requiring low-level diagnostics. `configuredSmartProvider`
-  is the configured smart bundle; `activeSmartProvider` is the latest effective execution path.
+  is the configured smart bundle; `activeSmartProvider` is the latest effective execution path, and cold-start snapshots emit an explicit provisional warning instead of claiming deterministic fallback before the first smart call settles.
 - **Expert depth remains available**: raw/smart/provider-specific tools still
   exist for operator workflows under the expert profile.
 
