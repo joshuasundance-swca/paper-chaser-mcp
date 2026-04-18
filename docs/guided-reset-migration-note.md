@@ -33,9 +33,14 @@ environments even though the server still supports those tools in expert mode.
 - Update clients to start from `research`.
 - Reuse `searchSessionId` with `follow_up_research`.
 - If `searchSessionId` is omitted, guided follow-up and source inspection infer it only when one compatible saved session exists.
+- Expect vague citation/reference fragments sent to guided `research` to stop
+  at `needs_disambiguation` + `clarification` before speculative retrieval.
 - Use `inspect_source` for provenance and direct-read follow-through.
 - Use `resolve_reference` for citation/identifier normalization.
 - Expect exact DOI, arXiv, and supported paper URLs to resolve before fuzzy citation repair.
+- Treat `resolve_reference.bestMatch` as citation-ready only when
+  `status=resolved`; `multiple_candidates` and `needs_disambiguation` mean the
+  server found leads, not a safe final anchor.
 - Treat `abstained` and `needs_disambiguation` as intended safe outcomes.
 - Expect guided responses to surface `executionProvenance`, and expect
   ambiguous session/source flows to return `sessionResolution` and
@@ -56,6 +61,9 @@ environments even though the server still supports those tools in expert mode.
   - `resultStatus`: `succeeded|partial|needs_disambiguation|abstained|failed`
   - `answerability`, `routingSummary`, `coverageSummary`, `evidence`, `leads`,
     `evidenceGaps`, `failureSummary`, `nextActions`, `executionProvenance`
+  - vague citation/reference fragments can preflight directly to
+    `needs_disambiguation` with a bounded `clarification` payload instead of a
+    speculative retrieval pass
   - `summary` now leads with a short recommendation-first statement when the
     server has a clear top result.
 - Guided follow-up returns explicit answer gating:
@@ -71,6 +79,8 @@ environments even though the server still supports those tools in expert mode.
     to restore the legacy compatibility views.
   - Comparative / selection asks expose a structured `topRecommendation` with
     `sourceId`, `recommendationReason`, and `comparativeAxis`.
+  - uniquely anchored recommendation asks can still answer safely with
+    `topRecommendation` even when broader synthesis stays limited
   - ambiguity and reuse state are surfaced through `sessionResolution`
   - saved-session introspection can classify mixed source sets into on-topic,
     weaker, and off-target groups when the stored metadata is sufficient
@@ -79,6 +89,8 @@ environments even though the server still supports those tools in expert mode.
   session), and `qaReadableText` (body actually available to the current
   synthesis call). `AccessStatus` values now include `url_verified`,
   `body_text_embedded`, and `qa_readable_text` alongside prior states.
+- `fullTextObserved` may still appear for backward compatibility, but treat the
+  split access fields above as the durable contract.
 - Guided source inspection now returns structured `sourceResolution` details on
   ambiguity instead of failing with a raw `ValueError`.
 - Runtime truth is now expected to include:
@@ -89,7 +101,7 @@ environments even though the server still supports those tools in expert mode.
   - `guidedResearchLatencyProfile`
   - `guidedFollowUpLatencyProfile`
   - where `activeSmartProvider` means the latest effective execution path, including deterministic fallback after the runtime has actually settled on fallback
-  - internally consistent active/disabled provider sets.
+  - internally consistent `configuredProviderSet` / `activeProviderSet` / `disabledProviderSet` / `suppressedProviderSet` / `degradedProviderSet` / `quotaLimitedProviderSet` semantics that match the per-provider rows, with `disabledProviderSet` reserved for configured-off providers and the other three capturing runtime-only suppression, degradation, or quota limits.
 
 ## Release-Readiness Checks
 

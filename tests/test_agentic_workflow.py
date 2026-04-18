@@ -113,6 +113,7 @@ def test_agentic_workflow_documentation_stays_in_sync() -> None:
     readme = (repo_root / "README.md").read_text()
     handoff = (repo_root / "docs" / "agent-handoff.md").read_text()
     golden_paths = (repo_root / "docs" / "golden-paths.md").read_text()
+    migration_note = (repo_root / "docs" / "guided-reset-migration-note.md").read_text()
     instructions = (repo_root / ".github" / "copilot-instructions.md").read_text()
     validate_workflow = (repo_root / ".github" / "workflows" / "validate.yml").read_text()
 
@@ -136,6 +137,17 @@ def test_agentic_workflow_documentation_stays_in_sync() -> None:
     assert ".github/workflows/test-paper-chaser.md" in golden_paths
     assert "feature_probe" in golden_paths
     assert "tool_profile" in golden_paths
+    assert "underspecified_reference_fragment" in readme
+    assert "multiple_candidates" in readme
+    assert "fullTextObserved" in readme
+    assert "underspecified citation-like fragment" in golden_paths
+    assert "disabledProviderSet" in golden_paths
+    assert "suppressedProviderSet" in golden_paths
+    assert "multiple_candidates" in migration_note
+    assert "fullTextObserved" in migration_note
+    assert "needs_disambiguation" in migration_note
+    assert "reference-fragment preflight" in handoff
+    assert "status=resolved" in handoff
     assert compile_command in instructions
     assert "feature_probe" in instructions
     assert "Install gh-aw" in validate_workflow

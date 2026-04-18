@@ -57,6 +57,9 @@ be hard to misuse and explicit about trust.
 - **Reference-first recovery**: `resolve_reference` handles DOI/arXiv/URL,
   citation fragments, and regulatory-style references, and exact DOI/arXiv/
   paper-URL inputs resolve as exact anchors rather than falling through to fuzzy repair.
+  Ambiguous title-only or conflicting metadata matches can now return
+  `multiple_candidates` or `needs_disambiguation`; treat those as candidate
+  anchors, not citation-ready resolutions.
 - **Compact top-level answer**: guided `research` leads with a short
   recommendation-first `summary`, while keeping the structured evidence,
   leads, and provenance fields available below it.
@@ -65,7 +68,7 @@ be hard to misuse and explicit about trust.
   is only accepted when one compatible saved session exists.
 - **Runtime truth**: `get_runtime_status` surfaces active profile/transport and
   provider-state warnings without requiring low-level diagnostics. `configuredSmartProvider`
-  is the configured smart bundle; `activeSmartProvider` is the latest effective execution path, and cold-start snapshots emit an explicit provisional warning instead of claiming deterministic fallback before the first smart call settles.
+  is the configured smart bundle; `activeSmartProvider` is the latest effective execution path, cold-start snapshots emit an explicit provisional warning instead of claiming deterministic fallback before the first smart call settles, and the top-level provider sets now split `disabledProviderSet`, `suppressedProviderSet`, `degradedProviderSet`, and `quotaLimitedProviderSet` instead of collapsing them.
 - **Expert depth remains available**: raw/smart/provider-specific tools still
   exist for operator workflows under the expert profile.
 
@@ -136,6 +139,8 @@ If you want a local env template for shell runs or Docker Compose, copy `.env.ex
 ```text
 research(query="retrieval-augmented generation for coding agents", limit=5)
 → inspect resultStatus, answerability, summary, evidence, leads, routingSummary
+→ if resultStatus=needs_disambiguation with clarification.reason=underspecified_reference_fragment:
+  tighten the anchor or pivot to resolve_reference instead of forcing retrieval
 → save searchSessionId for follow-up or source inspection
 ```
 
@@ -147,6 +152,7 @@ follow_up_research(searchSessionId="...", question="What evaluation tradeoffs sh
 → if answered: use answer + evidence (compact default: sources are identified by selectedEvidenceIds)
 → if abstained/insufficient_evidence: use nextActions and inspect_source
 → mixed saved sessions can still answer relevance-triage questions such as which items are on-topic vs off-target
+→ uniquely anchored recommendation asks can also return a safe start-here answer plus topRecommendation
 → if you omit searchSessionId and multiple saved sessions exist: provide it explicitly
 → for full source records pass responseMode="standard"; for diagnostics responseMode="debug"
 → for selection asks ("where should I start?", "most recent?"), read topRecommendation
@@ -159,6 +165,8 @@ resolve_reference(reference="10.1038/nrn3241")
 → exact DOI/arXiv/paper URL should resolve directly when supported
 resolve_reference(reference="Rockstrom et al planetary boundaries 2009 Nature 461 472")
 → inspect status and bestMatch/alternatives
+→ only treat bestMatch as citation-ready when status=resolved
+→ if status=multiple_candidates or needs_disambiguation: pick a candidate or add a stronger author/year/venue clue before citing it
 → if resolved: run research with the resolved anchor
 ```
 
@@ -175,6 +183,11 @@ inspect_source(searchSessionId="...", evidenceId="...")
 - If `research.resultStatus` is `abstained` or `needs_disambiguation`, do not invent
   synthesis. Narrow with a concrete anchor: DOI, exact title, species name,
   agency, year, or venue.
+- When `research` returns `needs_disambiguation` with
+  `clarification.reason=underspecified_reference_fragment`, the server is
+  intentionally stopping before speculative retrieval on a vague
+  citation/reference fragment. Tighten the clue set or switch to
+  `resolve_reference`.
 - If `follow_up_research.answerStatus` is `abstained` or
   `insufficient_evidence`, treat it as a safety signal. Use `inspect_source`
   and rerun `research` with tighter scope.
@@ -218,10 +231,10 @@ Treat these as the main guided contracts:
 | `nextActions` | guided tools | Treat as server-preferred recovery path on weak evidence |
 | `clarification` | `research` | Ask the user only when a bounded clarification request is provided |
 | `answerStatus` | `follow_up_research` | `answered`, `abstained`, `insufficient_evidence`. Grounded `answered` requires on-topic verified source + qa-readable text + non-deterministic provider + medium+ confidence; otherwise expect `insufficient_evidence`. |
-| `topRecommendation` | `follow_up_research` (comparative/selection asks) | Structured pick with `sourceId`, `recommendationReason`, `comparativeAxis` (e.g. `beginner_friendly`, `recency`, `authority`). |
+| `topRecommendation` | `follow_up_research` (comparative/selection asks) | Structured pick with `sourceId`, `recommendationReason`, `comparativeAxis` (e.g. `beginner_friendly`, `recency`, `authority`). Unique anchored "where should I start?" asks can safely answer through this path even when broader synthesis would stay limited. |
 | `responseMode` | `follow_up_research` input | `compact` (default, hides full sources and legacy fields), `standard`, `debug`. |
 | `includeLegacyFields` | `follow_up_research` input | Set `true` to restore legacy `verifiedFindings`/`unverifiedLeads` in compact mode. |
-| `fullTextUrlFound` / `bodyTextEmbedded` / `qaReadableText` | `inspect_source` | Distinguish URL discovery, embedded body text, and text actually available to QA synthesis. |
+| `fullTextUrlFound` / `bodyTextEmbedded` / `qaReadableText` | `inspect_source` | Distinguish URL discovery, embedded body text, and text actually available to QA synthesis. `fullTextObserved` may still appear as a compatibility alias, but the split fields are the durable contract. |
 | `evidenceId` | `evidence[*]` | Pass to `inspect_source` for per-source provenance checks |
 | `runtimeSummary` | `get_runtime_status` and expert diagnostics | Confirm effective profile, smart provider state, and warnings |
 

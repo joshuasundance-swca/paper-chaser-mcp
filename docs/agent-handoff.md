@@ -19,6 +19,9 @@ next steps without re-discovering project state.
   support belongs in `evidence`; weak, filtered, or off-topic items belong in
   `leads`. Legacy `verifiedFindings` and `unverifiedLeads` are compatibility
   views, not the primary contract.
+- Guided `research` now has a **reference-fragment preflight**. Vague
+  citation-like prompts should prefer `needs_disambiguation` plus a bounded
+  `clarification` payload over speculative retrieval.
 - Guided follow-up is now **abstention-safe**. `follow_up_research` returns
   `answerStatus=answered|abstained|insufficient_evidence` and should not emit
   answer-shaped filler when evidence is weak.
@@ -35,12 +38,18 @@ next steps without re-discovering project state.
   `insufficient_evidence`. Comparative / selection asks emit a structured
   `topRecommendation` with `sourceId`, `recommendationReason`, and inferred
   `comparativeAxis` (e.g. `beginner_friendly`, `recency`, `authority`).
+  Uniquely anchored "where should I start?" asks can still answer safely with
+  a narrow recommendation-first response through that path.
+- `resolve_reference` is now **ambiguity-safe**. Ambiguous title-only matches or
+  key author/year/venue conflicts should not be reported as a confident
+  resolution; expect `multiple_candidates` or `needs_disambiguation` and treat
+  `bestMatch` as a lead unless `status=resolved`.
 - Source inspection now **splits access state** into `fullTextUrlFound` (URL
   discovered), `bodyTextEmbedded` (body text indexed into the saved session),
   and `qaReadableText` (body text actually available to the current synthesis
   call). `AccessStatus` adds `url_verified`, `body_text_embedded`, and
   `qa_readable_text` so agents can tell URL discovery apart from true
-  full-text reads.
+  full-text reads. `fullTextObserved` remains a compatibility alias only.
 - The UX remediation checklist
   (`docs/ux-remediation-checklist.md`) is **fully implemented**. All 8 items
   (P0-1 answer-status gating, P0-2 full-text access split, two P0-3
@@ -73,11 +82,15 @@ next steps without re-discovering project state.
   retain weaker authority hits as leads rather than silently drifting into known-item recovery.
 - Runtime reporting is now **internally truthful**. `get_runtime_status` and
   expert diagnostics should agree on `effectiveProfile`, smart-provider state,
-  and active/disabled provider sets. `configuredSmartProvider` is the configured
-  smart bundle; `activeSmartProvider` is the latest effective execution path,
-  including deterministic fallback when smart execution degrades. Cold-start
-  snapshots should warn when smart-provider selection is still provisional
-  instead of falsely reporting deterministic fallback.
+  and the meaning of the top-level provider sets. `configuredSmartProvider` is
+  the configured smart bundle; `activeSmartProvider` is the latest effective
+  execution path, including deterministic fallback when smart execution
+  degrades. `disabledProviderSet` now tracks only rows with `enabled=false`,
+  while `suppressedProviderSet`, `degradedProviderSet`, and
+  `quotaLimitedProviderSet` capture runtime-only health and quota issues so the
+  top-level summary matches the per-provider rows. Cold-start snapshots should
+  warn when smart-provider selection is still provisional instead of falsely
+  reporting deterministic fallback.
 - The repo now includes a **portable eval curation funnel**. Live trace capture,
   review-queue generation, trace promotion, portable exports, service-specific
   publish helpers, and expert batch artifact generation are all checked in.

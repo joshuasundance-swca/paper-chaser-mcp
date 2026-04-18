@@ -1822,6 +1822,11 @@ class AgenticRuntime:
                 "unsupportedComponents": [],
             }
         plan_sufficient = bool(evidence_use_plan.get("sufficient"))
+        anchored_selection_source_ids = {
+            str(identifier).strip()
+            for identifier in (evidence_use_plan.get("anchoredSelectionSourceIds") or [])
+            if str(identifier).strip()
+        }
         answerability = str(synthesis.get("answerability") or "limited")
         if answerability not in {"grounded", "limited", "insufficient"}:
             answerability = "limited"
@@ -1978,7 +1983,38 @@ class AgenticRuntime:
             evidence=evidence,
             source_records=source_records,
             strong_evidence_ids=strong_evidence_ids,
+            anchored_selection_source_ids=anchored_selection_source_ids,
         )
+        if (
+            question_mode == "selection"
+            and top_recommendation is not None
+            and not unsupported_asks
+            and answer_status != "abstained"
+        ):
+            recommended_source_id = str(top_recommendation.get("sourceId") or "").strip()
+            if answer_status != "answered":
+                answer_status = "answered"
+                answerability = "limited"
+                degradation_reason = degradation_reason or "selection_recommendation_only"
+            if not str(answer_payload or "").strip():
+                answer_payload = _selection_answer_from_recommendation(top_recommendation, source_records)
+            if recommended_source_id and not selected_evidence_ids:
+                selected_evidence_ids = [recommended_source_id]
+            evidence_gaps = [
+                gap
+                for gap in evidence_gaps
+                if gap
+                != "Grounded follow-up could not find enough on-topic evidence to answer safely."
+            ]
+        visible_lead_ids = {
+            str(record.source_id or record.source_alias or "").strip()
+            for record in _candidate_leads_from_source_records(source_records)
+            if str(record.source_id or record.source_alias or "").strip()
+        }
+        if visible_lead_ids:
+            selected_lead_ids = [identifier for identifier in selected_lead_ids if identifier in visible_lead_ids]
+        else:
+            selected_lead_ids = []
         response = AskResultSetResponse(
             answer=answer_payload,
             answerStatus=answer_status,
@@ -4208,6 +4244,7 @@ def _compute_top_recommendation(
     evidence: list[EvidenceItem],
     source_records: list[StructuredSourceRecord],
     strong_evidence_ids: set[str],
+    anchored_selection_source_ids: set[str] | None = None,
 ) -> dict[str, Any] | None:
     """Build the P1-2 ``topRecommendation`` payload for selection follow-ups.
 
@@ -4221,13 +4258,44 @@ def _compute_top_recommendation(
     """
     if resolved_question_mode not in {"comparison", "selection"}:
         return None
-    if answer_status != "answered":
+    anchored_selection_source_ids = {
+        identifier for identifier in (anchored_selection_source_ids or set()) if identifier
+    }
+    if answer_status != "answered" and not (
+        resolved_question_mode == "selection" and len(anchored_selection_source_ids) == 1
+    ):
         return None
     strong_on_topic_evidence = [
         item
         for item in evidence
         if str(item.evidence_id or item.paper.paper_id or item.paper.canonical_id or "").strip() in strong_evidence_ids
     ]
+    source_record_by_id = {
+        str(record.source_id or "").strip(): record for record in source_records if str(record.source_id or "").strip()
+    }
+    anchored_items = [
+        item
+        for item in strong_on_topic_evidence
+        if str(item.evidence_id or item.paper.paper_id or item.paper.canonical_id or "").strip()
+        in anchored_selection_source_ids
+    ]
+    if resolved_question_mode == "selection" and len(anchored_items) == 1:
+        primary_item = anchored_items[0]
+        primary_pid = str(
+            primary_item.evidence_id or primary_item.paper.paper_id or primary_item.paper.canonical_id or ""
+        ).strip()
+        rationale = _build_anchored_selection_rationale(primary_item, source_record_by_id.get(primary_pid))
+        return {
+            "sourceId": primary_pid,
+            "comparativeAxis": "authority",
+            "recommendationReason": rationale,
+            "axisScore": 1.0,
+            "alternativeRecommendations": [],
+            "axis": "authority",
+            "score": 1.0,
+            "rationale": rationale,
+            "alternatives": [],
+        }
     if len(strong_on_topic_evidence) < 2:
         return None
     papers = [item.paper for item in strong_on_topic_evidence]
@@ -4272,15 +4340,18 @@ def _compute_top_recommendation(
         )
 
     # Find the corresponding evidence item for rationale enrichment.
-    primary_item = next(
-        (
-            item
-            for item in strong_on_topic_evidence
-            if str(item.paper.paper_id or item.paper.canonical_id or "").strip() == primary_pid
+    ranked_primary_item = cast(
+        EvidenceItem | None,
+        next(
+            (
+                item
+                for item in strong_on_topic_evidence
+                if str(item.paper.paper_id or item.paper.canonical_id or "").strip() == primary_pid
+            ),
+            None,
         ),
-        None,
     )
-    rationale = _build_top_recommendation_rationale(primary_axis, primary_score, primary_item)
+    rationale = _build_top_recommendation_rationale(primary_axis, primary_score, ranked_primary_item)
     comparative_axis = _top_recommendation_axis_label(primary_axis)
     alternative_recommendations = [
         {
@@ -4302,6 +4373,40 @@ def _compute_top_recommendation(
         "rationale": rationale,
         "alternatives": alternatives,
     }
+
+
+def _selection_answer_from_recommendation(
+    top_recommendation: dict[str, Any],
+    source_records: list[StructuredSourceRecord],
+) -> str:
+    source_id = str(top_recommendation.get("sourceId") or "").strip()
+    title = ""
+    if source_id:
+        matched = next((record for record in source_records if str(record.source_id or "").strip() == source_id), None)
+        if matched is not None:
+            title = str(matched.title or matched.citation_text or source_id).strip()
+    reason = str(top_recommendation.get("recommendationReason") or "").strip()
+    if title and reason:
+        return f"Start with {title}. {reason}"
+    if title:
+        return f"Start with {title}."
+    if reason:
+        return reason
+    return "Start with the recommended source from the saved evidence."
+
+
+def _build_anchored_selection_rationale(
+    item: EvidenceItem,
+    source_record: StructuredSourceRecord | None,
+) -> str:
+    source_title = source_record.title if source_record is not None else None
+    title = str(item.paper.title or source_title or "").strip()
+    citation = str(source_record.citation_text or "").strip() if source_record is not None else ""
+    if citation and citation not in title:
+        return f"This is the exact verified primary source for the requested codified text ({citation})."
+    if title:
+        return f"This is the exact verified primary source for the requested codified text ({title})."
+    return "This is the exact verified primary source for the requested codified text."
 
 
 def _top_recommendation_axis_label(axis: str) -> str:

@@ -6,6 +6,10 @@ from typing import Any, Literal, cast
 
 import pytest
 
+from paper_chaser_mcp.agentic.answer_modes import (
+    build_evidence_use_plan,
+    selection_anchor_candidate_ids,
+)
 from paper_chaser_mcp.agentic.models import EvidenceItem, StructuredSourceRecord
 from paper_chaser_mcp.agentic.selection_scoring import (
     infer_comparative_axis,
@@ -133,6 +137,104 @@ def test_scoring_relevance_fallback_uses_supplied_scores() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_selection_mode_allows_unique_current_text_anchor() -> None:
+    evidence = [
+        EvidenceItem(
+            evidenceId="50 CFR 17.95",
+            paper=Paper(
+                paperId="50 CFR 17.95",
+                title="50 CFR 17.95 — California condor critical habitat",
+            ),
+            excerpt="Current codified critical habitat text.",
+            whyRelevant="",
+            relevanceScore=0.9,
+        )
+    ]
+    source_records = [
+        StructuredSourceRecord(
+            sourceId="50 CFR 17.95",
+            title="50 CFR 17.95 — California condor critical habitat",
+            sourceType="primary_regulatory",
+            verificationStatus="verified_primary_source",
+            accessStatus="url_verified",
+            isPrimarySource=True,
+            topicalRelevance=cast(Literal["on_topic", "weak_match", "off_topic"], "on_topic"),
+            citationText="50 CFR 17.95",
+        )
+    ]
+    question = "Which returned source should I start with for the current codified habitat text under 50 CFR 17.95?"
+
+    assert selection_anchor_candidate_ids(question, evidence, source_records) == ["50 CFR 17.95"]
+    plan = build_evidence_use_plan(
+        question=question,
+        answer_mode="comparison",
+        evidence=evidence,
+        source_records=source_records,
+        unsupported_asks=[],
+        llm_relevance={"50 CFR 17.95": {"classification": "on_topic", "fallback": False}},
+        question_mode="selection",
+    )
+
+    assert plan["sufficient"] is True
+    assert plan["anchoredSelectionSourceIds"] == ["50 CFR 17.95"]
+    assert "exact strong source" in plan["rationale"]
+
+
+def test_selection_mode_keeps_ambiguous_current_text_anchor_insufficient() -> None:
+    evidence = [
+        EvidenceItem(
+            evidenceId="50 CFR 17.95",
+            paper=Paper(paperId="50 CFR 17.95", title="50 CFR 17.95 — California condor critical habitat"),
+            excerpt="Current codified text.",
+            whyRelevant="",
+            relevanceScore=0.9,
+        ),
+        EvidenceItem(
+            evidenceId="50 CFR 17.95-app",
+            paper=Paper(paperId="50 CFR 17.95-app", title="Appendix text for 50 CFR 17.95"),
+            excerpt="Supplementary codified text.",
+            whyRelevant="",
+            relevanceScore=0.1,
+        ),
+    ]
+    source_records = [
+        StructuredSourceRecord(
+            sourceId="50 CFR 17.95",
+            title="50 CFR 17.95 — California condor critical habitat",
+            sourceType="primary_regulatory",
+            verificationStatus="verified_primary_source",
+            accessStatus="url_verified",
+            isPrimarySource=True,
+            topicalRelevance=cast(Literal["on_topic", "weak_match", "off_topic"], "on_topic"),
+            citationText="50 CFR 17.95",
+        ),
+        StructuredSourceRecord(
+            sourceId="50 CFR 17.95-app",
+            title="Appendix text for 50 CFR 17.95",
+            sourceType="primary_regulatory",
+            verificationStatus="verified_primary_source",
+            accessStatus="url_verified",
+            isPrimarySource=True,
+            topicalRelevance=cast(Literal["on_topic", "weak_match", "off_topic"], "on_topic"),
+            citationText="50 CFR 17.95",
+        ),
+    ]
+    question = "Which returned source should I start with for the current codified habitat text under 50 CFR 17.95?"
+
+    plan = build_evidence_use_plan(
+        question=question,
+        answer_mode="comparison",
+        evidence=evidence,
+        source_records=source_records,
+        unsupported_asks=[],
+        llm_relevance={},
+        question_mode="selection",
+    )
+
+    assert plan["sufficient"] is False
+    assert plan["anchoredSelectionSourceIds"] == ["50 CFR 17.95", "50 CFR 17.95-app"]
+
+
 def _grounded_answer_stub(selected: list[str]) -> Any:
     async def _answer_question(**kwargs: object) -> dict[str, object]:
         del kwargs
@@ -162,10 +264,10 @@ async def _high_similarity(query: str, texts: list[str], **kwargs: object) -> li
 
 def _attach_stubs(runtime: Any, papers_ids: list[str]) -> None:
     answer_stub = _grounded_answer_stub(papers_ids)
-    runtime._provider_bundle.aanswer_question = answer_stub
-    runtime._deterministic_bundle.aanswer_question = answer_stub
-    runtime._provider_bundle.abatched_similarity = _high_similarity
-    runtime._deterministic_bundle.abatched_similarity = _high_similarity
+    setattr(runtime._provider_bundle, "aanswer_question", answer_stub)
+    setattr(runtime._deterministic_bundle, "aanswer_question", answer_stub)
+    setattr(runtime._provider_bundle, "abatched_similarity", _high_similarity)
+    setattr(runtime._deterministic_bundle, "abatched_similarity", _high_similarity)
 
 
 @pytest.mark.asyncio
@@ -332,6 +434,69 @@ async def test_ask_result_set_populates_regulatory_start_recommendation() -> Non
 
 
 @pytest.mark.asyncio
+async def test_ask_result_set_answers_unique_current_text_selection_from_top_recommendation() -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    registry, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
+
+    record = registry.save_result_set(
+        source_tool="search_papers_smart",
+        query="california condor critical habitat",
+        payload={
+            "data": [
+                {
+                    "paperId": "50 CFR 17.95",
+                    "title": "50 CFR 17.95 — California condor critical habitat",
+                    "abstract": "",
+                    "source": "govinfo",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_primary_source",
+                    "accessStatus": "url_verified",
+                    "isPrimarySource": True,
+                }
+            ]
+        },
+    )
+
+    async def _selection_stub(**kwargs: object) -> dict[str, object]:
+        del kwargs
+        return {
+            "answer": "",
+            "unsupportedAsks": [],
+            "followUpQuestions": [],
+            "confidence": "medium",
+            "answerability": "limited",
+            "selectedEvidenceIds": [],
+            "selectedLeadIds": [],
+            "citedPaperIds": [],
+            "evidenceSummary": "One exact primary source.",
+            "missingEvidenceDescription": "",
+        }
+
+    setattr(runtime._provider_bundle, "aanswer_question", _selection_stub)
+    setattr(runtime._deterministic_bundle, "aanswer_question", _selection_stub)
+    setattr(runtime._provider_bundle, "abatched_similarity", _high_similarity)
+    setattr(runtime._deterministic_bundle, "abatched_similarity", _high_similarity)
+
+    ask = await runtime.ask_result_set(
+        search_session_id=record.search_session_id,
+        question="Which returned source should I start with for the current codified habitat text under 50 CFR 17.95?",
+        top_k=1,
+        answer_mode="comparison",
+    )
+
+    assert ask["answerStatus"] == "answered"
+    assert ask["answerability"] == "limited"
+    assert ask["selectedEvidenceIds"] == ["50 CFR 17.95"]
+    assert "Start with" in ask["answer"]
+    top = ask["topRecommendation"]
+    assert top is not None
+    assert top["sourceId"] == "50 CFR 17.95"
+    assert top["comparativeAxis"] == "authority"
+    assert "exact verified primary source" in top["recommendationReason"]
+
+
+@pytest.mark.asyncio
 async def test_ask_result_set_omits_top_recommendation_for_non_selection_modes() -> None:
     semantic = RecordingSemanticClient()
     openalex = RecordingOpenAlexClient()
@@ -425,8 +590,6 @@ def test_top_recommendation_field_exists_on_response_model() -> None:
 
 
 def test_selection_mode_insufficient_evidence_still_insufficient() -> None:
-    from paper_chaser_mcp.agentic.answer_modes import build_evidence_use_plan
-
     evidence = [
         EvidenceItem(
             evidenceId="only",

@@ -33,6 +33,9 @@ gh aw compile test-paper-chaser --dir .github/workflows
 
 1. Start with guided tools.
 2. Let guided `research` use its server-owned quality-first policy; low-context clients should not need to choose `fast`, `balanced`, or `deep` for normal use.
+3. If guided `research` stops early on an underspecified citation-like fragment,
+   treat that `needs_disambiguation` + `clarification` response as a successful
+   guardrail, not a retrieval miss.
 3. Reuse `searchSessionId`; do not restart discovery unless needed.
 4. Treat `abstained`, `insufficient_evidence`, and `needs_disambiguation` as
    successful safety behavior.
@@ -46,13 +49,17 @@ gh aw compile test-paper-chaser --dir .github/workflows
 1. Start with `research` for discovery, literature review, known-item recovery,
    citation repair, and regulatory history asks.
 2. Inspect `resultStatus`, `answerability`, `evidence`, `leads`,
-  `routingSummary`, `coverageSummary`, `evidenceGaps`, `failureSummary`,
-  `executionProvenance`, and `nextActions`.
+   `routingSummary`, `coverageSummary`, `evidenceGaps`, `failureSummary`,
+   `executionProvenance`, and `nextActions`.
+3. If `resultStatus=needs_disambiguation` and
+   `clarification.reason=underspecified_reference_fragment`, tighten the
+   anchor instead of forcing retrieval. Prefer an exact title, author surname,
+   agency, venue, or year, or pivot into `resolve_reference`.
 3. When `routingSummary.querySpecificity=low` or
    `routingSummary.ambiguityLevel=medium|high`, treat
    `routingSummary.retrievalHypotheses` as the server's bounded interpretation
    of the broad ask rather than as final evidence.
-3. Save `searchSessionId` for follow-up steps.
+4. Save `searchSessionId` for follow-up steps.
 
 **Example**
 
@@ -142,6 +149,9 @@ and grounding cues. Treat them as hints layered on top of `answerability` and
 6. Comparative / selection asks ("where should I start?", "most recent?",
    "most authoritative?") expose a `topRecommendation` payload with
    `sourceId`, `recommendationReason`, and inferred `comparativeAxis`.
+7. A uniquely anchored recommendation ask can safely return `answerStatus=answered`
+   with a narrow recommendation-first answer plus `topRecommendation` even when
+   the broader answerability remains `limited`.
 
 **Example**
 
@@ -173,9 +183,12 @@ follow_up_research(searchSessionId="...", question="What evaluation tradeoffs sh
    matches — pick from `bestMatch`/`alternatives`), `needs_disambiguation`
    (best match's key metadata — author/year/venue — conflicts and is unsafe to
    cite directly), `no_match`, and `regulatory_primary_source`.
-3. Use `bestMatch`/`alternatives` and `nextActions` to decide whether to pivot
+3. Treat `bestMatch` as citation-ready only when `status=resolved`. For
+   `multiple_candidates` and `needs_disambiguation`, use it as a lead that
+   still needs user confirmation or a stronger clue.
+4. Use `bestMatch`/`alternatives` and `nextActions` to decide whether to pivot
    back into `research` with a stronger anchor.
-4. Exact DOI, arXiv, and supported paper URLs should resolve as direct anchors before fuzzy recovery.
+5. Exact DOI, arXiv, and supported paper URLs should resolve as direct anchors before fuzzy recovery.
 
 ### 4. Source-level audit (`inspect_source`)
 
@@ -199,7 +212,7 @@ follow_up_research(searchSessionId="...", question="What evaluation tradeoffs sh
 
 1. Use `get_runtime_status` when behavior differs across environments.
 2. Check `runtimeSummary.effectiveProfile`, transport, smart provider status,
-   provider visibility, and warnings.
+   provider visibility, provider state sets, and warnings.
 3. Use this before troubleshooting with expert diagnostics.
 4. Interpret `configuredSmartProvider` as the configured bundle and `activeSmartProvider` as the latest effective execution path, including deterministic fallback after a confirmed fallback. Before the first smart call settles, expect an explicit provisional warning instead of a fallback claim.
 5. Prefer the consolidated structured health fields over string-parsing:
@@ -209,14 +222,21 @@ follow_up_research(searchSessionId="...", question="What evaluation tradeoffs sh
       - `degraded`: smart provider is still provisional, or one or more optional providers are disabled or suppressed.
      - `fallback_active`: configured smart provider is unavailable and deterministic fallback is in use.
      - `critical`: the smart layer failed to initialize and no usable smart fallback is present.
-   - `runtimeSummary.fallbackActive` is a boolean mirror of the fallback state; when true,
-     `runtimeSummary.fallbackReason` carries a human-readable explanation (omitted otherwise).
-   - `runtimeSummary.structuredWarnings` is a list of
-     `{code, severity, message, subject}` entries. `severity` is one of
-     `info | warning | critical`. Known `code` values include
-      `smart_provider_fallback`, `smart_provider_unsettled`, `provider_disabled`, `chat_only_smart_provider`,
-     `tools_hidden`, `stdio_transport`, `ecos_tls_disabled`,
-     `guided_hides_expert`, and `narrow_provider_order`.
+    - `runtimeSummary.fallbackActive` is a boolean mirror of the fallback state; when true,
+      `runtimeSummary.fallbackReason` carries a human-readable explanation (omitted otherwise).
+    - Provider-set semantics are explicit:
+      - `configuredProviderSet`: providers whose rows report `enabled=true`.
+      - `activeProviderSet`: configured providers whose rows report `runtimeAvailability=active`.
+      - `disabledProviderSet`: providers whose rows report `enabled=false`; this is the configured-disabled bucket only.
+      - `suppressedProviderSet`: configured providers temporarily held out at runtime (`runtimeAvailability=suppressed`).
+      - `degradedProviderSet`: configured, non-suppressed providers with recent runtime failures (`runtimeHealth=degraded`).
+      - `quotaLimitedProviderSet`: configured providers with quota exhaustion or zero-capacity metadata (`runtimeHealth=quota_limited`), whether or not suppression is active.
+    - `runtimeSummary.structuredWarnings` is a list of
+      `{code, severity, message, subject}` entries. `severity` is one of
+      `info | warning | critical`. Known `code` values include
+       `smart_provider_fallback`, `smart_provider_unsettled`, `provider_disabled`, `provider_suppressed`,
+      `provider_quota_limited`, `provider_degraded`, `chat_only_smart_provider`, `tools_hidden`, `stdio_transport`, `ecos_tls_disabled`,
+      `guided_hides_expert`, and `narrow_provider_order`.
    - The legacy `runtimeSummary.warnings: list[str]` (also mirrored as the
      top-level `warnings` field on the tool response) is preserved for
      backward compatibility and stays byte-identical to the strings emitted in

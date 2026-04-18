@@ -2,7 +2,7 @@
 
 These pin the backward-compatible contract for guided dispatch output:
 
-* ``fullTextObserved`` is emitted alongside ``fullTextUrlFound`` (finding #2).
+* ``fullTextObserved`` tracks observed body/full text, not URL discovery (finding #2).
 * Scholarly papers with basic descriptive metadata (title + author/venue) keep
   the ``verified_metadata`` verification status even when no DOI is present
   (finding #3).
@@ -25,7 +25,7 @@ from paper_chaser_mcp.dispatch import (
 
 
 class TestFullTextObservedDualEmit:
-    def test_paper_record_dual_emits_both_keys(self) -> None:
+    def test_paper_record_distinguishes_url_discovery_from_body_observation(self) -> None:
         record = _guided_source_record_from_paper(
             "query",
             {
@@ -37,7 +37,7 @@ class TestFullTextObservedDualEmit:
             index=1,
         )
         assert record["fullTextUrlFound"] is True
-        assert record["fullTextObserved"] is True
+        assert record["fullTextObserved"] is False
 
     def test_paper_record_dual_emits_when_false(self) -> None:
         record = _guided_source_record_from_paper(
@@ -64,9 +64,9 @@ class TestFullTextObservedDualEmit:
             index=1,
         )
         assert record["fullTextUrlFound"] is True
-        assert record["fullTextObserved"] is True
+        assert record["fullTextObserved"] is False
 
-    def test_legacy_input_key_mirrored_to_both_outputs(self) -> None:
+    def test_legacy_input_key_preserved_for_legacy_payloads(self) -> None:
         record = _guided_source_record_from_structured_source(
             {
                 "sourceId": "src-1",

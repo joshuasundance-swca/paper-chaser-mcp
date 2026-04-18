@@ -19,6 +19,7 @@ unavailable).
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
@@ -61,6 +62,26 @@ _DEFAULT_WEAK_POOL_THRESHOLD = 0.6
 # Minimum number of non-fallback on_topic sources required to support a
 # synthesis-mode answer.
 _SYNTHESIS_MIN_RESPONSIVE = 2
+_STRONG_SELECTION_VERIFICATION_STATES = frozenset({"verified_primary_source", "verified_metadata"})
+_SELECTION_CURRENT_TEXT_MARKERS: tuple[str, ...] = (
+    "current text",
+    "current codified",
+    "codified text",
+    "current codified text",
+    "current cfr",
+    "cfr text",
+    "regulatory text",
+    "rule text",
+    "official text",
+)
+_SELECTION_PRIMARY_SOURCE_MARKERS: tuple[str, ...] = (
+    "cfr",
+    "code of federal regulations",
+    "codified",
+    "regulatory text",
+    "current text",
+)
+_CFR_REFERENCE_RE = re.compile(r"\b\d+\s*cfr\s*\d+(?:\.\d+)*\b", re.IGNORECASE)
 
 
 def _weak_pool_threshold() -> float:
@@ -352,6 +373,53 @@ def _metadata_facets(lowered_question: str) -> list[str]:
     return facets
 
 
+def selection_anchor_candidate_ids(
+    question: str,
+    evidence: list[EvidenceItem],
+    source_records: list[StructuredSourceRecord],
+) -> list[str]:
+    """Return strong exact-anchor candidates for safe selection follow-ups."""
+    lowered_question = (question or "").strip().lower()
+    if not lowered_question:
+        return []
+    wants_current_text = any(marker in lowered_question for marker in _SELECTION_CURRENT_TEXT_MARKERS)
+    cfr_references = {
+        re.sub(r"\s+", " ", match.group(0).lower()).strip()
+        for match in _CFR_REFERENCE_RE.finditer(question or "")
+    }
+    candidate_ids: list[str] = []
+    for item, source in zip(evidence, source_records, strict=False):
+        evidence_id = str(item.evidence_id or item.paper.paper_id or item.paper.canonical_id or "").strip()
+        if not evidence_id or source.topical_relevance != "on_topic":
+            continue
+        if str(source.verification_status or "").strip() not in _STRONG_SELECTION_VERIFICATION_STATES:
+            continue
+        provider_text = " ".join(
+            part
+            for part in (
+                source.title,
+                source.citation_text,
+                source.source_id,
+                source.canonical_url,
+                source.retrieved_url,
+                item.paper.title,
+            )
+            if isinstance(part, str) and part.strip()
+        ).lower()
+        is_primary = (
+            bool(source.is_primary_source)
+            or str(source.verification_status or "").strip() == "verified_primary_source"
+            or "primary" in str(source.source_type or "").lower()
+        )
+        cfr_match = any(reference in provider_text for reference in cfr_references)
+        current_text_match = wants_current_text and is_primary and any(
+            marker in provider_text for marker in _SELECTION_PRIMARY_SOURCE_MARKERS
+        )
+        if cfr_match or current_text_match:
+            candidate_ids.append(evidence_id)
+    return list(dict.fromkeys(candidate_ids))
+
+
 def _is_on_topic(source: StructuredSourceRecord) -> bool:
     return getattr(source, "topical_relevance", None) == "on_topic"
 
@@ -424,6 +492,9 @@ def build_evidence_use_plan(
     responsive_ids: list[str] = []
     fallback_only_on_topic = 0
     on_topic_count = 0
+    anchored_selection_ids = (
+        selection_anchor_candidate_ids(question, evidence, source_records) if mode == "selection" else []
+    )
     for item, source in zip(evidence, source_records, strict=False):
         evidence_id = str(item.evidence_id or item.paper.paper_id or item.paper.canonical_id or "").strip()
         if not evidence_id:
@@ -447,7 +518,11 @@ def build_evidence_use_plan(
     rationale = "Evidence pool supports the requested synthesis."
 
     if treat_as_synthesis:
-        if len(responsive_ids) >= _SYNTHESIS_MIN_RESPONSIVE and len(unsupported_components) <= 1:
+        if mode == "selection" and len(anchored_selection_ids) == 1 and not unsupported_components:
+            retrieval_sufficiency = "sufficient"
+            confidence = "medium"
+            rationale = "Selection follow-up is anchored to one exact strong source in the saved evidence."
+        elif len(responsive_ids) >= _SYNTHESIS_MIN_RESPONSIVE and len(unsupported_components) <= 1:
             retrieval_sufficiency = "sufficient"
             confidence = "high"
             rationale = f"{len(responsive_ids)} non-fallback on-topic sources support the requested {mode}."
@@ -564,6 +639,7 @@ def build_evidence_use_plan(
         "synthesisMode": synthesis_label,
         "onTopicCount": on_topic_count,
         "fallbackOnlyOnTopic": fallback_only_on_topic,
+        "anchoredSelectionSourceIds": anchored_selection_ids,
     }
 
 
@@ -577,4 +653,5 @@ __all__ = [
     "classify_question_mode",
     "build_evidence_use_plan",
     "evidence_pool_is_weak",
+    "selection_anchor_candidate_ids",
 ]

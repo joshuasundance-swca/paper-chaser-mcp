@@ -579,12 +579,15 @@ async def resolve_citation(
                 candidate_map,
                 max_candidates=max_candidates,
             )
-            if _best_candidate_confidence(ranked_candidates) == "high":
-                response = _serialize_citation_response(
-                    citation=citation,
-                    parsed=parsed,
-                    candidates=ranked_candidates,
-                )
+            response = _serialize_citation_response(
+                citation=citation,
+                parsed=parsed,
+                candidates=ranked_candidates,
+            )
+            if (
+                _best_candidate_confidence(ranked_candidates) == "high"
+                and response.get("knownItemResolutionState") != "needs_disambiguation"
+            ):
                 if include_enrichment and enrichment_service is not None:
                     response = await _enrich_best_match(
                         response,
@@ -696,6 +699,21 @@ def _serialize_citation_response(
         resolution_strategy=best.resolution_strategy if best is not None else "none",
         title_similarity=best.title_similarity if best is not None else None,
     )
+    resolution_state = classify_known_item_resolution_state(
+        resolution_confidence=confidence,
+        resolution_strategy=best.resolution_strategy if best is not None else "none",
+        matched_fields=best.matched_fields if best is not None else [],
+        conflicting_fields=best.conflicting_fields if best is not None else [],
+        title_similarity=best.title_similarity if best is not None else None,
+        year_delta=best.year_delta if best is not None else None,
+        author_overlap=best.author_overlap if best is not None else None,
+        best_score=best.score if best is not None else None,
+        runner_up_score=runner_up_score,
+        candidate_count=len(candidates),
+        has_best_match=best is not None,
+    )
+    if resolution_state == "needs_disambiguation" and confidence == "high":
+        confidence = "medium"
     abstain = bool(
         best is not None
         and (
@@ -714,31 +732,18 @@ def _serialize_citation_response(
             )
         )
     )
-    alternatives = (
-        _abstention_candidates(candidates)
-        if abstain
-        else _filtered_alternative_candidates(
+    if abstain:
+        alternatives = _abstention_candidates(candidates)
+    else:
+        alternative_confidence = "medium" if resolution_state == "needs_disambiguation" else confidence
+        alternatives = _filtered_alternative_candidates(
             candidates=candidates,
-            confidence=confidence,
+            confidence=alternative_confidence,
         )
-    )
     best_for_response = None if abstain else best
     serializable_candidates = ([best] if best is not None else []) if not abstain else alternatives
     if not abstain and best is not None:
         serializable_candidates = [best, *alternatives]
-    resolution_state = classify_known_item_resolution_state(
-        resolution_confidence=confidence,
-        resolution_strategy=best.resolution_strategy if best is not None else "none",
-        matched_fields=best.matched_fields if best is not None else [],
-        conflicting_fields=best.conflicting_fields if best is not None else [],
-        title_similarity=best.title_similarity if best is not None else None,
-        year_delta=best.year_delta if best is not None else None,
-        author_overlap=best.author_overlap if best is not None else None,
-        best_score=best.score if best is not None else None,
-        runner_up_score=runner_up_score,
-        candidate_count=len(candidates),
-        has_best_match=best_for_response is not None,
-    )
     response = CitationResolutionResponse(
         bestMatch=_to_candidate_model(best_for_response) if best_for_response is not None else None,
         alternatives=[_to_candidate_model(candidate) for candidate in alternatives],

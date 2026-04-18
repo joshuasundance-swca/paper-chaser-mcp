@@ -108,6 +108,27 @@ SCHOLARAPI_LIST_RETRIEVAL_NOTE = (
 
 logger = logging.getLogger(__name__)
 
+_GUIDED_REFERENCE_UNCERTAINTY_MARKERS: tuple[str, ...] = (
+    "maybe",
+    "perhaps",
+    "possibly",
+    "probably",
+    "roughly",
+    "approximately",
+    "approx",
+    "around",
+    "something",
+)
+_GUIDED_REFERENCE_GENERIC_CANDIDATE_WORDS = {
+    "article",
+    "document",
+    "paper",
+    "policy",
+    "report",
+    "something",
+    "study",
+}
+
 
 def _provider_error_text(exc: Exception) -> str:
     text = str(exc).strip()
@@ -707,6 +728,82 @@ def _smart_runtime_provider_state(
     )
 
 
+_RUNTIME_FAILURE_PROVIDER_STATUSES: frozenset[str] = frozenset(
+    {"rate_limited", "quota_exhausted", "auth_error", "provider_error"}
+)
+_QUOTA_METADATA_CAPACITY_KEYS: tuple[str, ...] = (
+    "searches_left",
+    "total_searches_left",
+    "this_hour_searches_left",
+    "requestsRemaining",
+    "remainingRequests",
+    "creditsRemaining",
+    "remainingCredits",
+)
+
+
+def _metadata_value_is_depleted(value: Any) -> bool:
+    if isinstance(value, bool) or value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value <= 0
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return False
+        try:
+            return float(stripped) <= 0
+        except ValueError:
+            return False
+    return False
+
+
+def _provider_row_quota_limited(provider_row: dict[str, Any]) -> bool:
+    if provider_row.get("lastOutcome") == "quota_exhausted":
+        return True
+    quota_metadata = provider_row.get("lastQuotaMetadata")
+    if not isinstance(quota_metadata, dict):
+        return False
+    return any(_metadata_value_is_depleted(quota_metadata.get(key)) for key in _QUOTA_METADATA_CAPACITY_KEYS)
+
+
+def _annotate_runtime_provider_row(provider_row: dict[str, Any]) -> tuple[str, str]:
+    enabled = provider_row.get("enabled") is True
+    suppressed = provider_row.get("suppressed") is True
+    last_outcome = provider_row.get("lastOutcome")
+    consecutive_failures = provider_row.get("consecutiveFailures")
+    quota_limited = _provider_row_quota_limited(provider_row)
+
+    if not enabled:
+        availability = "disabled"
+        health = "ok"
+        reason = "Provider is not currently enabled in the effective runtime."
+    elif suppressed:
+        availability = "suppressed"
+        health = "quota_limited" if quota_limited else "ok"
+        reason = "Provider is temporarily suppressed after recent failures."
+    else:
+        availability = "active"
+        if quota_limited:
+            health = "quota_limited"
+            reason = "Provider reported quota exhaustion or zero remaining capacity."
+        elif last_outcome in _RUNTIME_FAILURE_PROVIDER_STATUSES or (
+            isinstance(consecutive_failures, int) and consecutive_failures > 0
+        ):
+            health = "degraded"
+            if isinstance(last_outcome, str) and last_outcome:
+                reason = f"Recent runtime outcome was {last_outcome}."
+            else:
+                reason = "Provider has recent runtime failures."
+        else:
+            health = "ok"
+            reason = "Provider is currently eligible for calls."
+    provider_row["runtimeAvailability"] = availability
+    provider_row["runtimeHealth"] = health
+    provider_row["runtimeStateReason"] = reason
+    return availability, health
+
+
 def _build_provider_diagnostics_snapshot(
     *,
     include_recent_outcomes: bool,
@@ -770,20 +867,6 @@ def _build_provider_diagnostics_snapshot(
         smart_provider_order=smart_provider_order,
     )
     provider_order_effective = [str(provider) for provider in (provider_order or [])]
-    active_provider_set = sorted(
-        [
-            provider
-            for provider, enabled in enabled_state.items()
-            if enabled and not (provider_registry is not None and provider_registry.is_suppressed(provider))
-        ]
-    )
-    disabled_provider_set = sorted(
-        [
-            provider
-            for provider, enabled in enabled_state.items()
-            if not enabled or (provider_registry is not None and provider_registry.is_suppressed(provider))
-        ]
-    )
     runtime_warnings: list[str] = []
     structured_warnings: list[dict[str, Any]] = []
 
@@ -804,14 +887,6 @@ def _build_provider_diagnostics_snapshot(
             }
         )
 
-    enabled_raw_providers = [provider for provider in (provider_order or []) if provider in active_provider_set]
-    if len(enabled_raw_providers) <= 1:
-        _warn(
-            "The effective broker order is very narrow, so no-result responses "
-            "may reflect limited provider coverage rather than absence of evidence.",
-            code="narrow_provider_order",
-            severity="warning",
-        )
     if not enable_serpapi and serpapi_client is not None:
         _warn(
             "SerpApi client state is present but PAPER_CHASER_ENABLE_SERPAPI is "
@@ -871,6 +946,84 @@ def _build_provider_diagnostics_snapshot(
             severity="info",
             subject="openrouter",
         )
+    snapshot: dict[str, Any] | None = None
+    if provider_registry is None:
+        configured_provider_set = sorted([provider for provider, enabled in enabled_state.items() if enabled])
+        active_provider_set = list(configured_provider_set)
+        disabled_provider_set = sorted([provider for provider, enabled in enabled_state.items() if not enabled])
+        suppressed_provider_set: list[str] = []
+        degraded_provider_set: list[str] = []
+        quota_limited_provider_set: list[str] = []
+    else:
+        snapshot = provider_registry.snapshot(
+            enabled=enabled_state,
+            provider_order=provider_list_order,
+        )
+        configured_provider_set = []
+        active_provider_set = []
+        disabled_provider_set = []
+        suppressed_provider_set = []
+        degraded_provider_set = []
+        quota_limited_provider_set = []
+        for provider_payload in snapshot.get("providers", []):
+            if not isinstance(provider_payload, dict):
+                continue
+            provider_name = provider_payload.get("provider")
+            if not isinstance(provider_name, str) or not provider_name:
+                continue
+            availability, health = _annotate_runtime_provider_row(provider_payload)
+            if provider_payload.get("enabled") is True:
+                configured_provider_set.append(provider_name)
+            if availability == "active":
+                active_provider_set.append(provider_name)
+            elif availability == "disabled":
+                disabled_provider_set.append(provider_name)
+            elif availability == "suppressed":
+                suppressed_provider_set.append(provider_name)
+            if health == "degraded" and availability == "active":
+                degraded_provider_set.append(provider_name)
+            if health == "quota_limited":
+                quota_limited_provider_set.append(provider_name)
+            if not include_recent_outcomes:
+                provider_payload["recentOutcomes"] = []
+        configured_provider_set.sort()
+        active_provider_set.sort()
+        disabled_provider_set.sort()
+        suppressed_provider_set.sort()
+        degraded_provider_set.sort()
+        quota_limited_provider_set.sort()
+        if suppressed_provider_set:
+            _warn(
+                "Providers currently suppressed at runtime: "
+                + ", ".join(suppressed_provider_set)
+                + ". Check provider rows for suppressedUntil and lastOutcome.",
+                code="provider_suppressed",
+                severity="warning",
+            )
+        if quota_limited_provider_set:
+            _warn(
+                "Providers currently quota-limited: "
+                + ", ".join(quota_limited_provider_set)
+                + ". Check provider rows for lastQuotaMetadata and suppressedUntil.",
+                code="provider_quota_limited",
+                severity="warning",
+            )
+        if degraded_provider_set:
+            _warn(
+                "Providers with recent non-suppressed runtime degradation: "
+                + ", ".join(degraded_provider_set)
+                + ". Check provider rows for lastOutcome and consecutiveFailures.",
+                code="provider_degraded",
+                severity="warning",
+            )
+    enabled_raw_providers = [provider for provider in (provider_order or []) if provider in active_provider_set]
+    if len(enabled_raw_providers) <= 1:
+        _warn(
+            "The effective broker order is very narrow, so no-result responses "
+            "may reflect limited provider coverage rather than absence of evidence.",
+            code="narrow_provider_order",
+            severity="warning",
+        )
     provisional_smart_provider = bool(
         configured_smart_provider
         and configured_smart_provider != "deterministic"
@@ -913,7 +1066,7 @@ def _build_provider_diagnostics_snapshot(
         health_status = "fallback_active"
     elif provisional_smart_provider:
         health_status = "degraded"
-    elif _non_smart_disabled:
+    elif _non_smart_disabled or suppressed_provider_set or degraded_provider_set or quota_limited_provider_set:
         health_status = "degraded"
     else:
         health_status = "nominal"
@@ -922,8 +1075,12 @@ def _build_provider_diagnostics_snapshot(
         effectiveProfile=tool_profile,
         transportMode=transport_mode,
         smartLayerEnabled=agentic_runtime is not None,
+        configuredProviderSet=configured_provider_set,
         activeProviderSet=active_provider_set,
         disabledProviderSet=disabled_provider_set,
+        suppressedProviderSet=suppressed_provider_set,
+        degradedProviderSet=degraded_provider_set,
+        quotaLimitedProviderSet=quota_limited_provider_set,
         configuredSmartProvider=configured_smart_provider,
         activeSmartProvider=active_smart_provider,
         providerOrderEffective=provider_order_effective,
@@ -944,22 +1101,13 @@ def _build_provider_diagnostics_snapshot(
         fallbackReason=fallback_reason,
         structuredWarnings=structured_warnings,
     )
-    if provider_registry is None:
+    if snapshot is None:
         return {
             "generatedAt": None,
             "providerOrder": provider_list_order,
             "providers": [],
             "runtimeSummary": runtime_summary.model_dump(by_alias=True, exclude_none=True),
         }
-
-    snapshot = provider_registry.snapshot(
-        enabled=enabled_state,
-        provider_order=provider_list_order,
-    )
-    if not include_recent_outcomes:
-        for provider in snapshot.get("providers", []):
-            if isinstance(provider, dict):
-                provider["recentOutcomes"] = []
     snapshot["runtimeSummary"] = runtime_summary.model_dump(by_alias=True, exclude_none=True)
     return snapshot
 
@@ -1063,6 +1211,7 @@ _REGULATORY_SOURCE_TYPES: frozenset[str] = frozenset(
         "government_report",
         "legislation",
         "policy_document",
+        "primary_regulatory",
         "primary_source",
         "regulatory_document",
         "regulatory_guidance",
@@ -1093,12 +1242,6 @@ def _assign_verification_status(
     if source_type in _REGULATORY_SOURCE_TYPES:
         if body_text_embedded:
             return "verified_primary_source"
-        # Legacy callers that only tracked ``full_text_url_found`` and used it
-        # as a proxy for "body is available" are treated as body-embedded for
-        # backward compatibility. New callers should pass ``body_text_embedded``
-        # explicitly.
-        if full_text_url_found:
-            return "verified_primary_source"
         return "verified_metadata"
     if has_doi and has_doi_resolution:
         return "verified_metadata"
@@ -1109,41 +1252,165 @@ def _assign_verification_status(
     return "unverified"
 
 
+_ACCESS_STATUS_IMPLIES_BODY: frozenset[str] = frozenset(
+    {"body_text_embedded", "qa_readable_text", "full_text_verified", "full_text_retrieved"}
+)
+_ACCESS_STATUS_IMPLIES_QA: frozenset[str] = frozenset(
+    {"qa_readable_text", "full_text_verified", "full_text_retrieved"}
+)
+
+
+def _guided_normalize_access_axes(candidate: dict[str, Any]) -> tuple[str, bool, bool, bool, bool]:
+    """Return normalized access status + split access flags.
+
+    ``fullTextUrlFound`` tracks URL discovery only. ``fullTextObserved`` tracks
+    actual full-text/body availability for the saved/current source record.
+    """
+
+    raw_access_status = str(candidate.get("accessStatus") or "").strip()
+    explicit_url_found = bool(candidate.get("fullTextUrlFound"))
+    explicit_body_text_embedded = bool(candidate.get("bodyTextEmbedded"))
+    explicit_qa_readable_text = bool(candidate.get("qaReadableText"))
+    explicit_full_text_retrieved = bool(candidate.get("fullTextRetrieved"))
+    legacy_full_text_observed = bool(candidate.get("fullTextObserved"))
+    has_full_text_locator = bool(
+        candidate.get("canonicalUrl")
+        or candidate.get("retrievedUrl")
+        or candidate.get("url")
+        or candidate.get("pdfUrl")
+    )
+    has_split_signals = any(
+        key in candidate
+        for key in (
+            "fullTextUrlFound",
+            "bodyTextEmbedded",
+            "qaReadableText",
+            "fullTextRetrieved",
+            "accessStatus",
+        )
+    )
+
+    full_text_url_found = explicit_url_found or (legacy_full_text_observed and not has_split_signals)
+    body_text_embedded = explicit_body_text_embedded or raw_access_status in _ACCESS_STATUS_IMPLIES_BODY
+    qa_readable_text = (
+        explicit_qa_readable_text
+        or explicit_full_text_retrieved
+        or raw_access_status in _ACCESS_STATUS_IMPLIES_QA
+    )
+    if qa_readable_text:
+        body_text_embedded = True
+    if (
+        not full_text_url_found
+        and has_full_text_locator
+        and raw_access_status
+        in {
+            "url_verified",
+            "oa_verified",
+            "oa_uncertain",
+            "pdf_available",
+            "full_text_verified",
+            "full_text_retrieved",
+        }
+    ):
+        full_text_url_found = True
+
+    if raw_access_status in {"full_text_verified", "full_text_retrieved"}:
+        if qa_readable_text:
+            access_status = "qa_readable_text"
+        elif body_text_embedded:
+            access_status = "body_text_embedded"
+        elif full_text_url_found:
+            access_status = "url_verified"
+        elif bool(candidate.get("abstractObserved")):
+            access_status = "abstract_only"
+        else:
+            access_status = "access_unverified"
+    elif raw_access_status == "qa_readable_text":
+        access_status = "qa_readable_text"
+    elif raw_access_status == "body_text_embedded":
+        access_status = "body_text_embedded"
+    elif body_text_embedded:
+        access_status = "qa_readable_text" if qa_readable_text else "body_text_embedded"
+    elif raw_access_status:
+        access_status = raw_access_status
+    elif full_text_url_found:
+        access_status = "url_verified"
+    elif bool(candidate.get("abstractObserved")):
+        access_status = "abstract_only"
+    else:
+        access_status = "access_unverified"
+
+    full_text_observed = body_text_embedded or qa_readable_text or explicit_full_text_retrieved or (
+        legacy_full_text_observed and not has_split_signals
+    )
+    return access_status, full_text_url_found, full_text_observed, body_text_embedded, qa_readable_text
+
+
+def _guided_normalize_verification_status(
+    candidate: dict[str, Any],
+    *,
+    source_type: str,
+    full_text_url_found: bool,
+    body_text_embedded: bool,
+) -> str:
+    raw_citation = candidate.get("citation")
+    citation = cast(dict[str, Any], raw_citation) if isinstance(raw_citation, dict) else {}
+    explicit_verification_status = str(candidate.get("verificationStatus") or "").strip()
+    normalized_verification_status = explicit_verification_status or _assign_verification_status(
+        source_type=source_type,
+        has_doi=bool(candidate.get("doi") or citation.get("doi")),
+        has_doi_resolution=bool(candidate.get("doi") or citation.get("doi")),
+        full_text_url_found=full_text_url_found,
+        body_text_embedded=body_text_embedded,
+    )
+    if (
+        normalized_verification_status == "verified_primary_source"
+        and source_type in _REGULATORY_SOURCE_TYPES
+        and not body_text_embedded
+    ):
+        return "verified_metadata"
+    return normalized_verification_status
+
+
 def _guided_source_record_from_structured_source(source: dict[str, Any], *, index: int) -> dict[str, Any]:
     _source_type = source.get("sourceType") or "unknown"
-    _body_text_embedded = bool(source.get("bodyTextEmbedded"))
-    _qa_readable_text = bool(source.get("qaReadableText"))
-    _default_verification = _assign_verification_status(
-        source_type=_source_type,
-        has_doi=bool(source.get("doi") or source.get("citation", {}).get("doi")),
-        has_doi_resolution=bool(source.get("doi") or source.get("citation", {}).get("doi")),
-        full_text_url_found=bool(source.get("fullTextUrlFound") or source.get("fullTextObserved")),
+    _access_status, _full_text_url_found, _full_text_observed, _body_text_embedded, _qa_readable_text = (
+        _guided_normalize_access_axes(source)
+    )
+    _default_verification = _guided_normalize_verification_status(
+        source,
+        source_type=str(_source_type),
+        full_text_url_found=_full_text_url_found,
         body_text_embedded=_body_text_embedded,
     )
     topical_relevance = source.get("topicalRelevance") or "weak_match"
     weak_match_reason = str(source.get("whyClassifiedAsWeakMatch") or "").strip() or None
     if weak_match_reason is None and topical_relevance in {"weak_match", "off_topic"}:
         weak_match_reason = str(source.get("note") or source.get("whyNotVerified") or "").strip() or None
+    normalized_open_access_source = {
+        **source,
+        "accessStatus": _access_status,
+        "fullTextUrlFound": _full_text_url_found,
+        "fullTextObserved": _full_text_observed,
+    }
     return {
         "sourceId": _guided_source_id(source, fallback_prefix="source", index=index),
         "title": source.get("title"),
         "provider": source.get("provider"),
         "sourceType": _source_type,
-        "verificationStatus": source.get("verificationStatus") or _default_verification,
-        "accessStatus": source.get("accessStatus") or "access_unverified",
+        "verificationStatus": _default_verification,
+        "accessStatus": _access_status,
         "topicalRelevance": topical_relevance,
         "confidence": source.get("confidence") or "medium",
         "isPrimarySource": bool(source.get("isPrimarySource")),
         "canonicalUrl": source.get("canonicalUrl"),
         "retrievedUrl": source.get("retrievedUrl"),
-        "fullTextUrlFound": bool(source.get("fullTextUrlFound") or source.get("fullTextObserved")),
-        # Legacy alias retained for backward compatibility with clients that
-        # read the pre-rename key. Kept in lockstep with ``fullTextUrlFound``.
-        "fullTextObserved": bool(source.get("fullTextUrlFound") or source.get("fullTextObserved")),
+        "fullTextUrlFound": _full_text_url_found,
+        "fullTextObserved": _full_text_observed,
         "bodyTextEmbedded": _body_text_embedded,
         "qaReadableText": _qa_readable_text,
         "abstractObserved": bool(source.get("abstractObserved")),
-        "openAccessRoute": _guided_open_access_route(source),
+        "openAccessRoute": _guided_open_access_route(normalized_open_access_source),
         "citationText": source.get("citationText"),
         "citation": _guided_citation_from_structured_source(source),
         "date": source.get("date"),
@@ -1156,13 +1423,12 @@ def _guided_source_record_from_paper(query: str, paper: dict[str, Any], *, index
     canonical_url = paper.get("canonicalUrl") or paper.get("url") or paper.get("pdfUrl")
     source_type = paper.get("sourceType") or "scholarly_article"
     doi, _ = resolve_doi_from_paper_payload(paper)
-    _body_text_embedded = bool(paper.get("bodyTextEmbedded"))
-    _qa_readable_text = bool(paper.get("qaReadableText"))
-    _full_text_url_found = bool(paper.get("fullTextUrlFound") or paper.get("fullTextObserved"))
-    verification_status = paper.get("verificationStatus") or _assign_verification_status(
+    _access_status, _full_text_url_found, _full_text_observed, _body_text_embedded, _qa_readable_text = (
+        _guided_normalize_access_axes(paper)
+    )
+    verification_status = _guided_normalize_verification_status(
+        {**paper, "doi": doi},
         source_type=str(source_type),
-        has_doi=bool(doi),
-        has_doi_resolution=bool(doi),
         full_text_url_found=_full_text_url_found,
         body_text_embedded=_body_text_embedded,
     )
@@ -1194,22 +1460,19 @@ def _guided_source_record_from_paper(query: str, paper: dict[str, Any], *, index
     # implies inline body content; a URL-only hit becomes ``url_verified``
     # (distinct from the deprecated ``full_text_verified`` which used to be
     # emitted for any URL-found regulatory or scholarly record).
-    _explicit_access = paper.get("accessStatus")
-    if _explicit_access:
-        access_status: str = str(_explicit_access)
-    elif _body_text_embedded:
-        access_status = "body_text_embedded"
-    elif _full_text_url_found:
-        access_status = "url_verified"
-    elif bool(paper.get("abstractObserved")):
-        access_status = "abstract_only"
-    else:
-        access_status = "access_unverified"
     topical_relevance = _paper_topical_relevance(query, paper)
     confidence = paper.get("confidence") or ("high" if topical_relevance == "on_topic" else "medium")
     weak_match_reason = str(paper.get("whyClassifiedAsWeakMatch") or "").strip() or None
     if weak_match_reason is None and topical_relevance in {"weak_match", "off_topic"}:
         weak_match_reason = str(paper.get("note") or paper.get("venue") or "").strip() or None
+    normalized_open_access_paper = {
+        **paper,
+        "accessStatus": _access_status,
+        "fullTextUrlFound": _full_text_url_found,
+        "fullTextObserved": _full_text_observed,
+        "canonicalUrl": canonical_url,
+        "retrievedUrl": paper.get("retrievedUrl") or canonical_url,
+    }
     return strip_null_fields(
         {
             "sourceId": _guided_source_id(paper, fallback_prefix="paper", index=index),
@@ -1217,20 +1480,18 @@ def _guided_source_record_from_paper(query: str, paper: dict[str, Any], *, index
             "provider": paper.get("source"),
             "sourceType": source_type,
             "verificationStatus": verification_status,
-            "accessStatus": access_status,
+            "accessStatus": _access_status,
             "topicalRelevance": topical_relevance,
             "confidence": confidence,
             "isPrimarySource": bool(paper.get("isPrimarySource")),
             "canonicalUrl": canonical_url,
             "retrievedUrl": paper.get("retrievedUrl") or canonical_url,
             "fullTextUrlFound": _full_text_url_found,
-            # Legacy alias retained for backward compatibility with clients that
-            # read the pre-rename key. Kept in lockstep with ``fullTextUrlFound``.
-            "fullTextObserved": _full_text_url_found,
+            "fullTextObserved": _full_text_observed,
             "bodyTextEmbedded": _body_text_embedded,
             "qaReadableText": _qa_readable_text,
             "abstractObserved": bool(paper.get("abstractObserved")),
-            "openAccessRoute": _guided_open_access_route(paper),
+            "openAccessRoute": _guided_open_access_route(normalized_open_access_paper),
             "citationText": str(paper.get("canonicalId") or paper.get("paperId") or "") or None,
             "citation": _guided_citation_from_paper(paper, canonical_url),
             "date": paper.get("publicationDate") or paper.get("year"),
@@ -2445,6 +2706,85 @@ def _guided_is_mixed_intent_query(
     return detect_regulatory_intent(query, focus) and _guided_mentions_literature(query, focus)
 
 
+def _guided_reference_signal_words(candidate: str) -> list[str]:
+    words = re.findall(r"[A-Za-z][A-Za-z0-9'/-]*", candidate.lower())
+    return [
+        word
+        for word in words
+        if word not in _GUIDED_REFERENCE_GENERIC_CANDIDATE_WORDS
+        and word not in _GUIDED_REFERENCE_UNCERTAINTY_MARKERS
+        and word not in {"a", "an", "and", "for", "in", "of", "on", "the", "to", "with"}
+    ]
+
+
+def _guided_underspecified_reference_clarification(
+    *,
+    query: str,
+    focus: str | None,
+) -> dict[str, Any] | None:
+    combined = _guided_normalize_whitespace(" ".join(part for part in [query, focus or ""] if part))
+    if not combined or looks_like_paper_identifier(combined):
+        return None
+    parsed = parse_citation(combined)
+    if parsed.identifier:
+        return None
+
+    citation_like = bool(
+        parsed.year is not None
+        or looks_like_citation_query(combined)
+        or looks_like_exact_title(combined)
+    )
+    if not citation_like:
+        return None
+
+    if parsed.author_surnames or parsed.venue_hints:
+        return None
+
+    strongest_candidate_words = max(
+        (len(_guided_reference_signal_words(candidate)) for candidate in parsed.title_candidates),
+        default=0,
+    )
+    weak_anchor = strongest_candidate_words <= 4
+    uncertainty_hits = sum(
+        1
+        for marker in _GUIDED_REFERENCE_UNCERTAINTY_MARKERS
+        if re.search(rf"\b{re.escape(marker)}\b", combined, re.IGNORECASE)
+    )
+    if not weak_anchor or (uncertainty_hits == 0 and not parsed.looks_like_non_paper):
+        return None
+
+    if parsed.looks_like_non_paper or detect_regulatory_intent(query, focus):
+        return {
+            "reason": "underspecified_reference_fragment",
+            "question": (
+                "This looks like a vague reference fragment and may point to either a paper or a policy-style "
+                "document. Add an exact title, one author surname, an agency or venue, or confirm which type "
+                "of source you want before the server guesses."
+            ),
+            "options": [
+                "add exact title",
+                "add author surname",
+                "add agency or venue",
+                "paper vs policy source",
+            ],
+            "canProceedWithoutAnswer": True,
+        }
+    return {
+        "reason": "underspecified_reference_fragment",
+        "question": (
+            "This looks like a vague paper/reference fragment. Add an exact title, one author surname, or a "
+            "venue/year clue before guided research infers a likely paper from weak hints."
+        ),
+        "options": [
+            "add exact title",
+            "add author surname",
+            "add venue or year",
+            "use resolve_reference",
+        ],
+        "canProceedWithoutAnswer": True,
+    }
+
+
 def _guided_dedupe_source_records(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
     deduped: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
@@ -2459,6 +2799,74 @@ def _guided_dedupe_source_records(sources: list[dict[str, Any]]) -> list[dict[st
         seen.add(key)
         deduped.append(source)
     return deduped
+
+
+def _guided_source_identity(source: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(source.get("sourceId") or "").strip(),
+        str(source.get("canonicalUrl") or "").strip(),
+        str(source.get("title") or "").strip().lower(),
+    )
+
+
+def _guided_merge_source_records(primary: dict[str, Any], secondary: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(primary)
+    for key, value in secondary.items():
+        if key not in merged or merged[key] in (None, "", [], {}):
+            merged[key] = value
+            continue
+        if isinstance(value, bool) and value and not bool(merged[key]):
+            merged[key] = True
+    access_status, full_text_url_found, full_text_observed, body_text_embedded, qa_readable_text = (
+        _guided_normalize_access_axes(merged)
+    )
+    source_type = str(merged.get("sourceType") or "unknown")
+    merged["accessStatus"] = access_status
+    merged["fullTextUrlFound"] = full_text_url_found
+    merged["fullTextObserved"] = full_text_observed
+    merged["bodyTextEmbedded"] = body_text_embedded
+    merged["qaReadableText"] = qa_readable_text
+    merged["verificationStatus"] = _guided_normalize_verification_status(
+        merged,
+        source_type=source_type,
+        full_text_url_found=full_text_url_found,
+        body_text_embedded=body_text_embedded,
+    )
+    return merged
+
+
+def _guided_merge_source_record_sets(*record_sets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged_by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
+    ordered_keys: list[tuple[str, str, str]] = []
+    for record_set in record_sets:
+        for record in record_set:
+            canonical_record = _guided_merge_source_records({}, record)
+            key = _guided_source_identity(canonical_record)
+            if key not in merged_by_key:
+                merged_by_key[key] = canonical_record
+                ordered_keys.append(key)
+            else:
+                merged_by_key[key] = _guided_merge_source_records(merged_by_key[key], canonical_record)
+    return [merged_by_key[key] for key in ordered_keys]
+
+
+def _guided_source_coverage_summary(
+    *,
+    sources: list[dict[str, Any]],
+    leads: list[dict[str, Any]],
+    base_coverage: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    summary = dict(base_coverage or {})
+    visible_records = [record for record in [*sources, *leads] if isinstance(record, dict)]
+    if not summary and not visible_records:
+        return None
+    summary["totalSources"] = len(visible_records)
+    by_access_status: dict[str, int] = {}
+    for record in visible_records:
+        access_status = str(record.get("accessStatus") or "access_unverified").strip() or "access_unverified"
+        by_access_status[access_status] = by_access_status.get(access_status, 0) + 1
+    summary["byAccessStatus"] = by_access_status
+    return summary
 
 
 def _guided_merge_coverage_summaries(*coverages: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -3771,29 +4179,46 @@ def _guided_result_state(
 
 def _guided_record_source_candidates(record: Any) -> list[dict[str, Any]]:
     payload = record.payload if isinstance(record.payload, dict) else {}
-    collected_sources: list[dict[str, Any]] = []
-
-    for index, source in enumerate(payload.get("evidence") or [], start=1):
-        if isinstance(source, dict):
-            collected_sources.append(_guided_source_record_from_structured_source(source, index=index))
-
-    for source in payload.get("sources") or []:
-        if isinstance(source, dict):
-            collected_sources.append(source)
-
-    for key in ("structuredSources", "leads", "candidateLeads", "unverifiedLeads"):
-        for index, source in enumerate(payload.get(key) or [], start=1):
-            if isinstance(source, dict):
-                collected_sources.append(_guided_source_record_from_structured_source(source, index=index))
-
-    query = str(record.query or payload.get("query") or "")
-    paper_sources = [
-        _guided_source_record_from_paper(query, paper, index=index)
-        for index, paper in enumerate(getattr(record, "papers", []) or [], start=1)
-        if isinstance(paper, dict)
+    has_explicit_source_payload = any(
+        isinstance(payload.get(key), list) and bool(payload.get(key))
+        for key in ("evidence", "sources", "structuredSources", "leads", "candidateLeads", "unverifiedLeads")
+    )
+    payload_sources = [source for source in payload.get("sources") or [] if isinstance(source, dict)]
+    structured_sources = [
+        _guided_source_record_from_structured_source(source, index=index)
+        for index, source in enumerate(payload.get("structuredSources") or [], start=1)
+        if isinstance(source, dict)
     ]
-    collected_sources.extend(paper_sources)
-    return _guided_dedupe_source_records(collected_sources)
+    evidence_sources = [
+        _guided_source_record_from_structured_source(source, index=index)
+        for index, source in enumerate(payload.get("evidence") or [], start=1)
+        if isinstance(source, dict)
+    ]
+    lead_sources = [
+        _guided_source_record_from_structured_source(source, index=index)
+        for key in ("leads", "candidateLeads", "unverifiedLeads")
+        for index, source in enumerate(payload.get(key) or [], start=1)
+        if isinstance(source, dict)
+    ]
+    query = str(record.query or payload.get("query") or "")
+    paper_sources = (
+        [
+            _guided_source_record_from_paper(query, paper, index=index)
+            for index, paper in enumerate(getattr(record, "papers", []) or [], start=1)
+            if isinstance(paper, dict)
+        ]
+        if not has_explicit_source_payload
+        else []
+    )
+    return _guided_dedupe_source_records(
+        _guided_merge_source_record_sets(
+            payload_sources,
+            structured_sources,
+            evidence_sources,
+            paper_sources,
+            lead_sources,
+        )
+    )
 
 
 def _find_record_source_with_resolution(
@@ -4076,7 +4501,6 @@ _RESEARCH_COMPACT_FIELDS = {
     "status",
     "searchSessionId",
     "summary",
-    "sources",
     "evidenceGaps",
     "nextActions",
     "clarification",
@@ -4098,8 +4522,6 @@ _FOLLOW_UP_COMPACT_GROUNDED_PRESERVE = {
     "searchSessionId",
     "answerStatus",
     "answer",
-    "evidence",
-    "sources",
     "structuredSourceIds",
     "evidenceGaps",
     "nextActions",
@@ -4137,13 +4559,16 @@ _FOLLOW_UP_COMPACT_DROP = {
 
 
 def _compact_coverage_payload(coverage: Any) -> dict[str, Any] | None:
-    """Collapse a coverage/CoverageSummary dict to {totalSources, byAccessStatus}."""
+    """Collapse a coverage/CoverageSummary dict to compact, agent-usable fields."""
 
     if not isinstance(coverage, dict):
         return None
+    search_mode = coverage.get("searchMode")
     total = coverage.get("totalSources")
     by_access = coverage.get("byAccessStatus")
     result: dict[str, Any] = {}
+    if isinstance(search_mode, str) and search_mode.strip():
+        result["searchMode"] = search_mode.strip()
     if isinstance(total, int):
         result["totalSources"] = total
     if isinstance(by_access, dict):
@@ -4159,6 +4584,43 @@ def _is_empty_for_compact(value: Any) -> bool:
     if isinstance(value, (list, dict, str, tuple, set)) and len(value) == 0:
         return True
     return False
+
+
+def _compact_record_identifiers(records: Any) -> list[str]:
+    """Collect source-like identifiers from a list of source/evidence payloads."""
+
+    if not isinstance(records, list):
+        return []
+    identifiers: list[str] = []
+    for entry in records:
+        if isinstance(entry, str):
+            identifier = entry.strip()
+        elif isinstance(entry, dict):
+            identifier = str(
+                entry.get("sourceId")
+                or entry.get("sourceAlias")
+                or entry.get("evidenceId")
+                or entry.get("id")
+                or ""
+            ).strip()
+        else:
+            identifier = ""
+        if identifier:
+            identifiers.append(identifier)
+    return identifiers
+
+
+def _dedupe_compact_identifiers(identifiers: list[str]) -> list[str]:
+    """Deduplicate identifiers while preserving order."""
+
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for identifier in identifiers:
+        if identifier in seen:
+            continue
+        seen.add(identifier)
+        deduped.append(identifier)
+    return deduped
 
 
 def _apply_follow_up_response_mode(
@@ -4189,27 +4651,42 @@ def _apply_follow_up_response_mode(
 
     if response_mode == "compact":
         suppressed_count = 0
+        dropped_source_payload = False
+        kept_identifiers = _dedupe_compact_identifiers(
+            [
+                str(identifier).strip()
+                for identifier in (
+                    list(shaped.get("selectedEvidenceIds") or []) + list(shaped.get("selectedLeadIds") or [])
+                )
+                if str(identifier).strip()
+            ]
+        )
         if not include_legacy_fields:
             for key in ("verifiedFindings", "unverifiedLeads", "likelyUnverified"):
                 value = shaped.pop(key, None)
                 if isinstance(value, list):
                     suppressed_count += len(value)
+        evidence = shaped.pop("evidence", None)
+        if isinstance(evidence, list) and evidence:
+            dropped_source_payload = True
+        sources = shaped.pop("sources", None)
+        if isinstance(sources, list) and sources:
+            dropped_source_payload = True
         structured_sources = shaped.pop("structuredSources", None)
         if isinstance(structured_sources, list):
-            ids: list[str] = []
-            for entry in structured_sources:
-                if isinstance(entry, dict):
-                    identifier = entry.get("sourceId") or entry.get("sourceAlias")
-                    if identifier:
-                        ids.append(str(identifier))
-                elif isinstance(entry, str):
-                    ids.append(entry)
-            if ids:
+            ids = _dedupe_compact_identifiers(_compact_record_identifiers(structured_sources))
+            if ids and not kept_identifiers:
                 shaped["structuredSourceIds"] = ids
+            if ids:
+                dropped_source_payload = True
         coverage = shaped.get("coverage")
         collapsed = _compact_coverage_payload(coverage)
         if collapsed is not None:
-            shaped["coverage"] = collapsed
+            compact_coverage = dict(collapsed)
+            if compact_coverage:
+                shaped["coverage"] = compact_coverage
+            else:
+                shaped.pop("coverage", None)
         elif coverage is None or coverage == {}:
             shaped.pop("coverage", None)
         for drop_key in _FOLLOW_UP_COMPACT_DROP:
@@ -4219,6 +4696,8 @@ def _apply_follow_up_response_mode(
         )
         if suppressed_count > 0:
             shaped["sourcesSuppressed"] = suppressed_count
+        elif dropped_source_payload:
+            shaped["sourcesSuppressed"] = True
         shaped["responseMode"] = "compact"
 
     keep_keys = set(shaped.keys())
@@ -4236,6 +4715,46 @@ def _apply_follow_up_response_mode(
             any(key in shaped for key in _LEGACY_GUIDED_FIELDS),
         )
         shaped["responseMode"] = response_mode
+    return shaped
+
+
+def _apply_inspect_source_compaction(response: dict[str, Any]) -> dict[str, Any]:
+    """Trim inspect_source payloads to the inspected source plus concise context."""
+
+    shaped = dict(response)
+    source = shaped.get("source")
+    source_identifier = (
+        str(source.get("sourceId") or source.get("sourceAlias") or "").strip()
+        if isinstance(source, dict)
+        else ""
+    )
+    evidence = shaped.get("evidence")
+    if isinstance(evidence, list):
+        filtered_evidence = [
+            entry
+            for entry in evidence
+            if isinstance(entry, dict)
+            and str(entry.get("evidenceId") or entry.get("sourceId") or entry.get("sourceAlias") or "").strip()
+            == source_identifier
+        ]
+        if filtered_evidence:
+            shaped["evidence"] = filtered_evidence[:1]
+        else:
+            shaped.pop("evidence", None)
+    leads = shaped.get("leads")
+    if isinstance(leads, list):
+        shaped.pop("leads", None)
+    coverage_summary = shaped.get("coverageSummary")
+    collapsed_coverage = _compact_coverage_payload(coverage_summary)
+    if collapsed_coverage is not None:
+        shaped["coverageSummary"] = collapsed_coverage
+    else:
+        shaped.pop("coverageSummary", None)
+    for key in list(shaped.keys()):
+        if key in _COMPACT_NULL_OK_FIELDS:
+            continue
+        if _is_empty_for_compact(shaped[key]):
+            shaped.pop(key, None)
     return shaped
 
 
@@ -4495,39 +5014,39 @@ def _guided_session_state(
     except Exception:
         return None
     payload = record.payload if isinstance(record.payload, dict) else {}
-    sources = [
+    has_explicit_source_payload = any(
+        isinstance(payload.get(key), list) and bool(payload.get(key))
+        for key in ("evidence", "sources", "structuredSources", "leads", "candidateLeads", "unverifiedLeads")
+    )
+    payload_sources = [source for source in payload.get("sources") or [] if isinstance(source, dict)]
+    structured_sources = [
+        _guided_source_record_from_structured_source(source, index=index)
+        for index, source in enumerate(payload.get("structuredSources") or [], start=1)
+        if isinstance(source, dict)
+    ]
+    evidence_sources = [
         _guided_source_record_from_structured_source(source, index=index)
         for index, source in enumerate(payload.get("evidence") or [], start=1)
         if isinstance(source, dict)
     ]
-    if not sources:
-        sources = [source for source in payload.get("sources") or [] if isinstance(source, dict)]
-    if not sources:
-        sources = [
-            _guided_source_record_from_structured_source(source, index=index)
-            for index, source in enumerate(payload.get("structuredSources") or [], start=1)
-            if isinstance(source, dict)
-        ]
-    if not sources:
-        query = str(record.query or payload.get("query") or "")
-        sources = [
+    query = str(record.query or payload.get("query") or "")
+    paper_sources = (
+        [
             _guided_source_record_from_paper(query, paper, index=index)
             for index, paper in enumerate(record.papers, start=1)
             if isinstance(paper, dict)
         ]
-    unverified_leads = [lead for lead in payload.get("unverifiedLeads") or [] if isinstance(lead, dict)]
-    if not unverified_leads:
-        unverified_leads = [
-            _guided_source_record_from_structured_source(source, index=index)
-            for index, source in enumerate(payload.get("leads") or [], start=1)
-            if isinstance(source, dict)
-        ]
-    if not unverified_leads:
-        unverified_leads = [
-            _guided_source_record_from_structured_source(source, index=index)
-            for index, source in enumerate(payload.get("candidateLeads") or [], start=1)
-            if isinstance(source, dict)
-        ] or _guided_unverified_leads_from_sources(sources)
+        if not has_explicit_source_payload
+        else []
+    )
+    sources = _guided_merge_source_record_sets(payload_sources, structured_sources, evidence_sources, paper_sources)
+    lead_sources = [
+        _guided_source_record_from_structured_source(source, index=index)
+        for key in ("unverifiedLeads", "leads", "candidateLeads")
+        for index, source in enumerate(payload.get(key) or [], start=1)
+        if isinstance(source, dict)
+    ]
+    unverified_leads = _guided_merge_source_record_sets(lead_sources) or _guided_unverified_leads_from_sources(sources)
     verified_findings = _guided_session_findings(payload, sources)
     evidence_gaps = list(payload.get("evidenceGaps") or [])
     coverage = cast(dict[str, Any] | None, payload.get("coverage") or payload.get("coverageSummary"))
@@ -4560,11 +5079,15 @@ def _guided_session_state(
         "verifiedFindings": verified_findings,
         "evidenceGaps": evidence_gaps,
         "trustSummary": _guided_trust_summary(
-            sources,
+            [*sources, *unverified_leads],
             evidence_gaps,
             subject_chain_gaps=subject_chain_gaps or None,
         ),
-        "coverage": coverage,
+        "coverage": _guided_source_coverage_summary(
+            sources=sources,
+            leads=unverified_leads,
+            base_coverage=coverage,
+        ),
         "failureSummary": failure_summary,
         "resultMeaning": payload.get("resultMeaning")
         or _guided_result_meaning(
@@ -5136,6 +5659,8 @@ async def _answer_follow_up_from_session_state(
         if _referenced_ids
         else []
     )
+    _filtered_sources = _guided_dedupe_source_records(_filtered_sources)
+    _filtered_leads = _guided_dedupe_source_records(_filtered_leads)
     _filtered_findings = [
         f
         for f in (session_state.get("verifiedFindings") or [])
@@ -5147,8 +5672,16 @@ async def _answer_follow_up_from_session_state(
     # Ensure trustSummary.authoritativeButWeak is always present (possibly
     # empty) for shape consistency across research / follow_up_research /
     # inspect_source synthesis paths.
-    _session_trust_summary = cast(dict[str, Any], dict(session_state.get("trustSummary") or {}))
+    _session_trust_summary = _guided_trust_summary(
+        [*_filtered_sources, *_filtered_leads],
+        list(session_state.get("evidenceGaps") or []),
+    )
     _session_trust_summary.setdefault("authoritativeButWeak", [])
+    _session_coverage = _guided_source_coverage_summary(
+        sources=_filtered_sources,
+        leads=_filtered_leads,
+        base_coverage=cast(dict[str, Any] | None, session_state.get("coverage")),
+    )
 
     # P0-1 Fix #2: gate ``answered`` on the saved trust summary. When the
     # session has no on-topic or no verified sources the introspection fast
@@ -5203,7 +5736,7 @@ async def _answer_follow_up_from_session_state(
         "unverifiedLeads": _filtered_leads,
         "evidenceGaps": session_state["evidenceGaps"],
         "trustSummary": _session_trust_summary,
-        "coverage": session_state["coverage"],
+        "coverage": _session_coverage,
         "failureSummary": session_state["failureSummary"],
         "resultMeaning": session_state["resultMeaning"],
         "nextActions": session_state["nextActions"],
@@ -5396,6 +5929,9 @@ async def dispatch_tool(
         best_match = raw.get("bestMatch")
         alternatives = list(raw.get("alternatives") or [])
         resolution_confidence = str(raw.get("resolutionConfidence") or "low")
+        resolution_state = str(raw.get("knownItemResolutionState") or "").strip().lower()
+        if resolution_state == "needs_disambiguation" and resolution_confidence == "high":
+            resolution_confidence = "medium"
         resolution_type = "title_fragment"
         if parsed.looks_like_regulatory:
             resolution_type = "regulatory_reference"
@@ -5406,11 +5942,10 @@ async def dispatch_tool(
         status = "no_match"
         if parsed.looks_like_regulatory and best_match is None:
             status = "regulatory_primary_source"
+        elif resolution_state == "needs_disambiguation":
+            status = "needs_disambiguation"
         elif best_match is not None:
-            _key_conflict_fields = {"author", "year", "venue"}
-            _best_conflicting = list(best_match.get("conflictingFields") or []) if isinstance(best_match, dict) else []
-            _key_conflict_count = len(_key_conflict_fields & set(_best_conflicting))
-            if resolution_confidence in {"high", "medium"} and _key_conflict_count >= 2:
+            if resolution_state == "needs_disambiguation":
                 status = "needs_disambiguation"
             elif resolution_confidence in {"high", "medium"}:
                 status = "resolved"
@@ -5433,7 +5968,7 @@ async def dispatch_tool(
             ]
         elif status == "resolved":
             next_actions = [
-                "Citation resolved with high confidence against one candidate.",
+                "Citation resolved against one leading candidate; inspect the metadata before citing it directly.",
                 "Use research with the resolved title, DOI, or identifier to gather broader context.",
                 "Inspect the resolved source metadata before citing or expanding it.",
             ]
@@ -5454,6 +5989,7 @@ async def dispatch_tool(
             "bestMatch": best_match,
             "alternatives": alternatives,
             "resolutionConfidence": resolution_confidence,
+            "knownItemResolutionState": resolution_state or None,
             "nextActions": next_actions,
             "searchSessionId": raw.get("searchSessionId"),
         }
@@ -5475,6 +6011,115 @@ async def dispatch_tool(
         elif detect_regulatory_intent(research_args.query, research_args.focus):
             intent = "regulatory"
 
+        clarification = _guided_underspecified_reference_clarification(
+            query=research_args.query,
+            focus=research_args.focus,
+        )
+        if clarification is not None:
+            evidence_gaps = [
+                "The query looks like an underspecified citation or title fragment, so guided research refused "
+                "to guess a likely source from weak clues alone."
+            ]
+            trust_summary = _guided_trust_summary([], evidence_gaps)
+            failure_summary = _guided_failure_summary(
+                failure_summary={
+                    "outcome": "needs_clarification",
+                    "whatFailed": "guided_research_reference_preflight",
+                    "whatStillWorked": (
+                        "The server recognized a vague reference fragment and returned bounded clarification "
+                        "instead of surfacing likely-but-unrelated sources."
+                    ),
+                    "fallbackAttempted": False,
+                    "fallbackMode": None,
+                    "primaryPathFailureReason": "underspecified_reference_fragment",
+                    "completenessImpact": evidence_gaps[0],
+                    "recommendedNextAction": "resolve_reference",
+                },
+                status="needs_disambiguation",
+                sources=[],
+                evidence_gaps=evidence_gaps,
+            )
+            contract_fields = await _guided_contract_fields(
+                query=research_args.query,
+                intent=intent,
+                status="needs_disambiguation",
+                sources=[],
+                unverified_leads=[],
+                evidence_gaps=evidence_gaps,
+                coverage_summary=None,
+                strategy_metadata={
+                    "intent": intent,
+                    "intentRationale": (
+                        "Guided research detected an underspecified citation-like fragment and chose clarification "
+                        "over speculative retrieval."
+                    ),
+                    "routingConfidence": "low",
+                    "querySpecificity": "low",
+                    "ambiguityLevel": "high",
+                },
+            )
+            response = cast(
+                dict[str, Any],
+                {
+                "intent": intent,
+                "status": "needs_disambiguation",
+                "searchSessionId": None,
+                "summary": _guided_summary(
+                    intent,
+                    "needs_disambiguation",
+                    [],
+                    [],
+                    routing_summary=cast(dict[str, Any] | None, contract_fields.get("routingSummary")),
+                ),
+                "verifiedFindings": [],
+                "sources": [],
+                "unverifiedLeads": [],
+                "evidenceGaps": evidence_gaps,
+                "trustSummary": trust_summary,
+                "coverage": None,
+                "failureSummary": failure_summary,
+                "resultMeaning": _guided_result_meaning(
+                    status="needs_disambiguation",
+                    verified_findings=[],
+                    evidence_gaps=evidence_gaps,
+                    coverage=None,
+                    failure_summary=failure_summary,
+                    source_count=0,
+                ),
+                "nextActions": [
+                    "Add an exact title, author surname, agency, venue, or tighter year clue and rerun research.",
+                    "Use resolve_reference if you can provide a cleaner citation fragment, DOI, arXiv id, or URL.",
+                    (
+                        "Use get_runtime_status if behavior differs across environments and you need the active "
+                        "runtime truth."
+                    ),
+                ],
+                "clarification": clarification,
+                "resultState": _guided_result_state(
+                    status="needs_disambiguation",
+                    sources=[],
+                    evidence_gaps=evidence_gaps,
+                    search_session_id=None,
+                ),
+                "executionProvenance": _guided_execution_provenance_payload(
+                    execution_mode="guided_research_preflight_clarification",
+                    answer_source="research",
+                    passes_run=0,
+                ),
+                "inputNormalization": _guided_normalization_payload(research_normalization),
+                },
+            )
+            response.update(contract_fields)
+            abstention_details = _guided_abstention_details_payload(
+                status="needs_disambiguation",
+                sources=[],
+                evidence_gaps=evidence_gaps,
+                trust_summary=trust_summary,
+            )
+            if abstention_details is not None:
+                response["abstentionDetails"] = abstention_details
+            return _guided_finalize_response(tool_name="research", response=response)
+
         if intent == "known_item":
             resolved = await _dispatch_internal("resolve_reference", {"reference": research_args.query})
             paper = resolved.get("bestMatch", {}).get("paper") if isinstance(resolved.get("bestMatch"), dict) else None
@@ -5485,7 +6130,7 @@ async def dispatch_tool(
             )
             verified_findings = _guided_findings_from_sources(sources)
             unverified_leads = _guided_unverified_leads_from_sources(sources)
-            evidence_gaps: list[str] = []
+            evidence_gaps = []
             status = "succeeded" if paper is not None else ("partial" if resolved.get("alternatives") else "abstained")
             trust_summary = _guided_trust_summary(sources, evidence_gaps)
             failure_summary = _guided_failure_summary(
@@ -5495,7 +6140,9 @@ async def dispatch_tool(
                 evidence_gaps=evidence_gaps,
                 all_sources_off_topic=_guided_sources_all_off_topic(sources),
             )
-            response = {
+            response = cast(
+                dict[str, Any],
+                {
                 "intent": intent,
                 "status": status,
                 "searchSessionId": resolved.get("searchSessionId"),
@@ -5539,7 +6186,8 @@ async def dispatch_tool(
                     passes_run=1,
                 ),
                 "inputNormalization": _guided_normalization_payload(research_normalization),
-            }
+                },
+            )
             response.update(
                 await _guided_contract_fields(
                     query=research_args.query,
@@ -5965,7 +6613,9 @@ async def dispatch_tool(
             evidence_gaps=evidence_gaps,
             all_sources_off_topic=_guided_sources_all_off_topic(sources),
         )
-        response = {
+        response = cast(
+            dict[str, Any],
+            {
             "intent": intent,
             "status": status,
             "searchSessionId": raw.get("searchSessionId"),
@@ -6005,7 +6655,8 @@ async def dispatch_tool(
                 passes_run=1,
             ),
             "inputNormalization": _guided_normalization_payload(research_normalization),
-        }
+            },
+        )
         response.update(
             await _guided_contract_fields(
                 query=research_args.query,
@@ -6372,6 +7023,31 @@ async def dispatch_tool(
             for index, source in enumerate(ask.get("candidateLeads") or [], start=1)
             if isinstance(source, dict)
         ] or _guided_unverified_leads_from_sources(sources)
+        visible_source_ids = {
+            str(source.get("sourceId") or source.get("sourceAlias") or "").strip()
+            for source in sources
+            if str(source.get("sourceId") or source.get("sourceAlias") or "").strip()
+        }
+        visible_lead_ids = {
+            str(lead.get("sourceId") or lead.get("sourceAlias") or "").strip()
+            for lead in unverified_leads
+            if str(lead.get("sourceId") or lead.get("sourceAlias") or "").strip()
+        }
+        selected_evidence_ids = [
+            str(identifier).strip()
+            for identifier in (ask.get("selectedEvidenceIds") or [])
+            if str(identifier).strip() in visible_source_ids
+        ]
+        selected_lead_ids = [
+            str(identifier).strip()
+            for identifier in (ask.get("selectedLeadIds") or [])
+            if str(identifier).strip() in visible_lead_ids
+        ]
+        follow_up_coverage_summary = _guided_source_coverage_summary(
+            sources=sources,
+            leads=unverified_leads,
+            base_coverage=cast(dict[str, Any] | None, ask.get("coverageSummary")),
+        )
         answer_status = str(ask.get("answerStatus") or "answered")
         guided_status = "partial" if answer_status == "insufficient_evidence" else answer_status
         verified_findings = _guided_findings_from_sources(sources)
@@ -6428,7 +7104,9 @@ async def dispatch_tool(
             and failure_summary.get("recommendedNextAction") == "research"
         ):
             failure_summary["recommendedNextAction"] = "inspect_source"
-        response = {
+        response = cast(
+            dict[str, Any],
+            {
             "searchSessionId": follow_up_args.search_session_id,
             "answerStatus": answer_status,
             "answer": ask.get("answer"),
@@ -6443,13 +7121,13 @@ async def dispatch_tool(
             "unverifiedLeads": unverified_leads,
             "evidenceGaps": evidence_gaps,
             "trustSummary": trust_summary,
-            "coverage": ask.get("coverageSummary"),
+            "coverage": follow_up_coverage_summary,
             "failureSummary": failure_summary,
             "resultMeaning": _guided_result_meaning(
                 status=guided_status,
                 verified_findings=verified_findings,
                 evidence_gaps=evidence_gaps,
-                coverage=cast(dict[str, Any] | None, ask.get("coverageSummary")),
+                coverage=follow_up_coverage_summary,
                 failure_summary=failure_summary,
                 source_count=len(sources),
                 all_sources_off_topic=follow_up_all_off_topic,
@@ -6494,7 +7172,8 @@ async def dispatch_tool(
                     (follow_up_strategy_metadata or {}).get("subjectChainGaps"),
                 ),
             ),
-        }
+            },
+        )
         if ask.get("agentHints") is not None:
             response["agentHints"] = ask.get("agentHints")
         response.update(
@@ -6509,7 +7188,7 @@ async def dispatch_tool(
                 sources=sources,
                 unverified_leads=unverified_leads,
                 evidence_gaps=evidence_gaps,
-                coverage_summary=cast(dict[str, Any] | None, ask.get("coverageSummary")),
+                coverage_summary=follow_up_coverage_summary,
                 strategy_metadata=follow_up_strategy_metadata,
             )
         )
@@ -6529,14 +7208,16 @@ async def dispatch_tool(
                 (follow_up_strategy_metadata or {}).get("subjectChainGaps"),
             ),
         )
-        response["selectedEvidenceIds"] = [
-            str(identifier).strip() for identifier in (ask.get("selectedEvidenceIds") or []) if str(identifier).strip()
-        ]
-        response["selectedLeadIds"] = [
-            str(identifier).strip() for identifier in (ask.get("selectedLeadIds") or []) if str(identifier).strip()
-        ]
+        response["selectedEvidenceIds"] = selected_evidence_ids
+        response["selectedLeadIds"] = selected_lead_ids
         if ask.get("topRecommendation") is not None:
-            response["topRecommendation"] = ask.get("topRecommendation")
+            top_recommendation = ask.get("topRecommendation")
+            if isinstance(top_recommendation, dict):
+                recommendation_source_id = str(top_recommendation.get("sourceId") or "").strip()
+                if recommendation_source_id and recommendation_source_id in visible_source_ids:
+                    response["topRecommendation"] = top_recommendation
+            else:
+                response["topRecommendation"] = top_recommendation
         if ask.get("structuredSources") is not None:
             response["structuredSources"] = ask.get("structuredSources")
         session_answer = await _answer_follow_up_from_session_state(
@@ -6808,20 +7489,6 @@ async def dispatch_tool(
             workspace_registry=workspace_registry,
             search_session_id=inspect_args.search_session_id,
         )
-        session_sources = (
-            [candidate for candidate in inspect_session_state.get("sources") or [] if isinstance(candidate, dict)]
-            if isinstance(inspect_session_state, dict)
-            else [source]
-        )
-        session_leads = (
-            [
-                candidate
-                for candidate in inspect_session_state.get("unverifiedLeads") or []
-                if isinstance(candidate, dict)
-            ]
-            if isinstance(inspect_session_state, dict)
-            else []
-        )
         inspect_strategy_metadata = cast(dict[str, Any] | None, (inspect_session_state or {}).get("strategyMetadata"))
         why_classified_weak = _compose_why_classified_weak_match(source, strategy_metadata=inspect_strategy_metadata)
         inspect_response: dict[str, Any] = {
@@ -6870,8 +7537,8 @@ async def dispatch_tool(
                     query=str((inspect_session_state or {}).get("query") or ""),
                     intent=str((inspect_session_state or {}).get("intent") or "discovery"),
                     status="succeeded",
-                    sources=session_sources,
-                    unverified_leads=session_leads,
+                    sources=[source],
+                    unverified_leads=[],
                     evidence_gaps=[],
                     coverage_summary=cast(dict[str, Any] | None, (inspect_session_state or {}).get("coverage")),
                     strategy_metadata=cast(
@@ -6884,7 +7551,7 @@ async def dispatch_tool(
         }
         if why_classified_weak:
             inspect_response["whyClassifiedAsWeakMatch"] = why_classified_weak
-        return inspect_response
+        return _apply_inspect_source_compaction(inspect_response)
 
     if name == "search_papers_smart":
         smart_args = cast(

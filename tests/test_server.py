@@ -189,7 +189,13 @@ def test_streamable_http_app_handles_initialize_and_tool_call(
     assert "inspect_source" in instructions
     assert call_response.status_code == 200
     structured = call_payload["result"]["structuredContent"]
-    assert structured["status"] in {"resolved", "multiple_candidates", "no_match", "regulatory_primary_source"}
+    assert structured["status"] in {
+        "resolved",
+        "multiple_candidates",
+        "needs_disambiguation",
+        "no_match",
+        "regulatory_primary_source",
+    }
     assert structured["resolutionType"]
     assert "nextActions" in structured
     assert call_payload["result"]["isError"] is False
@@ -213,7 +219,13 @@ async def test_fastmcp_client_returns_structured_tool_output(
         )
 
     assert result.data["resolutionType"]
-    assert result.data["status"] in {"resolved", "multiple_candidates", "no_match", "regulatory_primary_source"}
+    assert result.data["status"] in {
+        "resolved",
+        "multiple_candidates",
+        "needs_disambiguation",
+        "no_match",
+        "regulatory_primary_source",
+    }
     assert "nextActions" in result.data
     assert tool_map["research"].annotations.readOnlyHint is True
     assert tool_map["research"].annotations.idempotentHint is True
@@ -468,6 +480,10 @@ def test_server_instructions_surface_continuation_and_schema_cues() -> None:
     assert "agentic UX review loops" in instructions
     assert "reproduction-ready issues" in instructions
     assert "evidence/leads/routingSummary/coverageSummary/evidenceGaps" in instructions
+    assert "underspecified citation-like fragments" in instructions.lower()
+    assert "bestMatch as citation-ready unless status=resolved" in instructions
+    assert "disabled vs suppressed/degraded/" in instructions
+    assert "quota-limited providers are split intentionally" in normalized_instructions
 
 
 @pytest.mark.asyncio
@@ -487,6 +503,9 @@ async def test_agent_workflow_resource_mentions_pivots_and_provider_contracts() 
     assert "answerability" in guide_text
     assert "routingSummary" in guide_text
     assert "abstains" in guide_text or "abstain" in guide_text
+    assert "underspecified citation-like fragment" in guide_text
+    assert "status=resolved" in guide_text
+    assert "configured-off" in guide_text
     assert "Expert/operator-only fallback" in guide_text
     assert "search_papers_smart" in guide_text
     assert "get_provider_diagnostics" in guide_text
@@ -516,5 +535,6 @@ async def test_plan_prompt_mentions_continuation_vs_pivot_and_schema_limits() ->
     assert "search_papers_bulk" in prompt_text
     assert "For regulatory work, prefer the guided path first" in prompt_text
     assert "pagination.nextCursor as opaque" in prompt_text
+    assert "underspecified fragment" in prompt_text
     assert "Mode: smoke." in prompt_text
     assert "GitHub Copilot coding agent" in prompt_text

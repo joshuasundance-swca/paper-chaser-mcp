@@ -5,11 +5,13 @@ import pytest
 from paper_chaser_mcp import server
 from paper_chaser_mcp.agentic import WorkspaceRegistry
 from paper_chaser_mcp.citation_repair import (
+    ParsedCitation,
     RankedCitationCandidate,
     _classify_resolution_confidence,
     _filtered_alternative_candidates,
     _normalize_identifier_for_openalex,
     _normalize_identifier_for_semantic_scholar,
+    _serialize_citation_response,
     _venue_hint_in_text,
     looks_like_citation_query,
     parse_citation,
@@ -120,6 +122,63 @@ def test_filtered_alternative_candidates_drop_weak_year_only_matches() -> None:
         )
         == []
     )
+
+
+def test_serialize_citation_response_caps_high_confidence_when_resolution_state_needs_disambiguation() -> None:
+    parsed = ParsedCitation(
+        original_text="Smith 2020 climate change adaptation",
+        normalized_text="Smith 2020 climate change adaptation",
+        year=2020,
+        title_candidates=["climate change adaptation"],
+        author_surnames=["smith"],
+    )
+    best = RankedCitationCandidate(
+        paper={
+            "paperId": "paper-2022",
+            "title": "Climate Change Adaptation",
+            "year": 2022,
+            "authors": [{"name": "Jane Doe"}],
+            "venue": "Adaptation Science",
+        },
+        score=0.86,
+        resolution_strategy="exact_title",
+        matched_fields=["title"],
+        conflicting_fields=["year"],
+        title_similarity=0.96,
+        year_delta=2,
+        author_overlap=0,
+        candidate_count=2,
+        why_selected="Leading exact-title match.",
+    )
+    runner_up = RankedCitationCandidate(
+        paper={
+            "paperId": "paper-2020",
+            "title": "Climate Change Adaptation in Practice",
+            "year": 2020,
+            "authors": [{"name": "Alice Smith"}],
+            "venue": "Climate Policy",
+        },
+        score=0.83,
+        resolution_strategy="fuzzy_search",
+        matched_fields=["title", "author", "year"],
+        conflicting_fields=[],
+        title_similarity=0.82,
+        year_delta=0,
+        author_overlap=1,
+        candidate_count=2,
+        why_selected="Near-tie runner-up.",
+    )
+
+    payload = _serialize_citation_response(
+        citation=parsed.original_text,
+        parsed=parsed,
+        candidates=[best, runner_up],
+    )
+
+    assert payload["knownItemResolutionState"] == "needs_disambiguation"
+    assert payload["resolutionConfidence"] == "medium"
+    assert payload["bestMatch"]["paper"]["paperId"] == "paper-2022"
+    assert payload["alternatives"][0]["paper"]["paperId"] == "paper-2020"
 
 
 @pytest.mark.asyncio

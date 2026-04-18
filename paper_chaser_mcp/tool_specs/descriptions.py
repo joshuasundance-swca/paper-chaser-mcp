@@ -56,7 +56,9 @@ TOOL_DESCRIPTIONS = {
     ),
     "get_runtime_status": (
         "Guided runtime and provider-status summary. Use this to confirm the active tool profile, transport, "
-        "effective smart provider, enabled coverage, and high-level warnings without reading low-level diagnostics."
+        "effective smart provider, enabled coverage, and explicit "
+        "disabled/suppressed/degraded/quota-limited provider sets, "
+        "and high-level warnings without reading low-level diagnostics."
     ),
     "search_papers": (
         "Primary entry point for quick literature discovery: start here when "

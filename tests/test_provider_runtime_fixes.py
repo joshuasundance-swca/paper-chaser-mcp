@@ -77,9 +77,24 @@ class TestFullTextAccessStatusConsistency:
         }
         record = dispatch_module._guided_source_record_from_paper("query", paper, index=1)
         assert record["fullTextUrlFound"] is True
+        assert record["fullTextObserved"] is False
         assert record["accessStatus"] == "url_verified"
         assert record["bodyTextEmbedded"] is False
         assert record["qaReadableText"] is False
+
+    def test_structured_source_body_embedded_sets_consistent_flags(self) -> None:
+        source: dict[str, Any] = {
+            "evidenceId": "50 CFR 17.11",
+            "sourceType": "primary_regulatory",
+            "accessStatus": "body_text_embedded",
+        }
+        record = dispatch_module._guided_source_record_from_structured_source(source, index=1)
+        assert record["accessStatus"] == "body_text_embedded"
+        assert record["bodyTextEmbedded"] is True
+        assert record["qaReadableText"] is False
+        assert record["fullTextUrlFound"] is False
+        assert record["fullTextObserved"] is True
+        assert record["verificationStatus"] == "verified_primary_source"
 
     def test_paper_without_full_text_does_not_get_full_text_verified(self) -> None:
         paper: dict[str, Any] = {

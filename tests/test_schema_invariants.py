@@ -561,8 +561,8 @@ class TestFullTextFieldRename:
 
     def test_guided_dispatch_source_record_emits_both_keys(self) -> None:
         """The guided-layer source output must emit BOTH the legacy
-        ``fullTextObserved`` key and the new ``fullTextUrlFound`` key with the
-        same value. Clients built against the pre-rename contract keep working.
+        ``fullTextObserved`` key and the new ``fullTextUrlFound`` key while
+        keeping URL discovery separate from observed body/full text.
         (ws-dispatch-contract-trust / finding #2.)"""
         from paper_chaser_mcp.dispatch import (
             _guided_source_record_from_paper,
@@ -582,8 +582,7 @@ class TestFullTextFieldRename:
             index=1,
         )
         assert paper_record["fullTextUrlFound"] is True
-        assert paper_record["fullTextObserved"] is True
-        assert paper_record["fullTextUrlFound"] == paper_record["fullTextObserved"]
+        assert paper_record["fullTextObserved"] is False
 
         # Structured-source path (from ask_result_set output).
         structured_record = _guided_source_record_from_structured_source(
@@ -597,7 +596,6 @@ class TestFullTextFieldRename:
         )
         assert structured_record["fullTextUrlFound"] is True
         assert structured_record["fullTextObserved"] is True
-        assert structured_record["fullTextUrlFound"] == structured_record["fullTextObserved"]
 
 
 # ---------------------------------------------------------------------------
@@ -626,6 +624,7 @@ class TestBodyTextAndQaReadableSignals:
         paper = {"title": "URL only", "fullTextUrlFound": True}
         record = dispatch_module._guided_source_record_from_paper("q", paper, index=1)
         assert record["fullTextUrlFound"] is True
+        assert record["fullTextObserved"] is False
         assert record["accessStatus"] == "url_verified"
         assert record["bodyTextEmbedded"] is False
         assert record["qaReadableText"] is False

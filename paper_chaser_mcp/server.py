@@ -70,24 +70,28 @@ SERVER_INSTRUCTIONS = """
 Decision tree for tool selection:
 
 1. DEFAULT GUIDED RESEARCH → research
-    (default low-context entry point for discovery, literature review,
-    citation repair, known-item recovery, and regulatory or species-history
-    questions; guided research uses a server-owned quality-first policy and now
-    returns executionProvenance plus evidence-first sections such as
-    evidence/leads/routingSummary/coverageSummary/evidenceGaps, with
-    verifiedFindings/sources/unverifiedLeads kept as compatibility views)
+     (default low-context entry point for discovery, literature review,
+     citation repair, known-item recovery, and regulatory or species-history
+     questions; guided research uses a server-owned quality-first policy and now
+     returns executionProvenance plus evidence-first sections such as
+     evidence/leads/routingSummary/coverageSummary/evidenceGaps, with
+     verifiedFindings/sources/unverifiedLeads kept as compatibility views.
+     Underspecified citation-like fragments can stop early with
+     needs_disambiguation + clarification instead of speculative retrieval)
 2. GUIDED FOLLOW-UP → follow_up_research
     (one grounded follow-up over a saved searchSessionId; returns answerStatus,
     nextActions, executionProvenance, and sessionResolution when session reuse is
     ambiguous)
 3. GUIDED REFERENCE NORMALIZATION → resolve_reference
-    (normalize DOI/arXiv/URL/citation/reference inputs before broader discovery)
+     (normalize DOI/arXiv/URL/citation/reference inputs before broader discovery;
+     do not treat bestMatch as citation-ready unless status=resolved)
 4. GUIDED SOURCE AUDIT → inspect_source
     (per-source provenance, trust, and direct-read recommendations; ambiguity now
     returns structured sessionResolution/sourceResolution instead of raw errors)
 5. RUNTIME / PROFILE SANITY CHECK → get_runtime_status
-    (surfaces effective profile, smart-provider state, guidedPolicy, guided
-    latency defaults, and runtime warnings)
+     (surfaces effective profile, smart-provider state, guidedPolicy, guided
+     latency defaults, and runtime warnings; disabled vs suppressed/degraded/
+     quota-limited providers are split intentionally)
 6. EXPERT CONCEPT-LEVEL DISCOVERY / REVIEW → search_papers_smart
     (returns searchSessionId, strategyMetadata, resultStatus, answerability,
     routingSummary, evidence, leads, evidenceGaps, structuredSources,
@@ -203,9 +207,11 @@ GUIDED_SERVER_INSTRUCTIONS = """
 Default guided workflow:
 
 1. RESEARCH -> research
-   Use this for topic discovery, literature review, known-item recovery, citation repair,
-   and regulatory or species-history requests when you want one trust-graded answer.
-    The server applies a server-owned quality-first policy for this guided path.
+    Use this for topic discovery, literature review, known-item recovery, citation repair,
+    and regulatory or species-history requests when you want one trust-graded answer.
+     The server applies a server-owned quality-first policy for this guided path.
+    Vague citation/reference fragments can stop here with needs_disambiguation +
+    clarification instead of speculative retrieval.
 2. FOLLOW UP -> follow_up_research
    Reuse searchSessionId from research to ask one grounded question. The tool abstains
    when the saved evidence is too weak or off-topic.
@@ -220,12 +226,14 @@ Default guided workflow:
    recent?") include a topRecommendation payload with sourceId, recommendationReason,
    and comparativeAxis when the saved evidence can be scored.
 3. RESOLVE ONE REFERENCE -> resolve_reference
-   Use this for citations, DOI strings, arXiv IDs, URLs, title fragments, and regulatory references.
+    Use this for citations, DOI strings, arXiv IDs, URLs, title fragments, and regulatory references.
+    Treat bestMatch as citation-ready only when status=resolved.
 4. INSPECT ONE SOURCE -> inspect_source
    Pass searchSessionId plus evidenceId, sourceAlias, or sourceId from research to inspect provenance, trust state,
    and direct-read next steps.
 
 Use get_runtime_status when behavior looks different across environments and you need the active runtime truth.
+Read disabledProviderSet separately from suppressedProviderSet/degradedProviderSet/quotaLimitedProviderSet.
 The guided surface is intentionally opinionated: it prefers trust-graded evidence, explicit abstention, and direct next
 actions over raw provider control.
 """.strip()
@@ -239,6 +247,9 @@ AGENT_WORKFLOW_GUIDE = """
   citation repair, and regulatory or species-history requests.
 - Treat guided `research` as server-managed quality-first behavior rather than a
     place to choose fast/balanced/deep execution modes.
+- If guided `research` returns `needs_disambiguation` with clarification for an
+  underspecified citation-like fragment, tighten the anchor or switch to
+  `resolve_reference` instead of forcing retrieval.
 - Save the returned `searchSessionId`. It is the anchor for `follow_up_research`
   and `inspect_source`.
 - Use `follow_up_research` for one grounded question over the saved evidence.
@@ -253,6 +264,8 @@ AGENT_WORKFLOW_GUIDE = """
   a one-line reason, and the inferred `comparativeAxis`.
 - Use `resolve_reference` when the user already has a citation, DOI, arXiv ID,
   URL, title fragment, or regulatory reference and wants the safest next anchor.
+  Treat `bestMatch` as final only when `status=resolved`; otherwise use
+  `multiple_candidates` / `needs_disambiguation` as a prompt to disambiguate.
 - Use `inspect_source` with `searchSessionId` plus `evidenceId`, `sourceAlias`,
   or `sourceId` to inspect
   provenance, trust state, access status, and direct-read next steps.
@@ -261,7 +274,11 @@ AGENT_WORKFLOW_GUIDE = """
   used for the current synthesis call) so agents can tell URL discovery apart
   from true full-text reads.
 - Use `get_runtime_status` when behavior differs across environments and you need
-  the active runtime truth without digging through low-level diagnostics.
+  the active runtime truth without digging through low-level diagnostics. Read
+  `disabledProviderSet`, `suppressedProviderSet`, `degradedProviderSet`, and
+  `quotaLimitedProviderSet` as distinct top-level summaries of the per-provider
+  rows rather than one collapsed availability bucket; `disabledProviderSet`
+  means configured-off, while the other three describe runtime-only state.
 
 ## Guided output contract
 
@@ -1026,7 +1043,9 @@ def plan_paper_chaser_search(
         f"Mode: {mode}. {mode_guidance[mode]}{focus_text} "
         "Default to the guided surface. Start with research for discovery, known-item "
         "recovery, citation repair, and regulatory routing. If the user already has a "
-        "citation-like string, use resolve_reference first. Reuse searchSessionId with "
+        "citation-like string, use resolve_reference first. If guided research returns "
+        "needs_disambiguation with clarification for an underspecified fragment, tighten "
+        "the anchor instead of forcing retrieval. Reuse searchSessionId with "
         "follow_up_research for one grounded question and inspect_source for provenance. "
         "Treat abstentions and clarification requests as real outputs, not failures to hide. "
         "Only fall back to the expert surface when the task explicitly requires provider-specific control, "

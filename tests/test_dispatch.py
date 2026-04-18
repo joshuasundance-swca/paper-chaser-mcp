@@ -1,5 +1,5 @@
 import types
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -338,6 +338,78 @@ async def test_guided_research_adequacy_can_promote_partial_to_succeeded(
 
     assert payload["status"] == "succeeded"
     assert not any("Adequacy assessment:" in gap for gap in payload["evidenceGaps"])
+
+
+@pytest.mark.asyncio
+async def test_guided_research_preflights_underspecified_reference_fragment_to_clarification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRuntime:
+        async def search_papers_smart(self, **kwargs: Any) -> dict[str, Any]:
+            raise AssertionError(
+                "search_papers_smart should not run for underspecified reference fragments: "
+                f"{kwargs!r}"
+            )
+
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(
+        await server.call_tool(
+            "research",
+            {"query": "smith maybe tree frog paper around 2001 maybe policy something"},
+        )
+    )
+
+    assert payload["status"] == "needs_disambiguation"
+    assert payload["clarification"]["reason"] == "underspecified_reference_fragment"
+    assert payload["resultState"]["status"] == "needs_disambiguation"
+    assert "underspecified citation or title fragment" in payload["evidenceGaps"][0].lower()
+    assert any("resolve_reference" in action for action in payload["nextActions"])
+
+
+@pytest.mark.asyncio
+async def test_guided_research_allows_legitimate_fuzzy_known_item_recovery_to_reach_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_calls: list[dict[str, Any]] = []
+
+    class _FakeRuntime:
+        async def search_papers_smart(self, **kwargs: Any) -> dict[str, Any]:
+            runtime_calls.append(kwargs)
+            return {
+                "searchSessionId": "ssn-fuzzy-known-item",
+                "strategyMetadata": {
+                    "intent": "discovery",
+                    "querySpecificity": "medium",
+                    "ambiguityLevel": "medium",
+                },
+                "structuredSources": [
+                    {
+                        "sourceId": "planetary-2009",
+                        "title": "Planetary Boundaries",
+                        "provider": "semantic_scholar",
+                        "sourceType": "scholarly_article",
+                        "verificationStatus": "verified_metadata",
+                        "accessStatus": "abstract_only",
+                        "topicalRelevance": "on_topic",
+                        "confidence": "high",
+                        "isPrimarySource": False,
+                    }
+                ],
+                "candidateLeads": [],
+                "evidenceGaps": [],
+                "coverageSummary": {"searchMode": "smart_literature_review"},
+                "failureSummary": None,
+                "clarification": None,
+            }
+
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(await server.call_tool("research", {"query": "planetary boundaries 2009 nature"}))
+
+    assert runtime_calls, "Legitimate fuzzy recovery should still reach the smart runtime."
+    assert payload["status"] != "needs_disambiguation"
+    assert payload["clarification"] is None
 
 
 def test_guided_deterministic_evidence_gaps_uses_retrieval_hypotheses_not_adequacy_strings() -> None:
@@ -2167,6 +2239,87 @@ async def test_get_runtime_status_structured_warnings_encode_legacy_strings(
         assert "subject" in entry
 
 
+def test_runtime_summary_separates_disabled_suppressed_and_degraded_provider_sets() -> None:
+    from paper_chaser_mcp.provider_runtime import (
+        ProviderDiagnosticsRegistry,
+        ProviderOutcomeEnvelope,
+        ProviderPolicy,
+    )
+
+    registry = ProviderDiagnosticsRegistry()
+    registry.record(
+        ProviderOutcomeEnvelope(
+            provider="scholarapi",
+            endpoint="search",
+            status_bucket="quota_exhausted",
+            error="ScholarApiQuotaError: quota exceeded",
+            quota_metadata={"searches_left": 0, "requestId": "sch-req-1"},
+            provider_request_id="sch-req-1",
+        ),
+        policy=ProviderPolicy(suppression_seconds=300.0),
+    )
+    registry.record(
+        ProviderOutcomeEnvelope(
+            provider="openalex",
+            endpoint="works.search",
+            status_bucket="provider_error",
+            error="RuntimeError: upstream timeout",
+        ),
+        policy=ProviderPolicy(failure_threshold=2, suppression_seconds=60.0),
+    )
+
+    payload = dispatch_module._build_provider_diagnostics_snapshot(
+        include_recent_outcomes=False,
+        provider_order=cast(Any, ["semantic_scholar", "openalex", "scholarapi", "core"]),
+        provider_registry=registry,
+        agentic_runtime=None,
+        transport_mode="stdio",
+        tool_profile="guided",
+        hide_disabled_tools=True,
+        session_ttl_seconds=1800,
+        embeddings_enabled=False,
+        guided_research_latency_profile="deep",
+        guided_follow_up_latency_profile="deep",
+        guided_allow_paid_providers=True,
+        guided_escalation_enabled=True,
+        guided_escalation_max_passes=2,
+        guided_escalation_allow_paid_providers=True,
+        enable_core=False,
+        enable_semantic_scholar=True,
+        enable_openalex=True,
+        enable_arxiv=False,
+        enable_serpapi=False,
+        enable_scholarapi=True,
+        enable_crossref=False,
+        enable_unpaywall=False,
+        enable_ecos=False,
+        enable_federal_register=False,
+        enable_govinfo_cfr=False,
+        ecos_client=None,
+        serpapi_client=None,
+        scholarapi_client=object(),
+    )
+    summary = payload["runtimeSummary"]
+    provider_map = {item["provider"]: item for item in payload["providers"] if isinstance(item, dict)}
+
+    assert "scholarapi" in summary["configuredProviderSet"]
+    assert "scholarapi" not in summary["disabledProviderSet"]
+    assert "scholarapi" in summary["suppressedProviderSet"]
+    assert "scholarapi" in summary["quotaLimitedProviderSet"]
+    assert "scholarapi" not in summary["activeProviderSet"]
+    assert "openalex" in summary["degradedProviderSet"]
+    assert "openalex" in summary["activeProviderSet"]
+    assert "core" in summary["disabledProviderSet"]
+    assert provider_map["scholarapi"]["enabled"] is True
+    assert provider_map["scholarapi"]["runtimeAvailability"] == "suppressed"
+    assert provider_map["scholarapi"]["runtimeHealth"] == "quota_limited"
+    assert provider_map["openalex"]["runtimeAvailability"] == "active"
+    assert provider_map["openalex"]["runtimeHealth"] == "degraded"
+    assert provider_map["core"]["runtimeAvailability"] == "disabled"
+    warning_codes = {entry["code"] for entry in summary.get("structuredWarnings", [])}
+    assert {"provider_suppressed", "provider_quota_limited", "provider_degraded"} <= warning_codes
+
+
 @pytest.mark.asyncio
 async def test_guided_research_escalates_once_when_initial_pass_is_too_weak(
     monkeypatch: pytest.MonkeyPatch,
@@ -3885,6 +4038,72 @@ async def test_resolve_reference_title_only_match_with_conflicting_author_year_v
     assert payload["resolutionConfidence"] != "high", (
         "title-only match with 3 conflicting key fields must not be high confidence"
     )
+    assert payload["knownItemResolutionState"] == "needs_disambiguation"
+
+
+@pytest.mark.asyncio
+async def test_resolve_reference_uses_known_item_resolution_state_to_cap_confidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class AmbiguousClimateClient(RecordingSemanticClient):
+        async def search_papers_match(self, **kwargs: object) -> dict:
+            self.calls.append(("search_papers_match", dict(kwargs)))
+            return {
+                "paperId": "paper-2022",
+                "title": "Climate Change Adaptation",
+                "year": 2022,
+                "authors": [{"name": "Jane Doe"}],
+                "venue": "Adaptation Science",
+                "matchFound": True,
+                "matchStrategy": "exact_title",
+                "matchConfidence": "high",
+                "matchedFields": ["title"],
+                "conflictingFields": ["year"],
+                "candidateCount": 2,
+                "titleSimilarity": 0.96,
+                "yearDelta": 2,
+                "authorOverlap": 0,
+            }
+
+        async def search_snippets(self, **kwargs: object) -> dict:
+            self.calls.append(("search_snippets", dict(kwargs)))
+            return {"data": []}
+
+        async def search_papers(self, **kwargs: object) -> dict:
+            self.calls.append(("search_papers", dict(kwargs)))
+            return {
+                "total": 1,
+                "offset": 0,
+                "data": [
+                    {
+                        "paperId": "paper-2020",
+                        "title": "Climate Change Adaptation",
+                        "year": 2020,
+                        "authors": [{"name": "Alice Smith"}],
+                        "venue": "Climate Policy",
+                    }
+                ],
+            }
+
+    semantic = AmbiguousClimateClient()
+    monkeypatch.setattr(server, "client", semantic)
+    monkeypatch.setattr(server, "enable_semantic_scholar", True)
+    monkeypatch.setattr(server, "enable_openalex", False)
+    monkeypatch.setattr(server, "enable_core", False)
+    monkeypatch.setattr(server, "enable_arxiv", False)
+    monkeypatch.setattr(server, "enable_serpapi", False)
+
+    payload = _payload(
+        await server.call_tool(
+            "resolve_reference",
+            {"reference": "Smith 2020 climate change adaptation"},
+        )
+    )
+
+    assert payload["status"] == "needs_disambiguation"
+    assert payload["resolutionConfidence"] in {"low", "medium"}
+    assert payload["knownItemResolutionState"] == "needs_disambiguation"
+    assert {candidate["paper"]["paperId"] for candidate in payload["alternatives"]} >= {"paper-2020"}
     # next actions must guide toward research or manual disambiguation
     assert any("research" in action.lower() or "conflict" in action.lower() for action in payload["nextActions"])
 
@@ -5381,6 +5600,176 @@ async def test_follow_up_research_uses_evidence_contract_records_when_sources_ar
 
 
 @pytest.mark.asyncio
+async def test_follow_up_session_state_rebuild_keeps_counts_and_access_flags_consistent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRuntime:
+        async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
+            raise AssertionError(f"ask_result_set should not run for saved-session introspection: {kwargs!r}")
+
+    isolated_registry = WorkspaceRegistry()
+    monkeypatch.setattr(server, "workspace_registry", isolated_registry)
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-follow-up-session-consistency",
+        query="FDA AI guidance",
+        payload={
+            "searchSessionId": "ssn-follow-up-session-consistency",
+            "intent": "regulatory",
+            "sources": [
+                {
+                    "sourceId": "pcp-guidance",
+                    "title": "Predetermined Change Control Plan Guidance",
+                    "provider": "govinfo",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_primary_source",
+                    "accessStatus": "body_text_embedded",
+                    "topicalRelevance": "on_topic",
+                    "isPrimarySource": True,
+                    "bodyTextEmbedded": True,
+                }
+            ],
+            "candidateLeads": [
+                {
+                    "sourceId": "cds-guidance",
+                    "title": "Clinical Decision Support Guidance",
+                    "provider": "govinfo",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "url_verified",
+                    "topicalRelevance": "off_topic",
+                    "isPrimarySource": True,
+                    "fullTextUrlFound": True,
+                }
+            ],
+            "coverageSummary": {
+                "providersAttempted": ["govinfo"],
+                "providersSucceeded": ["govinfo"],
+                "providersFailed": [],
+                "providersZeroResults": [],
+                "searchMode": "regulatory_primary_source",
+            },
+            "evidenceGaps": [],
+        },
+    )
+
+    payload = _payload(
+        await server.call_tool(
+            "follow_up_research",
+            {
+                "searchSessionId": "ssn-follow-up-session-consistency",
+                "question": "Which of these are on-topic and which are off-target?",
+                "responseMode": "standard",
+            },
+        )
+    )
+
+    assert payload["answerStatus"] == "answered"
+    assert payload["selectedEvidenceIds"] == ["pcp-guidance"]
+    assert payload["selectedLeadIds"] == ["cds-guidance"]
+    assert payload["trustSummary"]["onTopicSourceCount"] == 1
+    assert payload["trustSummary"]["offTopicCount"] == 1
+    assert payload["coverage"]["totalSources"] == 2
+    assert payload["coverage"]["byAccessStatus"] == {"body_text_embedded": 1, "url_verified": 1}
+    assert payload["sources"][0]["bodyTextEmbedded"] is True
+    assert payload["unverifiedLeads"][0]["fullTextUrlFound"] is True
+    assert payload["unverifiedLeads"][0]["fullTextObserved"] is False
+
+
+@pytest.mark.asyncio
+async def test_follow_up_filters_hidden_selected_ids_from_runtime_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRuntime:
+        async def ask_result_set(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            return {
+                "answer": "Paper 1 is the strongest match.",
+                "answerStatus": "answered",
+                "structuredSources": [
+                    {
+                        "sourceId": "paper-1",
+                        "title": "Paper 1",
+                        "provider": "semantic_scholar",
+                        "sourceType": "scholarly_article",
+                        "verificationStatus": "verified_metadata",
+                        "accessStatus": "body_text_embedded",
+                        "topicalRelevance": "on_topic",
+                        "bodyTextEmbedded": True,
+                        "qaReadableText": True,
+                    }
+                ],
+                "candidateLeads": [
+                    {
+                        "sourceId": "lead-1",
+                        "title": "Lead 1",
+                        "provider": "openalex",
+                        "sourceType": "scholarly_article",
+                        "verificationStatus": "verified_metadata",
+                        "accessStatus": "url_verified",
+                        "topicalRelevance": "weak_match",
+                        "fullTextUrlFound": True,
+                    }
+                ],
+                "selectedEvidenceIds": ["paper-1", "paper-hidden"],
+                "selectedLeadIds": ["lead-1", "lead-hidden"],
+                "coverageSummary": {"searchMode": "grounded_follow_up"},
+                "evidenceGaps": [],
+                "unsupportedAsks": [],
+                "followUpQuestions": [],
+                "evidenceUsePlan": {"sufficient": True},
+                "providerUsed": "openai",
+            }
+
+    isolated_registry = WorkspaceRegistry()
+    monkeypatch.setattr(server, "workspace_registry", isolated_registry)
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-follow-up-hidden-ids",
+        query="paper 1",
+        payload={
+            "searchSessionId": "ssn-follow-up-hidden-ids",
+            "intent": "discovery",
+            "sources": [
+                {
+                    "sourceId": "paper-1",
+                    "title": "Paper 1",
+                    "provider": "semantic_scholar",
+                    "sourceType": "scholarly_article",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "body_text_embedded",
+                    "topicalRelevance": "on_topic",
+                    "bodyTextEmbedded": True,
+                    "qaReadableText": True,
+                }
+            ],
+            "evidenceGaps": [],
+        },
+    )
+
+    payload = _payload(
+        await server.call_tool(
+            "follow_up_research",
+            {
+                "searchSessionId": "ssn-follow-up-hidden-ids",
+                "question": "Summarize the strongest match.",
+                "responseMode": "standard",
+            },
+        )
+    )
+
+    assert payload["answerStatus"] == "answered"
+    assert payload["selectedEvidenceIds"] == ["paper-1"]
+    assert payload["selectedLeadIds"] == ["lead-1"]
+    assert payload["coverage"]["totalSources"] == 2
+    assert payload["coverage"]["byAccessStatus"] == {"body_text_embedded": 1, "url_verified": 1}
+
+
+@pytest.mark.asyncio
 async def test_inspect_source_reads_evidence_contract_records_without_legacy_sources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5432,6 +5821,69 @@ async def test_inspect_source_reads_evidence_contract_records_without_legacy_sou
     assert payload["coverageSummary"]["searchMode"] == "regulatory_primary_source"
     assert payload["evidence"]
     assert payload["evidence"][0]["evidenceId"] == "50 CFR 17.11"
+
+
+@pytest.mark.asyncio
+async def test_inspect_source_prefers_saved_source_enrichment_over_minimal_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    isolated_registry = WorkspaceRegistry()
+    monkeypatch.setattr(server, "workspace_registry", isolated_registry)
+
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-inspect-enriched-source",
+        query="current CFR text",
+        payload={
+            "searchSessionId": "ssn-inspect-enriched-source",
+            "intent": "regulatory",
+            "evidence": [
+                {
+                    "evidenceId": "50 CFR 17.11",
+                    "title": "50 CFR 17.11 Endangered and threatened wildlife",
+                    "provider": "govinfo",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_primary_source",
+                    "accessStatus": "body_text_embedded",
+                    "topicalRelevance": "on_topic",
+                    "isPrimarySource": True,
+                }
+            ],
+            "sources": [
+                {
+                    "sourceId": "50 CFR 17.11",
+                    "title": "50 CFR 17.11 Endangered and threatened wildlife",
+                    "provider": "govinfo",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_primary_source",
+                    "accessStatus": "qa_readable_text",
+                    "topicalRelevance": "on_topic",
+                    "isPrimarySource": True,
+                    "fullTextUrlFound": True,
+                    "bodyTextEmbedded": True,
+                    "qaReadableText": True,
+                }
+            ],
+            "evidenceGaps": [],
+        },
+    )
+
+    payload = _payload(
+        await server.call_tool(
+            "inspect_source",
+            {
+                "searchSessionId": "ssn-inspect-enriched-source",
+                "sourceId": "50 CFR 17.11",
+            },
+        )
+    )
+
+    assert payload["source"]["sourceId"] == "50 CFR 17.11"
+    assert payload["source"]["accessStatus"] == "qa_readable_text"
+    assert payload["source"]["fullTextUrlFound"] is True
+    assert payload["source"]["fullTextObserved"] is True
+    assert payload["source"]["bodyTextEmbedded"] is True
+    assert payload["source"]["qaReadableText"] is True
 
 
 @pytest.mark.asyncio

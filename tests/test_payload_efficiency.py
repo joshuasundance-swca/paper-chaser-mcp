@@ -375,6 +375,7 @@ async def test_follow_up_insufficient_evidence_payload_is_compact(monkeypatch: p
     assert len(encoded) < 2200
     assert payload["sourcesSuppressed"] is True
     assert payload["legacyFieldsIncluded"] is False
+    assert "evidence" not in payload
     assert "sources" not in payload
     assert "verifiedFindings" not in payload
     assert "unverifiedLeads" not in payload
@@ -432,6 +433,61 @@ async def test_research_abstention_payload_is_compact(monkeypatch: pytest.Monkey
     assert "verifiedFindings" not in payload
     assert "unverifiedLeads" not in payload
     assert "trustSummary" not in payload
+
+
+@pytest.mark.asyncio
+async def test_inspect_source_payload_keeps_only_the_selected_source_context() -> None:
+    isolated_registry = WorkspaceRegistry()
+    isolated_registry.save_result_set(
+        source_tool="research",
+        search_session_id="ssn-compact-inspect",
+        query="test query",
+        payload={
+            "query": "test query",
+            "intent": "discovery",
+            "coverageSummary": {
+                "searchMode": "grounded_follow_up",
+                "providersAttempted": ["semantic_scholar", "openalex", "crossref"],
+                "providersSucceeded": ["semantic_scholar"],
+                "providersFailed": ["openalex"],
+                "totalSources": 3,
+                "byAccessStatus": {"body_text_embedded": 1, "url_verified": 2},
+            },
+            "sources": [
+                _make_source(source_id="src-1", title="Paper 1", note="keep"),
+                _make_source(source_id="src-2", title="Paper 2", note="drop me"),
+                _make_source(source_id="src-3", title="Paper 3", note="drop me too"),
+            ],
+            "unverifiedLeads": [
+                _make_source(
+                    source_id="lead-1",
+                    source_alias="lead-1",
+                    title="Lead 1",
+                    topical_relevance="weak_match",
+                    verification_status="verified_metadata",
+                )
+            ],
+        },
+    )
+
+    original_registry = server.workspace_registry
+    server.workspace_registry = isolated_registry
+    try:
+        payload = _payload(
+            await server.call_tool(
+                "inspect_source",
+                {"searchSessionId": "ssn-compact-inspect", "sourceId": "src-1"},
+            )
+        )
+    finally:
+        server.workspace_registry = original_registry
+
+    encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    assert len(encoded) < 4500
+    assert payload["source"]["sourceId"] == "src-1"
+    assert [entry["evidenceId"] for entry in payload["evidence"]] == ["src-1"]
+    assert "leads" not in payload
+    assert set(payload["coverageSummary"]) <= {"searchMode", "totalSources", "byAccessStatus"}
 
 
 # ---------------------------------------------------------------------------
@@ -504,6 +560,8 @@ def test_follow_up_default_compact_drops_legacy_and_trust_fields() -> None:
         response_mode="compact",
         include_legacy_fields=False,
     )
+    assert "evidence" not in shaped
+    assert "sources" not in shaped
     assert "verifiedFindings" not in shaped
     assert "unverifiedLeads" not in shaped
     for key in (
@@ -522,13 +580,25 @@ def test_follow_up_default_compact_drops_legacy_and_trust_fields() -> None:
     assert shaped["responseMode"] == "compact"
 
 
-def test_follow_up_default_compact_uses_source_ids() -> None:
+def test_follow_up_default_compact_prefers_selected_ids_over_source_arrays() -> None:
     shaped = _apply_follow_up_response_mode(
         _grounded_follow_up_response(),
         response_mode="compact",
         include_legacy_fields=False,
     )
     assert "structuredSources" not in shaped
+    assert "structuredSourceIds" not in shaped
+    assert shaped["selectedEvidenceIds"] == ["ev-1"]
+
+
+def test_follow_up_default_compact_uses_source_ids_when_no_selected_ids() -> None:
+    payload = _grounded_follow_up_response()
+    payload["selectedEvidenceIds"] = []
+    shaped = _apply_follow_up_response_mode(
+        payload,
+        response_mode="compact",
+        include_legacy_fields=False,
+    )
     assert shaped["structuredSourceIds"] == ["src-1", "src-2"]
 
 
@@ -559,7 +629,7 @@ def test_follow_up_default_compact_omits_none_and_empty_fields() -> None:
     assert "unsupportedAsks" not in shaped
 
 
-def test_follow_up_default_compact_omits_zero_sources_suppressed() -> None:
+def test_follow_up_default_compact_flags_source_suppression_without_legacy_lists() -> None:
     payload = _grounded_follow_up_response()
     payload["verifiedFindings"] = []
     payload["unverifiedLeads"] = []
@@ -568,7 +638,7 @@ def test_follow_up_default_compact_omits_zero_sources_suppressed() -> None:
         response_mode="compact",
         include_legacy_fields=False,
     )
-    assert "sourcesSuppressed" not in shaped
+    assert shaped["sourcesSuppressed"] is True
 
 
 def test_follow_up_compact_reports_sources_suppressed_int_count() -> None:
@@ -643,8 +713,10 @@ def test_finalize_routes_follow_up_to_compact_by_default() -> None:
         include_legacy_fields=False,
     )
     assert shaped["responseMode"] == "compact"
+    assert "evidence" not in shaped
+    assert "sources" not in shaped
     assert "verifiedFindings" not in shaped
-    assert shaped["structuredSourceIds"] == ["src-1", "src-2"]
+    assert "structuredSourceIds" not in shaped
 
 
 def test_finalize_standard_preserves_legacy_and_trust() -> None:
