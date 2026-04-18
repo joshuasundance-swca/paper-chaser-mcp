@@ -72,6 +72,8 @@ from .planner import (
     dedupe_variants,
     grounded_expansion_candidates,
     initial_retrieval_hypotheses,
+    looks_like_exact_title,
+    looks_like_near_known_item_query,
     normalize_query,
     query_facets,
     query_terms,
@@ -5134,6 +5136,13 @@ def _classify_topical_relevance_with_provenance(
     has_title_or_body_signal = has_title_signal or (query_facet_coverage > 0.0) or (query_anchor_coverage > 0.0)
     fast_path_on_topic = deterministic == "on_topic" and query_similarity > 0.5
     fast_path_off_topic = deterministic == "off_topic" and query_similarity < 0.12 and not has_title_or_body_signal
+    strict_title_alignment_query = looks_like_exact_title(query) or looks_like_near_known_item_query(query)
+    guard_llm_on_topic_promotion = (
+        strict_title_alignment_query
+        and deterministic == "weak_match"
+        and llm_classification == "on_topic"
+        and not has_title_signal
+    )
 
     effective: Literal["on_topic", "weak_match", "off_topic"]
     source: Literal["deterministic", "llm", "llm_tiebreaker"]
@@ -5148,6 +5157,9 @@ def _classify_topical_relevance_with_provenance(
         source = "deterministic"
         if llm_classification is not None and llm_classification != "off_topic":
             llm_override_ignored = True
+    elif guard_llm_on_topic_promotion:
+        effective = deterministic
+        source = "deterministic"
     elif llm_classification is not None:
         effective = llm_classification
         source = "llm_tiebreaker" if deterministic == "weak_match" else "llm"

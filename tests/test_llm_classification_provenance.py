@@ -113,6 +113,63 @@ def test_provenance_weak_match_with_llm_classification_is_llm_tiebreaker() -> No
     assert result.llm_override_ignored is False
 
 
+@pytest.mark.parametrize(
+    ("query", "title", "abstract"),
+    [
+        (
+            "CLIP",
+            "Vision-language evaluation benchmark",
+            "Compares retrieval baselines including CLIP embeddings for multimodal ranking.",
+        ),
+        (
+            "MMLU",
+            "Reasoning benchmark synthesis",
+            "Reviews evaluation suites and reports MMLU as one metric among many.",
+        ),
+        (
+            "Med-PaLM M",
+            "Medical multimodal assistant survey",
+            "Summarizes medical assistants such as Med-PaLM M and related imaging models.",
+        ),
+        (
+            "DSPy",
+            "LLM pipeline optimization methods",
+            "Discusses prompt programming toolkits including DSPy and related compiler-style systems.",
+        ),
+        (
+            "Toolformer",
+            "Language-model tool use overview",
+            "Covers tool-use methods and mentions Toolformer as a representative prior system.",
+        ),
+    ],
+)
+def test_provenance_near_known_item_query_requires_title_alignment_for_llm_promotion(
+    query: str,
+    title: str,
+    abstract: str,
+) -> None:
+    """Near-known-item prompts should not promote abstract-only mentions to on-topic.
+
+    Live drift cases like CLIP, MMLU, Med-PaLM M, DSPy, and Toolformer were
+    getting promoted from borderline lexical overlap into on-topic. The LLM
+    signal is still surfaced, but the effective classification must stay
+    ``weak_match`` unless the paper title itself aligns with the named item.
+    """
+
+    result = _classify_topical_relevance_with_provenance(
+        query=query,
+        paper=_paper(title, abstract=abstract),
+        query_similarity=0.30,
+        llm_classification="on_topic",
+    )
+
+    assert result.deterministic == "weak_match"
+    assert result.llm == "on_topic"
+    assert result.effective == "weak_match"
+    assert result.source == "deterministic"
+    assert result.llm_override_ignored is False
+
+
 def test_provenance_no_llm_signal_returns_deterministic_source() -> None:
     query = "microplastic effects in freshwater benthic macroinvertebrates"
     paper = _paper(

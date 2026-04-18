@@ -2801,6 +2801,53 @@ def _guided_dedupe_source_records(sources: list[dict[str, Any]]) -> list[dict[st
     return deduped
 
 
+def _guided_source_matches_reference(candidate: dict[str, Any], reference: Any) -> bool:
+    normalized_reference = _guided_normalize_whitespace(reference)
+    if not normalized_reference:
+        return False
+    lowered_reference = normalized_reference.lower()
+    normalized_locator = _guided_normalize_source_locator(normalized_reference)
+    for value in (
+        candidate.get("sourceId"),
+        candidate.get("sourceAlias"),
+        candidate.get("citationText"),
+        candidate.get("canonicalUrl"),
+        candidate.get("retrievedUrl"),
+        candidate.get("title"),
+    ):
+        normalized_candidate = _guided_normalize_whitespace(value)
+        if not normalized_candidate:
+            continue
+        if normalized_candidate.lower() == lowered_reference:
+            return True
+        if normalized_locator and _guided_normalize_source_locator(normalized_candidate) == normalized_locator:
+            return True
+    return False
+
+
+def _guided_source_records_share_surface(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    left_titles = {
+        _guided_normalize_whitespace(left.get("title")).lower(),
+        _guided_normalize_whitespace(left.get("citationText")).lower(),
+    } - {""}
+    right_titles = {
+        _guided_normalize_whitespace(right.get("title")).lower(),
+        _guided_normalize_whitespace(right.get("citationText")).lower(),
+    } - {""}
+    if left_titles and right_titles and left_titles & right_titles:
+        return True
+
+    left_locators = {
+        _guided_normalize_source_locator(left.get("canonicalUrl")),
+        _guided_normalize_source_locator(left.get("retrievedUrl")),
+    } - {""}
+    right_locators = {
+        _guided_normalize_source_locator(right.get("canonicalUrl")),
+        _guided_normalize_source_locator(right.get("retrievedUrl")),
+    } - {""}
+    return bool(left_locators and right_locators and left_locators & right_locators)
+
+
 def _guided_source_identity(source: dict[str, Any]) -> tuple[str, str, str]:
     return (
         str(source.get("sourceId") or "").strip(),
@@ -2901,11 +2948,24 @@ def _guided_merge_coverage_summaries(*coverages: dict[str, Any] | None) -> dict[
             likely_completeness = normalized_value
             break
 
+    providers_attempted = _merge_list("providersAttempted")
+    providers_succeeded = _merge_list("providersSucceeded")
+    succeeded_markers = {repr(item) for item in providers_succeeded}
+    providers_failed = [
+        item for item in _merge_list("providersFailed") if repr(item) not in succeeded_markers
+    ]
+    failed_markers = {repr(item) for item in providers_failed}
+    providers_zero_results = [
+        item
+        for item in _merge_list("providersZeroResults")
+        if repr(item) not in succeeded_markers and repr(item) not in failed_markers
+    ]
+
     merged: dict[str, Any] = {
-        "providersAttempted": _merge_list("providersAttempted"),
-        "providersSucceeded": _merge_list("providersSucceeded"),
-        "providersFailed": _merge_list("providersFailed"),
-        "providersZeroResults": _merge_list("providersZeroResults"),
+        "providersAttempted": providers_attempted,
+        "providersSucceeded": providers_succeeded,
+        "providersFailed": providers_failed,
+        "providersZeroResults": providers_zero_results,
         "likelyCompleteness": likely_completeness,
         "searchMode": "guided_hybrid_research",
         "retrievalNotes": _merge_list("retrievalNotes"),
@@ -4201,24 +4261,40 @@ def _guided_record_source_candidates(record: Any) -> list[dict[str, Any]]:
         if isinstance(source, dict)
     ]
     query = str(record.query or payload.get("query") or "")
-    paper_sources = (
-        [
-            _guided_source_record_from_paper(query, paper, index=index)
-            for index, paper in enumerate(getattr(record, "papers", []) or [], start=1)
-            if isinstance(paper, dict)
-        ]
-        if not has_explicit_source_payload
-        else []
-    )
-    return _guided_dedupe_source_records(
+    explicit_candidates = _guided_dedupe_source_records(
         _guided_merge_source_record_sets(
             payload_sources,
             structured_sources,
             evidence_sources,
-            paper_sources,
             lead_sources,
         )
     )
+    paper_sources = [
+        _guided_source_record_from_paper(query, paper, index=index)
+        for index, paper in enumerate(getattr(record, "papers", []) or [], start=1)
+        if isinstance(paper, dict)
+    ]
+    if not paper_sources:
+        return explicit_candidates
+    if not has_explicit_source_payload:
+        return _guided_dedupe_source_records(
+            _guided_merge_source_record_sets(explicit_candidates, paper_sources)
+        )
+
+    augmented_candidates = list(explicit_candidates)
+    for paper_source in paper_sources:
+        paper_source_id = str(paper_source.get("sourceId") or "").strip()
+        if not paper_source_id:
+            continue
+        if any(_guided_source_matches_reference(candidate, paper_source_id) for candidate in augmented_candidates):
+            continue
+        merged_candidate = paper_source
+        for candidate in explicit_candidates:
+            if _guided_source_records_share_surface(candidate, paper_source):
+                merged_candidate = _guided_merge_source_records(paper_source, candidate)
+                break
+        augmented_candidates.append(merged_candidate)
+    return _guided_dedupe_source_records(augmented_candidates)
 
 
 def _find_record_source_with_resolution(
@@ -5380,6 +5456,172 @@ def _guided_relevance_triage_answers(
     return answers
 
 
+def _guided_enrich_records_from_saved_session(
+    current_records: list[dict[str, Any]],
+    saved_records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    enriched: list[dict[str, Any]] = []
+    for record in current_records:
+        best_match: dict[str, Any] | None = None
+        for saved in saved_records:
+            if any(
+                _guided_source_matches_reference(saved, reference)
+                for reference in (
+                    record.get("sourceId"),
+                    record.get("sourceAlias"),
+                    record.get("citationText"),
+                    record.get("canonicalUrl"),
+                    record.get("retrievedUrl"),
+                )
+                if _guided_normalize_whitespace(reference)
+            ):
+                best_match = saved
+                break
+            if _guided_source_records_share_surface(saved, record):
+                best_match = saved
+                break
+        enriched.append(_guided_merge_source_records(best_match, record) if best_match is not None else record)
+    return _guided_dedupe_source_records(enriched)
+
+
+def _guided_append_selected_saved_records(
+    current_records: list[dict[str, Any]],
+    saved_records: list[dict[str, Any]],
+    selected_ids: list[Any],
+) -> list[dict[str, Any]]:
+    augmented = list(current_records)
+    for selected_id in selected_ids:
+        normalized_selected_id = _guided_normalize_whitespace(selected_id)
+        if not normalized_selected_id:
+            continue
+        if any(_guided_source_matches_reference(record, normalized_selected_id) for record in augmented):
+            continue
+        matched_saved = next(
+            (
+                saved
+                for saved in saved_records
+                if _guided_source_matches_reference(saved, normalized_selected_id)
+            ),
+            None,
+        )
+        if matched_saved is not None:
+            augmented.append(matched_saved)
+    return _guided_dedupe_source_records(augmented)
+
+
+def _guided_requested_metadata_facets(question: str) -> set[str]:
+    lowered = _guided_normalize_whitespace(question).lower()
+    facets: set[str] = set()
+    if any(marker in lowered for marker in ("author", "authors", "who wrote", "written by")):
+        facets.add("authors")
+    if any(marker in lowered for marker in ("venue", "journal", "publisher", "published in")):
+        facets.add("venue")
+    if any(marker in lowered for marker in ("doi", "identifier")):
+        facets.add("identifier")
+    if any(marker in lowered for marker in ("publication year", "what year", "year published", "published in")):
+        facets.add("year")
+    if any(
+        marker in lowered
+        for marker in (
+            "what records",
+            "what sources",
+            "which documents",
+            "what documents",
+            "which paper",
+            "which source",
+        )
+    ):
+        facets.add("inventory")
+    return facets
+
+
+def _guided_metadata_answer_is_responsive(
+    *,
+    question: str,
+    answer_text: Any,
+    sources: list[dict[str, Any]],
+    leads: list[dict[str, Any]],
+    selected_evidence_ids: list[Any],
+    selected_lead_ids: list[Any],
+) -> bool:
+    requested_facets = _guided_requested_metadata_facets(question)
+    if not requested_facets:
+        return True
+
+    answer_lower = _guided_normalize_whitespace(answer_text).lower()
+    if not answer_lower:
+        return False
+
+    selected_source_ids = {
+        _guided_normalize_whitespace(identifier)
+        for identifier in selected_evidence_ids
+        if _guided_normalize_whitespace(identifier)
+    }
+    selected_lead_ids_set = {
+        _guided_normalize_whitespace(identifier)
+        for identifier in selected_lead_ids
+        if _guided_normalize_whitespace(identifier)
+    }
+    candidate_records = [
+        record
+        for record in sources
+        if _guided_normalize_whitespace(record.get("sourceId") or record.get("sourceAlias")) in selected_source_ids
+    ] + [
+        record
+        for record in leads
+        if _guided_normalize_whitespace(record.get("sourceId") or record.get("sourceAlias")) in selected_lead_ids_set
+    ]
+    if not candidate_records and len(sources) == 1 and requested_facets - {"inventory"}:
+        candidate_records = sources[:1]
+    if not candidate_records:
+        return False
+
+    citation_payloads = [
+        citation
+        for citation in (record.get("citation") for record in candidate_records)
+        if isinstance(citation, dict)
+    ]
+
+    def _contains_any(values: list[str]) -> bool:
+        return any(value.lower() in answer_lower for value in values if value)
+
+    if "authors" in requested_facets:
+        author_values = [
+            _guided_normalize_whitespace(author.get("name") if isinstance(author, dict) else author)
+            for citation in citation_payloads
+            for author in (citation.get("authors") or [])
+        ]
+        if not author_values or not _contains_any(author_values):
+            return False
+    if "venue" in requested_facets:
+        venue_values = [
+            _guided_normalize_whitespace(citation.get("journalOrPublisher"))
+            for citation in citation_payloads
+        ]
+        if not venue_values or not _contains_any(venue_values):
+            return False
+    if "identifier" in requested_facets:
+        doi_values = [_guided_normalize_whitespace(citation.get("doi")) for citation in citation_payloads]
+        if not doi_values or not _contains_any(doi_values):
+            return False
+    if "year" in requested_facets:
+        year_values = []
+        for record in candidate_records:
+            citation = record.get("citation")
+            citation_dict = citation if isinstance(citation, dict) else {}
+            year_values.append(_guided_normalize_whitespace(citation_dict.get("year") or record.get("date")))
+        if not year_values or not _contains_any(year_values):
+            return False
+    if "inventory" in requested_facets:
+        inventory_values = [
+            _guided_normalize_whitespace(record.get("title") or record.get("sourceId") or record.get("sourceAlias"))
+            for record in candidate_records
+        ]
+        if not inventory_values or not _contains_any(inventory_values):
+            return False
+    return True
+
+
 def _guided_follow_up_response_mode(question: str, session_strategy_metadata: dict[str, Any]) -> str:
     lowered = question.lower()
     facets = _guided_follow_up_introspection_facets(question)
@@ -5945,12 +6187,12 @@ async def dispatch_tool(
         elif resolution_state == "needs_disambiguation":
             status = "needs_disambiguation"
         elif best_match is not None:
-            if resolution_state == "needs_disambiguation":
-                status = "needs_disambiguation"
-            elif resolution_confidence in {"high", "medium"}:
+            if resolution_type == "paper_identifier" or resolution_state == "resolved_exact":
                 status = "resolved"
-            else:
+            elif alternatives:
                 status = "multiple_candidates"
+            else:
+                status = "needs_disambiguation"
         elif alternatives:
             status = "multiple_candidates"
         next_actions: list[str] = []
@@ -5961,11 +6203,22 @@ async def dispatch_tool(
                 "Inspect returned sources before treating the regulatory text as current and settled.",
             ]
         elif status == "needs_disambiguation":
-            next_actions = [
-                "The title matched but author, year, or venue conflicts make this result unsafe to cite directly.",
-                "Use research with the title plus author or year to find the correct paper.",
-                "Review the conflicting fields in bestMatch before treating this as a confirmed citation.",
-            ]
+            next_actions = (
+                [
+                    "The title matched but author, year, or venue conflicts make this result unsafe to cite directly.",
+                    "Use research with the title plus author or year to find the correct paper.",
+                    "Review the conflicting fields in bestMatch before treating this as a confirmed citation.",
+                ]
+                if best_match is not None
+                else [
+                    "The current clues are too sparse or conflicting to cite a single paper safely.",
+                    "Add an author, year, venue, DOI, or a more exact title fragment, then rerun resolve_reference.",
+                    (
+                        "Use research if you want the server to explore nearby candidates "
+                        "with a broader trust-graded pass."
+                    ),
+                ]
+            )
         elif status == "resolved":
             next_actions = [
                 "Citation resolved against one leading candidate; inspect the metadata before citing it directly.",
@@ -5973,11 +6226,19 @@ async def dispatch_tool(
                 "Inspect the resolved source metadata before citing or expanding it.",
             ]
         elif status == "multiple_candidates":
-            next_actions = [
-                "Multiple plausible matches were returned — compare bestMatch against alternatives before citing.",
-                "Use research with an added author, year, venue, or more specific title fragment to disambiguate.",
-                "If the best match is good enough, inspect its source record before relying on it.",
-            ]
+            next_actions = (
+                [
+                    "Multiple plausible matches were returned — compare bestMatch against alternatives before citing.",
+                    "Use research with an added author, year, venue, or more specific title fragment to disambiguate.",
+                    "If the best match is good enough, inspect its source record before relying on it.",
+                ]
+                if best_match is not None
+                else [
+                    "Multiple plausible matches were returned — review the alternatives before citing any one of them.",
+                    "Use research with an added author, year, venue, or more specific title fragment to disambiguate.",
+                    "Inspect the strongest alternative before relying on it.",
+                ]
+            )
         else:
             next_actions = [
                 "Try adding an author, year, venue, DOI, or a more exact title fragment.",
@@ -7012,6 +7273,12 @@ async def dispatch_tool(
                 response_mode=follow_up_args.response_mode,
                 include_legacy_fields=follow_up_args.include_legacy_fields,
             )
+        raw_selected_evidence_ids = [
+            str(identifier).strip() for identifier in (ask.get("selectedEvidenceIds") or []) if str(identifier).strip()
+        ]
+        raw_selected_lead_ids = [
+            str(identifier).strip() for identifier in (ask.get("selectedLeadIds") or []) if str(identifier).strip()
+        ]
         sources = [
             _guided_source_record_from_structured_source(source, index=index)
             for index, source in enumerate(ask.get("structuredSources") or [], start=1)
@@ -7023,6 +7290,26 @@ async def dispatch_tool(
             for index, source in enumerate(ask.get("candidateLeads") or [], start=1)
             if isinstance(source, dict)
         ] or _guided_unverified_leads_from_sources(sources)
+        session_sources = [
+            source for source in (session_state or {}).get("sources") or [] if isinstance(source, dict)
+        ]
+        session_leads = [
+            lead for lead in (session_state or {}).get("unverifiedLeads") or [] if isinstance(lead, dict)
+        ]
+        if session_sources:
+            sources = _guided_enrich_records_from_saved_session(sources, session_sources)
+            sources = _guided_append_selected_saved_records(
+                sources,
+                session_sources,
+                raw_selected_evidence_ids,
+            )
+        if session_leads:
+            unverified_leads = _guided_enrich_records_from_saved_session(unverified_leads, session_leads)
+            unverified_leads = _guided_append_selected_saved_records(
+                unverified_leads,
+                session_leads,
+                raw_selected_lead_ids,
+            )
         visible_source_ids = {
             str(source.get("sourceId") or source.get("sourceAlias") or "").strip()
             for source in sources
@@ -7034,21 +7321,41 @@ async def dispatch_tool(
             if str(lead.get("sourceId") or lead.get("sourceAlias") or "").strip()
         }
         selected_evidence_ids = [
-            str(identifier).strip()
-            for identifier in (ask.get("selectedEvidenceIds") or [])
-            if str(identifier).strip() in visible_source_ids
+            identifier for identifier in raw_selected_evidence_ids if identifier in visible_source_ids
         ]
-        selected_lead_ids = [
-            str(identifier).strip()
-            for identifier in (ask.get("selectedLeadIds") or [])
-            if str(identifier).strip() in visible_lead_ids
-        ]
+        selected_lead_ids = [identifier for identifier in raw_selected_lead_ids if identifier in visible_lead_ids]
         follow_up_coverage_summary = _guided_source_coverage_summary(
             sources=sources,
             leads=unverified_leads,
             base_coverage=cast(dict[str, Any] | None, ask.get("coverageSummary")),
         )
         answer_status = str(ask.get("answerStatus") or "answered")
+        answer_text = ask.get("answer")
+        answer_is_responsive = (
+            answer_status != "answered"
+            or _guided_metadata_answer_is_responsive(
+                question=follow_up_args.question,
+                answer_text=answer_text,
+                sources=sources,
+                leads=unverified_leads,
+                selected_evidence_ids=selected_evidence_ids,
+                selected_lead_ids=selected_lead_ids,
+            )
+        )
+        if answer_status == "answered" and (
+            not _guided_is_usable_answer_text(answer_text) or not answer_is_responsive
+        ):
+            if session_answer is not None:
+                session_answer["inputNormalization"] = _guided_normalization_payload(follow_up_normalization)
+                session_answer["sessionResolution"] = session_resolution
+                return _guided_finalize_response(
+                    tool_name="follow_up_research",
+                    response=session_answer,
+                    response_mode=follow_up_args.response_mode,
+                    include_legacy_fields=follow_up_args.include_legacy_fields,
+                )
+            answer_status = "insufficient_evidence"
+            answer_text = None
         guided_status = "partial" if answer_status == "insufficient_evidence" else answer_status
         verified_findings = _guided_findings_from_sources(sources)
         trust_summary = _guided_trust_summary(
@@ -7109,7 +7416,7 @@ async def dispatch_tool(
             {
             "searchSessionId": follow_up_args.search_session_id,
             "answerStatus": answer_status,
-            "answer": ask.get("answer"),
+            "answer": answer_text,
             "providerUsed": ask.get("providerUsed"),
             "degradationReason": ask.get("degradationReason"),
             "evidenceUsePlan": ask.get("evidenceUsePlan"),
@@ -7220,28 +7527,12 @@ async def dispatch_tool(
                 response["topRecommendation"] = top_recommendation
         if ask.get("structuredSources") is not None:
             response["structuredSources"] = ask.get("structuredSources")
-        session_answer = await _answer_follow_up_from_session_state(
-            question=follow_up_args.question,
-            session_state=session_state,
-            response_mode=follow_up_response_mode,
-        )
-        if answer_status == "answered" and not _guided_is_usable_answer_text(ask.get("answer")):
-            if session_answer is not None:
-                session_answer["inputNormalization"] = _guided_normalization_payload(follow_up_normalization)
-                session_answer["sessionResolution"] = session_resolution
-                return _guided_finalize_response(
-                    tool_name="follow_up_research",
-                    response=session_answer,
-                    response_mode=follow_up_args.response_mode,
-                    include_legacy_fields=follow_up_args.include_legacy_fields,
-                )
-            response["answerStatus"] = "insufficient_evidence"
-            response["answer"] = None
+        if answer_status == "insufficient_evidence":
             response["resultMeaning"] = _guided_result_meaning(
                 status="partial",
                 verified_findings=verified_findings,
                 evidence_gaps=evidence_gaps,
-                coverage=cast(dict[str, Any] | None, ask.get("coverageSummary")),
+                coverage=follow_up_coverage_summary,
                 failure_summary=failure_summary,
                 source_count=len(sources),
                 all_sources_off_topic=follow_up_all_off_topic,
@@ -7253,6 +7544,17 @@ async def dispatch_tool(
                 search_session_id=follow_up_args.search_session_id,
                 saved_session_has_sources=follow_up_saved_has_sources,
                 saved_session_all_off_topic=follow_up_saved_all_off_topic,
+            )
+            response["resultStatus"] = "partial"
+            response["answerability"] = classify_answerability(
+                status="partial",
+                evidence=cast(list[dict[str, Any]], response.get("evidence") or []),
+                leads=unverified_leads,
+                evidence_gaps=evidence_gaps,
+                answer_text="",
+                evidence_quality_profile=str(
+                    cast(dict[str, Any], response.get("confidenceSignals") or {}).get("evidenceQualityProfile") or "low"
+                ),
             )
             abstention_details = _guided_abstention_details_payload(
                 status="insufficient_evidence",

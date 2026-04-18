@@ -617,6 +617,66 @@ def test_classify_resolution_confidence_identifier_match_remains_high() -> None:
     )
 
 
+@pytest.mark.asyncio
+async def test_resolve_citation_identifier_with_noisy_surrounding_text_stays_high_confidence() -> None:
+    semantic = RecordingSemanticClient()
+
+    payload = await resolve_citation(
+        citation="10.1038/nrn3241 some mismatched title fragment from another paper",
+        max_candidates=3,
+        client=semantic,
+        enable_core=False,
+        enable_semantic_scholar=True,
+        enable_openalex=False,
+        enable_arxiv=False,
+        enable_serpapi=False,
+        core_client=None,
+        openalex_client=None,
+        arxiv_client=None,
+        serpapi_client=None,
+    )
+
+    assert payload["bestMatch"]["paper"]["paperId"] == "DOI:10.1038/nrn3241"
+    assert payload["resolutionConfidence"] == "high"
+    assert payload["knownItemResolutionState"] == "resolved_exact"
+
+
+def test_serialize_citation_response_abstention_keeps_plausible_alternative_when_best_is_withheld() -> None:
+    parsed = ParsedCitation(
+        original_text="Sparse ambiguous climate citation",
+        normalized_text="Sparse ambiguous climate citation",
+        title_candidates=["Climate adaptation pathways"],
+        author_surnames=["smith"],
+    )
+    weak = RankedCitationCandidate(
+        paper={
+            "paperId": "candidate-1",
+            "title": "Climate adaptation pathways",
+            "year": 2021,
+            "authors": [{"name": "Alice Smith"}],
+        },
+        score=0.34,
+        resolution_strategy="sparse_metadata",
+        matched_fields=["title", "author"],
+        conflicting_fields=[],
+        title_similarity=0.68,
+        year_delta=None,
+        author_overlap=1,
+        candidate_count=1,
+        why_selected="Plausible but still weak.",
+    )
+
+    payload = _serialize_citation_response(
+        citation=parsed.original_text,
+        parsed=parsed,
+        candidates=[weak],
+    )
+
+    assert payload["bestMatch"] is None
+    assert payload["alternatives"]
+    assert payload["alternatives"][0]["paper"]["paperId"] == "candidate-1"
+
+
 def test_classify_resolution_confidence_exact_title_with_two_key_conflicts_is_medium() -> None:
     # exact_title with 2+ conflicting key fields (author + year) must not return "high"
     assert (

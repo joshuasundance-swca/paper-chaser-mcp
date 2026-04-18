@@ -339,6 +339,67 @@ def looks_like_exact_title(query: str) -> bool:
     return bool(re.search(r"\([A-Z][A-Za-z]+(?:\s+[a-z][A-Za-z-]+)+\)", stripped)) and len(significant_words) >= 6
 
 
+def looks_like_near_known_item_query(query: str) -> bool:
+    """Heuristically identify short near-known-item prompts.
+
+    This catches prompts like model/paper/system names (for example CLIP,
+    Toolformer, DSPy, or Med-PaLM M) that are not exact-title lookups but still
+    behave like anchored known-item requests for topical-relevance purposes.
+    """
+
+    normalized = normalize_query(query)
+    if not normalized or normalized.endswith("?"):
+        return False
+    if detect_regulatory_intent(normalized):
+        return False
+    lowered = normalized.lower()
+    if any(marker in lowered for marker in STRONG_REGULATORY_TITLE_BLOCKERS):
+        return False
+    if any(
+        phrase in lowered
+        for phrase in (
+            "what is",
+            "what are",
+            "how does",
+            "how do",
+            "compare",
+            "survey",
+            "review",
+            "literature",
+            "state of the art",
+            "overview",
+            "introduction",
+            "tutorial",
+        )
+    ):
+        return False
+    raw_tokens = re.findall(r"[A-Za-z0-9][A-Za-z0-9+./:-]*", query.strip("\"' "))
+    terms = query_terms(normalized)
+    if not raw_tokens or not terms or len(terms) > 4 or len(raw_tokens) > 5:
+        return False
+    queryish_count = sum(term.lower() in QUERYISH_TITLE_BLOCKERS for term in terms)
+    if queryish_count >= 2:
+        return False
+
+    def _identifierish(token: str) -> bool:
+        stripped = token.strip()
+        if len(stripped) <= 1:
+            return stripped.isupper()
+        upper_count = sum(char.isupper() for char in stripped)
+        lower_count = sum(char.islower() for char in stripped)
+        return bool(
+            stripped.isupper()
+            or "-" in stripped
+            or any(char.isdigit() for char in stripped)
+            or re.search(r"[a-z][A-Z]|[A-Z][a-z]+[A-Z]", stripped)
+            or (upper_count >= 2 and lower_count >= 1)
+        )
+
+    if any(_identifierish(token) for token in raw_tokens):
+        return True
+    return len(raw_tokens) == 1 and raw_tokens[0][:1].isupper() and len(raw_tokens[0]) >= 5
+
+
 def detect_regulatory_intent(query: str, focus: str | None = None) -> bool:
     """Return True when the ask is more likely a regulatory primary-source workflow."""
 

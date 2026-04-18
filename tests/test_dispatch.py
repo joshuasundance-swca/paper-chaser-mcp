@@ -3704,6 +3704,162 @@ async def test_follow_up_research_session_introspection_does_not_emit_answered_o
 
 
 @pytest.mark.asyncio
+async def test_follow_up_research_downgrades_nonresponsive_metadata_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    isolated_registry = WorkspaceRegistry()
+    monkeypatch.setattr(server, "workspace_registry", isolated_registry)
+
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-follow-up-metadata-gate",
+        query="retrieval-augmented generation",
+        payload={
+            "searchSessionId": "ssn-follow-up-metadata-gate",
+            "sources": [
+                {
+                    "sourceId": "paper-a",
+                    "title": "Agentic retrieval systems",
+                    "topicalRelevance": "on_topic",
+                    "verificationStatus": "verified_metadata",
+                    "citation": {"authors": ["Alice Smith"], "year": "2024"},
+                },
+                {
+                    "sourceId": "paper-b",
+                    "title": "Grounded coding assistants",
+                    "topicalRelevance": "on_topic",
+                    "verificationStatus": "verified_metadata",
+                    "citation": {"authors": ["Bob Jones"], "year": "2023"},
+                },
+            ]
+        },
+    )
+
+    class _FakeRuntime:
+        async def ask_result_set(self, **kwargs: Any) -> dict[str, Any]:
+            del kwargs
+            return {
+                "answerStatus": "answered",
+                "answer": "Trust summary: 2 verified source(s), 2 on-topic, 0 weak match, and 0 off-topic.",
+                "providerUsed": "openai",
+                "structuredSources": [
+                    {
+                        "sourceId": "paper-a",
+                        "title": "Agentic retrieval systems",
+                        "topicalRelevance": "on_topic",
+                        "verificationStatus": "verified_metadata",
+                    },
+                    {
+                        "sourceId": "paper-b",
+                        "title": "Grounded coding assistants",
+                        "topicalRelevance": "on_topic",
+                        "verificationStatus": "verified_metadata",
+                    },
+                ],
+                "candidateLeads": [],
+                "selectedEvidenceIds": [],
+                "selectedLeadIds": [],
+                "evidenceGaps": ["The requested metadata was not grounded in a single selected source."],
+                "coverageSummary": {"providersAttempted": ["openalex"], "providersSucceeded": ["openalex"]},
+            }
+
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(
+        await server.call_tool(
+            "follow_up_research",
+            {
+                "searchSessionId": "ssn-follow-up-metadata-gate",
+                "question": "Who authored the most recent paper in this session?",
+            },
+        )
+    )
+
+    assert payload["answerStatus"] == "insufficient_evidence"
+    assert payload["answer"] is None
+    assert payload["resultStatus"] == "partial"
+    assert payload["answerability"] == "limited"
+
+
+@pytest.mark.asyncio
+async def test_follow_up_research_prefers_saved_source_access_truth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    isolated_registry = WorkspaceRegistry()
+    monkeypatch.setattr(server, "workspace_registry", isolated_registry)
+
+    isolated_registry.save_result_set(
+        source_tool="search_papers_smart",
+        search_session_id="ssn-follow-up-access-truth",
+        query="current CFR text",
+        payload={
+            "searchSessionId": "ssn-follow-up-access-truth",
+            "sources": [
+                {
+                    "sourceId": "50 CFR 17.11",
+                    "title": "50 CFR 17.11 Endangered and threatened wildlife",
+                    "provider": "govinfo",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_primary_source",
+                    "accessStatus": "qa_readable_text",
+                    "topicalRelevance": "on_topic",
+                    "isPrimarySource": True,
+                    "fullTextUrlFound": True,
+                    "bodyTextEmbedded": True,
+                    "qaReadableText": True,
+                }
+            ],
+        },
+    )
+
+    class _FakeRuntime:
+        async def ask_result_set(self, **kwargs: Any) -> dict[str, Any]:
+            del kwargs
+            return {
+                "answerStatus": "answered",
+                "answer": "Start with 50 CFR 17.11 for the current text.",
+                "providerUsed": "openai",
+                "structuredSources": [
+                    {
+                        "sourceId": "50 CFR 17.11",
+                        "title": "50 CFR 17.11 Endangered and threatened wildlife",
+                        "provider": "govinfo",
+                        "sourceType": "primary_regulatory",
+                        "verificationStatus": "verified_primary_source",
+                        "accessStatus": "access_unverified",
+                        "topicalRelevance": "on_topic",
+                        "isPrimarySource": True,
+                    }
+                ],
+                "selectedEvidenceIds": ["50 CFR 17.11"],
+                "selectedLeadIds": [],
+                "candidateLeads": [],
+                "evidenceGaps": [],
+                "coverageSummary": {"providersAttempted": ["govinfo"], "providersSucceeded": ["govinfo"]},
+            }
+
+    monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
+
+    payload = _payload(
+        await server.call_tool(
+            "follow_up_research",
+            {
+                "searchSessionId": "ssn-follow-up-access-truth",
+                "question": "Which source should I start with for the current text?",
+                "responseMode": "standard",
+            },
+        )
+    )
+
+    source = payload["sources"][0]
+    assert source["sourceId"] == "50 CFR 17.11"
+    assert source["accessStatus"] == "qa_readable_text"
+    assert source["fullTextUrlFound"] is True
+    assert source["bodyTextEmbedded"] is True
+    assert source["qaReadableText"] is True
+
+
+@pytest.mark.asyncio
 async def test_follow_up_research_surfaces_evidence_use_plan_for_comparison_question(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4107,6 +4263,109 @@ async def test_resolve_reference_uses_known_item_resolution_state_to_cap_confide
     # next actions must guide toward research or manual disambiguation
     assert any("research" in action.lower() or "conflict" in action.lower() for action in payload["nextActions"])
 
+
+@pytest.mark.asyncio
+async def test_resolve_reference_identifier_with_noisy_text_still_reports_resolved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    semantic = RecordingSemanticClient()
+    monkeypatch.setattr(server, "client", semantic)
+    monkeypatch.setattr(server, "enable_semantic_scholar", True)
+    monkeypatch.setattr(server, "enable_openalex", False)
+
+    payload = _payload(
+        await server.call_tool(
+            "resolve_reference",
+            {"reference": "10.1038/nrn3241 some mismatched title fragment from another paper"},
+        )
+    )
+
+    assert payload["status"] == "resolved"
+    assert payload["resolutionConfidence"] == "high"
+    assert payload["bestMatch"]["paper"]["paperId"] == "DOI:10.1038/nrn3241"
+
+
+@pytest.mark.asyncio
+async def test_resolve_reference_sparse_single_lead_is_needs_disambiguation_and_message_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SparseLeadClient(RecordingSemanticClient):
+        async def search_papers_match(self, **kwargs: object) -> dict:
+            self.calls.append(("search_papers_match", dict(kwargs)))
+            return {
+                "paperId": "candidate-1",
+                "title": "Climate adaptation pathways",
+                "year": 2021,
+                "authors": [{"name": "Alice Smith"}],
+                "matchFound": True,
+                "matchStrategy": "fuzzy_search",
+                "matchConfidence": "medium",
+                "matchedFields": ["title"],
+                "candidateCount": 1,
+            }
+
+        async def search_snippets(self, **kwargs: object) -> dict:
+            self.calls.append(("search_snippets", dict(kwargs)))
+            return {"data": []}
+
+        async def search_papers(self, **kwargs: object) -> dict:
+            self.calls.append(("search_papers", dict(kwargs)))
+            return {"total": 0, "offset": 0, "data": []}
+
+    semantic = SparseLeadClient()
+    monkeypatch.setattr(server, "client", semantic)
+    monkeypatch.setattr(server, "enable_semantic_scholar", True)
+    monkeypatch.setattr(server, "enable_openalex", False)
+    monkeypatch.setattr(server, "enable_core", False)
+    monkeypatch.setattr(server, "enable_arxiv", False)
+    monkeypatch.setattr(server, "enable_serpapi", False)
+
+    payload = _payload(await server.call_tool("resolve_reference", {"reference": "climate adaptation pathways"}))
+
+    assert payload["status"] == "needs_disambiguation"
+    assert payload["bestMatch"]["paper"]["paperId"] == "candidate-1"
+    assert any("research" in action.lower() or "author" in action.lower() for action in payload["nextActions"])
+
+
+@pytest.mark.asyncio
+async def test_resolve_reference_multiple_candidates_without_best_match_uses_message_safe_guidance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_resolve_citation(**kwargs: object) -> dict[str, object]:
+        assert kwargs["citation"] == "ambiguous reference"
+        return {
+            "bestMatch": None,
+            "alternatives": [
+                {
+                    "paper": {"paperId": "candidate-a", "title": "Candidate A"},
+                    "score": 0.51,
+                    "resolutionStrategy": "sparse_metadata",
+                    "matchedFields": ["title"],
+                    "conflictingFields": [],
+                    "titleSimilarity": 0.6,
+                    "yearDelta": None,
+                    "authorOverlap": 0,
+                    "candidateCount": 2,
+                    "whySelected": "Lead A.",
+                }
+            ],
+            "resolutionConfidence": "low",
+            "knownItemResolutionState": "needs_disambiguation",
+        }
+
+    monkeypatch.setattr(dispatch_module, "resolve_citation", fake_resolve_citation)
+
+    payload = _payload(await server.call_tool("resolve_reference", {"reference": "ambiguous reference"}))
+
+    assert payload["status"] == "needs_disambiguation"
+    assert payload["bestMatch"] is None
+    assert payload["alternatives"]
+    assert all("bestmatch" not in action.lower() for action in payload["nextActions"])
+
+@pytest.mark.asyncio
+async def test_guided_contract_compat_views_include_unverified_leads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class _FakeRuntime:
         async def search_papers_smart(self, **kwargs: object) -> dict[str, object]:
             del kwargs
@@ -5952,6 +6211,77 @@ async def test_inspect_source_reads_candidate_and_unverified_leads_from_saved_se
     assert candidate_payload["sourceResolution"]["matchType"] == "exact_id"
     assert unverified_payload["source"]["sourceId"] == "lead-unverified-1"
     assert unverified_payload["source"]["topicalRelevance"] == "off_topic"
+
+
+@pytest.mark.asyncio
+async def test_inspect_source_resolves_paper_id_when_saved_session_also_has_explicit_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    isolated_registry = WorkspaceRegistry()
+    monkeypatch.setattr(server, "workspace_registry", isolated_registry)
+
+    isolated_registry.save_result_set(
+        source_tool="search_papers",
+        search_session_id="ssn-inspect-paper-id-fallback",
+        query="attention is all you need",
+        payload={
+            "data": [
+                {
+                    "paperId": "paper-123",
+                    "title": "Attention Is All You Need",
+                    "canonicalUrl": "https://example.test/paper-123",
+                    "source": "semantic_scholar",
+                }
+            ],
+            "sources": [
+                {
+                    "sourceId": "Attention Is All You Need",
+                    "title": "Attention Is All You Need",
+                    "canonicalUrl": "https://example.test/paper-123",
+                    "provider": "semantic_scholar",
+                    "sourceType": "scholarly_article",
+                    "verificationStatus": "verified_metadata",
+                    "accessStatus": "url_verified",
+                    "topicalRelevance": "on_topic",
+                    "fullTextUrlFound": True,
+                }
+            ],
+        },
+    )
+
+    payload = _payload(
+        await server.call_tool(
+            "inspect_source",
+            {
+                "searchSessionId": "ssn-inspect-paper-id-fallback",
+                "sourceId": "paper-123",
+            },
+        )
+    )
+
+    assert payload["source"]["sourceId"] == "paper-123"
+    assert payload["source"]["fullTextUrlFound"] is True
+    assert payload["sourceResolution"]["matchType"] == "exact_id"
+
+
+def test_guided_merge_coverage_summaries_keeps_provider_outcome_buckets_disjoint() -> None:
+    merged = dispatch_module._guided_merge_coverage_summaries(
+        {
+            "providersAttempted": ["openalex", "arxiv"],
+            "providersSucceeded": ["openalex"],
+            "providersZeroResults": ["arxiv"],
+        },
+        {
+            "providersAttempted": ["openalex", "arxiv"],
+            "providersFailed": ["openalex", "arxiv"],
+            "providersZeroResults": ["openalex", "arxiv"],
+        },
+    )
+
+    assert merged is not None
+    assert merged["providersSucceeded"] == ["openalex"]
+    assert merged["providersFailed"] == ["arxiv"]
+    assert merged["providersZeroResults"] == []
 
 
 @pytest.mark.asyncio

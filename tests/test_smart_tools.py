@@ -1598,6 +1598,87 @@ async def test_search_papers_smart_promotes_borderline_weak_match_with_relevance
 
 
 @pytest.mark.asyncio
+async def test_search_papers_smart_near_known_item_keeps_abstract_only_mentions_as_weak_match() -> None:
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+
+    async def semantic_search(**kwargs: object) -> dict[str, Any]:
+        semantic.calls.append(("search_papers", dict(kwargs)))
+        return {
+            "total": 2,
+            "offset": 0,
+            "data": [
+                {
+                    "paperId": "toolformer-paper",
+                    "title": "Toolformer: Language Models Can Teach Themselves to Use Tools",
+                    "abstract": (
+                        "Introduces Toolformer and shows how language models can learn API use self-supervised."
+                    ),
+                    "year": 2023,
+                    "source": "semantic_scholar",
+                },
+                {
+                    "paperId": "tool-use-survey",
+                    "title": "Language-model Tool Use Overview",
+                    "abstract": (
+                        "Surveys tool-use methods and mentions Toolformer as one representative baseline."
+                    ),
+                    "year": 2024,
+                    "source": "semantic_scholar",
+                },
+            ],
+        }
+
+    async def empty_openalex_search(**kwargs: object) -> dict[str, Any]:
+        openalex.calls.append(("search", dict(kwargs)))
+        return {"total": 0, "offset": 0, "data": []}
+
+    semantic.search_papers = semantic_search  # type: ignore[method-assign]
+    openalex.search = empty_openalex_search  # type: ignore[method-assign]
+
+    _, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
+
+    async def _forced_similarity(query: str, texts: list[str], **_: object) -> list[float]:
+        del query
+        scores: list[float] = []
+        for text in texts:
+            lowered = text.lower()
+            if "teach themselves to use tools" in lowered:
+                scores.append(0.92)
+            else:
+                scores.append(0.30)
+        return scores
+
+    runtime._provider_bundle.abatched_similarity = _forced_similarity  # type: ignore[method-assign]
+    runtime._deterministic_bundle.abatched_similarity = _forced_similarity  # type: ignore[method-assign]
+
+    async def _relevance_batch(**_: object) -> dict[str, dict[str, str]]:
+        return {
+            "tool-use-survey": {
+                "classification": "on_topic",
+                "rationale": "Mentions Toolformer in the abstract.",
+            }
+        }
+
+    runtime._provider_bundle.aclassify_relevance_batch = _relevance_batch  # type: ignore[method-assign]
+    runtime._deterministic_bundle.aclassify_relevance_batch = _relevance_batch  # type: ignore[method-assign]
+
+    payload = await runtime.search_papers_smart(query="Toolformer", limit=5)
+
+    results_by_id = {hit["paper"]["paperId"]: hit for hit in payload["results"]}
+    assert results_by_id["toolformer-paper"]["topicalRelevance"] == "on_topic"
+    assert results_by_id["tool-use-survey"]["llmClassification"] == "on_topic"
+    assert results_by_id["tool-use-survey"]["topicalRelevance"] == "weak_match"
+    assert results_by_id["tool-use-survey"]["classificationSource"] == "deterministic"
+
+    evidence_ids = {item["sourceId"] for item in payload["evidence"]}
+    lead_ids = {item["sourceId"] for item in payload["candidateLeads"]}
+    assert "toolformer-paper" in evidence_ids
+    assert "tool-use-survey" in lead_ids
+    assert "tool-use-survey" not in evidence_ids
+
+
+@pytest.mark.asyncio
 async def test_search_papers_smart_initial_retrieval_blends_focus_for_broad_environmental_query() -> None:
     semantic = RecordingSemanticClient()
     openalex = RecordingOpenAlexClient()

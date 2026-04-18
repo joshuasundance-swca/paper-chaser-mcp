@@ -779,6 +779,19 @@ def _abstention_candidates(
         ):
             continue
         abstained.append(candidate)
+    if abstained:
+        return abstained[:3]
+    for candidate in candidates:
+        if candidate.score < 0.25:
+            continue
+        if (
+            candidate.title_similarity < 0.35
+            and candidate.author_overlap == 0
+            and "identifier" not in candidate.matched_fields
+            and "year" not in candidate.matched_fields
+        ):
+            continue
+        abstained.append(candidate)
     return abstained[:3]
 
 
@@ -1331,7 +1344,7 @@ def _rank_candidate(
         matched_fields.append("identifier")
     if title_similarity >= 0.72:
         matched_fields.append("title")
-    elif parsed.title_candidates:
+    elif parsed.title_candidates and not identifier_hit:
         conflicting_fields.append("title")
     if author_overlap > 0:
         matched_fields.append("author")
