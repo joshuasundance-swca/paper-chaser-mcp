@@ -70,17 +70,30 @@ class TestPrimarySourceCountConsistency:
         assert trust["verifiedPrimarySourceCount"] == 1
 
     def test_assign_verification_status_for_primary_source_types(self) -> None:
-        """Regulatory source types should get verified_primary_source status."""
+        """Regulatory types with body-text embedded earn verified_primary_source."""
         for source_type in ("regulatory_document", "primary_source", "government_document", "federal_register_rule"):
             status = _assign_verification_status(
                 source_type=source_type,
                 has_doi=False,
                 has_doi_resolution=False,
                 full_text_url_found=False,
+                body_text_embedded=True,
             )
             assert status == "verified_primary_source", (
                 f"Expected verified_primary_source for {source_type}, got {status}"
             )
+
+    def test_regulatory_url_only_is_verified_metadata_not_primary(self) -> None:
+        """P0-2: URL-only regulatory hits are verified_metadata, not primary."""
+        for source_type in ("regulatory_document", "primary_source", "government_document", "federal_register_rule"):
+            status = _assign_verification_status(
+                source_type=source_type,
+                has_doi=False,
+                has_doi_resolution=False,
+                full_text_url_found=False,
+                body_text_embedded=False,
+            )
+            assert status == "verified_metadata", f"Expected verified_metadata for URL-only {source_type}, got {status}"
 
     def test_primary_source_flag_aligns_with_verification_status(self) -> None:
         """When isPrimarySource is true, the trust summary count must include it."""
@@ -143,6 +156,54 @@ class TestProviderSetDisjointness:
         )
         overlap = set(coverage.providers_succeeded) & set(coverage.providers_zero_results)
         assert overlap == set(), "A provider cannot both succeed and return zero results"
+
+
+def test_zero_results_excludes_succeeded_providers_post_fallback() -> None:
+    """P0-3 item 1 regression: when a provider initially returned empty but
+    was then recovered via a fallback path, it must not remain in
+    ``providersZeroResults``. The fix is a one-line reconciliation of
+    ``zero_results`` against ``succeeded``/``failed`` immediately before
+    ``CoverageSummary`` construction in ``_search_regulatory``.
+    """
+    import inspect
+
+    from paper_chaser_mcp.agentic import graphs
+    from paper_chaser_mcp.models.common import CoverageSummary
+
+    # --- Behavioral invariant -------------------------------------------------
+    # Simulate the buggy pre-reconciliation state produced by the two-pass
+    # govinfo path in ``_search_regulatory``: the first attempt returned empty
+    # (so ``zero_results`` contains ``govinfo``), and the fallback attempt
+    # recovered it (so ``succeeded`` also contains ``govinfo``).
+    attempted = ["govinfo", "federal_register"]
+    succeeded = ["govinfo"]
+    failed: list[str] = []
+
+    # Canonical reconciliation that must run before CoverageSummary is built.
+    zero_results = [p for p in attempted if p not in succeeded and p not in failed]
+
+    coverage = CoverageSummary(
+        providersAttempted=attempted,
+        providersSucceeded=succeeded,
+        providersFailed=failed,
+        providersZeroResults=zero_results,
+    )
+    assert "govinfo" not in coverage.providers_zero_results, (
+        "A provider recovered via fallback must not remain in providersZeroResults"
+    )
+    assert coverage.providers_zero_results == ["federal_register"]
+    assert set(coverage.providers_succeeded) & set(coverage.providers_zero_results) == set()
+
+    # --- Code-level regression guard -----------------------------------------
+    # The fix must be applied inside ``_search_regulatory`` immediately before
+    # the ``CoverageSummary`` is constructed so the invariant cannot be
+    # violated at runtime, regardless of the order of appends along the
+    # regulatory retrieval path.
+    source = inspect.getsource(graphs.AgenticRuntime._search_regulatory)
+    assert "zero_results = [p for p in attempted if p not in succeeded and p not in failed]" in source, (
+        "_search_regulatory must reconcile zero_results against succeeded/failed "
+        "before building CoverageSummary (see docs/ux-remediation-checklist.md P0-3 item 1)"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -540,6 +601,59 @@ class TestFullTextFieldRename:
 
 
 # ---------------------------------------------------------------------------
+# P0-2: body-text-embedded / qa-readable-text signal separation
+# ---------------------------------------------------------------------------
+
+
+class TestBodyTextAndQaReadableSignals:
+    """P0-2: URL-found, body-text-embedded, and QA-readable-text are three
+    distinct signals. The guided contract must not conflate them."""
+
+    def test_access_status_literal_accepts_new_values(self) -> None:
+        """AccessStatus must accept url_verified, body_text_embedded,
+        qa_readable_text, and pdf_available."""
+        from paper_chaser_mcp.models.common import Paper
+
+        for value in ("url_verified", "body_text_embedded", "qa_readable_text", "pdf_available"):
+            paper = Paper(title="x", accessStatus=value)  # type: ignore[arg-type]
+            assert paper.access_status == value
+
+    def test_full_text_url_found_does_not_imply_body_text_embedded(self) -> None:
+        """P0-2: a paper with only a URL (no inline body) must emit
+        bodyTextEmbedded=False and accessStatus=url_verified."""
+        from paper_chaser_mcp import dispatch as dispatch_module
+
+        paper = {"title": "URL only", "fullTextUrlFound": True}
+        record = dispatch_module._guided_source_record_from_paper("q", paper, index=1)
+        assert record["fullTextUrlFound"] is True
+        assert record["accessStatus"] == "url_verified"
+        assert record["bodyTextEmbedded"] is False
+        assert record["qaReadableText"] is False
+
+    def test_regulatory_url_only_is_verified_metadata_not_primary(self) -> None:
+        """P0-2: URL-only regulatory hits must not be promoted to primary."""
+        status = _assign_verification_status(
+            source_type="federal_register_rule",
+            has_doi=False,
+            has_doi_resolution=False,
+            full_text_url_found=False,
+            body_text_embedded=False,
+        )
+        assert status == "verified_metadata"
+
+    def test_regulatory_body_embedded_is_verified_primary(self) -> None:
+        """P0-2: body_text_embedded=True promotes regulatory to primary source."""
+        status = _assign_verification_status(
+            source_type="federal_register_rule",
+            has_doi=False,
+            has_doi_resolution=False,
+            full_text_url_found=False,
+            body_text_embedded=True,
+        )
+        assert status == "verified_primary_source"
+
+
+# ---------------------------------------------------------------------------
 # 1.8: regulatoryTimeline / timeline deduplication
 # ---------------------------------------------------------------------------
 
@@ -649,3 +763,256 @@ class TestPdfUrlNullNormalization:
         record = _guided_source_record_from_paper("test query", paper, index=1)
         # canonicalUrl falls through to pdfUrl as last resort — must not be ""
         assert record.get("canonicalUrl") != "", "canonicalUrl must not be an empty string"
+
+
+# ---------------------------------------------------------------------------
+# P0-3 Item 2: verifiedPrimarySourceCount semantics + fullTextVerifiedPrimarySourceCount
+# ---------------------------------------------------------------------------
+
+
+class TestVerifiedPrimarySourceCountSemantics:
+    """P0-3 item 2: rename/rescope verifiedPrimarySourceCount so it reflects
+    isPrimarySource=True AND verificationStatus ∈ {verified_primary_source,
+    verified_metadata}. Introduce a separate fullTextVerifiedPrimarySourceCount
+    for the narrower full-text-only signal."""
+
+    def test_primary_source_flag_reflected_in_verified_count(self) -> None:
+        """verifiedPrimarySourceCount counts sources where isPrimarySource=True
+        AND verificationStatus is verified_primary_source OR verified_metadata."""
+        sources = [
+            _make_source(
+                source_id="fr-1",
+                is_primary_source=True,
+                verification_status="verified_primary_source",
+                source_type="federal_register_rule",
+            ),
+            _make_source(
+                source_id="gov-1",
+                is_primary_source=True,
+                verification_status="verified_metadata",
+                source_type="regulatory_document",
+            ),
+            _make_source(
+                source_id="paper-1",
+                is_primary_source=False,
+                verification_status="verified_metadata",
+            ),
+            _make_source(
+                source_id="weak-1",
+                is_primary_source=True,
+                verification_status="unverified",
+            ),
+        ]
+        trust = _guided_trust_summary(sources, [])
+        assert trust["verifiedPrimarySourceCount"] == 2
+
+    def test_full_text_verified_primary_source_count_is_narrower(self) -> None:
+        """fullTextVerifiedPrimarySourceCount only counts sources where
+        isPrimarySource=True AND verificationStatus=verified_primary_source."""
+        sources = [
+            _make_source(
+                source_id="fr-1",
+                is_primary_source=True,
+                verification_status="verified_primary_source",
+                source_type="federal_register_rule",
+            ),
+            _make_source(
+                source_id="gov-1",
+                is_primary_source=True,
+                verification_status="verified_metadata",
+                source_type="regulatory_document",
+            ),
+        ]
+        trust = _guided_trust_summary(sources, [])
+        assert "fullTextVerifiedPrimarySourceCount" in trust
+        assert trust["fullTextVerifiedPrimarySourceCount"] == 1
+        assert trust["verifiedPrimarySourceCount"] == 2
+
+
+# ---------------------------------------------------------------------------
+# P0-3 Item 3: source alias collision detection / global uniqueness
+# ---------------------------------------------------------------------------
+
+
+class TestSourceAliasCollisionDetection:
+    """P0-3 item 3: per-bucket helpers used to pre-assign source-{index}
+    aliases producing duplicates when multiple buckets were merged.
+    _attach_source_aliases must detect collisions and reissue unique aliases."""
+
+    def test_source_alias_collision_detection(self) -> None:
+        """When two sources arrive with the same pre-assigned sourceAlias,
+        _attach_source_aliases must detect the collision and reissue a unique
+        alias to the colliding entries."""
+        from paper_chaser_mcp.agentic.workspace import WorkspaceRegistry
+
+        store = WorkspaceRegistry()
+        payload = {
+            "sources": [
+                {"sourceId": "paper-a", "sourceAlias": "source-1"},
+                {"sourceId": "paper-b", "sourceAlias": "source-1"},
+            ],
+        }
+        normalized = store.attach_source_aliases(payload)
+        aliases = [entry["sourceAlias"] for entry in normalized["sources"]]
+        assert len(aliases) == len(set(aliases)), f"Aliases must be unique, got {aliases}"
+
+    def test_source_alias_globally_unique_across_buckets(self) -> None:
+        """Aliases must be globally unique across evidence, leads, sources,
+        structuredSources, and other bucket keys processed by
+        _attach_source_aliases."""
+        from paper_chaser_mcp.agentic.workspace import WorkspaceRegistry
+
+        store = WorkspaceRegistry()
+        payload = {
+            "sources": [
+                {"sourceId": "p1", "sourceAlias": "source-1"},
+                {"sourceId": "p2", "sourceAlias": "source-2"},
+            ],
+            "structuredSources": [
+                {"sourceId": "s1", "sourceAlias": "source-1"},
+            ],
+            "leads": [
+                {"sourceId": "l1", "sourceAlias": "source-fr-1"},
+                {"sourceId": "l2", "sourceAlias": "source-fr-1"},
+            ],
+        }
+        normalized = store.attach_source_aliases(payload)
+        all_aliases: list[str] = []
+        for key in ("sources", "structuredSources", "leads"):
+            for entry in normalized.get(key, []):
+                all_aliases.append(entry["sourceAlias"])
+        assert len(all_aliases) == len(set(all_aliases)), (
+            f"Aliases must be globally unique across buckets, got {all_aliases}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# P0-3 Item 4: topical relevance computed consistently, not hardcoded
+# ---------------------------------------------------------------------------
+
+
+class TestTopicalRelevanceConsistency:
+    """P0-3 item 4: _guided_sources_from_fr_documents hardcodes
+    topicalRelevance='on_topic'; research and inspect_source disagree on the
+    same FR doc for the same query. Extract compute_topical_relevance and
+    use it for both FR docs and the smart/paper path."""
+
+    def test_fr_document_relevance_computed_not_assumed(self) -> None:
+        """An off-topic FR document should NOT be labeled on_topic just because
+        the FR API returned it — topicalRelevance must be computed from the
+        canonical relevance function against the query."""
+        import types
+
+        from paper_chaser_mcp import dispatch as dispatch_module
+
+        off_topic_doc = types.SimpleNamespace(
+            title="Safety Standards for Commercial Truck Drivers",
+            htmlUrl="https://example.com/fr/trucks",
+            pdfUrl="https://example.com/fr/trucks.pdf",
+            documentNumber="2020-11111",
+            documentType="Rule",
+            publicationDate="2020-06-15",
+            citation="85 FR 11111",
+            agencies=[types.SimpleNamespace(name="Federal Motor Carrier Safety Administration")],
+            cfrReferences=["49 CFR 391"],
+            abstract="Hours-of-service regulations for commercial motor vehicle operators.",
+        )
+        sources = dispatch_module._guided_sources_from_fr_documents(
+            "northern long-eared bat endangered species critical habitat",
+            [off_topic_doc],
+        )
+        assert len(sources) == 1
+        assert sources[0]["topicalRelevance"] != "on_topic", (
+            f"Off-topic FR doc should not be labeled on_topic, got {sources[0]['topicalRelevance']}"
+        )
+
+    def test_topical_relevance_consistent_across_research_and_inspect_source(self) -> None:
+        """The same canonical relevance function must be used for FR docs and
+        paper sources — so research and inspect_source agree on the same
+        query/source pair."""
+        from paper_chaser_mcp import dispatch as dispatch_module
+
+        # A canonical helper must exist (item 4 extraction).
+        assert hasattr(dispatch_module, "compute_topical_relevance"), (
+            "compute_topical_relevance must be exposed as the canonical topical-relevance function"
+        )
+        # Same query + same structured signals should produce the same label
+        # whether we call the public helper or the paper helper.
+        query = "quantum error correction surface code"
+        paper = {
+            "title": "Surface code quantum error correction threshold",
+            "abstract": "We prove a new threshold for the surface code.",
+            "venue": "Physical Review A",
+        }
+        via_paper_helper = dispatch_module._paper_topical_relevance(query, paper)
+        via_canonical = dispatch_module.compute_topical_relevance(query, paper)
+        assert via_paper_helper == via_canonical
+
+
+# ---------------------------------------------------------------------------
+# P0-3 Item 5: authoritativeButWeak semantics documentation + prose note
+# ---------------------------------------------------------------------------
+
+
+class TestAuthoritativeButWeakSemantics:
+    """P0-3 item 5: authoritativeButWeak is the 'missed-escalation' bucket —
+    authoritative/primary-source records that are topically weak or off-topic.
+    Docstrings and tool-spec descriptions should say so, and trustSummary
+    should emit a one-line prose note when the bucket is populated."""
+
+    def test_authoritative_but_weak_function_docstring_is_explicit(self) -> None:
+        """_authoritative_but_weak_source_ids must document the bucket as a
+        missed-escalation signal."""
+        from paper_chaser_mcp.dispatch import _authoritative_but_weak_source_ids
+
+        docstring = (_authoritative_but_weak_source_ids.__doc__ or "").lower()
+        assert "missed-escalation" in docstring or "missed escalation" in docstring, (
+            "Docstring should identify authoritativeButWeak as a missed-escalation bucket"
+        )
+
+    def test_authoritative_but_weak_tool_spec_descriptions_are_explicit(self) -> None:
+        """research and follow_up_research descriptions should clarify that
+        authoritativeButWeak is a missed-escalation bucket."""
+        from paper_chaser_mcp.tool_specs.descriptions import TOOL_DESCRIPTIONS
+
+        research = TOOL_DESCRIPTIONS["research"].lower()
+        follow_up = TOOL_DESCRIPTIONS["follow_up_research"].lower()
+        for description in (research, follow_up):
+            assert "missed-escalation" in description or "missed escalation" in description, (
+                "Tool description must call out missed-escalation semantics"
+            )
+
+    def test_authoritative_but_weak_emits_prose_note_when_populated(self) -> None:
+        """When the authoritativeButWeak bucket is non-empty, trustSummary
+        must include a one-line prose note calling attention to it."""
+        sources = [
+            _make_source(
+                source_id="fr-off",
+                is_primary_source=True,
+                verification_status="verified_primary_source",
+                topical_relevance="off_topic",
+                source_type="federal_register_rule",
+            ),
+        ]
+        trust = _guided_trust_summary(sources, [])
+        assert trust.get("authoritativeButWeak") == ["fr-off"]
+        note = trust.get("authoritativeButWeakNote")
+        assert isinstance(note, str) and note.strip(), (
+            f"Expected a non-empty authoritativeButWeakNote when bucket populated, got {note!r}"
+        )
+        assert "authoritative" in note.lower()
+
+    def test_authoritative_but_weak_note_absent_when_empty(self) -> None:
+        """When the bucket is empty, no note should be emitted."""
+        sources = [
+            _make_source(
+                source_id="fr-on",
+                is_primary_source=True,
+                verification_status="verified_primary_source",
+                topical_relevance="on_topic",
+                source_type="federal_register_rule",
+            ),
+        ]
+        trust = _guided_trust_summary(sources, [])
+        assert trust.get("authoritativeButWeak") == []
+        assert "authoritativeButWeakNote" not in trust or not trust.get("authoritativeButWeakNote")

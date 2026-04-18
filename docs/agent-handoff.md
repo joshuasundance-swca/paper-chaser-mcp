@@ -26,6 +26,29 @@ next steps without re-discovering project state.
   metadata is strong enough, it can classify sources and leads into on-topic,
   weaker, and off-target groups instead of immediately deferring to a fresh
   retrieval or a metadata-free abstention.
+- Guided follow-up is now **compact-by-default and selection-aware**.
+  `follow_up_research` omits full source records and legacy
+  `verifiedFindings`/`unverifiedLeads` unless the caller opts in via
+  `responseMode="standard"`/`"debug"` or `includeLegacyFields=true`. Grounded
+  `answered` now requires a non-deterministic provider plus at least one
+  on-topic, verified source with qa-readable text; weaker cases fall back to
+  `insufficient_evidence`. Comparative / selection asks emit a structured
+  `topRecommendation` with `sourceId`, `recommendationReason`, and inferred
+  `comparativeAxis` (e.g. `beginner_friendly`, `recency`, `authority`).
+- Source inspection now **splits access state** into `fullTextUrlFound` (URL
+  discovered), `bodyTextEmbedded` (body text indexed into the saved session),
+  and `qaReadableText` (body text actually available to the current synthesis
+  call). `AccessStatus` adds `url_verified`, `body_text_embedded`, and
+  `qa_readable_text` so agents can tell URL discovery apart from true
+  full-text reads.
+- The UX remediation checklist
+  (`docs/ux-remediation-checklist.md`) is **fully implemented**. All 8 items
+  (P0-1 answer-status gating, P0-2 full-text access split, two P0-3
+  zero-results/dispatch clusters, P1-1 compact default, P1-2 selection mode,
+  P2-1 conceptual routing, P2-2 citation repair bias) landed with TDD; final
+  validation pass is `python -m pytest --cov=paper_chaser_mcp
+  --cov-fail-under=85` => `1352 passed`, coverage `86.01%`, plus `pre-commit
+  run --all-files` clean.
 - Guided execution policy is now **server-owned and quality-first**. Guided
   `research` ignores client `latencyProfile`, uses the configured guided
   defaults from `settings.py`, and can run one bounded review escalation when
@@ -76,9 +99,9 @@ next steps without re-discovering project state.
   instead of static prompt assumptions.
 - The current checked-in package version is `0.2.1` in both `pyproject.toml`
   and `server.json`.
-- The current coverage-gated validation baseline after the latest stress-test remediation pass is:
+- The current coverage-gated validation baseline after the UX remediation pass is:
   `python -m pytest --cov=paper_chaser_mcp --cov-report=term-missing --cov-fail-under=85`
-  => `962 passed`, total coverage ≥ `85%`.
+  => `1352 passed`, total coverage ≥ `86%`.
 
 ### Fleet-mode `llm-guidance` branch (in progress, not merged)
 

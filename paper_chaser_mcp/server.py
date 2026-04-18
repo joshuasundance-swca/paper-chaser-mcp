@@ -209,6 +209,16 @@ Default guided workflow:
 2. FOLLOW UP -> follow_up_research
    Reuse searchSessionId from research to ask one grounded question. The tool abstains
    when the saved evidence is too weak or off-topic.
+   Responses are compact by default (sources collapsed to selectedEvidenceIds/
+   selectedLeadIds; diagnostics and legacy verifiedFindings/unverifiedLeads omitted).
+   Pass responseMode="standard" for full source records, responseMode="debug" for
+   full diagnostics, or includeLegacyFields=true to restore legacy compatibility views.
+   Grounded answers only land when synthesis is backed by at least one on-topic,
+   verified source with qa-readable text and a non-deterministic provider; otherwise
+   the tool returns answerStatus=insufficient_evidence or abstained.
+   Comparative / selection follow-ups (e.g. "which should I start with?", "most
+   recent?") include a topRecommendation payload with sourceId, recommendationReason,
+   and comparativeAxis when the saved evidence can be scored.
 3. RESOLVE ONE REFERENCE -> resolve_reference
    Use this for citations, DOI strings, arXiv IDs, URLs, title fragments, and regulatory references.
 4. INSPECT ONE SOURCE -> inspect_source
@@ -233,11 +243,23 @@ AGENT_WORKFLOW_GUIDE = """
   and `inspect_source`.
 - Use `follow_up_research` for one grounded question over the saved evidence.
   It is supposed to abstain when the evidence is weak, off-topic, or incomplete.
+  Responses are compact by default. Request `responseMode="standard"` when you
+  need full source records, `responseMode="debug"` for full diagnostics, or
+  `includeLegacyFields=true` to restore `verifiedFindings`/`unverifiedLeads`.
+  Grounded answers require an on-topic, verified source with qa-readable text
+  and a non-deterministic synthesis provider; otherwise expect abstention.
+  Comparative / selection asks ("which should I start with?", "most recent?",
+  "most authoritative?") surface a `topRecommendation` with the chosen source,
+  a one-line reason, and the inferred `comparativeAxis`.
 - Use `resolve_reference` when the user already has a citation, DOI, arXiv ID,
   URL, title fragment, or regulatory reference and wants the safest next anchor.
 - Use `inspect_source` with `searchSessionId` plus `evidenceId`, `sourceAlias`,
   or `sourceId` to inspect
   provenance, trust state, access status, and direct-read next steps.
+  Access now distinguishes `fullTextUrlFound` (URL discovered), `bodyTextEmbedded`
+  (body text indexed into the session), and `qaReadableText` (body text actually
+  used for the current synthesis call) so agents can tell URL discovery apart
+  from true full-text reads.
 - Use `get_runtime_status` when behavior differs across environments and you need
   the active runtime truth without digging through low-level diagnostics.
 

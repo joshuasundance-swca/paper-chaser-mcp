@@ -67,14 +67,19 @@ class TestCanAnswerFollowUpCapabilityBased:
 class TestFullTextAccessStatusConsistency:
     """When fullTextUrlFound is False, accessStatus must not be full_text_verified."""
 
-    def test_paper_with_full_text_gets_full_text_verified(self) -> None:
+    def test_paper_with_full_text_url_gets_url_verified(self) -> None:
+        """P0-2: fullTextUrlFound=True means we discovered a URL, not that the
+        body text is actually embedded. Access status is ``url_verified``, not
+        the deprecated ``full_text_verified``."""
         paper: dict[str, Any] = {
             "title": "Some Paper",
             "fullTextUrlFound": True,
         }
         record = dispatch_module._guided_source_record_from_paper("query", paper, index=1)
         assert record["fullTextUrlFound"] is True
-        assert record["accessStatus"] == "full_text_verified"
+        assert record["accessStatus"] == "url_verified"
+        assert record["bodyTextEmbedded"] is False
+        assert record["qaReadableText"] is False
 
     def test_paper_without_full_text_does_not_get_full_text_verified(self) -> None:
         paper: dict[str, Any] = {

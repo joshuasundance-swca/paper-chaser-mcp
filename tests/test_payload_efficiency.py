@@ -432,3 +432,266 @@ async def test_research_abstention_payload_is_compact(monkeypatch: pytest.Monkey
     assert "verifiedFindings" not in payload
     assert "unverifiedLeads" not in payload
     assert "trustSummary" not in payload
+
+
+# ---------------------------------------------------------------------------
+# P1-1: Payload slimdown & response_mode for follow_up_research
+# ---------------------------------------------------------------------------
+
+from paper_chaser_mcp.dispatch import (  # noqa: E402
+    _apply_follow_up_response_mode,
+    _guided_finalize_response,
+)
+from paper_chaser_mcp.models.tools import FollowUpResearchArgs  # noqa: E402
+
+
+def _grounded_follow_up_response() -> dict:
+    """Representative grounded follow-up response used by P1-1 tests."""
+    return {
+        "searchSessionId": "ssn-1",
+        "answerStatus": "answered",
+        "answer": "Ragas supports automated RAG evaluation.",
+        "evidence": [{"evidenceId": "ev-1", "claim": "x"}],
+        "sources": [{"sourceId": "src-1", "title": "Ragas"}],
+        "structuredSources": [
+            {"sourceId": "src-1", "title": "Ragas"},
+            {"sourceId": "src-2", "title": "Another"},
+        ],
+        "verifiedFindings": [{"claim": "Ragas supports RAG", "sourceId": "src-1"}],
+        "unverifiedLeads": [{"sourceId": "lead-1"}],
+        "coverage": {
+            "totalSources": 2,
+            "byAccessStatus": {"open_access": 1, "access_unverified": 1},
+            "byProvider": {"semantic_scholar": 2},
+            "byPrimarySource": {"false": 2},
+        },
+        "failureSummary": {"outcome": "answered"},
+        "confidenceSignals": {"trustRevisionReason": "deterministic_synthesis_fallback"},
+        "trustSummary": {"authoritative": 1},
+        "telemetry": {"latencyMs": 42},
+        "evidenceUsePlan": {"plan": "use ev-1"},
+        "providerUsed": "deterministic",
+        "degradationReason": "deterministic_synthesis_fallback",
+        "classificationProvenance": {"source": "llm"},
+        "degradedClassification": False,
+        "topRecommendation": {"sourceId": "src-1", "reason": "best match"},
+        "evidenceGaps": [],
+        "nextActions": [],
+        "resultMeaning": "answered_with_evidence",
+        "resultState": "ok",
+        "answerability": "full",
+        "selectedEvidenceIds": ["ev-1"],
+        "selectedLeadIds": [],
+        "agentHints": {"next": "inspect_source"},
+        "sessionResolution": {"status": "ok"},
+        "inputNormalization": {"changed": False},
+        "executionProvenance": {"path": "grounded"},
+        "unsupportedAsks": [],
+        "followUpQuestions": [],
+        "abstentionDetails": None,
+    }
+
+
+def test_follow_up_default_is_compact() -> None:
+    args = FollowUpResearchArgs.model_validate({"question": "q"})
+    assert args.response_mode == "compact"
+    assert args.include_legacy_fields is False
+
+
+def test_follow_up_default_compact_drops_legacy_and_trust_fields() -> None:
+    shaped = _apply_follow_up_response_mode(
+        _grounded_follow_up_response(),
+        response_mode="compact",
+        include_legacy_fields=False,
+    )
+    assert "verifiedFindings" not in shaped
+    assert "unverifiedLeads" not in shaped
+    for key in (
+        "failureSummary",
+        "confidenceSignals",
+        "trustSummary",
+        "telemetry",
+        "evidenceUsePlan",
+        "providerUsed",
+        "degradationReason",
+        "classificationProvenance",
+        "degradedClassification",
+    ):
+        assert key not in shaped, key
+    assert shaped["legacyFieldsIncluded"] is False
+    assert shaped["responseMode"] == "compact"
+
+
+def test_follow_up_default_compact_uses_source_ids() -> None:
+    shaped = _apply_follow_up_response_mode(
+        _grounded_follow_up_response(),
+        response_mode="compact",
+        include_legacy_fields=False,
+    )
+    assert "structuredSources" not in shaped
+    assert shaped["structuredSourceIds"] == ["src-1", "src-2"]
+
+
+def test_follow_up_default_compact_collapses_coverage() -> None:
+    shaped = _apply_follow_up_response_mode(
+        _grounded_follow_up_response(),
+        response_mode="compact",
+        include_legacy_fields=False,
+    )
+    assert shaped["coverage"] == {
+        "totalSources": 2,
+        "byAccessStatus": {"open_access": 1, "access_unverified": 1},
+    }
+
+
+def test_follow_up_default_compact_omits_none_and_empty_fields() -> None:
+    payload = _grounded_follow_up_response()
+    payload["abstentionDetails"] = None
+    payload["evidenceGaps"] = []
+    payload["unsupportedAsks"] = []
+    shaped = _apply_follow_up_response_mode(
+        payload,
+        response_mode="compact",
+        include_legacy_fields=False,
+    )
+    assert "abstentionDetails" not in shaped
+    assert "evidenceGaps" not in shaped
+    assert "unsupportedAsks" not in shaped
+
+
+def test_follow_up_default_compact_omits_zero_sources_suppressed() -> None:
+    payload = _grounded_follow_up_response()
+    payload["verifiedFindings"] = []
+    payload["unverifiedLeads"] = []
+    shaped = _apply_follow_up_response_mode(
+        payload,
+        response_mode="compact",
+        include_legacy_fields=False,
+    )
+    assert "sourcesSuppressed" not in shaped
+
+
+def test_follow_up_compact_reports_sources_suppressed_int_count() -> None:
+    shaped = _apply_follow_up_response_mode(
+        _grounded_follow_up_response(),
+        response_mode="compact",
+        include_legacy_fields=False,
+    )
+    assert shaped["sourcesSuppressed"] == 2
+
+
+def test_follow_up_compact_preserves_top_recommendation() -> None:
+    shaped = _apply_follow_up_response_mode(
+        _grounded_follow_up_response(),
+        response_mode="compact",
+        include_legacy_fields=False,
+    )
+    assert shaped["topRecommendation"] == {"sourceId": "src-1", "reason": "best match"}
+
+
+def test_follow_up_include_legacy_fields_restores_legacy() -> None:
+    shaped = _apply_follow_up_response_mode(
+        _grounded_follow_up_response(),
+        response_mode="compact",
+        include_legacy_fields=True,
+    )
+    assert shaped["verifiedFindings"][0]["claim"] == "Ragas supports RAG"
+    assert shaped["unverifiedLeads"][0]["sourceId"] == "lead-1"
+    assert shaped["legacyFieldsIncluded"] is True
+
+
+def test_follow_up_standard_restores_full_shape_except_empties() -> None:
+    payload = _grounded_follow_up_response()
+    payload["abstentionDetails"] = None
+    shaped = _apply_follow_up_response_mode(
+        payload,
+        response_mode="standard",
+        include_legacy_fields=False,
+    )
+    assert "verifiedFindings" in shaped
+    assert "unverifiedLeads" in shaped
+    assert "failureSummary" in shaped
+    assert "confidenceSignals" in shaped
+    assert "structuredSources" in shaped
+    assert "structuredSourceIds" not in shaped
+    assert "abstentionDetails" not in shaped
+    assert shaped["responseMode"] == "standard"
+    assert shaped["topRecommendation"]["sourceId"] == "src-1"
+
+
+def test_follow_up_debug_includes_everything_unfiltered() -> None:
+    payload = _grounded_follow_up_response()
+    payload["abstentionDetails"] = None
+    shaped = _apply_follow_up_response_mode(
+        payload,
+        response_mode="debug",
+        include_legacy_fields=False,
+    )
+    assert shaped["abstentionDetails"] is None
+    assert "verifiedFindings" in shaped
+    assert "confidenceSignals" in shaped
+    assert "failureSummary" in shaped
+    assert shaped["responseMode"] == "debug"
+    assert shaped["topRecommendation"]["sourceId"] == "src-1"
+
+
+def test_finalize_routes_follow_up_to_compact_by_default() -> None:
+    shaped = _guided_finalize_response(
+        tool_name="follow_up_research",
+        response=_grounded_follow_up_response(),
+        response_mode="compact",
+        include_legacy_fields=False,
+    )
+    assert shaped["responseMode"] == "compact"
+    assert "verifiedFindings" not in shaped
+    assert shaped["structuredSourceIds"] == ["src-1", "src-2"]
+
+
+def test_finalize_standard_preserves_legacy_and_trust() -> None:
+    shaped = _guided_finalize_response(
+        tool_name="follow_up_research",
+        response=_grounded_follow_up_response(),
+        response_mode="standard",
+        include_legacy_fields=False,
+    )
+    assert shaped["responseMode"] == "standard"
+    assert "verifiedFindings" in shaped
+    assert "confidenceSignals" in shaped
+
+
+def test_follow_up_insufficient_evidence_still_abstains_compactly() -> None:
+    abstention = {
+        "searchSessionId": "ssn-1",
+        "answerStatus": "insufficient_evidence",
+        "answer": None,
+        "nextActions": ["broaden_search"],
+        "evidenceGaps": ["No primary source covers this question."],
+        "abstentionDetails": {"reason": "weak_pool"},
+        "verifiedFindings": [{"claim": "should be dropped"}],
+        "unverifiedLeads": [{"sourceId": "lead-x"}],
+        "evidence": [{"evidenceId": "ev-1"}],
+    }
+    shaped = _guided_finalize_response(
+        tool_name="follow_up_research",
+        response=abstention,
+        response_mode="compact",
+        include_legacy_fields=False,
+    )
+    assert shaped["answerStatus"] == "insufficient_evidence"
+    assert shaped.get("sourcesSuppressed") is True
+    assert shaped.get("legacyFieldsIncluded") is False
+    assert shaped["abstentionDetails"]["reason"] == "weak_pool"
+    assert shaped["nextActions"] == ["broaden_search"]
+
+
+def test_follow_up_args_rejects_invalid_response_mode() -> None:
+    with pytest.raises(Exception):
+        FollowUpResearchArgs.model_validate({"question": "q", "responseMode": "tiny"})
+
+
+def test_follow_up_args_accepts_camelcase_aliases() -> None:
+    args = FollowUpResearchArgs.model_validate(
+        {"question": "q", "responseMode": "debug", "includeLegacyFields": True},
+    )
+    assert args.response_mode == "debug"
+    assert args.include_legacy_fields is True

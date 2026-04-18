@@ -503,6 +503,7 @@ async def test_follow_up_research_trust_revision_narrative_populates_when_pool_i
                 {
                     "searchSessionId": "ssn-follow-up-degraded",
                     "question": "What actions are required?",
+                    "responseMode": "standard",
                 },
             )
         )

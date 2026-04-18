@@ -204,6 +204,24 @@ class FollowUpResearchArgs(ToolArgsModel):
         ),
     )
     question: str = Field(description="Grounded follow-up question about the saved research result set.")
+    response_mode: Literal["compact", "standard", "debug"] = Field(
+        default="compact",
+        alias="responseMode",
+        description=(
+            "Payload shape for the follow-up response. 'compact' (default) is a slim, agent-friendly payload that "
+            "drops legacy verifiedFindings/likelyUnverified, collapses coverage to totalSources + byAccessStatus, "
+            "and omits None/empty fields. 'standard' preserves the full legacy shape. 'debug' is 'standard' plus "
+            "None/empty fields for deep inspection."
+        ),
+    )
+    include_legacy_fields: bool = Field(
+        default=False,
+        alias="includeLegacyFields",
+        description=(
+            "Opt-in restore of verifiedFindings and likelyUnverified on compact responses. Ignored for "
+            "standard/debug modes (which always include them when present)."
+        ),
+    )
 
 
 class ResolveReferenceArgs(ToolArgsModel):

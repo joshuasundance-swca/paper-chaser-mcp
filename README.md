@@ -144,10 +144,12 @@ research(query="retrieval-augmented generation for coding agents", limit=5)
 ```text
 follow_up_research(searchSessionId="...", question="What evaluation tradeoffs show up here?")
 → inspect answerStatus
-→ if answered: use answer + evidence
+→ if answered: use answer + evidence (compact default: sources are identified by selectedEvidenceIds)
 → if abstained/insufficient_evidence: use nextActions and inspect_source
 → mixed saved sessions can still answer relevance-triage questions such as which items are on-topic vs off-target
 → if you omit searchSessionId and multiple saved sessions exist: provide it explicitly
+→ for full source records pass responseMode="standard"; for diagnostics responseMode="debug"
+→ for selection asks ("where should I start?", "most recent?"), read topRecommendation
 ```
 
 ### 3. Resolve references before broad search when possible
@@ -215,7 +217,11 @@ Treat these as the main guided contracts:
 | `abstentionDetails` | guided tools on weak evidence | Treat as the actionable reason and recovery hint for abstention or insufficient evidence |
 | `nextActions` | guided tools | Treat as server-preferred recovery path on weak evidence |
 | `clarification` | `research` | Ask the user only when a bounded clarification request is provided |
-| `answerStatus` | `follow_up_research` | `answered`, `abstained`, `insufficient_evidence` |
+| `answerStatus` | `follow_up_research` | `answered`, `abstained`, `insufficient_evidence`. Grounded `answered` requires on-topic verified source + qa-readable text + non-deterministic provider + medium+ confidence; otherwise expect `insufficient_evidence`. |
+| `topRecommendation` | `follow_up_research` (comparative/selection asks) | Structured pick with `sourceId`, `recommendationReason`, `comparativeAxis` (e.g. `beginner_friendly`, `recency`, `authority`). |
+| `responseMode` | `follow_up_research` input | `compact` (default, hides full sources and legacy fields), `standard`, `debug`. |
+| `includeLegacyFields` | `follow_up_research` input | Set `true` to restore legacy `verifiedFindings`/`unverifiedLeads` in compact mode. |
+| `fullTextUrlFound` / `bodyTextEmbedded` / `qaReadableText` | `inspect_source` | Distinguish URL discovery, embedded body text, and text actually available to QA synthesis. |
 | `evidenceId` | `evidence[*]` | Pass to `inspect_source` for per-source provenance checks |
 | `runtimeSummary` | `get_runtime_status` and expert diagnostics | Confirm effective profile, smart provider state, and warnings |
 

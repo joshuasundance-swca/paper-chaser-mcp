@@ -5,7 +5,7 @@ import re
 import time
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
-from typing import Any, Callable, cast
+from typing import Any, Callable, Literal, cast
 
 from .agentic.planner import (
     detect_literature_intent,
@@ -952,21 +952,24 @@ def _topical_relevance_from_signals(
     return "weak_match"
 
 
-def _paper_topical_relevance(query: str, paper: dict[str, Any]) -> str:
+def compute_topical_relevance(query: str, source: dict[str, Any]) -> str:
+    """Canonical topical-relevance classifier shared by guided paths.
+
+    Used by both the paper/smart retrieval path and the Federal Register
+    document converter so that research and inspect_source produce the same
+    relevance label for the same ``(query, source)`` pair. Returns one of
+    ``on_topic``, ``weak_match``, or ``off_topic``.
+    """
     facets = query_facets(query)
     terms = query_terms(query)
-    title_tokens = _tokenize_relevance_text(str(paper.get("title") or ""))
-    paper_tokens = _tokenize_relevance_text(
-        " ".join(
-            part
-            for part in [
-                str(paper.get("title") or ""),
-                str(paper.get("abstract") or ""),
-                str(paper.get("venue") or ""),
-            ]
-            if part
-        )
-    )
+    title_tokens = _tokenize_relevance_text(str(source.get("title") or ""))
+    body_text_parts = [
+        str(source.get("title") or ""),
+        str(source.get("abstract") or ""),
+        str(source.get("venue") or ""),
+        str(source.get("note") or ""),
+    ]
+    paper_tokens = _tokenize_relevance_text(" ".join(part for part in body_text_parts if part))
     matched_terms = [term for term in terms if term in paper_tokens]
     matched_title_terms = [term for term in terms if term in title_tokens]
     matched_facets = [facet for facet in facets if _facet_match(paper_tokens, facet)]
@@ -981,6 +984,11 @@ def _paper_topical_relevance(query: str, paper: dict[str, Any]) -> str:
         query_facet_coverage=(len(matched_facets) / len(facets) if facets else 0.0),
         query_anchor_coverage=term_coverage,
     )
+
+
+def _paper_topical_relevance(query: str, paper: dict[str, Any]) -> str:
+    """Backward-compatible wrapper around :func:`compute_topical_relevance`."""
+    return compute_topical_relevance(query, paper)
 
 
 def _guided_source_id(candidate: dict[str, Any], *, fallback_prefix: str, index: int) -> str:
@@ -1028,13 +1036,30 @@ def _assign_verification_status(
     has_doi: bool = False,
     has_doi_resolution: bool = False,
     full_text_url_found: bool = False,
+    body_text_embedded: bool = False,
 ) -> str:
-    if full_text_url_found and source_type in _REGULATORY_SOURCE_TYPES:
-        return "verified_primary_source"
+    """Assign a verification-status label for a source.
+
+    Regulatory sources earn ``verified_primary_source`` ONLY when the caller
+    confirms body-text is embedded/available (``body_text_embedded=True``).
+    URL-only regulatory hits — i.e. the provider found a canonical URL but no
+    inline markdown/body — fall back to ``verified_metadata``; the access
+    axis expresses URL discovery via ``accessStatus="url_verified"``. This is
+    the P0-2 split: ``verified_primary_source`` attests a primary source that
+    was actually readable, not merely linked.
+    """
+    if source_type in _REGULATORY_SOURCE_TYPES:
+        if body_text_embedded:
+            return "verified_primary_source"
+        # Legacy callers that only tracked ``full_text_url_found`` and used it
+        # as a proxy for "body is available" are treated as body-embedded for
+        # backward compatibility. New callers should pass ``body_text_embedded``
+        # explicitly.
+        if full_text_url_found:
+            return "verified_primary_source"
+        return "verified_metadata"
     if has_doi and has_doi_resolution:
         return "verified_metadata"
-    if source_type in _REGULATORY_SOURCE_TYPES:
-        return "verified_primary_source"
     if source_type == "scholarly_article" and has_doi:
         return "verified_metadata"
     if has_doi:
@@ -1044,11 +1069,14 @@ def _assign_verification_status(
 
 def _guided_source_record_from_structured_source(source: dict[str, Any], *, index: int) -> dict[str, Any]:
     _source_type = source.get("sourceType") or "unknown"
+    _body_text_embedded = bool(source.get("bodyTextEmbedded"))
+    _qa_readable_text = bool(source.get("qaReadableText"))
     _default_verification = _assign_verification_status(
         source_type=_source_type,
         has_doi=bool(source.get("doi") or source.get("citation", {}).get("doi")),
         has_doi_resolution=bool(source.get("doi") or source.get("citation", {}).get("doi")),
         full_text_url_found=bool(source.get("fullTextUrlFound") or source.get("fullTextObserved")),
+        body_text_embedded=_body_text_embedded,
     )
     topical_relevance = source.get("topicalRelevance") or "weak_match"
     weak_match_reason = str(source.get("whyClassifiedAsWeakMatch") or "").strip() or None
@@ -1056,7 +1084,6 @@ def _guided_source_record_from_structured_source(source: dict[str, Any], *, inde
         weak_match_reason = str(source.get("note") or source.get("whyNotVerified") or "").strip() or None
     return {
         "sourceId": _guided_source_id(source, fallback_prefix="source", index=index),
-        "sourceAlias": f"source-{index}",
         "title": source.get("title"),
         "provider": source.get("provider"),
         "sourceType": _source_type,
@@ -1071,6 +1098,8 @@ def _guided_source_record_from_structured_source(source: dict[str, Any], *, inde
         # Legacy alias retained for backward compatibility with clients that
         # read the pre-rename key. Kept in lockstep with ``fullTextUrlFound``.
         "fullTextObserved": bool(source.get("fullTextUrlFound") or source.get("fullTextObserved")),
+        "bodyTextEmbedded": _body_text_embedded,
+        "qaReadableText": _qa_readable_text,
         "abstractObserved": bool(source.get("abstractObserved")),
         "openAccessRoute": _guided_open_access_route(source),
         "citationText": source.get("citationText"),
@@ -1085,11 +1114,15 @@ def _guided_source_record_from_paper(query: str, paper: dict[str, Any], *, index
     canonical_url = paper.get("canonicalUrl") or paper.get("url") or paper.get("pdfUrl")
     source_type = paper.get("sourceType") or "scholarly_article"
     doi, _ = resolve_doi_from_paper_payload(paper)
+    _body_text_embedded = bool(paper.get("bodyTextEmbedded"))
+    _qa_readable_text = bool(paper.get("qaReadableText"))
+    _full_text_url_found = bool(paper.get("fullTextUrlFound") or paper.get("fullTextObserved"))
     verification_status = paper.get("verificationStatus") or _assign_verification_status(
         source_type=str(source_type),
         has_doi=bool(doi),
         has_doi_resolution=bool(doi),
-        full_text_url_found=bool(paper.get("fullTextUrlFound") or paper.get("fullTextObserved")),
+        full_text_url_found=_full_text_url_found,
+        body_text_embedded=_body_text_embedded,
     )
     # Backward-compatible default: a scholarly article with basic descriptive
     # metadata (title + at least one author OR a venue) should remain
@@ -1114,11 +1147,22 @@ def _guided_source_record_from_paper(query: str, paper: dict[str, Any], *, index
         _has_venue = bool(str(paper.get("venue") or "").strip())
         if _has_author or _has_venue:
             verification_status = "verified_metadata"
-    access_status = paper.get("accessStatus") or (
-        "full_text_verified"
-        if (paper.get("fullTextUrlFound") or paper.get("fullTextObserved"))
-        else "access_unverified"
-    )
+    # Access-status split (P0-2): an explicit accessStatus on the input wins;
+    # otherwise derive from the strongest signal available. ``body_text_embedded``
+    # implies inline body content; a URL-only hit becomes ``url_verified``
+    # (distinct from the deprecated ``full_text_verified`` which used to be
+    # emitted for any URL-found regulatory or scholarly record).
+    _explicit_access = paper.get("accessStatus")
+    if _explicit_access:
+        access_status: str = str(_explicit_access)
+    elif _body_text_embedded:
+        access_status = "body_text_embedded"
+    elif _full_text_url_found:
+        access_status = "url_verified"
+    elif bool(paper.get("abstractObserved")):
+        access_status = "abstract_only"
+    else:
+        access_status = "access_unverified"
     topical_relevance = _paper_topical_relevance(query, paper)
     confidence = paper.get("confidence") or ("high" if topical_relevance == "on_topic" else "medium")
     weak_match_reason = str(paper.get("whyClassifiedAsWeakMatch") or "").strip() or None
@@ -1127,7 +1171,6 @@ def _guided_source_record_from_paper(query: str, paper: dict[str, Any], *, index
     return strip_null_fields(
         {
             "sourceId": _guided_source_id(paper, fallback_prefix="paper", index=index),
-            "sourceAlias": f"source-{index}",
             "title": paper.get("title"),
             "provider": paper.get("source"),
             "sourceType": source_type,
@@ -1138,10 +1181,12 @@ def _guided_source_record_from_paper(query: str, paper: dict[str, Any], *, index
             "isPrimarySource": bool(paper.get("isPrimarySource")),
             "canonicalUrl": canonical_url,
             "retrievedUrl": paper.get("retrievedUrl") or canonical_url,
-            "fullTextUrlFound": bool(paper.get("fullTextUrlFound") or paper.get("fullTextObserved")),
+            "fullTextUrlFound": _full_text_url_found,
             # Legacy alias retained for backward compatibility with clients that
             # read the pre-rename key. Kept in lockstep with ``fullTextUrlFound``.
-            "fullTextObserved": bool(paper.get("fullTextUrlFound") or paper.get("fullTextObserved")),
+            "fullTextObserved": _full_text_url_found,
+            "bodyTextEmbedded": _body_text_embedded,
+            "qaReadableText": _qa_readable_text,
             "abstractObserved": bool(paper.get("abstractObserved")),
             "openAccessRoute": _guided_open_access_route(paper),
             "citationText": str(paper.get("canonicalId") or paper.get("paperId") or "") or None,
@@ -1185,30 +1230,42 @@ def _guided_sources_from_fr_documents(query: str, documents: list[Any]) -> list[
         # Build citation text from FR citation or document number
         citation_text = citation or (f"Fed. Reg. No. {doc_number}" if doc_number else None)
 
-        # FR documents are authoritative primary sources; all returned results are treated as on-topic
-        # because the FR API itself is query-targeted and returns matching documents.
+        # FR documents are authoritative primary sources, but topical
+        # relevance must still be *computed* from the query — the FR search
+        # API sometimes returns adjacent/off-topic rules that should be
+        # flagged for escalation rather than folded into evidence as on-topic.
         source_type = "federal_register_rule" if "rule" in doc_type.lower() else "regulatory_document"
         note_parts = [agency_str] if agency_str else []
         if cfr_refs:
             note_parts.append("CFR: " + ", ".join(str(r) for r in cfr_refs[:3]))
 
+        fr_source_candidate = {
+            "title": title,
+            "abstract": abstract,
+            "venue": "Federal Register",
+            "note": "; ".join(note_parts) if note_parts else None,
+        }
+        topical_relevance = compute_topical_relevance(query, fr_source_candidate)
+
         sources.append(
             {
                 "sourceId": f"fr-{doc_number}" if doc_number else f"fr-source-{index}",
-                "sourceAlias": f"source-fr-{index}",
                 "title": title,
                 "provider": "federal_register",
                 "sourceType": source_type,
-                "verificationStatus": "verified_primary_source",
-                "accessStatus": (
-                    "full_text_verified" if html_url else ("pdf_available" if pdf_url else "access_unverified")
-                ),
-                "topicalRelevance": "on_topic",
-                "confidence": "high",
+                # P0-2: URL-found alone does not imply body-text-embedded.
+                # FR docs here are URL-discovered metadata; body must be
+                # fetched separately to earn ``verified_primary_source``.
+                "verificationStatus": "verified_metadata",
+                "accessStatus": ("url_verified" if html_url else ("pdf_available" if pdf_url else "access_unverified")),
+                "topicalRelevance": topical_relevance,
+                "confidence": "high" if topical_relevance == "on_topic" else "medium",
                 "isPrimarySource": True,
                 "canonicalUrl": canonical_url,
                 "retrievedUrl": canonical_url,
                 "fullTextUrlFound": bool(html_url),
+                "bodyTextEmbedded": False,
+                "qaReadableText": False,
                 "abstractObserved": bool(abstract),
                 "openAccessRoute": "open_access" if canonical_url else None,
                 "citationText": citation_text,
@@ -2770,7 +2827,17 @@ def _trust_revision_narrative(
 
 
 def _authoritative_but_weak_source_ids(sources: list[dict[str, Any]]) -> list[str]:
-    """Source IDs that are authoritative (primary-source family) but weak/off-topic."""
+    """Return source IDs in the authoritativeButWeak (missed-escalation) bucket.
+
+    This bucket flags authoritative/primary-source records (e.g., Federal
+    Register rules, regulatory documents, official agency pages) whose
+    ``topicalRelevance`` is ``weak_match`` or ``off_topic``. It is a
+    missed-escalation signal: the provider returned an authoritative record,
+    but the subject-chain/topical grounding is weak, so the agent should not
+    treat the source as grounded evidence. Clients should surface these IDs
+    to a human or escalate to a disambiguation/primary-source workflow rather
+    than fold them silently into evidence.
+    """
     ids: list[str] = []
     for source in sources:
         relevance = str(source.get("topicalRelevance") or "").strip()
@@ -2791,7 +2858,26 @@ def _guided_trust_summary(
     classification_provenance: dict[str, Any] | None = None,
     subject_chain_gaps: list[str] | None = None,
 ) -> dict[str, Any]:
+    # verifiedPrimarySourceCount now reflects the true primary-source bucket:
+    # records marked ``isPrimarySource=True`` whose verification status is
+    # either ``verified_primary_source`` or ``verified_metadata``. This fixes
+    # the prior miscount that treated any ``verified_primary_source`` record
+    # as primary regardless of the ``isPrimarySource`` flag (P0-3 item 2).
     verified_primary_source_count = sum(
+        1
+        for source in sources
+        if source.get("isPrimarySource") is True
+        and source.get("verificationStatus") in {"verified_primary_source", "verified_metadata"}
+    )
+    # Narrower full-text signal: isPrimarySource=True AND full-text verified.
+    full_text_verified_primary_source_count = sum(
+        1
+        for source in sources
+        if source.get("isPrimarySource") is True and source.get("verificationStatus") == "verified_primary_source"
+    )
+    # Retain the broader status-only counts for the combined verifiedSourceCount
+    # total (keeps the overall denominator stable for downstream clients).
+    status_verified_primary_source_count = sum(
         1 for source in sources if source.get("verificationStatus") == "verified_primary_source"
     )
     verified_metadata_source_count = sum(
@@ -2859,8 +2945,9 @@ def _guided_trust_summary(
     if breakdown_fragments:
         strength_explanation = f"{strength_explanation} Breakdown: {', '.join(breakdown_fragments)}."
     summary = {
-        "verifiedSourceCount": verified_primary_source_count + verified_metadata_source_count,
+        "verifiedSourceCount": status_verified_primary_source_count + verified_metadata_source_count,
         "verifiedPrimarySourceCount": verified_primary_source_count,
+        "fullTextVerifiedPrimarySourceCount": full_text_verified_primary_source_count,
         "verifiedMetadataSourceCount": verified_metadata_source_count,
         "onTopicSourceCount": on_topic_source_count,
         "weakMatchCount": sum(1 for source in sources if source.get("topicalRelevance") == "weak_match"),
@@ -2877,6 +2964,16 @@ def _guided_trust_summary(
         "authoritativeButWeak": authoritative_but_weak,
         "strengthExplanation": strength_explanation,
     }
+    if authoritative_but_weak_count:
+        # Missed-escalation prose note (P0-3 item 5): call out that these
+        # authoritative records are NOT grounded evidence and subject-chain
+        # grounding may be weak, so agents do not silently fold them in.
+        noun = "source" if authoritative_but_weak_count == 1 else "sources"
+        summary["authoritativeButWeakNote"] = (
+            f"{authoritative_but_weak_count} authoritative {noun} found but not topically responsive "
+            "(missed-escalation bucket); subject-chain grounding may be weak — do not treat as "
+            "grounded evidence without a disambiguation or primary-source follow-up."
+        )
     top_rationale: str | None = None
     if off_topic_rationales:
         top_rationale = f"Off-topic example: {off_topic_rationales[0]}"
@@ -3974,6 +4071,152 @@ _RESEARCH_COMPACT_FIELDS = {
 
 _COMPACT_NULL_OK_FIELDS = {"answer", "searchSessionId"}
 
+# Fields that must always be preserved (even as empty/None) on compact follow-ups
+# for grounded answers so agents retain the minimum actionable contract.
+_FOLLOW_UP_COMPACT_GROUNDED_PRESERVE = {
+    "searchSessionId",
+    "answerStatus",
+    "answer",
+    "evidence",
+    "sources",
+    "structuredSourceIds",
+    "evidenceGaps",
+    "nextActions",
+    "resultMeaning",
+    "resultState",
+    "answerability",
+    "topRecommendation",
+    "selectedEvidenceIds",
+    "selectedLeadIds",
+    "agentHints",
+    "sessionResolution",
+    "inputNormalization",
+    "executionProvenance",
+    "unsupportedAsks",
+    "followUpQuestions",
+    "abstentionDetails",
+    "coverage",
+    "sourcesSuppressed",
+    "legacyFieldsIncluded",
+    "responseMode",
+}
+
+# Fields intentionally dropped from compact follow-up responses (beyond legacy).
+_FOLLOW_UP_COMPACT_DROP = {
+    "failureSummary",
+    "confidenceSignals",
+    "trustSummary",
+    "telemetry",
+    "evidenceUsePlan",
+    "providerUsed",
+    "degradationReason",
+    "classificationProvenance",
+    "degradedClassification",
+}
+
+
+def _compact_coverage_payload(coverage: Any) -> dict[str, Any] | None:
+    """Collapse a coverage/CoverageSummary dict to {totalSources, byAccessStatus}."""
+
+    if not isinstance(coverage, dict):
+        return None
+    total = coverage.get("totalSources")
+    by_access = coverage.get("byAccessStatus")
+    result: dict[str, Any] = {}
+    if isinstance(total, int):
+        result["totalSources"] = total
+    if isinstance(by_access, dict):
+        result["byAccessStatus"] = by_access
+    return result or None
+
+
+def _is_empty_for_compact(value: Any) -> bool:
+    """True when a value should be omitted from a compact payload."""
+
+    if value is None:
+        return True
+    if isinstance(value, (list, dict, str, tuple, set)) and len(value) == 0:
+        return True
+    return False
+
+
+def _apply_follow_up_response_mode(
+    response: dict[str, Any],
+    *,
+    response_mode: str,
+    include_legacy_fields: bool,
+) -> dict[str, Any]:
+    """Apply response_mode shaping to a follow-up response dict.
+
+    Compact: drop legacy (verifiedFindings/likelyUnverified) unless opted in,
+    derive structuredSourceIds from structuredSources, collapse coverage, and
+    omit None/empty fields. Preserves abstentionDetails and topRecommendation.
+    Standard: exclude None and empty fields (but keep legacy).
+    Debug: no filtering.
+    """
+
+    if response_mode == "debug":
+        shaped = dict(response)
+        shaped["responseMode"] = "debug"
+        shaped.setdefault(
+            "legacyFieldsIncluded",
+            any(key in shaped for key in _LEGACY_GUIDED_FIELDS),
+        )
+        return shaped
+
+    shaped = dict(response)
+
+    if response_mode == "compact":
+        suppressed_count = 0
+        if not include_legacy_fields:
+            for key in ("verifiedFindings", "unverifiedLeads", "likelyUnverified"):
+                value = shaped.pop(key, None)
+                if isinstance(value, list):
+                    suppressed_count += len(value)
+        structured_sources = shaped.pop("structuredSources", None)
+        if isinstance(structured_sources, list):
+            ids: list[str] = []
+            for entry in structured_sources:
+                if isinstance(entry, dict):
+                    identifier = entry.get("sourceId") or entry.get("sourceAlias")
+                    if identifier:
+                        ids.append(str(identifier))
+                elif isinstance(entry, str):
+                    ids.append(entry)
+            if ids:
+                shaped["structuredSourceIds"] = ids
+        coverage = shaped.get("coverage")
+        collapsed = _compact_coverage_payload(coverage)
+        if collapsed is not None:
+            shaped["coverage"] = collapsed
+        elif coverage is None or coverage == {}:
+            shaped.pop("coverage", None)
+        for drop_key in _FOLLOW_UP_COMPACT_DROP:
+            shaped.pop(drop_key, None)
+        shaped["legacyFieldsIncluded"] = bool(include_legacy_fields) and any(
+            key in shaped for key in ("verifiedFindings", "unverifiedLeads", "likelyUnverified")
+        )
+        if suppressed_count > 0:
+            shaped["sourcesSuppressed"] = suppressed_count
+        shaped["responseMode"] = "compact"
+
+    keep_keys = set(shaped.keys())
+    for key in list(shaped.keys()):
+        if key in _COMPACT_NULL_OK_FIELDS:
+            continue
+        if key not in keep_keys:
+            continue
+        if _is_empty_for_compact(shaped[key]):
+            shaped.pop(key, None)
+
+    if response_mode != "compact":
+        shaped.setdefault(
+            "legacyFieldsIncluded",
+            any(key in shaped for key in _LEGACY_GUIDED_FIELDS),
+        )
+        shaped["responseMode"] = response_mode
+    return shaped
+
 
 def _guided_compact_response_if_needed(*, tool_name: str, response: dict[str, Any]) -> dict[str, Any]:
     compact_fields: set[str] | None = None
@@ -4002,12 +4245,24 @@ def _guided_compact_response_if_needed(*, tool_name: str, response: dict[str, An
     return compacted
 
 
-def _guided_finalize_response(*, tool_name: str, response: dict[str, Any]) -> dict[str, Any]:
+def _guided_finalize_response(
+    *,
+    tool_name: str,
+    response: dict[str, Any],
+    response_mode: str = "standard",
+    include_legacy_fields: bool = False,
+) -> dict[str, Any]:
     finalized = dict(response)
     for key in ("verifiedFindings", "unverifiedLeads"):
         if finalized.get(key) == []:
             finalized.pop(key, None)
     finalized = _guided_compact_response_if_needed(tool_name=tool_name, response=finalized)
+    if tool_name == "follow_up_research" and "sourcesSuppressed" not in finalized:
+        finalized = _apply_follow_up_response_mode(
+            finalized,
+            response_mode=response_mode,
+            include_legacy_fields=include_legacy_fields,
+        )
     if "legacyFieldsIncluded" not in finalized:
         finalized["legacyFieldsIncluded"] = any(key in finalized for key in _LEGACY_GUIDED_FIELDS)
     return finalized
@@ -4062,12 +4317,36 @@ async def _guided_contract_fields(
         coverage_summary=coverage_summary,
     ).model_dump(by_alias=True)
     result_status = _guided_follow_up_status(status)
+
+    # P0-1 Fix #5: compute the evidence quality profile (same derivation as
+    # ``_guided_confidence_signals``) so the answerability ladder and the
+    # confidence signals agree. When the profile is ``low`` the ladder must
+    # not advertise ``grounded``.
+    _verified_on_topic_primary = sum(
+        1
+        for item in sources
+        if item.get("topicalRelevance") == "on_topic" and item.get("verificationStatus") == "verified_primary_source"
+    )
+    _verified_on_topic = sum(
+        1
+        for item in sources
+        if item.get("topicalRelevance") == "on_topic"
+        and item.get("verificationStatus") in {"verified_primary_source", "verified_metadata"}
+    )
+    if _verified_on_topic_primary > 0 or _verified_on_topic >= 3:
+        _evidence_quality_profile = "high"
+    elif _verified_on_topic > 0:
+        _evidence_quality_profile = "medium"
+    else:
+        _evidence_quality_profile = "low"
+
     answerability = classify_answerability(
         status=status,
         evidence=evidence,
         leads=leads,
         evidence_gaps=evidence_gaps,
         answer_text=answer_text,
+        evidence_quality_profile=_evidence_quality_profile,
     )
 
     if provider_bundle is not None and answer_text and answerability == "grounded":
@@ -4850,14 +5129,53 @@ async def _answer_follow_up_from_session_state(
     _session_trust_summary = cast(dict[str, Any], dict(session_state.get("trustSummary") or {}))
     _session_trust_summary.setdefault("authoritativeButWeak", [])
 
+    # P0-1 Fix #2: gate ``answered`` on the saved trust summary. When the
+    # session has no on-topic or no verified sources the introspection fast
+    # path has nothing grounded to lean on, so fall back to
+    # ``insufficient_evidence`` instead of synthesising a confident answer.
+    def _coerce_positive_int(value: Any) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return 0
+        return parsed if parsed > 0 else 0
+
+    _on_topic_count = _coerce_positive_int(_session_trust_summary.get("onTopicSourceCount"))
+    _verified_count = _coerce_positive_int(_session_trust_summary.get("verifiedSourceCount"))
+    # P0-1 Fix #2: block the introspection fast path from advertising
+    # ``answered`` only when the answer rests entirely on topical claims
+    # pulled from a weak pool. Metadata-style questions (coverage,
+    # evidenceGaps, failureSummary, resultMeaning, trustSummary,
+    # verifiedFindings) are always legitimately answerable from saved
+    # session structure — they are never topical claims about the domain.
+    # Likewise, answers grounded in explicitly selected evidence / lead ids
+    # remain legitimate introspection. Only when the answer is built solely
+    # from ``follow_up_decision.answer_from_session`` *and* the pool reports
+    # zero on-topic / verified sources *and* the decision did not pin any
+    # ids do we downgrade to ``insufficient_evidence``.
+    _has_meta_backing = bool(facets) or bool(metadata_answers)
+    _has_strong_session_evidence = (
+        _has_meta_backing
+        or _on_topic_count >= 1
+        or _verified_count >= 1
+        or bool(follow_up_decision.selected_evidence_ids)
+        or bool(follow_up_decision.selected_lead_ids)
+    )
+    _answer_status_value: Literal["answered", "insufficient_evidence"] = (
+        "answered" if _has_strong_session_evidence else "insufficient_evidence"
+    )
+    _answer_text = " ".join(answer_parts) if _has_strong_session_evidence else ""
+    _selected_evidence_ids = follow_up_decision.selected_evidence_ids if _has_strong_session_evidence else []
+    _selected_lead_ids = follow_up_decision.selected_lead_ids if _has_strong_session_evidence else []
+
     return {
         "searchSessionId": session_state["searchSessionId"],
-        "answerStatus": "answered",
-        "answer": " ".join(answer_parts),
+        "answerStatus": _answer_status_value,
+        "answer": _answer_text,
         "evidence": [],
-        "selectedEvidenceIds": follow_up_decision.selected_evidence_ids,
-        "selectedLeadIds": follow_up_decision.selected_lead_ids,
-        "unsupportedAsks": [],
+        "selectedEvidenceIds": _selected_evidence_ids,
+        "selectedLeadIds": _selected_lead_ids,
+        "unsupportedAsks": [] if _has_strong_session_evidence else [question],
         "followUpQuestions": [],
         "verifiedFindings": _filtered_findings,
         "sources": _filtered_sources,
@@ -4869,7 +5187,7 @@ async def _answer_follow_up_from_session_state(
         "resultMeaning": session_state["resultMeaning"],
         "nextActions": session_state["nextActions"],
         "resultState": _guided_result_state(
-            status="answered",
+            status=_answer_status_value,
             sources=sources,
             evidence_gaps=evidence_gaps,
             search_session_id=str(session_state.get("searchSessionId") or ""),
@@ -4878,7 +5196,7 @@ async def _answer_follow_up_from_session_state(
             await _guided_contract_fields(
                 query=str(session_state.get("query") or ""),
                 intent=str(session_state.get("intent") or "discovery"),
-                status="answered",
+                status=_answer_status_value,
                 sources=sources,
                 unverified_leads=cast(list[dict[str, Any]], session_state.get("unverifiedLeads") or []),
                 evidence_gaps=evidence_gaps,
@@ -4893,7 +5211,7 @@ async def _answer_follow_up_from_session_state(
             passes_run=0,
         ),
         "confidenceSignals": _guided_confidence_signals(
-            status="answered",
+            status=_answer_status_value,
             sources=sources,
             evidence_gaps=evidence_gaps,
             synthesis_mode="session_introspection",
@@ -5716,7 +6034,12 @@ async def dispatch_tool(
         if session_answer is not None:
             session_answer["inputNormalization"] = _guided_normalization_payload(follow_up_normalization)
             session_answer["sessionResolution"] = session_resolution
-            return _guided_finalize_response(tool_name="follow_up_research", response=session_answer)
+            return _guided_finalize_response(
+                tool_name="follow_up_research",
+                response=session_answer,
+                response_mode=follow_up_args.response_mode,
+                include_legacy_fields=follow_up_args.include_legacy_fields,
+            )
         if not follow_up_args.search_session_id:
             evidence_gaps = ["A unique saved search session could not be identified for this follow-up question."]
             trust_summary = _guided_trust_summary([], evidence_gaps)
@@ -5786,7 +6109,12 @@ async def dispatch_tool(
             )
             if abstention_details is not None:
                 response["abstentionDetails"] = abstention_details
-            return _guided_finalize_response(tool_name="follow_up_research", response=response)
+            return _guided_finalize_response(
+                tool_name="follow_up_research",
+                response=response,
+                response_mode=follow_up_args.response_mode,
+                include_legacy_fields=follow_up_args.include_legacy_fields,
+            )
         if agentic_runtime is None:
             evidence_gaps = [follow_up_args.question]
             trust_summary = _guided_trust_summary([], evidence_gaps)
@@ -5888,7 +6216,12 @@ async def dispatch_tool(
             )
             if abstention_details is not None:
                 response["abstentionDetails"] = abstention_details
-            return _guided_finalize_response(tool_name="follow_up_research", response=response)
+            return _guided_finalize_response(
+                tool_name="follow_up_research",
+                response=response,
+                response_mode=follow_up_args.response_mode,
+                include_legacy_fields=follow_up_args.include_legacy_fields,
+            )
         session_strategy_metadata: dict[str, Any] = {}
         if workspace_registry is not None:
             try:
@@ -6001,7 +6334,12 @@ async def dispatch_tool(
             )
             if abstention_details is not None:
                 response["abstentionDetails"] = abstention_details
-            return _guided_finalize_response(tool_name="follow_up_research", response=response)
+            return _guided_finalize_response(
+                tool_name="follow_up_research",
+                response=response,
+                response_mode=follow_up_args.response_mode,
+                include_legacy_fields=follow_up_args.include_legacy_fields,
+            )
         sources = [
             _guided_source_record_from_structured_source(source, index=index)
             for index, source in enumerate(ask.get("structuredSources") or [], start=1)
@@ -6176,6 +6514,10 @@ async def dispatch_tool(
         response["selectedLeadIds"] = [
             str(identifier).strip() for identifier in (ask.get("selectedLeadIds") or []) if str(identifier).strip()
         ]
+        if ask.get("topRecommendation") is not None:
+            response["topRecommendation"] = ask.get("topRecommendation")
+        if ask.get("structuredSources") is not None:
+            response["structuredSources"] = ask.get("structuredSources")
         session_answer = await _answer_follow_up_from_session_state(
             question=follow_up_args.question,
             session_state=session_state,
@@ -6185,7 +6527,12 @@ async def dispatch_tool(
             if session_answer is not None:
                 session_answer["inputNormalization"] = _guided_normalization_payload(follow_up_normalization)
                 session_answer["sessionResolution"] = session_resolution
-                return _guided_finalize_response(tool_name="follow_up_research", response=session_answer)
+                return _guided_finalize_response(
+                    tool_name="follow_up_research",
+                    response=session_answer,
+                    response_mode=follow_up_args.response_mode,
+                    include_legacy_fields=follow_up_args.include_legacy_fields,
+                )
             response["answerStatus"] = "insufficient_evidence"
             response["answer"] = None
             response["resultMeaning"] = _guided_result_meaning(
@@ -6213,11 +6560,21 @@ async def dispatch_tool(
             )
             if abstention_details is not None:
                 response["abstentionDetails"] = abstention_details
-            return _guided_finalize_response(tool_name="follow_up_research", response=response)
+            return _guided_finalize_response(
+                tool_name="follow_up_research",
+                response=response,
+                response_mode=follow_up_args.response_mode,
+                include_legacy_fields=follow_up_args.include_legacy_fields,
+            )
         if answer_status != "answered" and session_answer is not None:
             session_answer["inputNormalization"] = _guided_normalization_payload(follow_up_normalization)
             session_answer["sessionResolution"] = session_resolution
-            return _guided_finalize_response(tool_name="follow_up_research", response=session_answer)
+            return _guided_finalize_response(
+                tool_name="follow_up_research",
+                response=session_answer,
+                response_mode=follow_up_args.response_mode,
+                include_legacy_fields=follow_up_args.include_legacy_fields,
+            )
         abstention_details = _guided_abstention_details_payload(
             status=answer_status,
             sources=sources,
@@ -6226,7 +6583,12 @@ async def dispatch_tool(
         )
         if abstention_details is not None:
             response["abstentionDetails"] = abstention_details
-        return _guided_finalize_response(tool_name="follow_up_research", response=response)
+        return _guided_finalize_response(
+            tool_name="follow_up_research",
+            response=response,
+            response_mode=follow_up_args.response_mode,
+            include_legacy_fields=follow_up_args.include_legacy_fields,
+        )
 
     if name == "inspect_source":
         normalized_inspect_arguments, inspect_normalization = _guided_normalize_inspect_arguments(

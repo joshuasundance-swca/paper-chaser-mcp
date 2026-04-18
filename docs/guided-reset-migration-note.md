@@ -61,9 +61,24 @@ environments even though the server still supports those tools in expert mode.
 - Guided follow-up returns explicit answer gating:
   - `answerStatus`: `answered|abstained|insufficient_evidence`
   - `answer` is `null` when not safely answerable.
+  - Grounded `answered` now requires a non-deterministic synthesis provider
+    plus at least one on-topic, verified source with qa-readable text. Cases
+    that used to return filler now return `insufficient_evidence`.
+  - Follow-up responses are **compact by default**. `sources` are collapsed to
+    `selectedEvidenceIds`/`selectedLeadIds`, and legacy `verifiedFindings` /
+    `unverifiedLeads` are omitted. Pass `responseMode="standard"` or
+    `responseMode="debug"` for richer payloads, or `includeLegacyFields=true`
+    to restore the legacy compatibility views.
+  - Comparative / selection asks expose a structured `topRecommendation` with
+    `sourceId`, `recommendationReason`, and `comparativeAxis`.
   - ambiguity and reuse state are surfaced through `sessionResolution`
   - saved-session introspection can classify mixed source sets into on-topic,
     weaker, and off-target groups when the stored metadata is sufficient
+- Guided source inspection now splits access state into `fullTextUrlFound`
+  (URL discovered), `bodyTextEmbedded` (body text indexed into the saved
+  session), and `qaReadableText` (body actually available to the current
+  synthesis call). `AccessStatus` values now include `url_verified`,
+  `body_text_embedded`, and `qa_readable_text` alongside prior states.
 - Guided source inspection now returns structured `sourceResolution` details on
   ambiguity instead of failing with a raw `ValueError`.
 - Runtime truth is now expected to include:

@@ -9,7 +9,7 @@ from collections import defaultdict
 from typing import Any, Literal
 
 from .config import AgenticConfig
-from .planner import query_facets, query_terms
+from .planner import _is_definitional_query, query_facets, query_terms
 from .providers import ModelProviderBundle
 from .retrieval import RetrievedCandidate
 
@@ -257,6 +257,36 @@ async def rerank_candidates(
         year_decay_scale = 0.5
         citation_decay_scale = 0.5
 
+    # P2-1: definitional-query bias. When the user asks "what is X / define X /
+    # overview of X", promote canonical foundational papers and surveys over
+    # niche variants. Thresholds are pool-relative so single/small pools auto
+    # self-regulate (canonical bonus only fires with >=3 candidates).
+    definitional_query = _is_definitional_query(query)
+    citation_threshold: float | None = None
+    canonical_year_cutoff: int | None = None
+    if definitional_query and len(merged_candidates) >= 3:
+        citation_counts = [
+            int(item["paper"].get("citationCount"))
+            for item in merged_candidates
+            if isinstance(item["paper"].get("citationCount"), int) and int(item["paper"].get("citationCount", 0)) >= 0
+        ]
+        years = [
+            int(item["paper"].get("year")) for item in merged_candidates if isinstance(item["paper"].get("year"), int)
+        ]
+        if len(citation_counts) >= 3:
+            sorted_counts = sorted(citation_counts)
+            median_citations = sorted_counts[len(sorted_counts) // 2]
+            if median_citations > 0:
+                citation_threshold = median_citations * 10.0
+        if len(years) >= 3:
+            sorted_years = sorted(years)
+            percentile_index = max(0, int(len(sorted_years) * 0.2) - 1)
+            canonical_year_cutoff = sorted_years[percentile_index]
+    survey_title_pattern = re.compile(
+        r"\b(survey|review|introduction|overview|primer|tutorial)\b",
+        re.IGNORECASE,
+    )
+
     for item, paper_text, query_similarity in zip(
         merged_candidates,
         paper_texts,
@@ -389,6 +419,27 @@ async def rerank_candidates(
             semantic_fit_scale = 0.3
             provider_bonus *= semantic_fit_scale
             citation_bonus *= semantic_fit_scale
+
+        canonical_paper_bonus = 0.0
+        survey_title_bonus = 0.0
+        definitional_consensus_bonus = 0.0
+        if definitional_query:
+            raw_citation_count = paper.get("citationCount")
+            paper_year = paper.get("year")
+            if (
+                citation_threshold is not None
+                and canonical_year_cutoff is not None
+                and isinstance(raw_citation_count, int)
+                and raw_citation_count >= citation_threshold
+                and isinstance(paper_year, int)
+                and paper_year <= canonical_year_cutoff
+            ):
+                canonical_paper_bonus = 0.15
+            if survey_title_pattern.search(title_text or ""):
+                survey_title_bonus = 0.10
+            if len(item.get("providers", [])) >= 2:
+                definitional_consensus_bonus = 0.05
+
         final_score = (
             fused_rank_score
             + query_similarity
@@ -397,6 +448,9 @@ async def rerank_candidates(
             + citation_bonus
             + bridge_bonus
             + relevance_bonus
+            + canonical_paper_bonus
+            + survey_title_bonus
+            + definitional_consensus_bonus
             - drift_penalty
             - (facet_penalty * facet_penalty_scale)
         )
@@ -429,6 +483,10 @@ async def rerank_candidates(
             "facetPenaltyScale": round(facet_penalty_scale, 6),
             "relevanceClassification": relevance_classification,
             "relevanceClassificationFallback": relevance_fallback,
+            "canonicalPaperBonus": round(canonical_paper_bonus, 6),
+            "surveyTitleBonus": round(survey_title_bonus, 6),
+            "definitionalConsensusBonus": round(definitional_consensus_bonus, 6),
+            "definitionalQuery": definitional_query,
             "finalScore": round(final_score, 6),
         }
         item["querySimilarity"] = query_similarity

@@ -37,6 +37,7 @@ ANSWER_MODES: tuple[str, ...] = (
     "metadata",
     "relevance_triage",
     "comparison",
+    "selection",
     "mechanism_summary",
     "regulatory_chain",
     "intervention_tradeoff",
@@ -47,7 +48,7 @@ ANSWER_MODES: tuple[str, ...] = (
 # in any of these modes without corroborating non-fallback evidence is exactly
 # the failure we are trying to prevent.
 SYNTHESIS_MODES: frozenset[str] = frozenset(
-    {"comparison", "mechanism_summary", "regulatory_chain", "intervention_tradeoff"}
+    {"comparison", "selection", "mechanism_summary", "regulatory_chain", "intervention_tradeoff"}
 )
 
 # Modes where deterministic salvage over saved session state is acceptable when
@@ -203,6 +204,35 @@ def _classify_question_mode_keyword(question: str) -> str:
         return "relevance_triage"
     if metadata_facets:
         return "metadata"
+    # Selection markers are checked before the generic compare/versus branch so
+    # single-best questions ("which is best", "most recent", "beginner-friendly")
+    # route to ``selection`` rather than being swallowed by the broader
+    # comparison bucket. Explicit "compare X and Y" phrasing still wins because
+    # neither "compare" nor "versus" appears in the selection marker list.
+    if any(
+        marker in lowered
+        for marker in (
+            "which is best",
+            "which one is best",
+            "best starting point",
+            "most suitable",
+            "beginner-friendly",
+            "beginner friendly",
+            "most recent",
+            "most authoritative",
+            "most cited",
+            "most influential",
+            "easiest to",
+            "should i start with",
+            "where should i start",
+            "most accessible",
+            "most up to date",
+            "most up-to-date",
+            "latest paper",
+            "which should i",
+        )
+    ):
+        return "selection"
     if any(marker in lowered for marker in ("compare", "versus", " vs ", " vs.", "tradeoff", "trade-off")):
         if "trade" in lowered and "intervent" in lowered:
             return "intervention_tradeoff"

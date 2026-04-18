@@ -437,6 +437,31 @@ def _query_starts_broad(query: str) -> bool:
     return lowered.startswith(("what ", "which ", "how ", "compare ", "summarize ", "identify ", "find "))
 
 
+_DEFINITIONAL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bwhat\s+(is|are|does)\b"),
+    re.compile(r"\bdefine\b"),
+    re.compile(r"\bexplain\b"),
+    re.compile(r"\boverview\s+of\b"),
+    re.compile(r"\bintroduction\s+to\b"),
+    re.compile(r"\bguide\s+to\b"),
+    re.compile(r"\bprimer\s+on\b"),
+)
+
+
+def _is_definitional_query(query: str) -> bool:
+    """Return True when the query asks for a definition, overview, or primer.
+
+    Used to bias retrieval and ranking toward canonical/foundational papers and
+    survey articles when the user is seeking conceptual grounding rather than a
+    specific result.
+    """
+
+    normalized = normalize_query(query or "").lower()
+    if not normalized:
+        return False
+    return any(pattern.search(normalized) for pattern in _DEFINITIONAL_PATTERNS)
+
+
 def _infer_regulatory_subintent(query: str, focus: str | None = None) -> str | None:
     normalized = normalize_query(" ".join(part for part in [query, focus or ""] if part)).lower()
     if not normalized or not detect_regulatory_intent(query, focus):
@@ -792,6 +817,9 @@ def initial_retrieval_hypotheses(
         return candidates
 
     planner_angles = [str(angle).strip() for angle in planner.search_angles if str(angle).strip()]
+    if _is_definitional_query(normalized_query):
+        definitional_angles = [f"{base_query} survey", f"{base_query} foundational paper"]
+        planner_angles = definitional_angles + [angle for angle in planner_angles if angle not in definitional_angles]
     if not planner_angles:
         return candidates
 

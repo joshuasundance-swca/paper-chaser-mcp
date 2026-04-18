@@ -528,6 +528,7 @@ class WorkspaceRegistry:
     def _attach_source_aliases(payload: dict[str, Any]) -> dict[str, Any]:
         normalized_payload = dict(payload)
         alias_map: dict[str, str] = {}
+        seen_aliases: set[str] = set()
         alias_index = 1
         for key in ("evidence", "leads", "sources", "structuredSources", "candidateLeads", "unverifiedLeads"):
             entries = normalized_payload.get(key)
@@ -544,12 +545,24 @@ class WorkspaceRegistry:
                     continue
                 alias = alias_map.get(source_id)
                 if alias is None:
-                    alias = f"src_{alias_index}"
+                    existing_alias = str(entry.get("sourceAlias") or "").strip()
+                    # Only honor a pre-set sourceAlias when it does not
+                    # collide with another source_id that already claimed it
+                    # in this bucket. Colliding aliases are reissued as
+                    # fresh src_N identifiers so that sessionSourceAliases
+                    # remains a reversible 1:1 map.
+                    if existing_alias and existing_alias not in seen_aliases:
+                        alias = existing_alias
+                    else:
+                        while True:
+                            alias = f"src_{alias_index}"
+                            alias_index += 1
+                            if alias not in seen_aliases:
+                                break
                     alias_map[source_id] = alias
-                    alias_index += 1
+                    seen_aliases.add(alias)
                 updated_entry = dict(entry)
-                if not updated_entry.get("sourceAlias"):
-                    updated_entry["sourceAlias"] = alias
+                updated_entry["sourceAlias"] = alias
                 updated_entries.append(updated_entry)
             normalized_payload[key] = updated_entries
         if alias_map:

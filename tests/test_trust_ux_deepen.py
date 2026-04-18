@@ -29,7 +29,7 @@ def _fr_weak_source() -> dict[str, Any]:
         "provider": "federal_register",
         "sourceType": "regulatory_document",
         "verificationStatus": "verified_primary_source",
-        "accessStatus": "full_text_verified",
+        "accessStatus": "url_verified",
         "topicalRelevance": "weak_match",
         "classificationRationale": "Notice mentions endangered species broadly, not desert tortoise.",
         "whyClassifiedAsWeakMatch": (
@@ -48,7 +48,7 @@ def _on_topic_primary_source() -> dict[str, Any]:
         "provider": "federal_register",
         "sourceType": "federal_register_rule",
         "verificationStatus": "verified_primary_source",
-        "accessStatus": "full_text_verified",
+        "accessStatus": "url_verified",
         "topicalRelevance": "on_topic",
         "isPrimarySource": True,
         "canonicalUrl": "https://example.com/fr-strong",

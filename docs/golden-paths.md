@@ -128,16 +128,29 @@ and grounding cues. Treat them as hints layered on top of `answerability` and
 ### 2. Grounded follow-up (`follow_up_research`)
 
 1. Use `follow_up_research` with `searchSessionId` from `research`.
-2. Gate on `answerStatus` before trusting the answer body.
+2. Gate on `answerStatus` before trusting the answer body. `answered`/grounded
+   now requires an on-topic, verified source with qa-readable text and a
+   non-deterministic synthesis provider; fallback cases return
+   `insufficient_evidence` with `answer=null`.
 3. If not answered, follow `nextActions` and inspect source-level evidence.
 4. If `searchSessionId` is omitted, expect inference only when exactly one compatible saved session exists.
+5. Responses are **compact by default** — `sources` are collapsed to
+   `selectedEvidenceIds` / `selectedLeadIds`, and legacy
+   `verifiedFindings`/`unverifiedLeads` are omitted. Pass
+   `responseMode="standard"` for full source records, `responseMode="debug"`
+   for full diagnostics, or `includeLegacyFields=true` to restore legacy views.
+6. Comparative / selection asks ("where should I start?", "most recent?",
+   "most authoritative?") expose a `topRecommendation` payload with
+   `sourceId`, `recommendationReason`, and inferred `comparativeAxis`.
 
 **Example**
 
 ```text
 follow_up_research(searchSessionId="...", question="What evaluation tradeoffs show up here?")
-→ if answerStatus=answered: use answer + evidence
+→ if answerStatus=answered: use answer + selectedEvidenceIds (resolve to evidence records via the saved session)
 → if answerStatus=abstained|insufficient_evidence: inspect_source + refine research query
+→ if you need full source records inline: re-run with responseMode="standard"
+→ for selection asks: read topRecommendation.sourceId + topRecommendation.recommendationReason
 ```
 
 **Success signals**

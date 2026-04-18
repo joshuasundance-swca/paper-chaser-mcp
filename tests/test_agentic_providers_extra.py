@@ -298,6 +298,39 @@ def test_provider_helpers_and_deterministic_bundle_paths() -> None:
     )
 
 
+def test_deterministic_bundle_default_qa_gates_answerability_on_evidence_count() -> None:
+    """P0-1 Fix #3: deterministic default QA path must downgrade when evidence is thin.
+
+    With fewer than two evidence papers the deterministic bundle has no real
+    on-topic signal, so it must not return ``answerability="grounded"``. It
+    should emit ``limited``/``low`` and clear ``selectedEvidenceIds`` so
+    downstream grounded-promotion gates cannot reintroduce the weak pool.
+    """
+
+    bundle = DeterministicProviderBundle(_config(provider="deterministic"))
+
+    thin = bundle.answer_question(
+        question="What does the saved result set say about X?",
+        evidence_papers=[{"title": "Only Paper", "paperId": "paper-only"}],
+        answer_mode="qa",
+    )
+    assert thin["answerability"] == "limited"
+    assert thin["confidence"] == "low"
+    assert thin["selectedEvidenceIds"] == []
+
+    sufficient = bundle.answer_question(
+        question="What does the saved result set say about X?",
+        evidence_papers=[
+            {"title": "Paper A", "paperId": "paper-a"},
+            {"title": "Paper B", "paperId": "paper-b"},
+        ],
+        answer_mode="qa",
+    )
+    assert sufficient["answerability"] == "grounded"
+    assert sufficient["confidence"] == "medium"
+    assert sufficient["selectedEvidenceIds"]
+
+
 def test_openai_provider_loaders_and_response_helpers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1890,7 +1923,7 @@ def test_openai_sync_answer_invalid_native_text_fallback_uses_deterministic(
     )
 
     assert "Paper A" in answer["answer"]
-    assert answer["confidence"] == "medium"
+    assert answer["confidence"] == "low"
 
 
 @pytest.mark.asyncio
@@ -1940,7 +1973,7 @@ async def test_openai_async_answer_invalid_native_text_fallback_uses_determinist
     )
 
     assert "Paper A" in answer["answer"]
-    assert answer["confidence"] == "medium"
+    assert answer["confidence"] == "low"
 
 
 class _StructuredInvoker:

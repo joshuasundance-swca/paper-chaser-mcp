@@ -301,14 +301,28 @@ def classify_answerability(
     leads: list[dict[str, Any]],
     evidence_gaps: list[str],
     answer_text: str = "",
+    synthesis_mode: str | None = None,
+    evidence_quality_profile: str | None = None,
 ) -> str:
-    """Map source state into the simplified answerability ladder."""
+    """Map source state into the simplified answerability ladder.
+
+    P0-1 Fix #5: even when the deterministic ladder would return ``grounded``,
+    downgrade to ``limited`` whenever the trust signals indicate weak or
+    non-grounded synthesis (``evidence_quality_profile == 'low'`` or
+    ``synthesis_mode`` reports anything other than ``'grounded'``). The guided
+    contract must never advertise a grounded answer while the accompanying
+    confidence signals disagree.
+    """
 
     if status in {"succeeded", "answered"} and evidence:
         if any("deterministic_synthesis_fallback" in str(gap) for gap in evidence_gaps):
             return "limited"
         if _detect_refusal(answer_text):
             return "insufficient"
+        if evidence_quality_profile is not None and evidence_quality_profile == "low":
+            return "limited"
+        if synthesis_mode is not None and synthesis_mode != "grounded":
+            return "limited"
         return "grounded"
     if evidence or leads or evidence_gaps:
         return "limited"

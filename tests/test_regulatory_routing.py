@@ -43,50 +43,54 @@ class TestAssignVerificationStatus:
         assert result == "verified_metadata"
 
     def test_regulatory_document_returns_verified_primary_source(self) -> None:
-        result = _assign_verification_status(source_type="regulatory_document")
+        result = _assign_verification_status(source_type="regulatory_document", body_text_embedded=True)
         assert result == "verified_primary_source"
 
     def test_government_document_returns_verified_primary_source(self) -> None:
-        result = _assign_verification_status(source_type="government_document")
+        result = _assign_verification_status(source_type="government_document", body_text_embedded=True)
         assert result == "verified_primary_source"
 
     def test_federal_register_rule_returns_verified_primary_source(self) -> None:
-        result = _assign_verification_status(source_type="federal_register_rule")
+        result = _assign_verification_status(source_type="federal_register_rule", body_text_embedded=True)
         assert result == "verified_primary_source"
 
     def test_primary_source_returns_verified_primary_source(self) -> None:
-        result = _assign_verification_status(source_type="primary_source")
+        result = _assign_verification_status(source_type="primary_source", body_text_embedded=True)
         assert result == "verified_primary_source"
 
     def test_full_text_url_found_regulatory_returns_verified_primary_source(self) -> None:
-        result = _assign_verification_status(source_type="regulatory_document", full_text_url_found=True)
+        result = _assign_verification_status(
+            source_type="regulatory_document",
+            full_text_url_found=True,
+            body_text_embedded=True,
+        )
         assert result == "verified_primary_source"
 
     # --- Regulatory source type variations (brittleness fix) ---
 
     def test_government_report_returns_verified_primary_source(self) -> None:
         """'government_report' should be recognized as a regulatory source."""
-        result = _assign_verification_status(source_type="government_report")
+        result = _assign_verification_status(source_type="government_report", body_text_embedded=True)
         assert result == "verified_primary_source"
 
     def test_regulatory_guidance_returns_verified_primary_source(self) -> None:
-        result = _assign_verification_status(source_type="regulatory_guidance")
+        result = _assign_verification_status(source_type="regulatory_guidance", body_text_embedded=True)
         assert result == "verified_primary_source"
 
     def test_executive_order_returns_verified_primary_source(self) -> None:
-        result = _assign_verification_status(source_type="executive_order")
+        result = _assign_verification_status(source_type="executive_order", body_text_embedded=True)
         assert result == "verified_primary_source"
 
     def test_legislation_returns_verified_primary_source(self) -> None:
-        result = _assign_verification_status(source_type="legislation")
+        result = _assign_verification_status(source_type="legislation", body_text_embedded=True)
         assert result == "verified_primary_source"
 
     def test_agency_report_returns_verified_primary_source(self) -> None:
-        result = _assign_verification_status(source_type="agency_report")
+        result = _assign_verification_status(source_type="agency_report", body_text_embedded=True)
         assert result == "verified_primary_source"
 
     def test_congressional_report_returns_verified_primary_source(self) -> None:
-        result = _assign_verification_status(source_type="congressional_report")
+        result = _assign_verification_status(source_type="congressional_report", body_text_embedded=True)
         assert result == "verified_primary_source"
 
     def test_empty_source_type_no_doi_returns_unverified(self) -> None:
@@ -132,6 +136,7 @@ class TestSourceRecordVerificationFlow:
         source = {
             "sourceType": "regulatory_document",
             "title": "EPA Final Rule",
+            "bodyTextEmbedded": True,
         }
         record = _guided_source_record_from_structured_source(source, index=0)
         assert record["verificationStatus"] == "verified_primary_source"
@@ -230,7 +235,7 @@ class TestRegulatorySourceTypeSet:
         ],
     )
     def test_regulatory_types_get_primary_source_status(self, source_type: str) -> None:
-        result = _assign_verification_status(source_type=source_type)
+        result = _assign_verification_status(source_type=source_type, body_text_embedded=True)
         assert result == "verified_primary_source", (
             f"Source type '{source_type}' should be verified_primary_source, got '{result}'"
         )

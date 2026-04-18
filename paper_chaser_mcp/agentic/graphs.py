@@ -93,6 +93,10 @@ from .retrieval import (
     RetrievedCandidate,
     retrieve_variant,
 )
+from .selection_scoring import (
+    infer_comparative_axis,
+    score_papers_for_comparative_axis,
+)
 from .workspace import (
     ExpiredSearchSessionError,
     SearchSessionNotFoundError,
@@ -1703,6 +1707,40 @@ class AgenticRuntime:
 
         max_relevance = max((item.relevance_score for item in evidence), default=0.0)
         insufficient_evidence = (not evidence) or (max_relevance < 0.12 and on_topic_evidence == 0)
+        # Build the set of "strong" evidence identifiers: on-topic sources
+        # whose verification status is primary-source or metadata-verified.
+        # This set feeds the strict ``grounded`` answerability gate and the
+        # selected_evidence_ids filter further below.
+        _strong_verification_states = {"verified_primary_source", "verified_metadata"}
+        strong_evidence_ids: set[str] = set()
+        # P0-2: track which on-topic strong sources actually have QA-readable
+        # body text. The ``grounded`` answerability gate (below) requires at
+        # least one selected evidence id in this set; otherwise we downgrade
+        # to ``limited`` with degradation_reason="no_qa_readable_body_text".
+        # Legacy/backfilled records may not populate qa_readable_text; we
+        # treat ``access_status in {body_text_embedded, full_text_verified,
+        # full_text_retrieved}`` as implying QA-readable for back-compat.
+        _qa_readable_access_states = {"body_text_embedded", "full_text_verified", "full_text_retrieved"}
+        qa_readable_evidence_ids: set[str] = set()
+        for _record in source_records:
+            if _record.topical_relevance != "on_topic":
+                continue
+            if str(_record.verification_status or "") not in _strong_verification_states:
+                continue
+            _ident = str(_record.source_id or "").strip()
+            if _ident:
+                strong_evidence_ids.add(_ident)
+                _qa_flag = getattr(_record, "qa_readable_text", None)
+                if _qa_flag is True:
+                    qa_readable_evidence_ids.add(_ident)
+                elif _qa_flag is None and str(_record.access_status or "") in _qa_readable_access_states:
+                    qa_readable_evidence_ids.add(_ident)
+        if strong_evidence_ids:
+            _filtered_selected = [
+                identifier for identifier in selected_evidence_ids if identifier in strong_evidence_ids
+            ]
+            if _filtered_selected:
+                selected_evidence_ids = _filtered_selected
         should_abstain = bool(unsupported_asks) and (
             normalized_confidence == "low" or max_relevance < 0.25 or on_topic_evidence == 0
         )
@@ -1763,7 +1801,34 @@ class AgenticRuntime:
         if answerability not in {"grounded", "limited", "insufficient"}:
             answerability = "limited"
         if answer_status == "answered" and selected_evidence_ids:
-            answerability = "grounded"
+            _normalized_confidence_value = str(normalized_confidence or "").lower()
+            _has_qa_readable_selected = any(
+                identifier in qa_readable_evidence_ids for identifier in selected_evidence_ids
+            )
+            if (
+                provider_used != "deterministic"
+                and strong_evidence_ids
+                and _has_qa_readable_selected
+                and _normalized_confidence_value in {"high", "medium"}
+            ):
+                answerability = "grounded"
+            else:
+                answerability = "limited"
+                if degradation_reason is None:
+                    if not strong_evidence_ids:
+                        degradation_reason = "weak_evidence_pool"
+                    elif not _has_qa_readable_selected:
+                        # P0-2: we have strong (metadata/primary) on-topic
+                        # sources, but none of the selected evidence has QA-
+                        # readable body text. Cannot ground a synthesis
+                        # answer on URL-only or abstract-only metadata.
+                        degradation_reason = "no_qa_readable_body_text"
+                        answer_status = "insufficient_evidence"
+                        answer_payload = None
+                    elif provider_used == "deterministic":
+                        degradation_reason = "deterministic_synthesis_fallback"
+                    else:
+                        degradation_reason = "low_confidence_synthesis"
         elif answer_status == "insufficient_evidence":
             answerability = "insufficient"
         elif answer_status == "abstained" or not selected_evidence_ids:
@@ -1881,6 +1946,14 @@ class AgenticRuntime:
                 evidence_gaps = evidence_gaps + [fallback_warning]
             if fallback_warning not in agent_hints.warnings:
                 agent_hints.warnings.append(fallback_warning)
+        top_recommendation = _compute_top_recommendation(
+            question=question,
+            resolved_question_mode=resolved_question_mode,
+            answer_status=answer_status,
+            evidence=evidence,
+            source_records=source_records,
+            strong_evidence_ids=strong_evidence_ids,
+        )
         response = AskResultSetResponse(
             answer=answer_payload,
             answerStatus=answer_status,
@@ -1914,6 +1987,7 @@ class AgenticRuntime:
             evidenceUsePlan=evidence_use_plan,
             classificationProvenance=classification_provenance if classification_provenance.get("total") else None,
             degradedClassification=degraded_classification if classification_provenance.get("total") else None,
+            topRecommendation=top_recommendation,
         )
         if self._config.enable_trace_log:
             self._workspace_registry.record_trace(
@@ -3039,6 +3113,10 @@ class AgenticRuntime:
         )
 
         provider_selection = self._provider_bundle_for_profile(latency_profile).selection_metadata()
+        # P0-3 item 1: reconcile zero_results against succeeded/failed so a provider
+        # recovered via a fallback path (e.g., govinfo) cannot remain classified as
+        # returning zero results. See docs/ux-remediation-checklist.md.
+        zero_results = [p for p in attempted if p not in succeeded and p not in failed]
         coverage_summary = CoverageSummary(
             providersAttempted=attempted,
             providersSucceeded=succeeded,
@@ -3998,6 +4076,8 @@ def _source_record_from_paper(
         canonicalUrl=paper.canonical_url,
         retrievedUrl=paper.retrieved_url,
         fullTextUrlFound=paper.full_text_url_found,
+        bodyTextEmbedded=paper.body_text_embedded,
+        qaReadableText=paper.qa_readable_text,
         abstractObserved=paper.abstract_observed,
         openAccessRoute=paper.open_access_route,
         citationText=str(paper.canonical_id or paper.paper_id or "") or None,
@@ -4048,28 +4128,38 @@ def _source_record_from_regulatory_document(
             document.get("note")
             or ("Authoritative CFR text" if document.get("markdown") else "GovInfo primary-source discovery hit")
         )
-    has_full_text = bool(document.get("markdown") or document.get("contentSource"))
+    has_inline_body = bool(document.get("markdown"))
+    has_url = bool(canonical_url)
     family_match = document.get("_documentFamilyMatch")
     family_boost = document.get("_documentFamilyBoost")
+    if has_inline_body:
+        access_status: str = "body_text_embedded"
+    elif has_url:
+        access_status = "url_verified"
+    else:
+        access_status = "access_unverified"
+    if has_inline_body:
+        verification_status_default = "verified_primary_source" if provider == "govinfo" else "verified_metadata"
+    else:
+        verification_status_default = "verified_metadata"
     return StructuredSourceRecord(
         sourceId=source_id,
         title=title,
         provider=provider,
         sourceType="primary_regulatory",
-        verificationStatus=str(
-            document.get("verificationStatus")
-            or ("verified_primary_source" if provider == "govinfo" else "verified_metadata")
-        ),
-        accessStatus=("full_text_verified" if has_full_text else "access_unverified"),
-        confidence="high" if provider == "govinfo" else "medium",
+        verificationStatus=str(document.get("verificationStatus") or verification_status_default),
+        accessStatus=access_status,
+        confidence="high" if (provider == "govinfo" and has_inline_body) else "medium",
         topicalRelevance=topical_relevance,
         isPrimarySource=True,
         canonicalUrl=canonical_url,
         retrievedUrl=canonical_url,
-        fullTextUrlFound=has_full_text,
-        fullTextRetrieved=has_full_text,
+        fullTextUrlFound=has_url,
+        fullTextRetrieved=has_inline_body,
+        bodyTextEmbedded=has_inline_body,
+        qaReadableText=has_inline_body,
         abstractObserved=False,
-        openAccessRoute=("non_oa_or_unconfirmed" if (has_full_text or canonical_url) else "unknown"),
+        openAccessRoute=("non_oa_or_unconfirmed" if (has_inline_body or has_url) else "unknown"),
         citationText=citation,
         citation=_citation_record_from_regulatory_document(
             document,
@@ -4083,6 +4173,116 @@ def _source_record_from_regulatory_document(
         documentFamilyMatch=str(family_match) if family_match else None,
         documentFamilyBoost=float(family_boost) if isinstance(family_boost, (int, float)) else None,
     )
+
+
+def _compute_top_recommendation(
+    *,
+    question: str,
+    resolved_question_mode: str,
+    answer_status: str,
+    evidence: list[EvidenceItem],
+    source_records: list[StructuredSourceRecord],
+    strong_evidence_ids: set[str],
+) -> dict[str, Any] | None:
+    """Build the P1-2 ``topRecommendation`` payload for selection follow-ups.
+
+    Returns ``None`` unless:
+
+    * ``resolved_question_mode`` is ``comparison`` or ``selection``;
+    * ``answer_status`` is ``answered`` (mirrors the grounded gate; abstained
+      or insufficient_evidence paths never carry a recommendation);
+    * at least two strong, on-topic evidence items are available;
+    * and at least one paper scores above zero on the inferred axis.
+    """
+    if resolved_question_mode not in {"comparison", "selection"}:
+        return None
+    if answer_status != "answered":
+        return None
+    strong_on_topic_evidence = [
+        item
+        for item in evidence
+        if str(item.evidence_id or item.paper.paper_id or item.paper.canonical_id or "").strip() in strong_evidence_ids
+    ]
+    if len(strong_on_topic_evidence) < 2:
+        return None
+    papers = [item.paper for item in strong_on_topic_evidence]
+    relevance_scores: dict[str, float] = {}
+    for item in strong_on_topic_evidence:
+        pid = str(item.paper.paper_id or item.paper.canonical_id or "").strip()
+        if pid:
+            relevance_scores[pid] = float(item.relevance_score or 0.0)
+    primary_axis = infer_comparative_axis(question)
+    primary_scores = score_papers_for_comparative_axis(
+        papers,
+        question,
+        primary_axis,
+        relevance_scores=relevance_scores,
+    )
+    if not primary_scores:
+        return None
+    primary_pid, primary_score = max(primary_scores.items(), key=lambda kv: kv[1])
+    if primary_score <= 0.0:
+        return None
+
+    alt_axes: list[str] = [ax for ax in ("recency", "authority", "coverage") if ax != primary_axis]
+    alternatives: list[dict[str, Any]] = []
+    for alt_axis in alt_axes[:2]:
+        alt_scores = score_papers_for_comparative_axis(
+            papers,
+            question,
+            alt_axis,  # type: ignore[arg-type]
+            relevance_scores=relevance_scores,
+        )
+        if not alt_scores:
+            continue
+        alt_pid, alt_score = max(alt_scores.items(), key=lambda kv: kv[1])
+        if alt_score <= 0.0:
+            continue
+        alternatives.append(
+            {
+                "sourceId": alt_pid,
+                "axis": alt_axis,
+                "score": round(alt_score, 4),
+            }
+        )
+
+    # Find the corresponding evidence item for rationale enrichment.
+    primary_item = next(
+        (
+            item
+            for item in strong_on_topic_evidence
+            if str(item.paper.paper_id or item.paper.canonical_id or "").strip() == primary_pid
+        ),
+        None,
+    )
+    rationale = _build_top_recommendation_rationale(primary_axis, primary_score, primary_item)
+    return {
+        "sourceId": primary_pid,
+        "axis": primary_axis,
+        "score": round(primary_score, 4),
+        "rationale": rationale,
+        "alternatives": alternatives,
+    }
+
+
+def _build_top_recommendation_rationale(
+    axis: str,
+    score: float,
+    item: EvidenceItem | None,
+) -> str:
+    base = f"Highest score on axis '{axis}' ({score:.2f})."
+    if item is None:
+        return base
+    paper = item.paper
+    if axis == "recency" and paper.year is not None:
+        return f"{base} Published in {paper.year}."
+    if axis == "authority" and paper.citation_count is not None:
+        return f"{base} Citation count: {paper.citation_count}."
+    if axis == "beginner":
+        return f"{base} Title signals beginner-friendly framing."
+    if axis == "coverage":
+        return f"{base} Broadest term overlap with the question."
+    return base
 
 
 def _verified_findings_from_source_records(records: list[StructuredSourceRecord]) -> list[str]:

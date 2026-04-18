@@ -815,6 +815,7 @@ class DeterministicProviderBundle(ModelProviderBundle):
                 "selectedLeadIds": [],
                 "confidence": "medium" if insights else "low",
             }
+        sufficient_default = len(evidence_papers) >= 2
         return {
             "answer": (
                 f"The saved result set most directly answers this through "
@@ -826,8 +827,8 @@ class DeterministicProviderBundle(ModelProviderBundle):
                 "Would you like a claim check?",
                 "Should I map the themes in this result set?",
             ],
-            "answerability": "grounded",
-            "selectedEvidenceIds": selected_evidence_ids,
+            "answerability": "grounded" if sufficient_default else "limited",
+            "selectedEvidenceIds": selected_evidence_ids if sufficient_default else [],
             "selectedLeadIds": [],
-            "confidence": "medium",
+            "confidence": "medium" if sufficient_default else "low",
         }

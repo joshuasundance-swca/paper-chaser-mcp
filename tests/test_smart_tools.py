@@ -22,6 +22,7 @@ from paper_chaser_mcp.agentic.models import IntentCandidate, PlannerDecision
 from paper_chaser_mcp.agentic.planner import (
     _estimate_ambiguity_level,
     _estimate_query_specificity,
+    _is_definitional_query,
     _top_evidence_phrases,
     classify_query,
     grounded_expansion_candidates,
@@ -1886,6 +1887,9 @@ async def test_ask_result_set_runs_synthesis_and_scoring_concurrently(
                     "paperId": "paper-1",
                     "title": "Retrieval-Augmented Agents",
                     "abstract": "Vector retrieval grounds agent answers.",
+                    "verificationStatus": "verified_metadata",
+                    "bodyTextEmbedded": True,
+                    "qaReadableText": True,
                 }
             ]
         },
@@ -2239,6 +2243,75 @@ async def test_ask_result_set_returns_evidence_use_plan_for_comparison_when_supp
     assert ask["evidenceUsePlan"]["answerSubtype"] == "comparison"
     assert ask["evidenceUsePlan"]["retrievalSufficiency"] == "insufficient"
     assert ask["evidenceUsePlan"]["directlyResponsiveIds"] == ["paper-1"]
+
+
+@pytest.mark.asyncio
+async def test_ask_result_set_does_not_promote_grounded_on_deterministic_boilerplate() -> None:
+    """P0-1 Fix #1/#5: even when the non-deterministic synthesis path reports a
+    confident grounded/high answer, the final contract must not advertise
+    ``answerability='grounded'`` if the underlying source pool is weak (no
+    ``verificationStatus``, off-topic / unverified only). Such a pool yields an
+    empty ``strong_evidence_ids`` set, which forces the graphs.py gate to
+    downgrade the answerability ladder to ``limited``.
+    """
+
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    registry, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
+
+    record = registry.save_result_set(
+        source_tool="search_papers_smart",
+        payload={
+            "data": [
+                {
+                    "paperId": "paper-1",
+                    "title": "Speculative survey without primary verification",
+                    "abstract": "Abstract discusses the topic at a high level only.",
+                    "source": "semantic_scholar",
+                },
+                {
+                    "paperId": "paper-2",
+                    "title": "Unrelated methodology note",
+                    "abstract": "Abstract unrelated to the question under review.",
+                    "source": "semantic_scholar",
+                },
+            ]
+        },
+    )
+
+    async def _answer_question(**kwargs: object) -> dict[str, object]:
+        del kwargs
+        return {
+            "answer": "Grounded answer asserted by the synthesis provider.",
+            "unsupportedAsks": [],
+            "followUpQuestions": [],
+            "confidence": "high",
+            "answerability": "grounded",
+            "selectedEvidenceIds": ["paper-1", "paper-2"],
+            "selectedLeadIds": [],
+            "citedPaperIds": ["paper-1", "paper-2"],
+            "evidenceSummary": "Synthesis model produced a confident grounded answer.",
+            "missingEvidenceDescription": "",
+        }
+
+    async def _similarity(query: str, texts: list[str], **kwargs: object) -> list[float]:
+        del query, kwargs
+        return [0.71 for _ in texts]
+
+    runtime._provider_bundle.aanswer_question = _answer_question  # type: ignore[method-assign]
+    runtime._deterministic_bundle.aanswer_question = _answer_question  # type: ignore[method-assign]
+    runtime._provider_bundle.abatched_similarity = _similarity  # type: ignore[method-assign]
+    runtime._deterministic_bundle.abatched_similarity = _similarity  # type: ignore[method-assign]
+
+    ask = await runtime.ask_result_set(
+        search_session_id=record.search_session_id,
+        question="Does the saved evidence confirm the grounded claim?",
+        top_k=2,
+        answer_mode="comparison",
+    )
+
+    assert ask["answerability"] != "grounded"
+    assert ask["answerability"] in {"limited", "insufficient"}
 
 
 @pytest.mark.asyncio
@@ -5637,3 +5710,158 @@ async def test_rerank_candidates_pool_size_over_inclusive_preserves_llm_first_si
     off_indices = [i for i, pid in enumerate(ranked_ids) if pid.startswith("off-")]
     if off_indices:
         assert on_index < min(off_indices), "on_topic paper did not outrank off_topic priors after LLM-first rerank"
+
+
+def test_classify_query_detects_definitional_what_is_pattern() -> None:
+    assert _is_definitional_query("What is retrieval-augmented generation?")
+    assert _is_definitional_query("what are graph neural networks")
+    assert _is_definitional_query("define transformer architecture")
+    assert _is_definitional_query("Explain diffusion models concept")
+    assert _is_definitional_query("overview of reinforcement learning")
+    assert _is_definitional_query("Introduction to causal inference")
+    assert _is_definitional_query("guide to federated learning")
+    assert not _is_definitional_query("compare RAG and fine-tuning on factual QA")
+    assert not _is_definitional_query("retrieval augmented generation benchmarks 2024")
+    assert not _is_definitional_query("")
+
+
+@pytest.mark.asyncio
+async def test_rerank_candidates_promotes_survey_papers_for_what_is_rag_query() -> None:
+    provider_bundle = resolve_provider_bundle(
+        _deterministic_config(),
+        openai_api_key=None,
+    )
+    ranked = await rerank_candidates(
+        query="What is retrieval-augmented generation?",
+        merged_candidates=[
+            {
+                "paper": {
+                    "paperId": "niche-rag",
+                    "title": "Retrieval-Augmented Generation for Hungarian Medical Ontology Alignment",
+                    "abstract": (
+                        "We apply retrieval-augmented generation to a narrow Hungarian "
+                        "medical ontology alignment task on a small domain corpus."
+                    ),
+                    "year": 2024,
+                    "authors": [{"name": "Author Niche"}],
+                    "citationCount": 3,
+                    "source": "semantic_scholar",
+                },
+                "providers": ["semantic_scholar"],
+                "variants": ["retrieval-augmented generation"],
+                "variantSources": ["from_input"],
+                "providerRanks": {"semantic_scholar": 1},
+                "retrievalCount": 1,
+            },
+            {
+                "paper": {
+                    "paperId": "survey-rag",
+                    "title": "A Survey of Retrieval-Augmented Generation for Large Language Models",
+                    "abstract": (
+                        "We survey retrieval-augmented generation methods for large language "
+                        "models, covering retrievers, generators, and evaluation."
+                    ),
+                    "year": 2024,
+                    "authors": [{"name": "Author Survey"}],
+                    "citationCount": 120,
+                    "source": "semantic_scholar",
+                },
+                "providers": ["openalex", "semantic_scholar"],
+                "variants": [
+                    "retrieval-augmented generation",
+                    "retrieval-augmented generation survey",
+                ],
+                "variantSources": ["from_input", "hypothesis"],
+                "providerRanks": {"openalex": 1, "semantic_scholar": 2},
+                "retrievalCount": 2,
+            },
+        ],
+        provider_bundle=provider_bundle,
+        candidate_concepts=["retrieval-augmented generation"],
+        query_specificity="low",
+        ambiguity_level="high",
+    )
+
+    assert ranked[0]["paper"]["paperId"] == "survey-rag"
+    survey_breakdown = ranked[0]["scoreBreakdown"]
+    assert survey_breakdown.get("surveyTitleBonus", 0.0) > 0.0
+    assert survey_breakdown.get("definitionalConsensusBonus", 0.0) > 0.0
+
+
+@pytest.mark.asyncio
+async def test_rerank_candidates_canonical_lewis_2020_rag_paper_ranks_high() -> None:
+    provider_bundle = resolve_provider_bundle(
+        _deterministic_config(),
+        openai_api_key=None,
+    )
+    ranked = await rerank_candidates(
+        query="What is retrieval-augmented generation?",
+        merged_candidates=[
+            {
+                "paper": {
+                    "paperId": "lewis-2020",
+                    "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+                    "abstract": (
+                        "We introduce retrieval-augmented generation (RAG), combining "
+                        "pre-trained parametric and non-parametric memory for language "
+                        "generation across knowledge-intensive NLP tasks."
+                    ),
+                    "year": 2020,
+                    "authors": [{"name": "Patrick Lewis"}],
+                    "citationCount": 4200,
+                    "source": "arxiv",
+                },
+                "providers": ["arxiv", "semantic_scholar"],
+                "variants": ["retrieval-augmented generation"],
+                "variantSources": ["from_input"],
+                "providerRanks": {"arxiv": 1, "semantic_scholar": 3},
+                "retrievalCount": 2,
+            },
+            {
+                "paper": {
+                    "paperId": "niche-rag-a",
+                    "title": "Retrieval-Augmented Generation for Hungarian Medical Ontology Alignment",
+                    "abstract": (
+                        "Narrow domain retrieval-augmented generation applied to Hungarian "
+                        "medical ontology alignment with limited evaluation."
+                    ),
+                    "year": 2024,
+                    "authors": [{"name": "Author Niche A"}],
+                    "citationCount": 2,
+                    "source": "semantic_scholar",
+                },
+                "providers": ["semantic_scholar"],
+                "variants": ["retrieval-augmented generation"],
+                "variantSources": ["from_input"],
+                "providerRanks": {"semantic_scholar": 2},
+                "retrievalCount": 1,
+            },
+            {
+                "paper": {
+                    "paperId": "niche-rag-b",
+                    "title": "Retrieval-Augmented Generation for Industrial Equipment Maintenance Logs",
+                    "abstract": (
+                        "A small-scale retrieval-augmented generation pilot on industrial "
+                        "equipment maintenance logs in a single plant."
+                    ),
+                    "year": 2025,
+                    "authors": [{"name": "Author Niche B"}],
+                    "citationCount": 1,
+                    "source": "semantic_scholar",
+                },
+                "providers": ["semantic_scholar"],
+                "variants": ["retrieval-augmented generation"],
+                "variantSources": ["from_input"],
+                "providerRanks": {"semantic_scholar": 4},
+                "retrievalCount": 1,
+            },
+        ],
+        provider_bundle=provider_bundle,
+        candidate_concepts=["retrieval-augmented generation"],
+        query_specificity="low",
+        ambiguity_level="high",
+    )
+
+    assert ranked[0]["paper"]["paperId"] == "lewis-2020"
+    lewis_breakdown = ranked[0]["scoreBreakdown"]
+    assert lewis_breakdown.get("canonicalPaperBonus", 0.0) > 0.0

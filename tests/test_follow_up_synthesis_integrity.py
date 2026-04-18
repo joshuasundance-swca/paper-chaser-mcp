@@ -72,7 +72,7 @@ def _relevance(paper_id: str, *, classification: str = "on_topic", fallback: boo
 def test_answer_modes_surface_is_stable() -> None:
     assert "mechanism_summary" in ANSWER_MODES
     assert SYNTHESIS_MODES == frozenset(
-        {"comparison", "mechanism_summary", "regulatory_chain", "intervention_tradeoff"}
+        {"comparison", "selection", "mechanism_summary", "regulatory_chain", "intervention_tradeoff"}
     )
     assert SALVAGEABLE_MODES == frozenset({"metadata", "relevance_triage"})
 

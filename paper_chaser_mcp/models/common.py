@@ -155,7 +155,18 @@ AccessStatus = Literal[
     "oa_uncertain",
     "access_unverified",
     "mirror_only",
+    "url_verified",
+    "body_text_embedded",
+    "qa_readable_text",
+    "pdf_available",
 ]
+"""Access-status literal. ``full_text_verified`` is deprecated in favour of the
+three-signal split introduced by P0-2: ``url_verified`` (URL discovered only),
+``body_text_embedded`` (body content embedded in the provider payload, e.g.
+GovInfo inline markdown), and ``qa_readable_text`` (body text fetched for the
+current synthesis call). ``full_text_verified`` is retained for backward
+compatibility with existing serialized payloads and will be removed in a future
+release."""
 OpenAccessRoute = Literal[
     "canonical_open_access",
     "repository_open_access",
@@ -506,6 +517,27 @@ class Paper(ApiModel):
         validation_alias=AliasChoices("fullTextUrlFound", "fullTextObserved"),
     )
     full_text_retrieved: bool | None = Field(default=None, alias="fullTextRetrieved")
+    body_text_embedded: bool | None = Field(
+        default=None,
+        alias="bodyTextEmbedded",
+        description=(
+            "True when the provider payload includes actual body text inline "
+            "(e.g. GovInfo CFR markdown). Distinct from ``fullTextUrlFound`` "
+            "which only indicates a URL was discovered, and distinct from "
+            "``qaReadableText`` which indicates body text is available for the "
+            "current synthesis call. Part of the P0-2 three-signal split."
+        ),
+    )
+    qa_readable_text: bool | None = Field(
+        default=None,
+        alias="qaReadableText",
+        description=(
+            "True when body text was actually fetched and is available for the "
+            "current QA/synthesis call. Only this signal should gate "
+            "``answerability=grounded`` — URL discovery and embedded body are "
+            "necessary but not sufficient."
+        ),
+    )
     abstract_observed: bool | None = Field(default=None, alias="abstractObserved")
     open_access_route: OpenAccessRoute | None = Field(default=None, alias="openAccessRoute")
 

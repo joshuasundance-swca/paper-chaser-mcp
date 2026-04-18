@@ -99,8 +99,10 @@ def test_guided_sources_from_fr_documents_handles_dict_and_object_inputs() -> No
 
     assert len(sources) == 2
     assert sources[0]["sourceType"] == "federal_register_rule"
-    assert sources[0]["verificationStatus"] == "verified_primary_source"
-    assert sources[0]["accessStatus"] == "full_text_verified"
+    # P0-2: URL-only FR docs → verified_metadata, not verified_primary_source.
+    # Inline body text would be required to promote to primary source.
+    assert sources[0]["verificationStatus"] == "verified_metadata"
+    assert sources[0]["accessStatus"] == "url_verified"
     assert "Fish and Wildlife Service" in str(sources[0]["note"])
     assert "CFR: 50 CFR 17.11" in str(sources[0]["note"])
     assert sources[1]["sourceType"] == "regulatory_document"
@@ -154,6 +156,8 @@ async def test_list_tools_returns_expected_public_contract() -> None:
     assert set(tool_map["follow_up_research"].inputSchema["properties"]) == {
         "searchSessionId",
         "question",
+        "responseMode",
+        "includeLegacyFields",
     }
     assert tool_map["resolve_reference"].inputSchema["required"] == ["reference"]
     assert set(tool_map["resolve_reference"].inputSchema["properties"]) == {"reference"}
@@ -3354,7 +3358,12 @@ async def test_follow_up_research_surfaces_deterministic_synthesis_degradation(
         payload = _payload(
             await server.call_tool(
                 "follow_up_research",
-                {"searchSessionId": "ssn-follow-up-det", "question": "What does the saved session support?"},
+                {
+                    "searchSessionId": "ssn-follow-up-det",
+                    "question": "What does the saved session support?",
+                    "responseMode": "standard",
+                    "includeLegacyFields": True,
+                },
             )
         )
     finally:
@@ -3410,6 +3419,59 @@ async def test_answer_follow_up_from_session_state_only_answers_metadata_safe_mo
 
     assert metadata_answer is not None
     assert metadata_answer["executionProvenance"]["executionMode"] == "session_introspection"
+
+
+@pytest.mark.asyncio
+async def test_follow_up_research_session_introspection_does_not_emit_answered_on_weak_pool() -> None:
+    """P0-1 Fix #2 + Fix #5: session-state introspection must not advertise a
+    ``grounded`` answerability ladder when the saved pool reports no on-topic
+    or verified sources. Metadata-style questions (coverage, evidence gaps)
+    are legitimately ``answered`` from saved structure, but the ladder must
+    downgrade to ``limited`` so agents cannot misread the deterministic
+    metadata answer as a topically grounded claim.
+    """
+
+    session_state = {
+        "searchSessionId": "ssn-weak-pool",
+        "query": "PFAS remediation in groundwater",
+        "intent": "discovery",
+        "verifiedFindings": [],
+        "sources": [
+            {
+                "sourceId": "paper-1",
+                "title": "Unverified lead masquerading as source",
+                "provider": "openalex",
+                "verificationStatus": "unverified",
+                "topicalRelevance": "off_topic",
+            }
+        ],
+        "unverifiedLeads": [],
+        "evidenceGaps": ["Direct comparison evidence is incomplete."],
+        "trustSummary": {
+            "verifiedSourceCount": 0,
+            "onTopicSourceCount": 0,
+            "weakMatchCount": 0,
+            "offTopicCount": 1,
+        },
+        "coverage": {"providersAttempted": ["openalex"]},
+        "failureSummary": None,
+        "resultMeaning": "Saved session pool is weak.",
+        "nextActions": ["Inspect the saved source."],
+    }
+
+    metadata_answer = await dispatch_module._answer_follow_up_from_session_state(
+        question="Which providers were searched and what were the main gaps?",
+        session_state=session_state,
+        response_mode="metadata",
+    )
+
+    assert metadata_answer is not None
+    # Metadata questions remain legitimately ``answered`` from saved structure.
+    assert metadata_answer["answerStatus"] == "answered"
+    # But the answerability ladder must NOT claim ``grounded`` on a weak pool:
+    # zero on-topic, zero verified sources yields an ``evidenceQualityProfile``
+    # of ``low``, which Fix #5 collapses down from ``grounded`` to ``limited``.
+    assert metadata_answer.get("answerability") != "grounded"
 
 
 @pytest.mark.asyncio
@@ -3807,6 +3869,8 @@ async def test_resolve_reference_title_only_match_with_conflicting_author_year_v
             {
                 "searchSessionId": "ssn-guided-1",
                 "question": "What evaluation tradeoffs show up here?",
+                "responseMode": "standard",
+                "includeLegacyFields": True,
             },
         )
     )
@@ -4993,6 +5057,8 @@ async def test_follow_up_research_answers_from_saved_session_metadata_when_parti
                 "question": (
                     "Which provider failure made completeness partial, and what was the strongest verified finding?"
                 ),
+                "responseMode": "standard",
+                "includeLegacyFields": True,
             },
         )
     )

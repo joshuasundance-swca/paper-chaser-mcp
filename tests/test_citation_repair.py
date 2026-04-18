@@ -919,3 +919,152 @@ async def test_resolve_citation_case_insensitive_title_match_for_human_dominatio
 
     assert payload["bestMatch"]["paper"]["paperId"] == "human-domination"
     assert payload["resolutionConfidence"] == "high"
+
+
+# ============================================================
+# P2-2: Citation resolution for natural-language classic papers
+# ============================================================
+
+
+def test_parse_citation_extracts_author_initials_watson_crick() -> None:
+    parsed = parse_citation(
+        "Watson, J. D., & Crick, F. H. C. (1953). Molecular structure of nucleic acids. Nature, 171(4356), 737-738."
+    )
+
+    assert parsed.year == 1953
+    assert "watson" in parsed.author_surnames
+    assert "crick" in parsed.author_surnames
+    assert "nature" in parsed.venue_hints
+
+
+def test_sparse_search_queries_prioritizes_journal_hint() -> None:
+    from paper_chaser_mcp.citation_repair import _sparse_search_queries
+
+    parsed = parse_citation("Watson Crick 1953 molecular structure nucleic acids Nature")
+    queries = _sparse_search_queries(parsed)
+
+    assert queries, "expected at least one sparse query"
+    first_lower = queries[0].lower()
+    assert "nature" in first_lower, f"expected venue hint first, got queries={queries!r}"
+    assert "watson" in first_lower or "1953" in first_lower
+
+
+def test_rank_candidate_penalizes_year_mismatch_watson_crick_variant() -> None:
+    from paper_chaser_mcp.citation_repair import _rank_candidate
+
+    parsed = parse_citation("Watson Crick 1953 molecular structure nucleic acids Nature")
+
+    old_paper = {
+        "paperId": "old",
+        "title": "molecular structure",
+        "year": 1953,
+        "authors": [{"name": "James D Watson"}, {"name": "Francis H Crick"}],
+        "venue": "Nature",
+    }
+    modern_paper = {
+        "paperId": "modern",
+        "title": "molecular structure of nucleic acids a modern reanalysis",
+        "year": 2020,
+        "authors": [{"name": "Jane Doe"}],
+        "venue": "Some Journal",
+    }
+
+    old_ranked = _rank_candidate(
+        paper=old_paper,
+        parsed=parsed,
+        resolution_strategy="sparse_metadata",
+        candidate_count=2,
+        snippet_text=None,
+    )
+    modern_ranked = _rank_candidate(
+        paper=modern_paper,
+        parsed=parsed,
+        resolution_strategy="sparse_metadata",
+        candidate_count=2,
+        snippet_text=None,
+    )
+
+    assert old_ranked.score > modern_ranked.score, (
+        f"expected 1953 match to outrank 2020 variant; old={old_ranked.score:.3f} modern={modern_ranked.score:.3f}"
+    )
+
+
+def test_rank_candidate_boosts_multi_author_match() -> None:
+    from paper_chaser_mcp.citation_repair import _rank_candidate
+
+    parsed = parse_citation("Watson Crick 1953 molecular structure nucleic acids Nature")
+
+    both = {
+        "paperId": "both",
+        "title": "molecular structure of nucleic acids",
+        "year": 1953,
+        "authors": [{"name": "James Watson"}, {"name": "Francis Crick"}],
+        "venue": "Nature",
+    }
+    one_only = {
+        "paperId": "one",
+        "title": "molecular structure of nucleic acids",
+        "year": 1953,
+        "authors": [{"name": "James Watson"}, {"name": "Rosalind Franklin"}],
+        "venue": "Nature",
+    }
+
+    both_ranked = _rank_candidate(
+        paper=both,
+        parsed=parsed,
+        resolution_strategy="sparse_metadata",
+        candidate_count=2,
+        snippet_text=None,
+    )
+    one_ranked = _rank_candidate(
+        paper=one_only,
+        parsed=parsed,
+        resolution_strategy="sparse_metadata",
+        candidate_count=2,
+        snippet_text=None,
+    )
+
+    assert both_ranked.author_overlap == 2
+    assert one_ranked.author_overlap == 1
+    assert both_ranked.score - one_ranked.score >= 0.15, (
+        f"expected multi-author match to beat single-author by >=0.15; "
+        f"both={both_ranked.score:.3f} one={one_ranked.score:.3f}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_citation_famous_paper_registry_watson_crick() -> None:
+    """Natural-language classics should resolve via the famous-paper registry
+    without hitting any upstream provider."""
+
+    class NetworkForbiddenClient:
+        def __getattr__(self, name: str):
+            async def _raise(*args, **kwargs):
+                raise AssertionError(f"no network calls allowed; method {name!r} was invoked")
+
+            return _raise
+
+    client = NetworkForbiddenClient()
+
+    payload = await resolve_citation(
+        citation="Watson and Crick 1953 DNA Nature",
+        max_candidates=5,
+        client=client,
+        enable_core=False,
+        enable_semantic_scholar=True,
+        enable_openalex=False,
+        enable_arxiv=False,
+        enable_serpapi=False,
+        core_client=None,
+        openalex_client=None,
+        arxiv_client=None,
+        serpapi_client=None,
+    )
+
+    best = payload["bestMatch"]
+    assert best is not None, "expected famous-paper registry to produce a bestMatch"
+    paper = best["paper"]
+    external_ids = paper.get("externalIds") or {}
+    doi = str(external_ids.get("DOI") or "").lower()
+    assert doi == "10.1038/171737a0", f"expected Watson/Crick DOI, got {external_ids!r}"
+    assert payload["resolutionConfidence"] in {"medium", "high"}

@@ -308,6 +308,7 @@ class TestVerificationStatusAssignment:
             source_type=source_type,
             has_doi=False,
             has_doi_resolution=False,
+            body_text_embedded=True,
         )
         assert status == "verified_primary_source"
 
@@ -581,6 +582,7 @@ class TestCrossCuttingPipeline:
             source_type="federal_register_rule",
             has_doi=False,
             has_doi_resolution=False,
+            body_text_embedded=True,
         )
         assert vs == "verified_primary_source"
 

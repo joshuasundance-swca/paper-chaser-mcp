@@ -401,6 +401,24 @@ class StructuredSourceRecord(ApiModel):
         validation_alias=AliasChoices("fullTextUrlFound", "fullTextObserved"),
     )
     full_text_retrieved: bool | None = Field(default=None, alias="fullTextRetrieved")
+    body_text_embedded: bool | None = Field(
+        default=None,
+        alias="bodyTextEmbedded",
+        description=(
+            "True when the upstream payload embedded actual body text (e.g. "
+            "GovInfo inline markdown). Independent of ``fullTextUrlFound`` "
+            "(URL-only discovery) and ``qaReadableText`` (body available for "
+            "the current synthesis call)."
+        ),
+    )
+    qa_readable_text: bool | None = Field(
+        default=None,
+        alias="qaReadableText",
+        description=(
+            "True when body text is available for the current synthesis/QA "
+            "call. This is the signal that gates ``answerability=grounded``."
+        ),
+    )
     abstract_observed: bool | None = Field(default=None, alias="abstractObserved")
     open_access_route: OpenAccessRoute | None = Field(default=None, alias="openAccessRoute")
     citation_text: str | None = Field(default=None, alias="citationText")
@@ -606,6 +624,7 @@ class AskResultSetResponse(ApiModel):
         alias="classificationProvenance",
     )
     degraded_classification: bool | None = Field(default=None, alias="degradedClassification")
+    top_recommendation: dict[str, Any] | None = Field(default=None, alias="topRecommendation")
 
 
 class LandscapeTheme(ApiModel):
