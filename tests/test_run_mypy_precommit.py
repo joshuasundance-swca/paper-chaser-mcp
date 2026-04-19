@@ -162,4 +162,5 @@ def test_main_defers_persistent_internal_errors_to_ci_mypy_step(monkeypatch, cap
     ]
     captured = capsys.readouterr()
     assert "retrying full project check without incremental state" in captured.err
+    assert "Full-project mypy retry exited with code 245 in GitHub Actions" in captured.err
     assert "deferring to the dedicated workflow mypy step" in captured.err

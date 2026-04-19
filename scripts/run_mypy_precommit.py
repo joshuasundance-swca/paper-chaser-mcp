@@ -119,9 +119,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         completed = _run_mypy(_ensure_no_incremental(full_command))
-        if os.environ.get("GITHUB_ACTIONS", "").lower() == "true" and _is_internal_error(completed):
+        if os.environ.get("GITHUB_ACTIONS", "").lower() == "true" and completed.returncode != 0:
             print(
-                "Full-project mypy retry also hit a mypy internal error in GitHub Actions; "
+                f"Full-project mypy retry exited with code {completed.returncode} in GitHub Actions; "
                 "deferring to the dedicated workflow mypy step.",
                 file=sys.stderr,
             )
