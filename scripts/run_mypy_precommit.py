@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess  # nosec B404
 import sys
 from pathlib import Path
@@ -94,9 +95,13 @@ def _is_internal_error_retryable(
 ) -> bool:
     if list(initial_command) == list(full_command):
         return False
-    if completed.returncode != 2:
+    if completed.returncode == 0:
         return False
 
+    return _is_internal_error(completed)
+
+
+def _is_internal_error(completed: subprocess.CompletedProcess[str]) -> bool:
     combined_output = f"{completed.stdout or ''}\n{completed.stderr or ''}"
     return MYPY_INTERNAL_ERROR_MARKER in combined_output
 
@@ -114,6 +119,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         completed = _run_mypy(_ensure_no_incremental(full_command))
+        if os.environ.get("GITHUB_ACTIONS", "").lower() == "true" and _is_internal_error(completed):
+            print(
+                "Full-project mypy retry also hit a mypy internal error in GitHub Actions; "
+                "deferring to the dedicated workflow mypy step.",
+                file=sys.stderr,
+            )
+            return 0
 
     _emit_completed_output(completed)
     return completed.returncode
