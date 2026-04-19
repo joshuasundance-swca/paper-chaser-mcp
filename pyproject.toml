@@ -123,6 +123,9 @@ push = false
     'current_version = "{version}"',
     'version = "{pep440_version}"',
 ]
+"paper_chaser_mcp/__init__.py" = [
+    '__version__ = "{pep440_version}"',
+]
 "server.json" = [
     '"version": "{pep440_version}",',
     '"identifier": "ghcr.io/joshuasundance-swca/paper-chaser-mcp:{pep440_version}",',

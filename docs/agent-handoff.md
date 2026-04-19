@@ -112,7 +112,7 @@ next steps without re-discovering project state.
   family, query specificity, ambiguity level, retrieval-hypothesis counts, and
   mixed-pass hints so review queues can tune routing thresholds with live traces
   instead of static prompt assumptions.
-- The current checked-in package version is `0.2.1` in both `pyproject.toml`
+- The current checked-in package version is `0.2.2` in both `pyproject.toml`
   and `server.json`.
 - The current coverage-gated validation baseline after the UX remediation pass is:
   `python -m pytest --cov=paper_chaser_mcp --cov-report=term-missing --cov-fail-under=85`
@@ -120,8 +120,7 @@ next steps without re-discovering project state.
 
 ### Fleet-mode `llm-guidance` branch (in progress, not merged)
 
-The `llm-guidance` branch bundles a focused LLM-first quality pass. All
-commits live locally and have not been pushed. HEAD is `5a3ccdd` with the
+The `llm-guidance` branch bundles a focused LLM-first quality pass with the
 following additions on top of `main`:
 
 #### Phase 1-3

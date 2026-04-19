@@ -52,5 +52,7 @@ def test_bumpver_file_patterns_cover_the_checked_in_version_contract() -> None:
     assert "[tool.bumpver.file_patterns]" in text
     assert 'current_version = "{version}"' in text
     assert 'version = "{pep440_version}"' in text
+    assert '"paper_chaser_mcp/__init__.py"' in text
+    assert '__version__ = "{pep440_version}"' in text
     assert '"version": "{pep440_version}",' in text
     assert '"identifier": "ghcr.io/joshuasundance-swca/paper-chaser-mcp:{pep440_version}",' in text

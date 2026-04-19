@@ -180,6 +180,7 @@ def test_azure_deployment_doc_mentions_openai_secret_and_agentic_flags() -> None
     assert "huggingface-api-key" in text
     assert "google-api-key" in text
     assert "mistral-api-key" in text
+    assert "openrouter-api-key" in text
     assert "enableAgentic" in text
     assert "agenticProvider" in text
     assert "azureOpenAiEndpoint" in text
