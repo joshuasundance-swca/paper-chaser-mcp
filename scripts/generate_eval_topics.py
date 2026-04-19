@@ -68,6 +68,15 @@ def _script_path(name: str) -> str:
     return str(Path(__file__).resolve().parent / name)
 
 
+def _serialize_repo_path(path: Path) -> str:
+    resolved = path.resolve()
+    repo_root = Path(__file__).resolve().parent.parent
+    try:
+        return resolved.relative_to(repo_root).as_posix()
+    except ValueError:
+        return str(resolved)
+
+
 def _load_dotenv(dotenv_path: Path) -> int:
     loaded = 0
     if not dotenv_path.exists():
@@ -1554,7 +1563,7 @@ async def generate_topics(args: argparse.Namespace) -> dict[str, Any]:
         "activeSmartProvider": selection_metadata.get("activeSmartProvider"),
         "plannerModel": selection_metadata.get("plannerModel"),
         "taxonomyPreset": args.taxonomy_preset,
-        "taxonomyFile": str(taxonomy_path),
+        "taxonomyFile": _serialize_repo_path(taxonomy_path),
         "generationWarnings": generation_warnings,
         "topics": topics,
     }

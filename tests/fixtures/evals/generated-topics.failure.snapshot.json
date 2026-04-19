@@ -7,7 +7,7 @@
   "activeSmartProvider": "deterministic",
   "plannerModel": "stub-planner",
   "taxonomyPreset": "balanced-science",
-  "taxonomyFile": "C:\\Users\\Joshua.Bailey\\VSCodeProjects\\scholar-search-mcp\\tests\\fixtures\\evals\\topic-taxonomy.balanced-science.sample.json",
+  "taxonomyFile": "tests/fixtures/evals/topic-taxonomy.balanced-science.sample.json",
   "generationWarnings": [
     "Speculative expansion failed for 'PFAS remediation in groundwater': RuntimeError; falling back to literal seed.",
     "Planner failed for 'PFAS remediation in groundwater': RuntimeError; using discovery fallback metadata."
