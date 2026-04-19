@@ -29,6 +29,7 @@ repos:
         name: mypy
         entry: python scripts/run_mypy_precommit.py
         language: system
+        pass_filenames: false
         files: ^(paper_chaser_mcp/.*\.py|tests/.*\.py|pyproject\.toml)$
 
   - repo: https://github.com/pre-commit/pre-commit-hooks

@@ -83,8 +83,6 @@ jobs:
           git diff --exit-code -- .github/workflows/test-paper-chaser.lock.yml
 
       - name: Run pre-commit
-        env:
-          SKIP: mypy
         run: pre-commit run --all-files
 
       - name: Run tests
@@ -122,9 +120,6 @@ jobs:
           # Temporary ignore: pip-audit flags CVE-2026-4539 for transitive
           # Pygments releases, but no fixed upstream version is published yet.
           python -m pip_audit . --progress-spinner off --ignore-vuln CVE-2026-4539
-
-      - name: Run mypy
-        run: python -m mypy --config-file pyproject.toml
 
       - name: Run Bandit
         run: python -m bandit -c pyproject.toml -r paper_chaser_mcp
