@@ -107,10 +107,10 @@ def test_main_retries_full_run_after_retryable_internal_error(monkeypatch, capsy
     assert exit_code == 0
     assert commands == [
         [*_expected_base_command(), "paper_chaser_mcp/server.py"],
-        _expected_base_command(),
+        [*_expected_base_command(), module.NO_INCREMENTAL_FLAG],
     ]
     captured = capsys.readouterr()
-    assert "retrying full project check" in captured.err
+    assert "retrying full project check without incremental state" in captured.err
     assert "Success: no issues found" in captured.out
 
 

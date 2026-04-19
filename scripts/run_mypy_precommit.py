@@ -51,6 +51,12 @@ def _base_command(passthrough_flags: Sequence[str]) -> list[str]:
     return [str(_repo_venv_python()), *MYPY_BASE_COMMAND, *passthrough_flags]
 
 
+def _ensure_no_incremental(command: Sequence[str]) -> list[str]:
+    if NO_INCREMENTAL_FLAG in command:
+        return list(command)
+    return [*command, NO_INCREMENTAL_FLAG]
+
+
 def build_mypy_command(argv: Sequence[str]) -> list[str]:
     passthrough_flags, filenames = _split_precommit_args(argv)
     command = _base_command(passthrough_flags)
@@ -104,10 +110,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     completed = _run_mypy(scoped_command)
     if _is_internal_error_retryable(scoped_command, full_command, completed):
         print(
-            "Scoped mypy run hit an internal error; retrying full project check.",
+            "Scoped mypy run hit an internal error; retrying full project check without incremental state.",
             file=sys.stderr,
         )
-        completed = _run_mypy(full_command)
+        completed = _run_mypy(_ensure_no_incremental(full_command))
 
     _emit_completed_output(completed)
     return completed.returncode
