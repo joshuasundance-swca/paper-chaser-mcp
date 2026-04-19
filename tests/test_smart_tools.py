@@ -1620,9 +1620,7 @@ async def test_search_papers_smart_near_known_item_keeps_abstract_only_mentions_
                 {
                     "paperId": "tool-use-survey",
                     "title": "Language-model Tool Use Overview",
-                    "abstract": (
-                        "Surveys tool-use methods and mentions Toolformer as one representative baseline."
-                    ),
+                    "abstract": ("Surveys tool-use methods and mentions Toolformer as one representative baseline."),
                     "year": 2024,
                     "source": "semantic_scholar",
                 },

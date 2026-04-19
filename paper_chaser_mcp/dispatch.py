@@ -1255,9 +1255,7 @@ def _assign_verification_status(
 _ACCESS_STATUS_IMPLIES_BODY: frozenset[str] = frozenset(
     {"body_text_embedded", "qa_readable_text", "full_text_verified", "full_text_retrieved"}
 )
-_ACCESS_STATUS_IMPLIES_QA: frozenset[str] = frozenset(
-    {"qa_readable_text", "full_text_verified", "full_text_retrieved"}
-)
+_ACCESS_STATUS_IMPLIES_QA: frozenset[str] = frozenset({"qa_readable_text", "full_text_verified", "full_text_retrieved"})
 
 
 def _guided_normalize_access_axes(candidate: dict[str, Any]) -> tuple[str, bool, bool, bool, bool]:
@@ -1293,9 +1291,7 @@ def _guided_normalize_access_axes(candidate: dict[str, Any]) -> tuple[str, bool,
     full_text_url_found = explicit_url_found or (legacy_full_text_observed and not has_split_signals)
     body_text_embedded = explicit_body_text_embedded or raw_access_status in _ACCESS_STATUS_IMPLIES_BODY
     qa_readable_text = (
-        explicit_qa_readable_text
-        or explicit_full_text_retrieved
-        or raw_access_status in _ACCESS_STATUS_IMPLIES_QA
+        explicit_qa_readable_text or explicit_full_text_retrieved or raw_access_status in _ACCESS_STATUS_IMPLIES_QA
     )
     if qa_readable_text:
         body_text_embedded = True
@@ -1340,8 +1336,11 @@ def _guided_normalize_access_axes(candidate: dict[str, Any]) -> tuple[str, bool,
     else:
         access_status = "access_unverified"
 
-    full_text_observed = body_text_embedded or qa_readable_text or explicit_full_text_retrieved or (
-        legacy_full_text_observed and not has_split_signals
+    full_text_observed = (
+        body_text_embedded
+        or qa_readable_text
+        or explicit_full_text_retrieved
+        or (legacy_full_text_observed and not has_split_signals)
     )
     return access_status, full_text_url_found, full_text_observed, body_text_embedded, qa_readable_text
 
@@ -2730,9 +2729,7 @@ def _guided_underspecified_reference_clarification(
         return None
 
     citation_like = bool(
-        parsed.year is not None
-        or looks_like_citation_query(combined)
-        or looks_like_exact_title(combined)
+        parsed.year is not None or looks_like_citation_query(combined) or looks_like_exact_title(combined)
     )
     if not citation_like:
         return None
@@ -2951,9 +2948,7 @@ def _guided_merge_coverage_summaries(*coverages: dict[str, Any] | None) -> dict[
     providers_attempted = _merge_list("providersAttempted")
     providers_succeeded = _merge_list("providersSucceeded")
     succeeded_markers = {repr(item) for item in providers_succeeded}
-    providers_failed = [
-        item for item in _merge_list("providersFailed") if repr(item) not in succeeded_markers
-    ]
+    providers_failed = [item for item in _merge_list("providersFailed") if repr(item) not in succeeded_markers]
     failed_markers = {repr(item) for item in providers_failed}
     providers_zero_results = [
         item
@@ -4277,9 +4272,7 @@ def _guided_record_source_candidates(record: Any) -> list[dict[str, Any]]:
     if not paper_sources:
         return explicit_candidates
     if not has_explicit_source_payload:
-        return _guided_dedupe_source_records(
-            _guided_merge_source_record_sets(explicit_candidates, paper_sources)
-        )
+        return _guided_dedupe_source_records(_guided_merge_source_record_sets(explicit_candidates, paper_sources))
 
     augmented_candidates = list(explicit_candidates)
     for paper_source in paper_sources:
@@ -4673,11 +4666,7 @@ def _compact_record_identifiers(records: Any) -> list[str]:
             identifier = entry.strip()
         elif isinstance(entry, dict):
             identifier = str(
-                entry.get("sourceId")
-                or entry.get("sourceAlias")
-                or entry.get("evidenceId")
-                or entry.get("id")
-                or ""
+                entry.get("sourceId") or entry.get("sourceAlias") or entry.get("evidenceId") or entry.get("id") or ""
             ).strip()
         else:
             identifier = ""
@@ -4800,9 +4789,7 @@ def _apply_inspect_source_compaction(response: dict[str, Any]) -> dict[str, Any]
     shaped = dict(response)
     source = shaped.get("source")
     source_identifier = (
-        str(source.get("sourceId") or source.get("sourceAlias") or "").strip()
-        if isinstance(source, dict)
-        else ""
+        str(source.get("sourceId") or source.get("sourceAlias") or "").strip() if isinstance(source, dict) else ""
     )
     evidence = shaped.get("evidence")
     if isinstance(evidence, list):
@@ -5497,11 +5484,7 @@ def _guided_append_selected_saved_records(
         if any(_guided_source_matches_reference(record, normalized_selected_id) for record in augmented):
             continue
         matched_saved = next(
-            (
-                saved
-                for saved in saved_records
-                if _guided_source_matches_reference(saved, normalized_selected_id)
-            ),
+            (saved for saved in saved_records if _guided_source_matches_reference(saved, normalized_selected_id)),
             None,
         )
         if matched_saved is not None:
@@ -5577,9 +5560,7 @@ def _guided_metadata_answer_is_responsive(
         return False
 
     citation_payloads = [
-        citation
-        for citation in (record.get("citation") for record in candidate_records)
-        if isinstance(citation, dict)
+        citation for citation in (record.get("citation") for record in candidate_records) if isinstance(citation, dict)
     ]
 
     def _contains_any(values: list[str]) -> bool:
@@ -5595,8 +5576,7 @@ def _guided_metadata_answer_is_responsive(
             return False
     if "venue" in requested_facets:
         venue_values = [
-            _guided_normalize_whitespace(citation.get("journalOrPublisher"))
-            for citation in citation_payloads
+            _guided_normalize_whitespace(citation.get("journalOrPublisher")) for citation in citation_payloads
         ]
         if not venue_values or not _contains_any(venue_values):
             return False
@@ -6322,52 +6302,52 @@ async def dispatch_tool(
             response = cast(
                 dict[str, Any],
                 {
-                "intent": intent,
-                "status": "needs_disambiguation",
-                "searchSessionId": None,
-                "summary": _guided_summary(
-                    intent,
-                    "needs_disambiguation",
-                    [],
-                    [],
-                    routing_summary=cast(dict[str, Any] | None, contract_fields.get("routingSummary")),
-                ),
-                "verifiedFindings": [],
-                "sources": [],
-                "unverifiedLeads": [],
-                "evidenceGaps": evidence_gaps,
-                "trustSummary": trust_summary,
-                "coverage": None,
-                "failureSummary": failure_summary,
-                "resultMeaning": _guided_result_meaning(
-                    status="needs_disambiguation",
-                    verified_findings=[],
-                    evidence_gaps=evidence_gaps,
-                    coverage=None,
-                    failure_summary=failure_summary,
-                    source_count=0,
-                ),
-                "nextActions": [
-                    "Add an exact title, author surname, agency, venue, or tighter year clue and rerun research.",
-                    "Use resolve_reference if you can provide a cleaner citation fragment, DOI, arXiv id, or URL.",
-                    (
-                        "Use get_runtime_status if behavior differs across environments and you need the active "
-                        "runtime truth."
+                    "intent": intent,
+                    "status": "needs_disambiguation",
+                    "searchSessionId": None,
+                    "summary": _guided_summary(
+                        intent,
+                        "needs_disambiguation",
+                        [],
+                        [],
+                        routing_summary=cast(dict[str, Any] | None, contract_fields.get("routingSummary")),
                     ),
-                ],
-                "clarification": clarification,
-                "resultState": _guided_result_state(
-                    status="needs_disambiguation",
-                    sources=[],
-                    evidence_gaps=evidence_gaps,
-                    search_session_id=None,
-                ),
-                "executionProvenance": _guided_execution_provenance_payload(
-                    execution_mode="guided_research_preflight_clarification",
-                    answer_source="research",
-                    passes_run=0,
-                ),
-                "inputNormalization": _guided_normalization_payload(research_normalization),
+                    "verifiedFindings": [],
+                    "sources": [],
+                    "unverifiedLeads": [],
+                    "evidenceGaps": evidence_gaps,
+                    "trustSummary": trust_summary,
+                    "coverage": None,
+                    "failureSummary": failure_summary,
+                    "resultMeaning": _guided_result_meaning(
+                        status="needs_disambiguation",
+                        verified_findings=[],
+                        evidence_gaps=evidence_gaps,
+                        coverage=None,
+                        failure_summary=failure_summary,
+                        source_count=0,
+                    ),
+                    "nextActions": [
+                        "Add an exact title, author surname, agency, venue, or tighter year clue and rerun research.",
+                        "Use resolve_reference if you can provide a cleaner citation fragment, DOI, arXiv id, or URL.",
+                        (
+                            "Use get_runtime_status if behavior differs across environments and you need the active "
+                            "runtime truth."
+                        ),
+                    ],
+                    "clarification": clarification,
+                    "resultState": _guided_result_state(
+                        status="needs_disambiguation",
+                        sources=[],
+                        evidence_gaps=evidence_gaps,
+                        search_session_id=None,
+                    ),
+                    "executionProvenance": _guided_execution_provenance_payload(
+                        execution_mode="guided_research_preflight_clarification",
+                        answer_source="research",
+                        passes_run=0,
+                    ),
+                    "inputNormalization": _guided_normalization_payload(research_normalization),
                 },
             )
             response.update(contract_fields)
@@ -6404,49 +6384,49 @@ async def dispatch_tool(
             response = cast(
                 dict[str, Any],
                 {
-                "intent": intent,
-                "status": status,
-                "searchSessionId": resolved.get("searchSessionId"),
-                "summary": (
-                    f"Resolved the request to {paper.get('title')}."
-                    if isinstance(paper, dict)
-                    else "The reference could not be resolved confidently."
-                ),
-                "verifiedFindings": verified_findings,
-                "sources": sources,
-                "unverifiedLeads": unverified_leads,
-                "evidenceGaps": evidence_gaps,
-                "trustSummary": trust_summary,
-                "coverage": None,
-                "failureSummary": failure_summary,
-                "resultMeaning": _guided_result_meaning(
-                    status=status,
-                    verified_findings=verified_findings,
-                    evidence_gaps=evidence_gaps,
-                    coverage=None,
-                    failure_summary=failure_summary,
-                    source_count=len(sources),
-                    all_sources_off_topic=_guided_sources_all_off_topic(sources),
-                ),
-                "nextActions": _guided_next_actions(
-                    search_session_id=cast(str | None, resolved.get("searchSessionId")),
-                    status=status,
-                    has_sources=bool(sources),
-                    all_sources_off_topic=_guided_sources_all_off_topic(sources),
-                ),
-                "clarification": None,
-                "resultState": _guided_result_state(
-                    status=status,
-                    sources=sources,
-                    evidence_gaps=evidence_gaps,
-                    search_session_id=cast(str | None, resolved.get("searchSessionId")),
-                ),
-                "executionProvenance": _guided_execution_provenance_payload(
-                    execution_mode="reference_resolution",
-                    answer_source="resolve_reference",
-                    passes_run=1,
-                ),
-                "inputNormalization": _guided_normalization_payload(research_normalization),
+                    "intent": intent,
+                    "status": status,
+                    "searchSessionId": resolved.get("searchSessionId"),
+                    "summary": (
+                        f"Resolved the request to {paper.get('title')}."
+                        if isinstance(paper, dict)
+                        else "The reference could not be resolved confidently."
+                    ),
+                    "verifiedFindings": verified_findings,
+                    "sources": sources,
+                    "unverifiedLeads": unverified_leads,
+                    "evidenceGaps": evidence_gaps,
+                    "trustSummary": trust_summary,
+                    "coverage": None,
+                    "failureSummary": failure_summary,
+                    "resultMeaning": _guided_result_meaning(
+                        status=status,
+                        verified_findings=verified_findings,
+                        evidence_gaps=evidence_gaps,
+                        coverage=None,
+                        failure_summary=failure_summary,
+                        source_count=len(sources),
+                        all_sources_off_topic=_guided_sources_all_off_topic(sources),
+                    ),
+                    "nextActions": _guided_next_actions(
+                        search_session_id=cast(str | None, resolved.get("searchSessionId")),
+                        status=status,
+                        has_sources=bool(sources),
+                        all_sources_off_topic=_guided_sources_all_off_topic(sources),
+                    ),
+                    "clarification": None,
+                    "resultState": _guided_result_state(
+                        status=status,
+                        sources=sources,
+                        evidence_gaps=evidence_gaps,
+                        search_session_id=cast(str | None, resolved.get("searchSessionId")),
+                    ),
+                    "executionProvenance": _guided_execution_provenance_payload(
+                        execution_mode="reference_resolution",
+                        answer_source="resolve_reference",
+                        passes_run=1,
+                    ),
+                    "inputNormalization": _guided_normalization_payload(research_normalization),
                 },
             )
             response.update(
@@ -6877,45 +6857,45 @@ async def dispatch_tool(
         response = cast(
             dict[str, Any],
             {
-            "intent": intent,
-            "status": status,
-            "searchSessionId": raw.get("searchSessionId"),
-            "summary": _guided_summary(intent, status, verified_findings, sources),
-            "verifiedFindings": verified_findings,
-            "sources": sources,
-            "unverifiedLeads": unverified_leads,
-            "evidenceGaps": evidence_gaps,
-            "trustSummary": trust_summary,
-            "coverage": raw.get("coverageSummary"),
-            "failureSummary": failure_summary,
-            "resultMeaning": _guided_result_meaning(
-                status=status,
-                verified_findings=verified_findings,
-                evidence_gaps=evidence_gaps,
-                coverage=cast(dict[str, Any] | None, raw.get("coverageSummary")),
-                failure_summary=failure_summary,
-                source_count=len(sources),
-                all_sources_off_topic=_guided_sources_all_off_topic(sources),
-            ),
-            "nextActions": _guided_next_actions(
-                search_session_id=cast(str | None, raw.get("searchSessionId")),
-                status=status,
-                has_sources=bool(sources),
-                all_sources_off_topic=_guided_sources_all_off_topic(sources),
-            ),
-            "clarification": None,
-            "resultState": _guided_result_state(
-                status=status,
-                sources=sources,
-                evidence_gaps=evidence_gaps,
-                search_session_id=cast(str | None, raw.get("searchSessionId")),
-            ),
-            "executionProvenance": _guided_execution_provenance_payload(
-                execution_mode="guided_raw_broker_fallback",
-                answer_source="search_papers",
-                passes_run=1,
-            ),
-            "inputNormalization": _guided_normalization_payload(research_normalization),
+                "intent": intent,
+                "status": status,
+                "searchSessionId": raw.get("searchSessionId"),
+                "summary": _guided_summary(intent, status, verified_findings, sources),
+                "verifiedFindings": verified_findings,
+                "sources": sources,
+                "unverifiedLeads": unverified_leads,
+                "evidenceGaps": evidence_gaps,
+                "trustSummary": trust_summary,
+                "coverage": raw.get("coverageSummary"),
+                "failureSummary": failure_summary,
+                "resultMeaning": _guided_result_meaning(
+                    status=status,
+                    verified_findings=verified_findings,
+                    evidence_gaps=evidence_gaps,
+                    coverage=cast(dict[str, Any] | None, raw.get("coverageSummary")),
+                    failure_summary=failure_summary,
+                    source_count=len(sources),
+                    all_sources_off_topic=_guided_sources_all_off_topic(sources),
+                ),
+                "nextActions": _guided_next_actions(
+                    search_session_id=cast(str | None, raw.get("searchSessionId")),
+                    status=status,
+                    has_sources=bool(sources),
+                    all_sources_off_topic=_guided_sources_all_off_topic(sources),
+                ),
+                "clarification": None,
+                "resultState": _guided_result_state(
+                    status=status,
+                    sources=sources,
+                    evidence_gaps=evidence_gaps,
+                    search_session_id=cast(str | None, raw.get("searchSessionId")),
+                ),
+                "executionProvenance": _guided_execution_provenance_payload(
+                    execution_mode="guided_raw_broker_fallback",
+                    answer_source="search_papers",
+                    passes_run=1,
+                ),
+                "inputNormalization": _guided_normalization_payload(research_normalization),
             },
         )
         response.update(
@@ -7290,12 +7270,8 @@ async def dispatch_tool(
             for index, source in enumerate(ask.get("candidateLeads") or [], start=1)
             if isinstance(source, dict)
         ] or _guided_unverified_leads_from_sources(sources)
-        session_sources = [
-            source for source in (session_state or {}).get("sources") or [] if isinstance(source, dict)
-        ]
-        session_leads = [
-            lead for lead in (session_state or {}).get("unverifiedLeads") or [] if isinstance(lead, dict)
-        ]
+        session_sources = [source for source in (session_state or {}).get("sources") or [] if isinstance(source, dict)]
+        session_leads = [lead for lead in (session_state or {}).get("unverifiedLeads") or [] if isinstance(lead, dict)]
         if session_sources:
             sources = _guided_enrich_records_from_saved_session(sources, session_sources)
             sources = _guided_append_selected_saved_records(
@@ -7331,20 +7307,15 @@ async def dispatch_tool(
         )
         answer_status = str(ask.get("answerStatus") or "answered")
         answer_text = ask.get("answer")
-        answer_is_responsive = (
-            answer_status != "answered"
-            or _guided_metadata_answer_is_responsive(
-                question=follow_up_args.question,
-                answer_text=answer_text,
-                sources=sources,
-                leads=unverified_leads,
-                selected_evidence_ids=selected_evidence_ids,
-                selected_lead_ids=selected_lead_ids,
-            )
+        answer_is_responsive = answer_status != "answered" or _guided_metadata_answer_is_responsive(
+            question=follow_up_args.question,
+            answer_text=answer_text,
+            sources=sources,
+            leads=unverified_leads,
+            selected_evidence_ids=selected_evidence_ids,
+            selected_lead_ids=selected_lead_ids,
         )
-        if answer_status == "answered" and (
-            not _guided_is_usable_answer_text(answer_text) or not answer_is_responsive
-        ):
+        if answer_status == "answered" and (not _guided_is_usable_answer_text(answer_text) or not answer_is_responsive):
             if session_answer is not None:
                 session_answer["inputNormalization"] = _guided_normalization_payload(follow_up_normalization)
                 session_answer["sessionResolution"] = session_resolution
@@ -7414,71 +7385,71 @@ async def dispatch_tool(
         response = cast(
             dict[str, Any],
             {
-            "searchSessionId": follow_up_args.search_session_id,
-            "answerStatus": answer_status,
-            "answer": answer_text,
-            "providerUsed": ask.get("providerUsed"),
-            "degradationReason": ask.get("degradationReason"),
-            "evidenceUsePlan": ask.get("evidenceUsePlan"),
-            "evidence": ask.get("evidence") or [],
-            "unsupportedAsks": ask.get("unsupportedAsks") or [],
-            "followUpQuestions": ask.get("followUpQuestions") or [],
-            "verifiedFindings": verified_findings,
-            "sources": sources,
-            "unverifiedLeads": unverified_leads,
-            "evidenceGaps": evidence_gaps,
-            "trustSummary": trust_summary,
-            "coverage": follow_up_coverage_summary,
-            "failureSummary": failure_summary,
-            "resultMeaning": _guided_result_meaning(
-                status=guided_status,
-                verified_findings=verified_findings,
-                evidence_gaps=evidence_gaps,
-                coverage=follow_up_coverage_summary,
-                failure_summary=failure_summary,
-                source_count=len(sources),
-                all_sources_off_topic=follow_up_all_off_topic,
-            ),
-            "nextActions": _guided_next_actions(
-                search_session_id=follow_up_args.search_session_id,
-                status=guided_status,
-                has_sources=bool(sources),
-                saved_session_inspectable=follow_up_saved_inspectable,
-                all_sources_off_topic=follow_up_all_off_topic,
-            ),
-            "resultState": _guided_result_state(
-                status=guided_status,
-                sources=sources,
-                evidence_gaps=evidence_gaps,
-                search_session_id=follow_up_args.search_session_id,
-                saved_session_has_sources=follow_up_saved_has_sources,
-                saved_session_all_off_topic=follow_up_saved_all_off_topic,
-            ),
-            "sessionResolution": session_resolution,
-            "executionProvenance": _guided_execution_provenance_payload(
-                execution_mode="guided_follow_up",
-                answer_source="ask_result_set",
-                latency_profile_applied=guided_follow_up_latency_profile,
-                strategy_metadata=follow_up_strategy_metadata,
-                passes_run=1,
-            ),
-            "inputNormalization": _guided_normalization_payload(follow_up_normalization),
-            "confidenceSignals": _guided_confidence_signals(
-                status=guided_status,
-                sources=sources,
-                evidence_gaps=evidence_gaps,
-                degradation_reason=cast(str | None, ask.get("degradationReason")),
-                synthesis_mode=(
-                    "session_introspection"
-                    if follow_up_response_mode in {"metadata", "relevance_triage"}
-                    else "grounded_follow_up"
+                "searchSessionId": follow_up_args.search_session_id,
+                "answerStatus": answer_status,
+                "answer": answer_text,
+                "providerUsed": ask.get("providerUsed"),
+                "degradationReason": ask.get("degradationReason"),
+                "evidenceUsePlan": ask.get("evidenceUsePlan"),
+                "evidence": ask.get("evidence") or [],
+                "unsupportedAsks": ask.get("unsupportedAsks") or [],
+                "followUpQuestions": ask.get("followUpQuestions") or [],
+                "verifiedFindings": verified_findings,
+                "sources": sources,
+                "unverifiedLeads": unverified_leads,
+                "evidenceGaps": evidence_gaps,
+                "trustSummary": trust_summary,
+                "coverage": follow_up_coverage_summary,
+                "failureSummary": failure_summary,
+                "resultMeaning": _guided_result_meaning(
+                    status=guided_status,
+                    verified_findings=verified_findings,
+                    evidence_gaps=evidence_gaps,
+                    coverage=follow_up_coverage_summary,
+                    failure_summary=failure_summary,
+                    source_count=len(sources),
+                    all_sources_off_topic=follow_up_all_off_topic,
                 ),
-                evidence_use_plan_applied=bool(ask.get("evidenceUsePlan")),
-                subject_chain_gaps=cast(
-                    list[str] | None,
-                    (follow_up_strategy_metadata or {}).get("subjectChainGaps"),
+                "nextActions": _guided_next_actions(
+                    search_session_id=follow_up_args.search_session_id,
+                    status=guided_status,
+                    has_sources=bool(sources),
+                    saved_session_inspectable=follow_up_saved_inspectable,
+                    all_sources_off_topic=follow_up_all_off_topic,
                 ),
-            ),
+                "resultState": _guided_result_state(
+                    status=guided_status,
+                    sources=sources,
+                    evidence_gaps=evidence_gaps,
+                    search_session_id=follow_up_args.search_session_id,
+                    saved_session_has_sources=follow_up_saved_has_sources,
+                    saved_session_all_off_topic=follow_up_saved_all_off_topic,
+                ),
+                "sessionResolution": session_resolution,
+                "executionProvenance": _guided_execution_provenance_payload(
+                    execution_mode="guided_follow_up",
+                    answer_source="ask_result_set",
+                    latency_profile_applied=guided_follow_up_latency_profile,
+                    strategy_metadata=follow_up_strategy_metadata,
+                    passes_run=1,
+                ),
+                "inputNormalization": _guided_normalization_payload(follow_up_normalization),
+                "confidenceSignals": _guided_confidence_signals(
+                    status=guided_status,
+                    sources=sources,
+                    evidence_gaps=evidence_gaps,
+                    degradation_reason=cast(str | None, ask.get("degradationReason")),
+                    synthesis_mode=(
+                        "session_introspection"
+                        if follow_up_response_mode in {"metadata", "relevance_triage"}
+                        else "grounded_follow_up"
+                    ),
+                    evidence_use_plan_applied=bool(ask.get("evidenceUsePlan")),
+                    subject_chain_gaps=cast(
+                        list[str] | None,
+                        (follow_up_strategy_metadata or {}).get("subjectChainGaps"),
+                    ),
+                ),
             },
         )
         if ask.get("agentHints") is not None:

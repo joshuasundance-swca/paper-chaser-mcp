@@ -347,8 +347,7 @@ async def test_guided_research_preflights_underspecified_reference_fragment_to_c
     class _FakeRuntime:
         async def search_papers_smart(self, **kwargs: Any) -> dict[str, Any]:
             raise AssertionError(
-                "search_papers_smart should not run for underspecified reference fragments: "
-                f"{kwargs!r}"
+                f"search_papers_smart should not run for underspecified reference fragments: {kwargs!r}"
             )
 
     monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime())
@@ -3731,7 +3730,7 @@ async def test_follow_up_research_downgrades_nonresponsive_metadata_answer(
                     "verificationStatus": "verified_metadata",
                     "citation": {"authors": ["Bob Jones"], "year": "2023"},
                 },
-            ]
+            ],
         },
     )
 
@@ -4361,6 +4360,7 @@ async def test_resolve_reference_multiple_candidates_without_best_match_uses_mes
     assert payload["bestMatch"] is None
     assert payload["alternatives"]
     assert all("bestmatch" not in action.lower() for action in payload["nextActions"])
+
 
 @pytest.mark.asyncio
 async def test_guided_contract_compat_views_include_unverified_leads(

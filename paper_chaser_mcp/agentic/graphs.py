@@ -2005,8 +2005,7 @@ class AgenticRuntime:
             evidence_gaps = [
                 gap
                 for gap in evidence_gaps
-                if gap
-                != "Grounded follow-up could not find enough on-topic evidence to answer safely."
+                if gap != "Grounded follow-up could not find enough on-topic evidence to answer safely."
             ]
         visible_lead_ids = {
             str(record.source_id or record.source_alias or "").strip()

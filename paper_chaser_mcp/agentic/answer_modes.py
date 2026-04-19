@@ -384,8 +384,7 @@ def selection_anchor_candidate_ids(
         return []
     wants_current_text = any(marker in lowered_question for marker in _SELECTION_CURRENT_TEXT_MARKERS)
     cfr_references = {
-        re.sub(r"\s+", " ", match.group(0).lower()).strip()
-        for match in _CFR_REFERENCE_RE.finditer(question or "")
+        re.sub(r"\s+", " ", match.group(0).lower()).strip() for match in _CFR_REFERENCE_RE.finditer(question or "")
     }
     candidate_ids: list[str] = []
     for item, source in zip(evidence, source_records, strict=False):
@@ -412,8 +411,10 @@ def selection_anchor_candidate_ids(
             or "primary" in str(source.source_type or "").lower()
         )
         cfr_match = any(reference in provider_text for reference in cfr_references)
-        current_text_match = wants_current_text and is_primary and any(
-            marker in provider_text for marker in _SELECTION_PRIMARY_SOURCE_MARKERS
+        current_text_match = (
+            wants_current_text
+            and is_primary
+            and any(marker in provider_text for marker in _SELECTION_PRIMARY_SOURCE_MARKERS)
         )
         if cfr_match or current_text_match:
             candidate_ids.append(evidence_id)
