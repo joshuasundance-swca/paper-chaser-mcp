@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "paper-chaser": {
+      "type": "local",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": ["scripts\\mcp-launcher.py"],
+      "cwd": "",
+      "env": {
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      }
+    }
+  }
+}

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 
 from ..models.common import ApiModel, CitationRecord, CoverageSummary, FailureSummary, OpenAccessRoute, Paper
 from ..models.regulations import RegulatoryTimeline
+from ..models.tools import KnownItemResolutionState
 
 IntentLabel = Literal[
     "discovery",
@@ -17,6 +18,73 @@ IntentLabel = Literal[
     "citation",
     "regulatory",
 ]
+
+PlannerQueryType = Literal[
+    "broad_concept",
+    "known_item",
+    "citation_repair",
+    "regulatory",
+    "author",
+    "review",
+]
+
+PlannerFirstPassMode = Literal["targeted", "broad", "mixed"]
+
+RETRIEVAL_MODE_TARGETED: Final[PlannerFirstPassMode] = "targeted"
+RETRIEVAL_MODE_BROAD: Final[PlannerFirstPassMode] = "broad"
+RETRIEVAL_MODE_MIXED: Final[PlannerFirstPassMode] = "mixed"
+
+# Canonical regulatory-intent split surfaced on PlannerDecision and
+# SearchStrategyMetadata. Populated LLM-first from planner signals (intent,
+# retrievalHypotheses, candidateConcepts) with a deterministic fallback in
+# ``planner.py``. See docs/environmental-science-remediation-plan.md §B.
+RegulatoryIntentLabel = Literal[
+    "current_cfr_text",
+    "rulemaking_history",
+    "species_dossier",
+    "guidance_lookup",
+    "hybrid_regulatory_plus_literature",
+    "unspecified",
+]
+
+# Document families practitioners expect from regulatory retrieval. Used by
+# ``SubjectCard.requestedDocumentFamily`` and the document-family ranking boost
+# in ``graphs._rank_regulatory_documents``.
+DocumentFamilyLabel = Literal[
+    "recovery_plan",
+    "critical_habitat",
+    "listing_rule",
+    "consultation_guidance",
+    "cfr_current_text",
+    "rulemaking_notice",
+    "programmatic_agreement",
+    "tribal_policy",
+    "agency_guidance",
+    "unspecified",
+]
+
+SubjectCardConfidence = Literal["high", "medium", "low", "deterministic_fallback"]
+
+
+class SubjectCard(ApiModel):
+    """LLM-resolved subject card for regulatory / known-item retrieval.
+
+    Populated LLM-first from planner outputs (``entity_card``,
+    ``candidate_concepts``, ``anchor_value``). When the planner ran in
+    deterministic-fallback mode, the card is still emitted but
+    ``confidence`` is set to ``"deterministic_fallback"``.
+    """
+
+    common_name: str | None = Field(default=None, alias="commonName")
+    scientific_name: str | None = Field(default=None, alias="scientificName")
+    agency: str | None = None
+    requested_document_family: DocumentFamilyLabel | None = Field(
+        default=None,
+        alias="requestedDocumentFamily",
+    )
+    subject_terms: list[str] = Field(default_factory=list, alias="subjectTerms")
+    confidence: SubjectCardConfidence = "deterministic_fallback"
+    source: Literal["planner_llm", "deterministic_fallback", "hybrid"] = "deterministic_fallback"
 
 
 class AgentHints(ApiModel):
@@ -97,6 +165,42 @@ class SearchStrategyMetadata(ApiModel):
         default="medium",
         alias="routingConfidence",
     )
+    query_specificity: Literal["high", "medium", "low"] = Field(
+        default="medium",
+        alias="querySpecificity",
+    )
+    ambiguity_level: Literal["low", "medium", "high"] = Field(
+        default="low",
+        alias="ambiguityLevel",
+    )
+    query_type: PlannerQueryType = Field(
+        default="broad_concept",
+        alias="queryType",
+    )
+    regulatory_subintent: str | None = Field(default=None, alias="regulatorySubintent")
+    regulatory_intent: RegulatoryIntentLabel | None = Field(
+        default=None,
+        alias="regulatoryIntent",
+        description=(
+            "Canonical regulatory-intent split (current_cfr_text, rulemaking_history, "
+            "species_dossier, guidance_lookup, hybrid_regulatory_plus_literature, "
+            "unspecified). LLM-first with deterministic fallback."
+        ),
+    )
+    entity_card: dict[str, Any] | None = Field(default=None, alias="entityCard")
+    subject_card: SubjectCard | None = Field(default=None, alias="subjectCard")
+    subject_chain_gaps: list[str] = Field(default_factory=list, alias="subjectChainGaps")
+    intent_family: str | None = Field(default=None, alias="intentFamily")
+    breadth_estimate: int = Field(
+        default=2,
+        ge=1,
+        le=4,
+        alias="breadthEstimate",
+    )
+    first_pass_mode: PlannerFirstPassMode = Field(
+        default="targeted",
+        alias="firstPassMode",
+    )
     intent_rationale: str = Field(
         default="",
         alias="intentRationale",
@@ -112,6 +216,18 @@ class SearchStrategyMetadata(ApiModel):
     query_variants_tried: list[str] = Field(
         default_factory=list,
         alias="queryVariantsTried",
+    )
+    retrieval_hypotheses: list[str] = Field(
+        default_factory=list,
+        alias="retrievalHypotheses",
+    )
+    search_angles: list[str] = Field(
+        default_factory=list,
+        alias="searchAngles",
+    )
+    uncertainty_flags: list[str] = Field(
+        default_factory=list,
+        alias="uncertaintyFlags",
     )
     accepted_expansions: list[str] = Field(
         default_factory=list,
@@ -193,6 +309,14 @@ class SearchStrategyMetadata(ApiModel):
         default=None,
         alias="anchoredSubject",
     )
+    known_item_resolution_state: KnownItemResolutionState | None = Field(
+        default=None,
+        alias="knownItemResolutionState",
+        description=(
+            "Execution-provenance label for known-item / resolve_reference outcomes. "
+            "One of resolved_exact, resolved_probable, needs_disambiguation."
+        ),
+    )
     normalization_warnings: list[str] = Field(
         default_factory=list,
         alias="normalizationWarnings",
@@ -217,6 +341,20 @@ class SearchStrategyMetadata(ApiModel):
         default=None,
         alias="bestNextInternalAction",
     )
+    ranking_diagnostics: list[dict[str, Any]] = Field(
+        default_factory=list,
+        alias="rankingDiagnostics",
+    )
+    llm_classification_overrides: int = Field(
+        default=0,
+        alias="llmClassificationOverrides",
+        description=(
+            "Count of smart-ranked candidates where the deterministic fast-path "
+            "gate produced a clear verdict that disagreed with an available LLM "
+            "classification. The deterministic verdict is kept as the effective "
+            "label; this counter surfaces how often the LLM signal was ignored."
+        ),
+    )
 
 
 class StructuredSourceRecord(ApiModel):
@@ -233,19 +371,72 @@ class StructuredSourceRecord(ApiModel):
         default=None,
         alias="topicalRelevance",
     )
+    llm_classification: Literal["on_topic", "weak_match", "off_topic"] | None = Field(
+        default=None,
+        alias="llmClassification",
+        description=(
+            "Raw LLM topical-relevance verdict when the relevance classifier ran "
+            "for this source. May differ from topicalRelevance when the "
+            "deterministic fast-path gate overrode the LLM signal."
+        ),
+    )
+    classification_source: Literal["deterministic", "llm", "llm_tiebreaker"] | None = Field(
+        default=None,
+        alias="classificationSource",
+        description=(
+            "Provenance of topicalRelevance: 'deterministic' when the heuristic "
+            "gate produced the verdict (including when it overrode an available "
+            "LLM signal), 'llm_tiebreaker' when the deterministic verdict was "
+            "weak_match and the LLM broke the tie, or 'llm' when the LLM supplied "
+            "the effective verdict outside a clear deterministic fast-path."
+        ),
+    )
     confidence: str | None = None
     is_primary_source: bool | None = Field(default=None, alias="isPrimarySource")
     canonical_url: str | None = Field(default=None, alias="canonicalUrl")
     retrieved_url: str | None = Field(default=None, alias="retrievedUrl")
-    full_text_observed: bool | None = Field(default=None, alias="fullTextObserved")
+    full_text_url_found: bool | None = Field(
+        default=None,
+        alias="fullTextUrlFound",
+        validation_alias=AliasChoices("fullTextUrlFound", "fullTextObserved"),
+    )
+    full_text_retrieved: bool | None = Field(default=None, alias="fullTextRetrieved")
+    body_text_embedded: bool | None = Field(
+        default=None,
+        alias="bodyTextEmbedded",
+        description=(
+            "True when the upstream payload embedded actual body text (e.g. "
+            "GovInfo inline markdown). Independent of ``fullTextUrlFound`` "
+            "(URL-only discovery) and ``qaReadableText`` (body available for "
+            "the current synthesis call)."
+        ),
+    )
+    qa_readable_text: bool | None = Field(
+        default=None,
+        alias="qaReadableText",
+        description=(
+            "True when body text is available for the current synthesis/QA "
+            "call. This is the signal that gates ``answerability=grounded``."
+        ),
+    )
     abstract_observed: bool | None = Field(default=None, alias="abstractObserved")
     open_access_route: OpenAccessRoute | None = Field(default=None, alias="openAccessRoute")
     citation_text: str | None = Field(default=None, alias="citationText")
     citation: CitationRecord | None = None
     date: str | None = None
     note: str | None = None
+    why_classified_as_weak_match: str | None = Field(default=None, alias="whyClassifiedAsWeakMatch")
     lead_reason: str | None = Field(default=None, alias="leadReason")
     why_not_verified: str | None = Field(default=None, alias="whyNotVerified")
+    relevance_source: Literal["llm", "llm_retry", "deterministic_tier", "hybrid"] | None = Field(
+        default=None,
+        alias="relevanceSource",
+    )
+    relevance_confidence: float | None = Field(default=None, alias="relevanceConfidence")
+    relevance_reason: str | None = Field(default=None, alias="relevanceReason")
+    classification_rationale: str | None = Field(default=None, alias="classificationRationale")
+    document_family_match: str | None = Field(default=None, alias="documentFamilyMatch")
+    document_family_boost: float | None = Field(default=None, alias="documentFamilyBoost")
 
 
 class ScoreBreakdown(ApiModel):
@@ -318,6 +509,31 @@ class SmartPaperHit(ApiModel):
         default=None,
         alias="topicalRelevance",
     )
+    llm_classification: Literal["on_topic", "weak_match", "off_topic"] | None = Field(
+        default=None,
+        alias="llmClassification",
+        description=(
+            "Raw LLM topical-relevance verdict, when the relevance classifier ran "
+            "for this hit. Kept alongside topicalRelevance so callers can tell "
+            "when the deterministic gate overrode the LLM signal."
+        ),
+    )
+    classification_source: Literal["deterministic", "llm", "llm_tiebreaker"] | None = Field(
+        default=None,
+        alias="classificationSource",
+        description=(
+            "Provenance of topicalRelevance: 'deterministic', 'llm_tiebreaker', "
+            "or 'llm'. See StructuredSourceRecord.classificationSource for the "
+            "full semantics."
+        ),
+    )
+    relevance_source: Literal["llm", "llm_retry", "deterministic_tier", "hybrid"] | None = Field(
+        default=None,
+        alias="relevanceSource",
+    )
+    relevance_confidence: float | None = Field(default=None, alias="relevanceConfidence")
+    relevance_reason: str | None = Field(default=None, alias="relevanceReason")
+    classification_rationale: str | None = Field(default=None, alias="classificationRationale")
     score_breakdown: ScoreBreakdown = Field(
         default_factory=ScoreBreakdown,
         alias="scoreBreakdown",
@@ -400,6 +616,15 @@ class AskResultSetResponse(ApiModel):
     structured_sources: list[StructuredSourceRecord] = Field(default_factory=list, alias="structuredSources")
     coverage_summary: CoverageSummary | None = Field(default=None, alias="coverageSummary")
     failure_summary: FailureSummary | None = Field(default=None, alias="failureSummary")
+    provider_used: str = Field(default="deterministic", alias="providerUsed")
+    degradation_reason: str | None = Field(default=None, alias="degradationReason")
+    evidence_use_plan: dict[str, Any] | None = Field(default=None, alias="evidenceUsePlan")
+    classification_provenance: dict[str, Any] | None = Field(
+        default=None,
+        alias="classificationProvenance",
+    )
+    degraded_classification: bool | None = Field(default=None, alias="degradedClassification")
+    top_recommendation: dict[str, Any] | None = Field(default=None, alias="topRecommendation")
 
 
 class LandscapeTheme(ApiModel):
@@ -494,6 +719,23 @@ class PlannerDecision(ApiModel):
         "hybrid_agreement",
         "fallback_recovery",
     ] = Field(default="planner", alias="intentSource")
+    planner_source: Literal[
+        "llm",
+        "deterministic",
+        "deterministic_fallback",
+    ] = Field(
+        default="deterministic",
+        alias="plannerSource",
+        description=(
+            "Provenance of the planner output itself: ``llm`` when an LLM-backed "
+            "bundle successfully produced the plan, ``deterministic_fallback`` "
+            "when an LLM bundle degraded to its deterministic shim (e.g. after a "
+            "model error), and ``deterministic`` when the deterministic bundle "
+            "produced the plan directly. Used by downstream provenance gates "
+            "(subject-card source stamping, etc.) that must not be fooled by "
+            "deterministic signals that happen to populate LLM-shaped fields."
+        ),
+    )
     intent_confidence: Literal["high", "medium", "low"] = Field(
         default="medium",
         alias="intentConfidence",
@@ -509,6 +751,60 @@ class PlannerDecision(ApiModel):
     routing_confidence: Literal["high", "medium", "low"] = Field(
         default="medium",
         alias="routingConfidence",
+    )
+    query_specificity: Literal["high", "medium", "low"] = Field(
+        default="medium",
+        alias="querySpecificity",
+    )
+    ambiguity_level: Literal["low", "medium", "high"] = Field(
+        default="low",
+        alias="ambiguityLevel",
+    )
+    query_type: PlannerQueryType = Field(
+        default="broad_concept",
+        alias="queryType",
+    )
+    regulatory_subintent: str | None = Field(default=None, alias="regulatorySubintent")
+    regulatory_intent: RegulatoryIntentLabel | None = Field(
+        default=None,
+        alias="regulatoryIntent",
+        description=(
+            "Canonical regulatory-intent split surfaced to strategy metadata. "
+            "LLM-first from planner signals with deterministic fallback."
+        ),
+    )
+    regulatory_intent_source: Literal[
+        "llm",
+        "deterministic_fallback",
+        "unspecified",
+    ] = Field(
+        default="unspecified",
+        alias="regulatoryIntentSource",
+        description=(
+            "Provenance of ``regulatory_intent``: ``llm`` when the planner LLM "
+            "emitted a valid label, ``deterministic_fallback`` when it was "
+            "derived by deterministic heuristics (the LLM omitted or malformed "
+            "the field), and ``unspecified`` when neither produced a label. "
+            "Downstream gates that treat LLM-authored regulatoryIntent as "
+            "authoritative (e.g. ``_derive_regulatory_query_flags``) must key "
+            "off this field rather than the combination of ``planner_source`` "
+            "and non-None ``regulatory_intent``, which otherwise mistakes "
+            "deterministic backfill for an LLM emission."
+        ),
+    )
+    entity_card: dict[str, Any] | None = Field(default=None, alias="entityCard")
+    subject_card: SubjectCard | None = Field(default=None, alias="subjectCard")
+    subject_chain_gaps: list[str] = Field(default_factory=list, alias="subjectChainGaps")
+    intent_family: str | None = Field(default=None, alias="intentFamily")
+    breadth_estimate: int = Field(
+        default=2,
+        ge=1,
+        le=4,
+        alias="breadthEstimate",
+    )
+    first_pass_mode: PlannerFirstPassMode = Field(
+        default="targeted",
+        alias="firstPassMode",
     )
     intent_rationale: str = Field(
         default="",
@@ -547,6 +843,18 @@ class PlannerDecision(ApiModel):
         default_factory=list,
         alias="successCriteria",
     )
+    search_angles: list[str] = Field(
+        default_factory=list,
+        alias="searchAngles",
+    )
+    retrieval_hypotheses: list[str] = Field(
+        default_factory=list,
+        alias="retrievalHypotheses",
+    )
+    uncertainty_flags: list[str] = Field(
+        default_factory=list,
+        alias="uncertaintyFlags",
+    )
     follow_up_mode: Literal["qa", "claim_check", "comparison"] = Field(
         default="qa",
         alias="followUpMode",
@@ -557,5 +865,6 @@ class ExpansionCandidate(ApiModel):
     """One candidate query expansion."""
 
     variant: str
-    source: Literal["from_input", "from_retrieved_evidence", "speculative"]
+    source: Literal["from_input", "from_retrieved_evidence", "speculative", "hypothesis"]
     rationale: str = ""
+    provider_plan: list[str] = Field(default_factory=list, alias="providerPlan")

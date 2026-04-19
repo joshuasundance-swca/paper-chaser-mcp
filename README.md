@@ -48,19 +48,27 @@ be hard to misuse and explicit about trust.
   with a server-owned quality-first policy for guided use.
 - **Grounded follow-up**: `follow_up_research` answers against one saved
   `searchSessionId`; if you omit it, the server only infers a session when the
-  choice is unique.
+  choice is unique. Saved-session follow-up can classify mixed source sets into
+  on-topic evidence, weaker context, and off-target leads when the stored
+  metadata is already sufficient.
 - **Decision metadata**: guided responses surface `executionProvenance`, and
   ambiguous follow-up or source-inspection flows return structured
   `sessionResolution` / `sourceResolution` payloads instead of opaque errors.
 - **Reference-first recovery**: `resolve_reference` handles DOI/arXiv/URL,
   citation fragments, and regulatory-style references, and exact DOI/arXiv/
   paper-URL inputs resolve as exact anchors rather than falling through to fuzzy repair.
+  Ambiguous title-only or conflicting metadata matches can now return
+  `multiple_candidates` or `needs_disambiguation`; treat those as candidate
+  anchors, not citation-ready resolutions.
+- **Compact top-level answer**: guided `research` leads with a short
+  recommendation-first `summary`, while keeping the structured evidence,
+  leads, and provenance fields available below it.
 - **Source auditability**: `inspect_source` exposes one `sourceId` with
-  provenance, trust state, and direct-read next steps; omitted `searchSessionId`
+  provenance, trust state, weak-match rationale, and quality-aware direct-read next steps; omitted `searchSessionId`
   is only accepted when one compatible saved session exists.
 - **Runtime truth**: `get_runtime_status` surfaces active profile/transport and
   provider-state warnings without requiring low-level diagnostics. `configuredSmartProvider`
-  is the configured smart bundle; `activeSmartProvider` is the latest effective execution path.
+  is the configured smart bundle; `activeSmartProvider` is the latest effective execution path, cold-start snapshots emit an explicit provisional warning instead of claiming deterministic fallback before the first smart call settles, and the top-level provider sets now split `disabledProviderSet`, `suppressedProviderSet`, `degradedProviderSet`, and `quotaLimitedProviderSet` instead of collapsing them.
 - **Expert depth remains available**: raw/smart/provider-specific tools still
   exist for operator workflows under the expert profile.
 
@@ -131,6 +139,8 @@ If you want a local env template for shell runs or Docker Compose, copy `.env.ex
 ```text
 research(query="retrieval-augmented generation for coding agents", limit=5)
 → inspect resultStatus, answerability, summary, evidence, leads, routingSummary
+→ if resultStatus=needs_disambiguation with clarification.reason=underspecified_reference_fragment:
+  tighten the anchor or pivot to resolve_reference instead of forcing retrieval
 → save searchSessionId for follow-up or source inspection
 ```
 
@@ -139,9 +149,13 @@ research(query="retrieval-augmented generation for coding agents", limit=5)
 ```text
 follow_up_research(searchSessionId="...", question="What evaluation tradeoffs show up here?")
 → inspect answerStatus
-→ if answered: use answer + evidence
+→ if answered: use answer + evidence (compact default: sources are identified by selectedEvidenceIds)
 → if abstained/insufficient_evidence: use nextActions and inspect_source
+→ mixed saved sessions can still answer relevance-triage questions such as which items are on-topic vs off-target
+→ uniquely anchored recommendation asks can also return a safe start-here answer plus topRecommendation
 → if you omit searchSessionId and multiple saved sessions exist: provide it explicitly
+→ for full source records pass responseMode="standard"; for diagnostics responseMode="debug"
+→ for selection asks ("where should I start?", "most recent?"), read topRecommendation
 ```
 
 ### 3. Resolve references before broad search when possible
@@ -151,6 +165,8 @@ resolve_reference(reference="10.1038/nrn3241")
 → exact DOI/arXiv/paper URL should resolve directly when supported
 resolve_reference(reference="Rockstrom et al planetary boundaries 2009 Nature 461 472")
 → inspect status and bestMatch/alternatives
+→ only treat bestMatch as citation-ready when status=resolved
+→ if status=multiple_candidates or needs_disambiguation: pick a candidate or add a stronger author/year/venue clue before citing it
 → if resolved: run research with the resolved anchor
 ```
 
@@ -158,7 +174,7 @@ resolve_reference(reference="Rockstrom et al planetary boundaries 2009 Nature 46
 
 ```text
 inspect_source(searchSessionId="...", evidenceId="...")
-→ inspect verificationStatus, topicalRelevance, canonicalUrl, directReadRecommendations
+→ inspect verificationStatus, topicalRelevance, whyClassifiedAsWeakMatch, confidenceSignals, canonicalUrl, directReadRecommendations
 → if searchSessionId is omitted and inference is ambiguous, rerun with an explicit saved session id
 ```
 
@@ -167,6 +183,11 @@ inspect_source(searchSessionId="...", evidenceId="...")
 - If `research.resultStatus` is `abstained` or `needs_disambiguation`, do not invent
   synthesis. Narrow with a concrete anchor: DOI, exact title, species name,
   agency, year, or venue.
+- When `research` returns `needs_disambiguation` with
+  `clarification.reason=underspecified_reference_fragment`, the server is
+  intentionally stopping before speculative retrieval on a vague
+  citation/reference fragment. Tighten the clue set or switch to
+  `resolve_reference`.
 - If `follow_up_research.answerStatus` is `abstained` or
   `insufficient_evidence`, treat it as a safety signal. Use `inspect_source`
   and rerun `research` with tighter scope.
@@ -199,17 +220,48 @@ Treat these as the main guided contracts:
 | `evidence` | `research`, `follow_up_research` | Canonical grounded source records for inspection and citation |
 | `leads` | `research`, `follow_up_research`, expert smart tools | Review weak, filtered, or off-topic leads without promoting them into grounded evidence |
 | `evidenceGaps` | `research`, `follow_up_research` | Treat as explicit limits on the current answer, not hidden caveats |
-| `routingSummary` | `research`, `follow_up_research` | Check intent, anchor, provider plan, and why the result is partial |
+| `routingSummary` | `research`, `follow_up_research` | Check intent, anchor, provider plan, regulatory subtype or entity card when present, and why the result is partial |
 | `coverageSummary` | `research`, `follow_up_research` | Check provider coverage and completeness before relying on synthesis |
 | `executionProvenance` | guided tools | Inspect which server policy, latency defaults, and fallback path produced the result |
+| `confidenceSignals` | `research`, `follow_up_research`, `inspect_source` | Inspect additive trust cues such as evidence quality, synthesis mode, and source-scope labels without replacing `answerability` |
+| `evidenceUsePlan` | `follow_up_research` | For synthesis-style follow-ups, inspect answer subtype, directly responsive evidence ids, unsupported parts, and retrieval sufficiency before trusting the answer |
 | `sessionResolution` | `follow_up_research`, `inspect_source` | Use when a session was inferred, repaired, missing, or ambiguous |
 | `sourceResolution` | `inspect_source` | Use when the requested source id was matched, unresolved, or needs a retry with available ids |
 | `abstentionDetails` | guided tools on weak evidence | Treat as the actionable reason and recovery hint for abstention or insufficient evidence |
 | `nextActions` | guided tools | Treat as server-preferred recovery path on weak evidence |
 | `clarification` | `research` | Ask the user only when a bounded clarification request is provided |
-| `answerStatus` | `follow_up_research` | `answered`, `abstained`, `insufficient_evidence` |
+| `answerStatus` | `follow_up_research` | `answered`, `abstained`, `insufficient_evidence`. Grounded `answered` requires on-topic verified source + qa-readable text + non-deterministic provider + medium+ confidence; otherwise expect `insufficient_evidence`. |
+| `topRecommendation` | `follow_up_research` (comparative/selection asks) | Structured pick with `sourceId`, `recommendationReason`, `comparativeAxis` (e.g. `beginner_friendly`, `recency`, `authority`). Unique anchored "where should I start?" asks can safely answer through this path even when broader synthesis would stay limited. |
+| `responseMode` | `follow_up_research` input | `compact` (default, hides full sources and legacy fields), `standard`, `debug`. |
+| `includeLegacyFields` | `follow_up_research` input | Set `true` to restore legacy `verifiedFindings`/`unverifiedLeads` in compact mode. |
+| `fullTextUrlFound` / `bodyTextEmbedded` / `qaReadableText` | `inspect_source` | Distinguish URL discovery, embedded body text, and text actually available to QA synthesis. `fullTextObserved` may still appear as a compatibility alias, but the split fields are the durable contract. |
 | `evidenceId` | `evidence[*]` | Pass to `inspect_source` for per-source provenance checks |
 | `runtimeSummary` | `get_runtime_status` and expert diagnostics | Confirm effective profile, smart provider state, and warnings |
+
+For broad agency-guidance discovery, guided routing stays on the
+regulatory primary-source path. Off-topic authority documents may still appear
+as `leads`, but they should not displace more relevant query-anchored guidance
+or policy documents from the top-level recommendation.
+
+For source-level audits, treat `whyClassifiedAsWeakMatch` and
+`confidenceSignals.sourceScopeLabel` / `confidenceSignals.sourceScopeReason` as
+the primary explanation of why an authoritative record was retained as a weak
+match or off-topic lead.
+
+Additional trust and grounding signals landed in the `llm-guidance` phase-4
+wave. Guided responses can expose `confidenceSignals.evidenceQualityProfile`,
+`confidenceSignals.synthesisMode`, `confidenceSignals.evidenceProfileDetail`,
+`confidenceSignals.synthesisPath`, `confidenceSignals.trustRevisionNarrative`,
+and a `trustSummary.authoritativeButWeak` bucket for primary-source records
+that are authoritative but not topically responsive. `searchStrategy` may
+surface `regulatoryIntent`, `intentFamily`, a `subjectCard` for species and
+regulatory grounding, and `subjectChainGaps` describing missing subject-chain
+evidence. `inspect_source` pairs each direct-read suggestion with a
+`directReadRecommendationDetails` entry shaped as
+`{trustLevel, whyRecommended, cautions}` so agents can prioritize direct reads
+by quality. See [Paper Chaser Golden Paths](docs/golden-paths.md) and
+[Guided And Smart Robustness Notes](docs/guided-smart-robustness.md) for how
+to read and act on these signals.
 
 ## Deferred export design
 
@@ -263,10 +315,14 @@ Optional extras for the additive AI layer:
 - Anthropic provider support: `pip install -e ".[ai,anthropic]"`
 - Google provider support: `pip install -e ".[ai,google]"`
 - Mistral provider support: `pip install -e ".[ai,mistral]"`
+- Azure AI Foundry eval publishing helpers: `pip install -e ".[eval-foundry]"`
+- Hugging Face eval publishing helpers: `pip install -e ".[eval-huggingface]"`
+- Both eval publishing helper surfaces: `pip install -e ".[eval]"`
 - Add `,ai-faiss` to any of the commands above if you want the optional FAISS backend.
 
 Azure OpenAI uses the same `openai` extra.
 Hugging Face uses a dedicated `huggingface` extra that installs the OpenAI-compatible SDK plus the LangChain OpenAI adapter; this repo documents it as a chat-only smart-provider path with embeddings disabled.
+The eval publishing helpers use separate extras on purpose: `eval-foundry` is for Azure AI Foundry dataset upload support, and `eval-huggingface` is for Hugging Face dataset-repo or bucket publishing support. Those extras are independent from the smart-provider chat runtime.
 
 ## Configuration
 
@@ -297,7 +353,7 @@ below are expert-path controls.
 | Enrichment | enabled | `PAPER_CHASER_ENABLE_CROSSREF`, `CROSSREF_MAILTO`, `CROSSREF_TIMEOUT_SECONDS`, `PAPER_CHASER_ENABLE_UNPAYWALL`, `UNPAYWALL_EMAIL`, `UNPAYWALL_TIMEOUT_SECONDS`, `PAPER_CHASER_ENABLE_OPENALEX` | Used after you already have a paper or DOI |
 | ECOS | enabled | `PAPER_CHASER_ENABLE_ECOS`, `ECOS_BASE_URL`, `ECOS_TIMEOUT_SECONDS`, document timeout and size vars, TLS vars | Species and document workflows |
 | Federal Register / GovInfo | enabled | `PAPER_CHASER_ENABLE_FEDERAL_REGISTER`, `PAPER_CHASER_ENABLE_GOVINFO_CFR`, `GOVINFO_API_KEY`, GovInfo timeout and size vars | Federal Register search is keyless; authoritative CFR retrieval uses GovInfo |
-| Smart layer | disabled | `OPENAI_API_KEY`, `HUGGINGFACE_API_KEY`, `HUGGINGFACE_BASE_URL`, `NVIDIA_API_KEY`, `NVIDIA_NIM_BASE_URL`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `MISTRAL_API_KEY`, `PAPER_CHASER_ENABLE_AGENTIC`, model and index vars | Additive only; supports `openai`, `azure-openai`, `anthropic`, `nvidia`, `google`, `mistral`, `huggingface`, and `deterministic`. OpenAI ships with checked-in model defaults, Anthropic, NVIDIA, Google, and Mistral auto-swap to provider defaults when those OpenAI defaults are left untouched, and Azure OpenAI can override both roles with deployment names. Hugging Face is documented as an OpenAI-compatible chat router configured with `HUGGINGFACE_BASE_URL`; it remains chat-only in this repo and does not enable embeddings. `NVIDIA_NIM_BASE_URL` is optional for self-hosted NIMs; leave it empty for hosted NVIDIA API Catalog access. Embeddings remain disabled by default because they have been unreliable in this codebase, and improving them is out of scope for the current release. When ScholarAPI is enabled, smart discovery can also route through it and cap it via `providerBudget.maxScholarApiCalls`. |
+| Smart layer | disabled | `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL`, `OPENROUTER_HTTP_REFERER`, `OPENROUTER_TITLE`, `HUGGINGFACE_API_KEY`, `HUGGINGFACE_BASE_URL`, `NVIDIA_API_KEY`, `NVIDIA_NIM_BASE_URL`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `MISTRAL_API_KEY`, `PAPER_CHASER_ENABLE_AGENTIC`, model and index vars | Additive only; supports `openai`, `azure-openai`, `anthropic`, `nvidia`, `google`, `mistral`, `huggingface`, `openrouter`, and `deterministic`. OpenAI ships with checked-in model defaults, Anthropic, NVIDIA, Google, and Mistral auto-swap to provider defaults when those OpenAI defaults are left untouched, and Azure OpenAI can override both roles with deployment names. Hugging Face and OpenRouter are documented as OpenAI-compatible chat routers configured with `HUGGINGFACE_BASE_URL` and `OPENROUTER_BASE_URL`; both remain chat-only in this repo and do not enable embeddings. OpenRouter preserves explicit planner and synthesis model names such as provider-prefixed model IDs. `NVIDIA_NIM_BASE_URL` is optional for self-hosted NIMs; leave it empty for hosted NVIDIA API Catalog access. Embeddings remain disabled by default because they have been unreliable in this codebase, and improving them is out of scope for the current release. When ScholarAPI is enabled, smart discovery can also route through it and cap it via `providerBudget.maxScholarApiCalls`. |
 | Hide disabled tools | guided default `true`, expert default `false` | `PAPER_CHASER_HIDE_DISABLED_TOOLS` | Guided mode keeps this on to reduce dead-end tool picks; expert mode usually leaves it off for operator visibility |
 
 ### Smart-layer model defaults
@@ -313,6 +369,7 @@ These are the effective planner/synthesis defaults when you enable `PAPER_CHASER
 | `google` | `gemini-2.5-flash` | `gemini-2.5-pro` | Runtime swaps to these provider defaults only when planner/synthesis are still set to the checked-in OpenAI defaults |
 | `mistral` | `mistral-medium-latest` | `mistral-large-latest` | Runtime swaps to these provider defaults only when planner/synthesis are still set to the checked-in OpenAI defaults |
 | `huggingface` | `moonshotai/Kimi-K2.5` | `moonshotai/Kimi-K2.5` | Runtime swaps to these provider defaults only when planner/synthesis are still set to the checked-in OpenAI defaults; requests are sent to `HUGGINGFACE_BASE_URL` and the path remains chat-only |
+| `openrouter` | none | none | Runtime preserves explicit planner/synthesis model values and sends requests to `OPENROUTER_BASE_URL`; the first-pass path remains chat-only |
 | `deterministic` | n/a | n/a | No external LLM calls; model selection metadata is reported as deterministic instead |
 
 `PAPER_CHASER_EMBEDDING_MODEL` defaults to `text-embedding-3-large`, but embeddings stay off until you set `PAPER_CHASER_DISABLE_EMBEDDINGS=false`. They remain off by default because embeddings have been unreliable in this codebase and improving them is outside the scope of the current guided-policy release. In the current provider surface, embeddings are only used by providers that explicitly support them, which means the documented Hugging Face path remains chat-only even though it uses an OpenAI-compatible router.
@@ -819,6 +876,29 @@ For maintainer orientation after the module split, start with `docs/agent-handof
 
 - [GitHub Copilot Instructions](.github/copilot-instructions.md) - repo-specific guidance for GitHub Copilot and the GitHub cloud coding agent, including workflow defaults and durable planning expectations.
 - [Agent Handoff](docs/agent-handoff.md) - current repo status, validation commands, and next recommended work for follow-on agents.
+- [LLM Selection Guide](docs/llm-selection-guide.md) - planner versus synthesis responsibilities, current smart-layer model defaults, the eval-bootstrap funnel around `generate_eval_topics.py` and `run_eval_autopilot.py`, and criteria for choosing LLMs in this repo.
+- [LLM Evaluation Program Plan](docs/llm-evaluation-program-plan.md) - role-based evaluation strategy, dataset-generation plan, evaluator stack, and phased rollout for rigorous LLM performance measurement in this repo.
+- [LLM Evaluation Dataset Schema](docs/llm-evaluation-dataset-schema.md) - JSONL schema, field rules, governance conventions, and storage layout for role-based evaluation seed sets and future benchmark expansion.
+- [LLM Evaluation Platform Strategy](docs/llm-evaluation-platform-strategy.md) - how to combine repo-local evals with Azure AI Foundry, Hugging Face, and live-trace active-learning loops without losing portability.
+- [LLM Evaluation Trace Promotion](docs/llm-evaluation-trace-promotion.md) - workflow and helper format for promoting reviewed live traces into durable evaluation rows.
+
+Optional live eval-candidate capture can be enabled with `PAPER_CHASER_ENABLE_EVAL_TRACE_CAPTURE=true` and `PAPER_CHASER_EVAL_TRACE_PATH=...`, then converted into a review queue with `scripts/build_eval_review_queue.py` before promotion.
+
+Portable exports for downstream evaluation and training systems are available via `scripts/export_eval_assets.py`, including Foundry-friendly eval JSONL, Hugging Face dataset JSONL, and chat-style training JSONL from review-approved traces.
+
+Service-specific publish helpers are available via `scripts/upload_foundry_eval_dataset.py` and `scripts/upload_hf_eval_assets.py` for pushing reviewed exports into a Foundry project dataset, a Hugging Face dataset repo, or a Hugging Face bucket.
+
+Expert batch curation runs can now emit `batch-summary.json` and `batch-ledger.csv` alongside the raw report, captured events, and review queue so offline drift and throughput checks do not depend on replaying the full JSONL artifacts.
+
+For repo-local eval bootstrap, the current top-level workflow is:
+
+- `scripts/generate_eval_topics.py` for planner-led topic generation, taxonomy assignment, ranking, pruning, balancing, and scenario emission
+- `scripts/run_eval_autopilot.py` for profile-driven generation, immutable run bundles, holdout checks, and guarded workflow handoff
+- `scripts/run_eval_workflow.py` for expert batch capture, review or promotion, dataset splitting, and live provider-matrix evaluation
+
+The checked-in autopilot sample profiles now include balanced-science defaults plus narrow-run profiles such as `single-seed-exploratory-review`, `single-seed-exploratory-safe`, and `single-seed-diagnostic-force`. Those narrow-run profiles can enable single-seed diversification so one-seed runs ask the planner for additional review, regulatory, and methods-oriented variants instead of depending only on looser workflow thresholds.
+
+See `docs/llm-evaluation-integrations.md` for the current Foundry and Hugging Face integration posture, including when `hf-mount` is a good fit for a shared capture sink.
 - [Release And Publishing Plan](docs/release-publishing-plan.md) - the current release playbook for GHCR, GitHub Release assets, manual MCP Registry publication, and dormant PyPI.
 - [Guided Reset Migration Note](docs/guided-reset-migration-note.md) - breaking default-surface change, guided-vs-expert split, and client migration checklist.
 - [Paper Chaser Golden Paths](docs/golden-paths.md) - primary personas, workflow defaults, success signals, and future workflow-oriented follow-up work.
@@ -826,6 +906,7 @@ For maintainer orientation after the module split, start with `docs/agent-handof
 - [Azure Architecture](docs/azure-architecture.md) - trust boundaries, runtime topology, and credential separation for the Azure scaffold.
 - [Azure Security Model](docs/azure-security-model.md) - credential classes, Key Vault usage, and backend-auth separation in the Azure rollout.
 - [Provider Upgrade Program](docs/provider-upgrade-program.md) - provider roles, latency profiles, diagnostics, benchmark corpus, and acceptance gates for the reliability-first provider upgrade.
+- [OpenRouter Provider Guide](docs/openrouter-api-guide.md) - implementation-focused guidance for adding and operating OpenRouter as a chat-only smart-layer provider, including the current Trinity bring-up plan.
 - [ScholarAPI Integration Guide](docs/scholarapi-api-guide.md) - planning guide for adding ScholarAPI as an explicit discovery, monitoring, full-text, and PDF provider without weakening the current graph-oriented provider contracts.
 - [OpenAlex API Guide](docs/openalex-api-guide.md) - implementation-focused guidance for the repo's explicit OpenAlex MCP surface, including authentication, credit-based limits, paging, `/works` semantics, and normalization caveats.
 - [Semantic Scholar API Guide](docs/semantic-scholar-api-guide.md) - practical guidance for respectful and effective Semantic Scholar API usage with async rate limiting, retries, and `.env`-based local development.

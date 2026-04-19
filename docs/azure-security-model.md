@@ -45,6 +45,8 @@ These are the credentials the MCP server uses to talk to scholarly providers.
 - `ANTHROPIC_API_KEY` when the smart layer uses the `anthropic` provider bundle
 - `HUGGINGFACE_API_KEY` when the smart layer uses the documented Hugging Face
   OpenAI-compatible chat router
+- `OPENROUTER_API_KEY` when the smart layer uses the `openrouter` provider
+  bundle
 - `NVIDIA_API_KEY` when the smart layer uses the `nvidia` provider bundle
 - `GOOGLE_API_KEY` when the smart layer uses the `google` provider bundle
 - `MISTRAL_API_KEY` when the smart layer uses the `mistral` provider bundle
@@ -56,6 +58,10 @@ These are the credentials the MCP server uses to talk to scholarly providers.
 `HUGGINGFACE_BASE_URL` is deployment config rather than an API key. Keep it out
 of Key Vault unless the URL itself is sensitive, such as a private router or
 gateway hostname.
+
+`OPENROUTER_BASE_URL`, `OPENROUTER_HTTP_REFERER`, and `OPENROUTER_TITLE` are
+deployment config rather than API keys. Keep them out of Key Vault unless the
+values themselves are sensitive in your environment.
 
 `NVIDIA_NIM_BASE_URL` is also deployment config rather than an API key. Keep it
 out of Key Vault unless the endpoint itself is sensitive, such as a private NIM

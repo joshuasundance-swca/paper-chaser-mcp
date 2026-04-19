@@ -41,6 +41,7 @@ ProviderName = Literal[
     "google",
     "mistral",
     "huggingface",
+    "openrouter",
     "ecos",
     "federal_register",
     "govinfo",
@@ -178,6 +179,14 @@ DEFAULT_PROVIDER_POLICIES: dict[str, ProviderPolicy] = {
         paywalled=True,
     ),
     "huggingface": ProviderPolicy(
+        concurrency_limit=4,
+        max_attempts=1,
+        base_delay_seconds=0.5,
+        failure_threshold=2,
+        suppression_seconds=60.0,
+        paywalled=True,
+    ),
+    "openrouter": ProviderPolicy(
         concurrency_limit=4,
         max_attempts=1,
         base_delay_seconds=0.5,

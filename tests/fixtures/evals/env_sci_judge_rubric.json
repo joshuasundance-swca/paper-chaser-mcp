@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "slice": "env-sci",
+  "roles": [
+    {
+      "id": "plannerSpecificity",
+      "purpose": "Score how well the planner chose an intent, route, and subject anchor for the specific environmental-science prompt.",
+      "scoringGuidance": [
+        "1.0 = intent is exactly right (regulatory vs discovery vs follow-up), subject anchor survives, provider plan is plausible.",
+        "0.5 = intent family is plausible but subject anchor is generic or the provider plan is broadly wrong.",
+        "0.0 = wrong intent family, or subject anchor lost, or provider plan routes to an obviously unsuitable stack."
+      ]
+    },
+    {
+      "id": "followUpResponsiveness",
+      "purpose": "Score whether a grounded follow-up actually answers the posed question instead of returning a generic theme summary or deterministic salvage prose.",
+      "scoringGuidance": [
+        "1.0 = directly addresses the posed question over the saved session, or explicitly abstains with a reason.",
+        "0.5 = partially on-point but pivots to a broader summary that sidesteps the specific question.",
+        "0.0 = answer-shaped filler, deterministic salvage, or off-topic pivot."
+      ]
+    },
+    {
+      "id": "evidenceSufficiency",
+      "purpose": "Score whether the response honestly reflects how much of the answer the evidence supports, including abstention when evidence is thin.",
+      "scoringGuidance": [
+        "1.0 = claims are supported per-claim; thin pools yield explicit insufficient_evidence rather than fused narrative.",
+        "0.5 = claims are mostly supported but uncertainty is quietly elided.",
+        "0.0 = confident claims drawn from thin or mismatched evidence; silent extrapolation."
+      ]
+    },
+    {
+      "id": "provenanceHonesty",
+      "purpose": "Score whether primary-source vs peer-reviewed vs grey-literature provenance is preserved, and whether weak-match rationales are honest rather than hidden behind authority.",
+      "scoringGuidance": [
+        "1.0 = primary-source bucket separate from literature, weak-match rationale cites scope or subject mismatch explicitly.",
+        "0.5 = buckets are partially separated but one or two items are mislabeled.",
+        "0.0 = peer-reviewed material is labelled primary, or weak matches are accepted as on-topic because the source is authoritative."
+      ]
+    }
+  ],
+  "template": [
+    "You are scoring an environmental-science research response produced by paper-chaser-mcp.",
+    "Return a JSON object with exactly these keys: plannerSpecificity, followUpResponsiveness, evidenceSufficiency, provenanceHonesty, overall, notes.",
+    "Each role score is a float in [0.0, 1.0]. `overall` is the unweighted mean of the four role scores. `notes` is a list of short strings citing concrete evidence for each score.",
+    "",
+    "Original query:",
+    "{{query}}",
+    "",
+    "Captured tool response (compacted JSON):",
+    "{{response_json}}",
+    "",
+    "Expected-behavior row (from the env-sci benchmark pack):",
+    "{{expected_json}}",
+    "",
+    "Score each role using the guidance below, then emit a single JSON object. Do not include prose outside the JSON."
+  ]
+}

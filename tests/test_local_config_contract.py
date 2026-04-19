@@ -14,6 +14,10 @@ PYPROJECT = REPO_ROOT / "pyproject.toml"
 
 EXPECTED_LOCAL_CONFIG_KEYS = {
     "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "OPENROUTER_BASE_URL",
+    "OPENROUTER_HTTP_REFERER",
+    "OPENROUTER_TITLE",
     "HUGGINGFACE_API_KEY",
     "HUGGINGFACE_BASE_URL",
     "NVIDIA_API_KEY",
@@ -223,3 +227,24 @@ def test_readme_agentic_install_guidance_matches_declared_optional_extras() -> N
         assert expected in readme
 
     assert "Azure OpenAI uses the same `openai` extra" in readme
+
+
+def test_readme_eval_install_guidance_matches_declared_optional_extras() -> None:
+    readme = README.read_text(encoding="utf-8")
+    pyproject = PYPROJECT.read_text(encoding="utf-8")
+
+    for expected in (
+        "eval-foundry = [",
+        "eval-huggingface = [",
+        "eval = [",
+    ):
+        assert expected in pyproject
+
+    for expected in (
+        'pip install -e ".[eval-foundry]"',
+        'pip install -e ".[eval-huggingface]"',
+        'pip install -e ".[eval]"',
+    ):
+        assert expected in readme
+
+    assert "eval publishing helpers use separate extras" in readme

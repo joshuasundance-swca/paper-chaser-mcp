@@ -5,7 +5,17 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, RootModel, model_validator
+
+# Mirrors :data:`paper_chaser_mcp.models.tools.KnownItemResolutionState`. We redefine
+# the Literal alias locally to avoid a ``common <- tools <- ecos <- common`` import
+# cycle; the two aliases are structurally identical (Literal types are nominal by
+# value, not by name).
+KnownItemResolutionState = Literal[
+    "resolved_exact",
+    "resolved_probable",
+    "needs_disambiguation",
+]
 
 
 class ApiModel(BaseModel):
@@ -139,12 +149,24 @@ VerificationStatus = Literal[
 ]
 AccessStatus = Literal[
     "full_text_verified",
+    "full_text_retrieved",
     "abstract_only",
     "oa_verified",
     "oa_uncertain",
     "access_unverified",
     "mirror_only",
+    "url_verified",
+    "body_text_embedded",
+    "qa_readable_text",
+    "pdf_available",
 ]
+"""Access-status literal. ``full_text_verified`` is deprecated in favour of the
+three-signal split introduced by P0-2: ``url_verified`` (URL discovered only),
+``body_text_embedded`` (body content embedded in the provider payload, e.g.
+GovInfo inline markdown), and ``qa_readable_text`` (body text fetched for the
+current synthesis call). ``full_text_verified`` is retained for backward
+compatibility with existing serialized payloads and will be removed in a future
+release."""
 OpenAccessRoute = Literal[
     "canonical_open_access",
     "repository_open_access",
@@ -153,6 +175,7 @@ OpenAccessRoute = Literal[
     "unknown",
 ]
 LikelyCompleteness = Literal["likely_complete", "partial", "unknown", "incomplete"]
+RuntimeHealthStatus = Literal["nominal", "degraded", "fallback_active", "critical"]
 FailureOutcome = Literal[
     "total_failure",
     "partial_success",
@@ -263,6 +286,20 @@ class SourceResolution(ApiModel):
     resolved_source_id: str | None = Field(default=None, alias="resolvedSourceId")
     match_type: str | None = Field(default=None, alias="matchType")
     available_source_ids: list[str] = Field(default_factory=list, alias="availableSourceIds")
+    available_source_candidates: list[dict[str, Any]] = Field(
+        default_factory=list,
+        alias="availableSourceCandidates",
+        description=(
+            "Compact metadata (sourceId, title, topicalRelevance, canonicalUrl, "
+            "confidence, accessStatus) for each available candidate so callers "
+            "can disambiguate without a follow-up round-trip."
+        ),
+    )
+    candidates_have_inspectable: bool = Field(
+        default=False,
+        alias="candidatesHaveInspectable",
+        description="True when at least one available candidate is not off_topic.",
+    )
 
 
 class SessionCandidate(ApiModel):
@@ -328,14 +365,46 @@ class GuidedResultState(ApiModel):
     missing_evidence_type: str = Field(alias="missingEvidenceType")
 
 
+class ConfidenceSignals(ApiModel):
+    """Additive trust and synthesis cues for guided responses."""
+
+    evidence_quality_profile: Literal["high", "medium", "low"] | None = Field(
+        default=None,
+        alias="evidenceQualityProfile",
+    )
+    synthesis_mode: str | None = Field(default=None, alias="synthesisMode")
+    trust_revision_reason: str | None = Field(default=None, alias="trustRevisionReason")
+    evidence_use_plan_applied: bool | None = Field(default=None, alias="evidenceUsePlanApplied")
+    fallback_explanation: str | None = Field(default=None, alias="fallbackExplanation")
+    source_scope_label: str | None = Field(default=None, alias="sourceScopeLabel")
+    source_scope_reason: str | None = Field(default=None, alias="sourceScopeReason")
+
+
+class EvidenceUsePlan(ApiModel):
+    """Additive synthesis-planning payload for grounded follow-up answers."""
+
+    answer_subtype: str = Field(alias="answerSubtype")
+    directly_responsive_ids: list[str] = Field(default_factory=list, alias="directlyResponsiveIds")
+    unsupported_components: list[str] = Field(default_factory=list, alias="unsupportedComponents")
+    retrieval_sufficiency: Literal["sufficient", "thin", "insufficient"] = Field(
+        default="thin",
+        alias="retrievalSufficiency",
+    )
+    confidence: Literal["high", "medium", "low"] = "medium"
+
+
 class RuntimeSummary(ApiModel):
     """Effective runtime state for debugging and support."""
 
     effective_profile: str = Field(alias="effectiveProfile")
     transport_mode: str = Field(alias="transportMode")
     smart_layer_enabled: bool = Field(alias="smartLayerEnabled")
+    configured_provider_set: list[str] = Field(default_factory=list, alias="configuredProviderSet")
     active_provider_set: list[str] = Field(default_factory=list, alias="activeProviderSet")
     disabled_provider_set: list[str] = Field(default_factory=list, alias="disabledProviderSet")
+    suppressed_provider_set: list[str] = Field(default_factory=list, alias="suppressedProviderSet")
+    degraded_provider_set: list[str] = Field(default_factory=list, alias="degradedProviderSet")
+    quota_limited_provider_set: list[str] = Field(default_factory=list, alias="quotaLimitedProviderSet")
     configured_smart_provider: str | None = Field(default=None, alias="configuredSmartProvider")
     active_smart_provider: str | None = Field(default=None, alias="activeSmartProvider")
     provider_order_effective: list[str] = Field(default_factory=list, alias="providerOrderEffective")
@@ -354,6 +423,13 @@ class RuntimeSummary(ApiModel):
     )
     version: str | None = None
     warnings: list[str] = Field(default_factory=list)
+    health_status: RuntimeHealthStatus | None = Field(default=None, alias="healthStatus")
+    fallback_active: bool | None = Field(default=None, alias="fallbackActive")
+    fallback_reason: str | None = Field(default=None, alias="fallbackReason")
+    structured_warnings: list[dict[str, Any]] | None = Field(
+        default=None,
+        alias="structuredWarnings",
+    )
 
 
 class Paper(ApiModel):
@@ -439,7 +515,33 @@ class Paper(ApiModel):
     retrieved_url: str | None = Field(default=None, alias="retrievedUrl")
     confidence: Literal["high", "medium", "low"] | None = None
     is_primary_source: bool | None = Field(default=None, alias="isPrimarySource")
-    full_text_observed: bool | None = Field(default=None, alias="fullTextObserved")
+    full_text_url_found: bool | None = Field(
+        default=None,
+        alias="fullTextUrlFound",
+        validation_alias=AliasChoices("fullTextUrlFound", "fullTextObserved"),
+    )
+    full_text_retrieved: bool | None = Field(default=None, alias="fullTextRetrieved")
+    body_text_embedded: bool | None = Field(
+        default=None,
+        alias="bodyTextEmbedded",
+        description=(
+            "True when the provider payload includes actual body text inline "
+            "(e.g. GovInfo CFR markdown). Distinct from ``fullTextUrlFound`` "
+            "which only indicates a URL was discovered, and distinct from "
+            "``qaReadableText`` which indicates body text is available for the "
+            "current synthesis call. Part of the P0-2 three-signal split."
+        ),
+    )
+    qa_readable_text: bool | None = Field(
+        default=None,
+        alias="qaReadableText",
+        description=(
+            "True when body text was actually fetched and is available for the "
+            "current QA/synthesis call. Only this signal should gate "
+            "``answerability=grounded`` — URL discovery and embedded body are "
+            "necessary but not sufficient."
+        ),
+    )
     abstract_observed: bool | None = Field(default=None, alias="abstractObserved")
     open_access_route: OpenAccessRoute | None = Field(default=None, alias="openAccessRoute")
 
@@ -908,6 +1010,14 @@ class CitationResolutionResponse(ApiModel):
     candidate_count: int = Field(
         default=0,
         alias="candidateCount",
+    )
+    known_item_resolution_state: KnownItemResolutionState | None = Field(
+        default=None,
+        alias="knownItemResolutionState",
+        description=(
+            "Execution-provenance label for resolve_reference outcomes. "
+            "One of resolved_exact, resolved_probable, needs_disambiguation."
+        ),
     )
     message: str = ""
 

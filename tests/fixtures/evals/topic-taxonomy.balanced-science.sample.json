@@ -1,0 +1,70 @@
+{
+  "rules": [
+    {
+      "family": "environmental_remediation",
+      "tags": ["environment", "water", "pfas", "remediation"],
+      "keywords": ["pfas", "groundwater", "remediation", "contaminant", "treatment"],
+      "intents": ["discovery", "review"]
+    },
+    {
+      "family": "natural_resources",
+      "tags": ["environment", "natural_resources", "forestry", "rangeland"],
+      "keywords": ["forest", "rangeland", "watershed", "grazing", "timber", "restoration"],
+      "intents": ["discovery", "review", "regulatory"]
+    },
+    {
+      "family": "habitat_and_species",
+      "tags": ["ecology", "habitat", "species", "biodiversity"],
+      "keywords": ["habitat", "species", "critical habitat", "occupancy", "wildlife", "biodiversity"],
+      "intents": ["discovery", "review", "regulatory"]
+    },
+    {
+      "family": "wetlands_and_hydrology",
+      "tags": ["wetlands", "hydrology", "water_resources"],
+      "keywords": ["wetland", "hydrology", "stream", "aquatic", "floodplain", "delineation"],
+      "intents": ["discovery", "review", "regulatory"]
+    },
+    {
+      "family": "cultural_resources",
+      "tags": ["cultural_resources", "archaeology", "historic_preservation"],
+      "keywords": ["archaeology", "historic", "section 106", "tribal", "cultural resource", "heritage"],
+      "intents": ["discovery", "review", "regulatory"]
+    },
+    {
+      "family": "environmental_regulatory",
+      "tags": ["regulatory", "policy", "compliance", "permitting"],
+      "keywords": ["nepa", "permitting", "regulatory", "federal register", "esa", "clean water act"],
+      "intents": ["regulatory", "review"]
+    },
+    {
+      "family": "climate_and_resilience",
+      "tags": ["climate", "resilience", "adaptation"],
+      "keywords": ["climate", "adaptation", "resilience", "carbon", "risk", "extreme heat"],
+      "intents": ["discovery", "review"]
+    },
+    {
+      "family": "health_science",
+      "tags": ["health", "public_health", "epidemiology"],
+      "keywords": ["epidemiology", "clinical", "public health", "mortality", "exposure", "cohort"],
+      "intents": ["discovery", "review", "known_item"]
+    },
+    {
+      "family": "computer_science",
+      "tags": ["computer_science", "machine_learning", "software"],
+      "keywords": ["benchmark", "neural network", "compiler", "distributed systems", "database", "retrieval"],
+      "intents": ["discovery", "review", "known_item"]
+    },
+    {
+      "family": "materials_and_engineering",
+      "tags": ["engineering", "materials", "manufacturing"],
+      "keywords": ["alloy", "battery", "polymer", "catalyst", "manufacturing", "structural"],
+      "intents": ["discovery", "review"]
+    },
+    {
+      "family": "social_science_and_policy",
+      "tags": ["social_science", "policy", "economics"],
+      "keywords": ["governance", "policy", "equity", "economics", "adoption", "survey"],
+      "intents": ["discovery", "review", "regulatory"]
+    }
+  ]
+}

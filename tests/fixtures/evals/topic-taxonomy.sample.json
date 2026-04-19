@@ -1,0 +1,28 @@
+{
+  "rules": [
+    {
+      "family": "environmental_remediation",
+      "tags": ["water", "pfas", "remediation"],
+      "keywords": ["pfas", "groundwater", "remediation", "treatment"],
+      "intents": ["discovery", "review"]
+    },
+    {
+      "family": "carbon_markets",
+      "tags": ["carbon", "verification", "climate"],
+      "keywords": ["soil carbon", "verification", "offset", "market"],
+      "intents": ["discovery", "review", "regulatory"]
+    },
+    {
+      "family": "ml_benchmarks",
+      "tags": ["benchmark", "evaluation", "leaderboard"],
+      "keywords": ["benchmark", "leaderboard", "evaluation", "accuracy"],
+      "intents": ["discovery", "review", "known_item"]
+    },
+    {
+      "family": "regulatory_research",
+      "tags": ["regulatory", "policy", "compliance"],
+      "keywords": ["rulemaking", "federal register", "regulatory", "compliance"],
+      "intents": ["regulatory"]
+    }
+  ]
+}

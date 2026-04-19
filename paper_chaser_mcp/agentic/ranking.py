@@ -6,10 +6,10 @@ import math
 import re
 import time
 from collections import defaultdict
-from typing import Any
+from typing import Any, Literal
 
 from .config import AgenticConfig
-from .planner import query_facets, query_terms
+from .planner import _is_definitional_query, query_facets, query_terms
 from .providers import ModelProviderBundle
 from .retrieval import RetrievedCandidate
 
@@ -146,44 +146,58 @@ async def rerank_candidates(
     merged_candidates: list[dict[str, Any]],
     provider_bundle: ModelProviderBundle,
     candidate_concepts: list[str],
+    routing_confidence: Literal["high", "medium", "low"] = "medium",
+    query_specificity: Literal["high", "medium", "low"] = "medium",
+    ambiguity_level: Literal["low", "medium", "high"] = "low",
     candidate_pool_size: int | None = None,
     request_outcomes: list[dict[str, Any]] | None = None,
     request_id: str | None = None,
+    planner_anchor_type: str | None = None,
+    planner_anchor_value: str | None = None,
 ) -> list[dict[str, Any]]:
     """Score and rank the merged candidate pool."""
     if not merged_candidates:
         return []
     current_year = time.gmtime().tm_year
     paper_texts = [_paper_text(item["paper"]) for item in merged_candidates]
+    # LLM-first pre-trim: when the pool is much larger than the requested
+    # final size, trim toward a deliberately over-inclusive cap so that the
+    # LLM relevance classification and all scaled priors (concept-bonus gate,
+    # anchor-threshold scale, year/citation decay scales) can still see a
+    # wide net. Pure pre-ranking here uses lexical/provider/recency priors
+    # only and cannot see topical_relevance yet, so a narrow trim would
+    # bypass the LLM-first rerank for any candidate dropped at this stage.
     if candidate_pool_size is not None and len(merged_candidates) > candidate_pool_size:
-        pre_ranked: list[tuple[float, dict[str, Any], str]] = []
-        for item, paper_text in zip(merged_candidates, paper_texts):
-            paper = item["paper"]
-            fused_rank_score = sum(1.0 / (60.0 + rank) for rank in item["providerRanks"].values())
-            provider_bonus = max(
-                (PROVIDER_QUALITY_BONUS.get(provider, 0.0) for provider in item["providers"]),
-                default=0.0,
-            )
-            provider_bonus += min(max(len(item["providers"]) - 1, 0) * 0.02, 0.06)
-            citation_count = paper.get("citationCount")
-            citation_bonus = 0.0
-            if isinstance(citation_count, int) and citation_count > 0:
-                citation_bonus += min(math.log1p(citation_count) / 25.0, 0.12)
-            year = paper.get("year")
-            if isinstance(year, int) and year <= current_year:
-                age = max(current_year - year, 0)
-                citation_bonus += max(0.0, 0.05 - min(age * 0.004, 0.05))
-            pre_ranked.append(
-                (
-                    _lexical_similarity(query, paper_text) + fused_rank_score + provider_bonus + citation_bonus,
-                    item,
-                    paper_text,
+        over_inclusive_cap = max(candidate_pool_size * 2, candidate_pool_size + 10)
+        if len(merged_candidates) > over_inclusive_cap:
+            pre_ranked: list[tuple[float, dict[str, Any], str]] = []
+            for item, paper_text in zip(merged_candidates, paper_texts):
+                paper = item["paper"]
+                fused_rank_score = sum(1.0 / (60.0 + rank) for rank in item["providerRanks"].values())
+                provider_bonus = max(
+                    (PROVIDER_QUALITY_BONUS.get(provider, 0.0) for provider in item["providers"]),
+                    default=0.0,
                 )
-            )
-        pre_ranked.sort(key=lambda item: item[0], reverse=True)
-        trimmed = pre_ranked[:candidate_pool_size]
-        merged_candidates = [item for _, item, _ in trimmed]
-        paper_texts = [paper_text for _, _, paper_text in trimmed]
+                provider_bonus += min(max(len(item["providers"]) - 1, 0) * 0.02, 0.06)
+                citation_count = paper.get("citationCount")
+                citation_bonus = 0.0
+                if isinstance(citation_count, int) and citation_count > 0:
+                    citation_bonus += min(math.log1p(citation_count) / 25.0, 0.12)
+                year = paper.get("year")
+                if isinstance(year, int) and year <= current_year:
+                    age = max(current_year - year, 0)
+                    citation_bonus += max(0.0, 0.05 - min(age * 0.004, 0.05))
+                pre_ranked.append(
+                    (
+                        _lexical_similarity(query, paper_text) + fused_rank_score + provider_bonus + citation_bonus,
+                        item,
+                        paper_text,
+                    )
+                )
+            pre_ranked.sort(key=lambda item: item[0], reverse=True)
+            trimmed = pre_ranked[:over_inclusive_cap]
+            merged_candidates = [item for _, item, _ in trimmed]
+            paper_texts = [paper_text for _, _, paper_text in trimmed]
 
     query_similarities = await provider_bundle.abatched_similarity(
         query,
@@ -191,9 +205,87 @@ async def rerank_candidates(
         request_outcomes=request_outcomes,
         request_id=request_id,
     )
+    relevance_batch: dict[str, dict[str, Any]] = {}
+    if hasattr(provider_bundle, "aclassify_relevance_batch"):
+        try:
+            relevance_batch = await provider_bundle.aclassify_relevance_batch(
+                query=query,
+                papers=[item["paper"] for item in merged_candidates],
+                request_id=request_id,
+            )
+        except Exception:
+            relevance_batch = {}
     facets = query_facets(query)
     terms = query_terms(query)
     anchor_terms = [term for term in terms if term not in GENERIC_RESEARCH_TERMS]
+    broad_query_mode = query_specificity == "low" or ambiguity_level != "low"
+    has_planner_anchor = bool(
+        (planner_anchor_type and str(planner_anchor_type).strip())
+        or (planner_anchor_value and str(planner_anchor_value).strip())
+    )
+    anchored_broad = broad_query_mode and (
+        len(anchor_terms) >= 2 or bool([c for c in candidate_concepts if c and str(c).strip()]) or has_planner_anchor
+    )
+    exploratory_broad = broad_query_mode and not anchored_broad
+    if anchored_broad:
+        broad_query_regime = "anchored_broad"
+        provider_bonus_scale = 0.85
+        facet_penalty_scale = 1.0
+    elif exploratory_broad:
+        broad_query_regime = "exploratory_broad"
+        provider_bonus_scale = 0.55
+        facet_penalty_scale = 0.65
+    else:
+        broad_query_regime = "not_broad"
+        provider_bonus_scale = 1.0
+        facet_penalty_scale = 1.0
+
+    # Finding #3: relax anchor-match thresholds for broad / high-ambiguity queries
+    # so anchor-identity-strict matching is not required when planner signals the
+    # query is not narrowly scoped. Stays strict (1.0) when planner reports a
+    # narrow/known-item query or when signals are absent (fallback-safe default).
+    anchor_threshold_scale = 1.0
+    if query_specificity == "low" or ambiguity_level == "high":
+        anchor_threshold_scale = 0.6
+
+    # Finding #4: dampen year-recency and citation-count priors when planner
+    # routing confidence is low or the query is explicitly broad, so ranking
+    # does not over-favor recent/popular papers for historical/niche intents.
+    year_decay_scale = 1.0
+    citation_decay_scale = 1.0
+    if routing_confidence == "low" or query_specificity == "low":
+        year_decay_scale = 0.5
+        citation_decay_scale = 0.5
+
+    # P2-1: definitional-query bias. When the user asks "what is X / define X /
+    # overview of X", promote canonical foundational papers and surveys over
+    # niche variants. Thresholds are pool-relative so single/small pools auto
+    # self-regulate (canonical bonus only fires with >=3 candidates).
+    definitional_query = _is_definitional_query(query)
+    citation_threshold: float | None = None
+    canonical_year_cutoff: int | None = None
+    if definitional_query and len(merged_candidates) >= 3:
+        citation_counts = [
+            int(item["paper"].get("citationCount"))
+            for item in merged_candidates
+            if isinstance(item["paper"].get("citationCount"), int) and int(item["paper"].get("citationCount", 0)) >= 0
+        ]
+        years = [
+            int(item["paper"].get("year")) for item in merged_candidates if isinstance(item["paper"].get("year"), int)
+        ]
+        if len(citation_counts) >= 3:
+            sorted_counts = sorted(citation_counts)
+            median_citations = sorted_counts[len(sorted_counts) // 2]
+            if median_citations > 0:
+                citation_threshold = median_citations * 10.0
+        if len(years) >= 3:
+            sorted_years = sorted(years)
+            percentile_index = max(0, int(len(sorted_years) * 0.2) - 1)
+            canonical_year_cutoff = sorted_years[percentile_index]
+    survey_title_pattern = re.compile(
+        r"\b(survey|review|introduction|overview|primer|tutorial)\b",
+        re.IGNORECASE,
+    )
 
     for item, paper_text, query_similarity in zip(
         merged_candidates,
@@ -236,14 +328,17 @@ async def rerank_candidates(
             default=0.0,
         )
         provider_bonus += min(max(len(item["providers"]) - 1, 0) * 0.02, 0.06)
+        provider_bonus *= provider_bonus_scale
         citation_count = paper.get("citationCount")
-        citation_bonus = 0.0
+        citation_count_bonus_raw = 0.0
+        year_recency_bonus_raw = 0.0
         if isinstance(citation_count, int) and citation_count > 0:
-            citation_bonus += min(math.log1p(citation_count) / 25.0, 0.12)
+            citation_count_bonus_raw = min(math.log1p(citation_count) / 25.0, 0.12)
         year = paper.get("year")
         if isinstance(year, int) and year <= current_year:
             age = max(current_year - year, 0)
-            citation_bonus += max(0.0, 0.05 - min(age * 0.004, 0.05))
+            year_recency_bonus_raw = max(0.0, 0.05 - min(age * 0.004, 0.05))
+        citation_bonus = citation_count_bonus_raw * citation_decay_scale + year_recency_bonus_raw * year_decay_scale
 
         drift_penalty = 0.0
         if "speculative" in item["variantSources"] and query_similarity < 0.12:
@@ -271,21 +366,103 @@ async def rerank_candidates(
             facet_penalty += 0.05
         if anchor_terms and not matched_title_anchor_terms:
             facet_penalty += 0.08
+        bridge_bonus = 0.0
+        if broad_query_mode:
+            bridge_bonus += min(max(len(set(item["variants"])) - 1, 0) * 0.03, 0.09)
+            if len(set(item["variantSources"])) > 1:
+                bridge_bonus += 0.02
+            if matched_facets and len(matched_facets) < len(facets) and term_coverage >= 0.35:
+                bridge_bonus += 0.03
+            if matched_candidate_concepts and len(set(item["variants"])) >= 2:
+                bridge_bonus += 0.03
+        if broad_query_mode and title_anchor_coverage == 0.0:
+            bridge_bonus *= 0.4
+        if broad_query_mode and anchor_coverage == 0.0 and title_anchor_coverage == 0.0:
+            bridge_bonus = 0.0
+
+        paper_id = str(
+            paper.get("paperId") or paper.get("paper_id") or paper.get("canonicalId") or paper.get("sourceId") or ""
+        ).strip()
+        relevance_entry = relevance_batch.get(paper_id, {})
+        relevance_classification = str(relevance_entry.get("classification") or "").strip() or None
+        relevance_fallback = bool(relevance_entry.get("fallback"))
+        relevance_bonus = 0.0
+        if relevance_classification == "on_topic":
+            relevance_bonus = 0.07 if not relevance_fallback else 0.04
+        elif relevance_classification == "off_topic":
+            relevance_bonus = -0.18 if not relevance_fallback else -0.12
+        elif relevance_classification == "weak_match" and broad_query_mode and title_anchor_coverage == 0.0:
+            relevance_bonus = -0.03
+
+        concept_bonus_gate_scale = 1.0
+        if relevance_classification == "off_topic" and not relevance_fallback:
+            concept_bonus_gate_scale = 0.0
+        elif relevance_classification == "weak_match" and not relevance_fallback:
+            concept_bonus_gate_scale = 0.5
+        concept_bonus *= concept_bonus_gate_scale
+
+        if broad_query_mode and title_anchor_coverage == 0.0 and anchor_coverage < 0.34 * anchor_threshold_scale:
+            facet_penalty += 0.08
+        if broad_query_mode and title_facet_coverage == 0.0 and query_similarity < 0.35:
+            facet_penalty += 0.05
+        if broad_query_mode and query_similarity < 0.2:
+            provider_bonus *= 0.5
+            citation_bonus *= 0.5
+        anchored_intent_penalty = 0.0
+        anchored_intent_threshold = 0.5 * anchor_threshold_scale
+        if anchored_broad and anchor_terms and anchor_coverage < anchored_intent_threshold:
+            anchored_intent_penalty = (anchored_intent_threshold - anchor_coverage) * 0.24
+            facet_penalty += anchored_intent_penalty
+        semantic_fit_scale = 1.0
+        semantic_fit_threshold = 0.25 * anchor_threshold_scale
+        if anchored_broad and anchor_terms and max(anchor_coverage, title_anchor_coverage) < semantic_fit_threshold:
+            semantic_fit_scale = 0.3
+            provider_bonus *= semantic_fit_scale
+            citation_bonus *= semantic_fit_scale
+
+        canonical_paper_bonus = 0.0
+        survey_title_bonus = 0.0
+        definitional_consensus_bonus = 0.0
+        if definitional_query:
+            raw_citation_count = paper.get("citationCount")
+            paper_year = paper.get("year")
+            if (
+                citation_threshold is not None
+                and canonical_year_cutoff is not None
+                and isinstance(raw_citation_count, int)
+                and raw_citation_count >= citation_threshold
+                and isinstance(paper_year, int)
+                and paper_year <= canonical_year_cutoff
+            ):
+                canonical_paper_bonus = 0.15
+            if survey_title_pattern.search(title_text or ""):
+                survey_title_bonus = 0.10
+            if len(item.get("providers", [])) >= 2:
+                definitional_consensus_bonus = 0.05
+
         final_score = (
             fused_rank_score
             + query_similarity
             + concept_bonus
             + provider_bonus
             + citation_bonus
+            + bridge_bonus
+            + relevance_bonus
+            + canonical_paper_bonus
+            + survey_title_bonus
+            + definitional_consensus_bonus
             - drift_penalty
-            - facet_penalty
+            - (facet_penalty * facet_penalty_scale)
         )
         item["matchedConcepts"] = matched_concepts
         item["scoreBreakdown"] = {
             "fusedRankScore": round(fused_rank_score, 6),
             "querySimilarity": round(query_similarity, 6),
             "conceptCoverageBonus": round(concept_bonus, 6),
+            "conceptBonusGateScale": round(concept_bonus_gate_scale, 6),
             "providerConsensusBonus": round(provider_bonus, 6),
+            "bridgeCoverageBonus": round(bridge_bonus, 6),
+            "relevanceClassificationBonus": round(relevance_bonus, 6),
             "queryFacetCoverage": round(facet_coverage, 6),
             "queryTermCoverage": round(term_coverage, 6),
             "queryAnchorCoverage": round(anchor_coverage, 6),
@@ -294,7 +471,22 @@ async def rerank_candidates(
             "titleAnchorCoverage": round(title_anchor_coverage, 6),
             "citationRecencyPrior": round(citation_bonus, 6),
             "driftPenalty": round(drift_penalty, 6),
-            "queryFacetPenalty": round(facet_penalty, 6),
+            "queryFacetPenalty": round(facet_penalty * facet_penalty_scale, 6),
+            "broadQueryMode": broad_query_mode,
+            "broadQueryRegime": broad_query_regime,
+            "anchoredIntentPenalty": round(anchored_intent_penalty, 6),
+            "semanticFitGate": round(semantic_fit_scale, 6),
+            "anchorThresholdScale": round(anchor_threshold_scale, 6),
+            "yearDecayScale": round(year_decay_scale, 6),
+            "citationDecayScale": round(citation_decay_scale, 6),
+            "providerBonusScale": round(provider_bonus_scale, 6),
+            "facetPenaltyScale": round(facet_penalty_scale, 6),
+            "relevanceClassification": relevance_classification,
+            "relevanceClassificationFallback": relevance_fallback,
+            "canonicalPaperBonus": round(canonical_paper_bonus, 6),
+            "surveyTitleBonus": round(survey_title_bonus, 6),
+            "definitionalConsensusBonus": round(definitional_consensus_bonus, 6),
+            "definitionalQuery": definitional_query,
             "finalScore": round(final_score, 6),
         }
         item["querySimilarity"] = query_similarity
@@ -363,8 +555,25 @@ def _merge_paper_dicts(left: dict[str, Any], right: dict[str, Any]) -> dict[str,
             merged[key] = value
             continue
         if isinstance(current, list) and isinstance(value, list):
-            seen = {repr(item) for item in current}
-            merged[key] = current + [item for item in value if repr(item) not in seen]
+
+            def _author_key(item: Any) -> str:
+                if isinstance(item, dict):
+                    name = str(item.get("name") or "").lower()
+                    # normalize: strip punctuation, sort tokens so "Smith, J." == "J. Smith"
+                    tokens = sorted(re.sub(r"[^a-z0-9 ]", " ", name).split())
+                    return " ".join(tokens)
+                return repr(item)
+
+            seen = {_author_key(item) for item in current}
+            new_items = [item for item in value if _author_key(item) not in seen]
+            # prefer the longest/most complete form of matching items
+            for item in value:
+                k = _author_key(item)
+                existing = next((x for x in current if _author_key(x) == k), None)
+                if existing is not None and isinstance(existing, dict) and isinstance(item, dict):
+                    if len(str(item.get("name") or "")) > len(str(existing.get("name") or "")):
+                        existing["name"] = item["name"]
+            merged[key] = current + new_items
     return merged
 
 
@@ -440,3 +649,42 @@ def _dedupe_strings(values: list[str]) -> list[str]:
         seen.add(lowered)
         deduped.append(value)
     return deduped
+
+
+def summarize_ranking_diagnostics(
+    ranked_candidates: list[dict[str, Any]],
+    top_n: int = 10,
+) -> list[dict[str, Any]]:
+    """Return a compact top-N snapshot of ranking diagnostics for eval/curation.
+
+    Intended for attaching pre-filter scoring context onto abstained, insufficient-
+    evidence, or failed result payloads so eval curation can replay the decision.
+    """
+    if top_n <= 0 or not ranked_candidates:
+        return []
+    snapshot: list[dict[str, Any]] = []
+    for candidate in ranked_candidates[:top_n]:
+        paper = candidate.get("paper") if isinstance(candidate, dict) else None
+        paper_dict = paper if isinstance(paper, dict) else {}
+        paper_id = str(
+            paper_dict.get("paperId") or paper_dict.get("canonicalId") or paper_dict.get("sourceId") or ""
+        ).strip()
+        title = str(paper_dict.get("title") or "").strip()
+        providers = candidate.get("providers") if isinstance(candidate, dict) else None
+        if isinstance(providers, (list, tuple, set)):
+            providers_list = sorted({str(provider) for provider in providers if provider})
+        else:
+            providers_list = []
+        score_breakdown = candidate.get("scoreBreakdown") if isinstance(candidate, dict) else None
+        score_breakdown_dict = score_breakdown if isinstance(score_breakdown, dict) else {}
+        snapshot.append(
+            {
+                "paperId": paper_id,
+                "title": title,
+                "providers": providers_list,
+                "finalScore": candidate.get("finalScore") if isinstance(candidate, dict) else None,
+                "querySimilarity": candidate.get("querySimilarity") if isinstance(candidate, dict) else None,
+                "scoreBreakdown": dict(score_breakdown_dict),
+            }
+        )
+    return snapshot

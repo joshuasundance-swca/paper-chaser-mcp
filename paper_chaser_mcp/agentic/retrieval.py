@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from ..provider_runtime import ProviderBudgetState, ProviderDiagnosticsRegistry
 from ..search_executor import (
@@ -140,7 +140,10 @@ def provider_limits(
 def _planned_provider_order(provider_plan: list[str] | None) -> list[ProviderExecutorName]:
     if not provider_plan:
         return list(_SMART_PROVIDER_ORDER)
-    allowed: list[ProviderExecutorName] = [provider for provider in _SMART_PROVIDER_ORDER if provider in provider_plan]
+    allowed: list[ProviderExecutorName] = []
+    for provider in provider_plan:
+        if provider in _SMART_PROVIDER_ORDER and provider not in allowed:
+            allowed.append(cast(ProviderExecutorName, provider))
     return allowed or list(_SMART_PROVIDER_ORDER)
 
 

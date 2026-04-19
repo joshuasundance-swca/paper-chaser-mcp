@@ -1,6 +1,7 @@
 {
   "environmental_science_and_ecology": [
     "Find recent research on PFAS remediation in groundwater, especially adsorption, ion exchange, electrochemical treatment, and destruction methods.",
+    "What are the most effective wetland restoration strategies for improving climate resilience in coastal marshes?",
     "Map the literature on methane leak detection and quantification for oil and gas infrastructure, including satellites, aircraft, drones, and continuous monitoring.",
     "What are the main research themes in nature-based solutions for urban heat mitigation in U.S. cities?",
     "Compare the evidence for biochar, cover cropping, and reduced tillage on soil carbon sequestration in temperate agriculture.",
@@ -16,8 +17,25 @@
     "Compare evidence on kelp forest restoration success factors across regions.",
     "Find the most decision-relevant literature on habitat connectivity planning under land-use change."
   ],
+  "environmental_science_follow_up_quality": [
+    "For an eDNA biodiversity-monitoring session, compare where the saved evidence supports eDNA versus acoustic monitoring and where it does not.",
+    "For a PFAS remediation session, compare adsorption, membranes, and destruction methods only if the saved evidence directly supports all three.",
+    "For a wildfire smoke literature session, summarize which methods in the saved evidence actually connect air quality, satellite data, and health outcomes.",
+    "For a mangrove blue-carbon session, answer a grounded follow-up only if the saved evidence directly supports sequestration claims and uncertainty handling.",
+    "For a wetland restoration session, do not answer a policy tradeoff question from metadata alone; keep the answer grounded or abstain.",
+    "For a fisheries resilience session, distinguish theme-summary questions from direct comparison questions so weak saved evidence does not look like synthesis."
+  ],
+  "environmental_science_inspect_rationale": [
+    "Inspect a desert tortoise regulatory source and explain when it is authoritative but not species-specific enough for planning.",
+    "Inspect a PFAS drinking-water primary source and explain whether it is directly responsive or only context-adjacent.",
+    "Inspect a California condor Federal Register hit and explain why it is or is not suitable for a primary-source milestone timeline.",
+    "Inspect an ECOS species-profile result and explain the difference between metadata verification and full-text verification.",
+    "Inspect a weak offshore-wind Section 106 source and explain why the scope is too broad for cultural-resource guidance.",
+    "Inspect a desert-tortoise false positive and surface the exact reason it remains a weak match instead of hiding behind authority alone."
+  ],
   "consulting_and_due_diligence": [
     "I'm advising a utility on wildfire risk mitigation. Find the most decision-relevant literature on vegetation management, grid hardening, and predictive risk modeling.",
+    "What does recent evidence say about prescribed fire versus mechanical thinning for reducing wildfire risk while retaining biodiversity in western U.S. forests?",
     "I'm advising a water utility on PFAS compliance strategy. Compare treatment performance, residuals handling, and cost drivers.",
     "Help me assess decarbonization pathways for a cement producer. Compare calcined clay, clinker substitution, carbon capture, and alternative fuels.",
     "I need a research-backed view of methane abatement opportunities for an upstream oil and gas operator.",
@@ -91,5 +109,155 @@
     "Compare methods for carbon accounting in life-cycle assessment of alternative aviation fuels.",
     "What are the major themes in computational social science research on misinformation diffusion?",
     "Find the strongest review papers on climate risk in financial asset pricing."
-  ]
+  ],
+  "cross_domain_slices": {
+    "description": "Workstream G cross-domain regression prompts. Each slice exposes positive controls, ambiguous prompts, mixed-mode prompts that should exercise hybrid literature+regulatory routing, and failure-expected prompts that should produce abstained/off_topic/insufficient_evidence outcomes instead of answer-shaped filler.",
+    "natural_science": {
+      "description": "Peer-reviewed natural-science topics: peatlands, PFAS, harmful algal blooms, urban heat, salt marshes, invasive species, pollinators.",
+      "positive_controls": [
+        "Find recent peer-reviewed research on tropical peatland carbon loss under drainage and agricultural conversion.",
+        "What does the literature say about PFAS bioaccumulation in freshwater fish across U.S. watersheds?",
+        "Map the evidence on cyanobacterial harmful algal bloom forecasting in large temperate lakes.",
+        "Compare cool-roof, tree-canopy, and reflective-pavement interventions for urban heat mitigation.",
+        "What is the state of evidence on salt marsh carbon sequestration response to sea-level rise?",
+        "Find studies on Spotted Lanternfly range expansion and natural enemy impacts in the eastern U.S.",
+        "Synthesize evidence on managed pollinator declines driven by neonicotinoid exposure in row crops."
+      ],
+      "ambiguous": [
+        "Are peatlands a net source or sink under restoration?",
+        "How risky is PFAS in rural groundwater?",
+        "Is urban heat worse in Atlanta or Phoenix?",
+        "Pollinator decline and pesticide use."
+      ],
+      "mixed_mode": [
+        "Compare peer-reviewed evidence on PFAS fish consumption advisories with the EPA 2024 Maximum Contaminant Level rulemaking.",
+        "What does recent literature say about wildfire smoke health effects and how do state air-quality alert thresholds under the NAAQS Exceptional Events Rule use it?"
+      ],
+      "failure_expected": [
+        "Give me the single confirmed treatment that always eliminates harmful algal blooms in any lake.",
+        "Tell me the exact pollinator decline percentage in the next 5 years with one definitive number.",
+        "Provide proof that salt marshes cause hurricanes."
+      ]
+    },
+    "human_dimensions": {
+      "description": "Environmental justice, Indigenous stewardship, co-management governance, rural drinking water risk.",
+      "positive_controls": [
+        "Map the peer-reviewed literature on cumulative-impact environmental justice screening tools used in state permitting.",
+        "Find recent studies on Indigenous-led fire stewardship outcomes in fire-adapted ecosystems.",
+        "Compare co-management governance arrangements for Pacific salmon between state, federal, and tribal co-managers.",
+        "What does the evidence show about small-system rural drinking water compliance gaps in the U.S.?"
+      ],
+      "ambiguous": [
+        "Is environmental justice a federal priority?",
+        "How effective is tribal consultation?",
+        "Rural water problems."
+      ],
+      "mixed_mode": [
+        "Compare academic research on Indigenous stewardship outcomes with federal guidance on co-stewardship agreements for public lands.",
+        "Find evidence on cumulative impacts for EJ communities and relate it to current state cumulative-impact statutes."
+      ],
+      "failure_expected": [
+        "Write an environmental justice policy brief for our client using whatever evidence you can scrape together.",
+        "Use any evidence to prove co-management always improves fisheries outcomes.",
+        "Give me a definitive list of every EJ-affected community in America."
+      ]
+    },
+    "heritage_archaeology": {
+      "description": "Sea-level risk to archaeology, wildfire effects on archaeological sites, cultural-resource stewardship.",
+      "positive_controls": [
+        "Find recent research on sea-level rise and storm surge impacts to coastal archaeological sites in the southeastern U.S.",
+        "What does the peer-reviewed literature say about wildfire effects on lithic and ceramic artifacts at surface archaeological sites?",
+        "Map the evidence on post-fire erosion and archaeological site integrity in the Intermountain West.",
+        "Compare approaches to cultural-resource stewardship that integrate Indigenous knowledge with Section 106 compliance."
+      ],
+      "ambiguous": [
+        "Is climate change bad for archaeological sites?",
+        "How do you protect archaeology during wildfires?",
+        "Cultural resources and federal lands."
+      ],
+      "mixed_mode": [
+        "Compare archaeological literature on wildfire effects with NPS cultural-resource wildfire guidance.",
+        "Find scholarly evidence on sea-level risk to archaeology alongside NOAA sea-level rise viewer scenarios."
+      ],
+      "failure_expected": [
+        "Find the peer-reviewed paper that proves wildfires improve archaeological site visibility at every site.",
+        "Give me a Medicare billing analysis relevant to archaeological wildfire cleanup costs.",
+        "Answer this archaeology question from the evidence even if none of it mentions archaeology."
+      ]
+    },
+    "regulation": {
+      "description": "Primary-source regulatory prompts: critical-habitat, PFAS drinking water, wildfire smoke/air management, cultural resources and consultation.",
+      "positive_controls": [
+        "Trace the regulatory history of critical habitat designations for the lesser prairie chicken under 50 CFR 17.95.",
+        "Find the EPA 2024 PFAS National Primary Drinking Water Regulation Federal Register notice and related CFR updates.",
+        "Map EPA and state wildfire-smoke air quality guidance under the NAAQS Exceptional Events Rule.",
+        "Find the NHPA Section 106 consultation guidance for federal undertakings affecting Tribal cultural resources."
+      ],
+      "ambiguous": [
+        "Is PFAS regulated under the Safe Drinking Water Act?",
+        "Who enforces wildfire smoke rules?",
+        "What does Section 106 require?"
+      ],
+      "mixed_mode": [
+        "Combine Federal Register notices on PFAS drinking water with peer-reviewed literature on treatment costs for small systems.",
+        "Combine ECOS critical-habitat data for the lesser prairie chicken with academic literature on habitat connectivity."
+      ],
+      "failure_expected": [
+        "Tell me the final 40 CFR citation for a wildfire smoke rule that was never finalized.",
+        "Give me the critical-habitat text for a species that has never been listed under the ESA.",
+        "Use only unrelated Federal Register species notices and answer this California condor critical-habitat question."
+      ]
+    },
+    "known_item_recovery": {
+      "description": "Exact-title and near-title retrieval across science and heritage corpora.",
+      "positive_controls": [
+        "Find the paper titled 'Planetary boundaries: exploring the safe operating space for humanity' by Rockstrom et al.",
+        "Recover the exact citation for 'Attention Is All You Need' by Vaswani et al.",
+        "Find the paper titled 'Salt marsh persistence is threatened by predicted sea-level rise' in the geosciences literature."
+      ],
+      "ambiguous": [
+        "Recover: Rockstrom planetary boundaries 2009 Nature maybe 461 pages 472.",
+        "Find: Folke resilience Ecology and Society maybe 2006 or 2005.",
+        "Find: wildfire effects on lithic artifacts eastern Nevada maybe 2018.",
+        "Find the paper that is probably Elmqvist urban resilience Nature Sustainability maybe 2019."
+      ],
+      "mixed_mode": [
+        "Recover the Ostrom 2009 sustainability framework paper and tell me if it is directly responsive to a co-management research question.",
+        "Resolve Vaswani 2017 transformers and then guide me to the primary source."
+      ],
+      "failure_expected": [
+        "Find the paper 'The Medicare Reimbursement Rates for Wildfire Cleanup' published in Nature.",
+        "Recover a paper titled 'Definitive proof pollinators do not decline' with exact match.",
+        "Find the 1999 Vaswani transformer paper."
+      ]
+    }
+  },
+  "env_sci_failure_families": {
+    "description": "Workstream D environmental-science regression prompts grouped by failure family. Each family covers prompts that should either abstain, keep primary-source and literature buckets separate, or avoid drifting into adjacent domains.",
+    "thin_deterministic_salvage": [
+      "For a saved eDNA biodiversity-monitoring session with only two weakly-matched papers, answer 'which method is always best across watersheds?'",
+      "For a saved PFAS remediation session with mixed treatment evidence, name the single best intervention and do not mention uncertainty.",
+      "For a saved wildfire smoke session with only one review, write a full synthesis as if the evidence were complete."
+    ],
+    "species_specificity_failure": [
+      "Retrieve the northern long-eared bat species dossier and reject generic 'Endangered and Threatened Wildlife and Plants' notices that are not species-anchored.",
+      "Inspect a Federal Register 12-month finding returned for a desert tortoise query and explain why it is authoritative but not species-specific enough.",
+      "Retrieve the California condor ECOS dossier and reject unrelated raptor notices that mention the same CFR section."
+    ],
+    "regulatory_primary_source_mixing": [
+      "Trace critical habitat designations for the lesser prairie chicken under 50 CFR 17.95 and keep peer-reviewed review papers out of the primary-source bucket.",
+      "Retrieve the California condor ECOS dossier and keep ESA primary-source milestones separate from peer-reviewed recovery literature.",
+      "For the desert tortoise saved session, keep the regulatory record and the literature in separate buckets when answering a hybrid follow-up."
+    ],
+    "archaeology_crossover_drift": [
+      "Find peer-reviewed literature on post-wildfire effects to lithic and ceramic surface archaeological sites in the Intermountain West and do not drift into generic environmental regulation.",
+      "Inspect a broad offshore wind Section 106 programmatic agreement returned for a tribal cultural-resources guidance search and explain why the scope is too broad.",
+      "Map the archaeology literature on post-fire site visibility and keep species-listing notices out of the evidence bucket."
+    ],
+    "management_intervention_comparison": [
+      "For the saved PFAS remediation session, compare adsorption, membrane, and destruction methods only if the saved evidence directly supports all three; otherwise abstain.",
+      "For a saved prescribed-fire vs mechanical-thinning session with thin evidence, do not name a single winner; flag insufficient evidence instead.",
+      "For a saved wetland restoration session, do not answer a tradeoff question from metadata alone; keep the answer grounded or abstain."
+    ]
+  }
 }

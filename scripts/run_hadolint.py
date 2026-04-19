@@ -13,6 +13,7 @@ IMAGE = f"{IMAGE_BASE}@{IMAGE_SHA256}"
 IMAGE_PULL_REF = IMAGE
 RUN_TIMEOUT_SECONDS = 90
 PULL_TIMEOUT_SECONDS = 300
+DOCKER_VERSION_TIMEOUT_SECONDS = 90
 HADOLINT_ARGS = ["hadolint", "--ignore", "DL3013"]
 
 
@@ -28,7 +29,7 @@ def run(
     *,
     timeout: int,
     description: str,
-) -> subprocess.CompletedProcess[None]:
+) -> subprocess.CompletedProcess[bytes]:
     try:
         return subprocess.run(  # nosec B603 - command is built from fixed args and filenames
             command,
@@ -102,7 +103,11 @@ def main(argv: list[str]) -> int:
         return 0
 
     docker = resolve_docker()
-    run([docker, "version"], timeout=30, description="checking Docker availability")
+    run(
+        [docker, "version"],
+        timeout=DOCKER_VERSION_TIMEOUT_SECONDS,
+        description="checking Docker availability",
+    )
     ensure_image(docker)
 
     for filename in argv[1:]:

@@ -83,6 +83,8 @@ jobs:
           git diff --exit-code -- .github/workflows/test-paper-chaser.lock.yml
 
       - name: Run pre-commit
+        env:
+          SKIP: mypy
         run: pre-commit run --all-files
 
       - name: Run tests

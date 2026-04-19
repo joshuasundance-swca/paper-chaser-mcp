@@ -1,0 +1,965 @@
+"""Helpers for capturing live eval candidates and shaping review queues."""
+
+from __future__ import annotations
+
+import csv
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+
+def _compact_source(source: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "sourceId": source.get("sourceId"),
+        "sourceAlias": source.get("sourceAlias"),
+        "title": source.get("title"),
+        "provider": source.get("provider"),
+        "sourceType": source.get("sourceType"),
+        "verificationStatus": source.get("verificationStatus"),
+        "accessStatus": source.get("accessStatus"),
+        "confidence": source.get("confidence"),
+        "whyClassifiedAsWeakMatch": source.get("whyClassifiedAsWeakMatch"),
+    }
+
+
+def _compact_recommendations(items: Any) -> list[str]:
+    if not isinstance(items, list):
+        return []
+    compact: list[str] = []
+    for item in items[:6]:
+        if isinstance(item, str) and item.strip():
+            compact.append(item.strip())
+        elif isinstance(item, dict):
+            title = str(item.get("title") or item.get("label") or item.get("action") or "").strip()
+            if title:
+                compact.append(title)
+    return compact
+
+
+def _compact_theme(theme: dict[str, Any]) -> dict[str, Any]:
+    representative = []
+    for paper in theme.get("representativePapers") or []:
+        if isinstance(paper, dict):
+            representative.append(
+                {
+                    "paperId": paper.get("paperId"),
+                    "title": paper.get("title"),
+                    "year": paper.get("year"),
+                }
+            )
+    return {
+        "title": theme.get("title"),
+        "summary": theme.get("summary"),
+        "matchedConcepts": theme.get("matchedConcepts") or [],
+        "representativePapers": representative,
+    }
+
+
+def _compact_graph_node(node: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": node.get("id"),
+        "kind": node.get("kind"),
+        "label": node.get("label"),
+        "score": node.get("score"),
+    }
+
+
+def _first_dict(*values: Any) -> dict[str, Any]:
+    for value in values:
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _compact_provider_outcomes(items: Any) -> dict[str, Any]:
+    if not isinstance(items, list):
+        return {
+            "attemptCount": 0,
+            "successCount": 0,
+            "providersUsed": [],
+            "totalRetries": 0,
+            "fallbackReasons": [],
+            "maxLatencyMs": 0,
+        }
+    outcomes = [item for item in items if isinstance(item, dict)]
+    providers_used = sorted({str(item.get("provider") or "").strip() for item in outcomes if item.get("provider")})
+    fallback_reasons = [
+        str(item.get("fallbackReason") or "").strip()
+        for item in outcomes
+        if str(item.get("fallbackReason") or "").strip()
+    ]
+    success_count = sum(1 for item in outcomes if str(item.get("statusBucket") or "") == "success")
+    total_retries = sum(int(item.get("retries") or 0) for item in outcomes)
+    max_latency_ms = max((int(item.get("latencyMs") or 0) for item in outcomes), default=0)
+    return {
+        "attemptCount": len(outcomes),
+        "successCount": success_count,
+        "providersUsed": providers_used,
+        "totalRetries": total_retries,
+        "fallbackReasons": fallback_reasons,
+        "maxLatencyMs": max_latency_ms,
+    }
+
+
+def _list_of_strings(value: Any, *, limit: int | None = None) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    values = [str(item).strip() for item in value if str(item).strip()]
+    return values[:limit] if isinstance(limit, int) and limit >= 0 else values
+
+
+def _infer_prompt_family(
+    *,
+    tool_name: str,
+    intent: str,
+    query_specificity: str | None,
+    ambiguity_level: str | None,
+    pass_modes: list[str],
+) -> str:
+    if tool_name in {"follow_up_research", "ask_result_set"}:
+        return "grounded_follow_up"
+    if tool_name == "inspect_source":
+        return "source_provenance"
+    if tool_name == "get_runtime_status":
+        return "runtime_status"
+    if intent == "mixed" or ("regulatory" in pass_modes and "review" in pass_modes):
+        return "mixed_regulatory_literature"
+    if intent == "regulatory":
+        return "regulatory_primary_source"
+    if intent == "known_item":
+        return "known_item"
+    if query_specificity == "low" or ambiguity_level in {"medium", "high"}:
+        return "broad_ambiguous_literature"
+    if intent == "review":
+        return "literature_review"
+    if intent == "author":
+        return "author_lookup"
+    if intent == "citation":
+        return "citation_trace"
+    return "discovery"
+
+
+def _build_heuristic_summary(tool_name: str, arguments: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    del arguments
+    execution_provenance = _first_dict(result.get("executionProvenance"))
+    strategy_metadata = _first_dict(result.get("strategyMetadata"))
+    routing_summary = _first_dict(result.get("routingSummary"))
+    intent = str(
+        result.get("intent") or routing_summary.get("intent") or strategy_metadata.get("intent") or "discovery"
+    )
+    query_specificity = (
+        str(strategy_metadata.get("querySpecificity") or routing_summary.get("querySpecificity") or "").strip() or None
+    )
+    ambiguity_level = (
+        str(strategy_metadata.get("ambiguityLevel") or routing_summary.get("ambiguityLevel") or "").strip() or None
+    )
+    retrieval_hypotheses = _list_of_strings(
+        strategy_metadata.get("retrievalHypotheses") or routing_summary.get("retrievalHypotheses"),
+        limit=5,
+    )
+    secondary_intents = _list_of_strings(
+        strategy_metadata.get("secondaryIntents") or routing_summary.get("secondaryIntents"),
+        limit=4,
+    )
+    pass_modes = _list_of_strings(
+        routing_summary.get("passModes") or execution_provenance.get("passModes"),
+        limit=4,
+    )
+    anchored_subject = (
+        str(strategy_metadata.get("anchoredSubject") or routing_summary.get("anchorValue") or "").strip() or None
+    )
+    prompt_family = _infer_prompt_family(
+        tool_name=tool_name,
+        intent=intent,
+        query_specificity=query_specificity,
+        ambiguity_level=ambiguity_level,
+        pass_modes=pass_modes,
+    )
+    summary = {
+        "promptFamily": prompt_family,
+        "intent": intent,
+        "querySpecificity": query_specificity,
+        "ambiguityLevel": ambiguity_level,
+        "secondaryIntents": secondary_intents,
+        "retrievalHypotheses": retrieval_hypotheses,
+        "retrievalHypothesisCount": len(retrieval_hypotheses),
+        "passModes": pass_modes,
+        "anchoredSubject": anchored_subject,
+        "reviewPassReason": routing_summary.get("reviewPassReason") or strategy_metadata.get("reviewPassReason"),
+    }
+    return {key: value for key, value in summary.items() if value not in (None, "", [], {})}
+
+
+def _tags_with_prompt_family(base_tags: list[str], heuristic_summary: dict[str, Any]) -> list[str]:
+    prompt_family = str(heuristic_summary.get("promptFamily") or "").strip()
+    if prompt_family and prompt_family not in base_tags:
+        return [*base_tags, prompt_family]
+    return base_tags
+
+
+def _extract_telemetry(result: dict[str, Any]) -> dict[str, Any]:
+    execution_provenance = _first_dict(result.get("executionProvenance"))
+    strategy_metadata = _first_dict(result.get("strategyMetadata"))
+    routing_summary = _first_dict(result.get("routingSummary"))
+    provider_outcomes = result.get("providerOutcomes")
+    if not isinstance(provider_outcomes, list):
+        provider_outcomes = execution_provenance.get("providerOutcomes")
+    if not isinstance(provider_outcomes, list):
+        provider_outcomes = strategy_metadata.get("providerOutcomes")
+    if not isinstance(provider_outcomes, list):
+        provider_outcomes = []
+
+    stage_timings_ms = execution_provenance.get("stageTimingsMs")
+    if not isinstance(stage_timings_ms, dict):
+        stage_timings_ms = strategy_metadata.get("stageTimingsMs")
+    if not isinstance(stage_timings_ms, dict):
+        stage_timings_ms = {}
+
+    confidence_signals = {
+        "intentConfidence": strategy_metadata.get("intentConfidence"),
+        "routingConfidence": strategy_metadata.get("routingConfidence"),
+        "querySpecificity": strategy_metadata.get("querySpecificity") or routing_summary.get("querySpecificity"),
+        "ambiguityLevel": strategy_metadata.get("ambiguityLevel") or routing_summary.get("ambiguityLevel"),
+        "answerability": result.get("answerability"),
+    }
+    explicit_confidence_signals = _first_dict(result.get("confidenceSignals"))
+    confidence_signals.update(
+        {key: value for key, value in explicit_confidence_signals.items() if value not in (None, "", [], {})}
+    )
+
+    return {
+        "providerOutcomes": provider_outcomes,
+        "providerPathwaySummary": _compact_provider_outcomes(provider_outcomes),
+        "stageTimingsMs": stage_timings_ms,
+        "strategyMetadata": strategy_metadata,
+        "confidenceSignals": {key: value for key, value in confidence_signals.items() if value is not None},
+        "failureSummary": result.get("failureSummary"),
+        "abstentionDetails": result.get("abstentionDetails"),
+    }
+
+
+_RANKING_DIAGNOSTIC_TERMINAL_STATUSES = {
+    "abstained",
+    "failed",
+    "partial",
+    "insufficient_evidence",
+    "needs_disambiguation",
+}
+
+
+def extract_ranking_diagnostics(result: dict[str, Any]) -> dict[str, Any] | None:
+    """Collect optional ranking-diagnostic telemetry for failed/abstained cases.
+
+    Workstream G (``docs/cross-domain-remediation-plan.md`` lines 370-405)
+    requires the eval-capture pipeline to preserve ranking-diagnostic signals
+    for terminal-non-success outcomes so review queues can reconstruct *why*
+    evidence was rejected. Sibling agents are still landing the producer-side
+    fields (``rankingDiagnostics``, ``preFilterCandidates``, ``scoreBreakdown``,
+    ``classificationProvenance``, ``synthesisMode``, ``evidenceQualityProfile``)
+    so this extractor must be tolerant: it uses ``.get`` defensively and
+    returns ``None`` when nothing useful is present so callers can cheaply
+    skip wiring the key into the captured payload.
+    """
+    if not isinstance(result, dict):
+        return None
+    strategy_metadata = _first_dict(result.get("strategyMetadata"))
+    diagnostics: dict[str, Any] = {}
+
+    ranking_diagnostics = result.get("rankingDiagnostics")
+    if isinstance(ranking_diagnostics, dict) and ranking_diagnostics:
+        diagnostics["rankingDiagnostics"] = ranking_diagnostics
+    elif isinstance(ranking_diagnostics, list) and ranking_diagnostics:
+        diagnostics["rankingDiagnostics"] = ranking_diagnostics
+
+    pre_filter = result.get("preFilterCandidates")
+    if isinstance(pre_filter, list) and pre_filter:
+        diagnostics["preFilterCandidates"] = pre_filter[:8]
+
+    score_breakdown = result.get("scoreBreakdown")
+    if not isinstance(score_breakdown, (dict, list)) or not score_breakdown:
+        score_breakdown = strategy_metadata.get("scoreBreakdown")
+    if isinstance(score_breakdown, (dict, list)) and score_breakdown:
+        diagnostics["scoreBreakdown"] = score_breakdown
+
+    classification_provenance = result.get("classificationProvenance")
+    if isinstance(classification_provenance, (dict, list)) and classification_provenance:
+        diagnostics["classificationProvenance"] = classification_provenance
+
+    synthesis_mode = result.get("synthesisMode")
+    if isinstance(synthesis_mode, str) and synthesis_mode.strip():
+        diagnostics["synthesisMode"] = synthesis_mode
+
+    evidence_quality_profile = result.get("evidenceQualityProfile")
+    if isinstance(evidence_quality_profile, (dict, list)) and evidence_quality_profile:
+        diagnostics["evidenceQualityProfile"] = evidence_quality_profile
+
+    return diagnostics or None
+
+
+def _maybe_attach_ranking_diagnostics(output: Any, result: dict[str, Any]) -> None:
+    """Attach ranking diagnostics to ``output`` only for terminal-non-success cases."""
+    if not isinstance(output, dict):
+        return
+    status_values = {
+        str(result.get("status") or "").strip().lower(),
+        str(result.get("resultStatus") or "").strip().lower(),
+        str(result.get("answerStatus") or "").strip().lower(),
+    }
+    if not status_values & _RANKING_DIAGNOSTIC_TERMINAL_STATUSES:
+        return
+    diagnostics = extract_ranking_diagnostics(result)
+    if diagnostics:
+        output["rankingDiagnostics"] = diagnostics
+
+
+def build_eval_capture_payload(
+    tool_name: str, arguments: dict[str, Any], result: dict[str, Any]
+) -> dict[str, Any] | None:
+    search_session_id = result.get("searchSessionId")
+    telemetry = _extract_telemetry(result)
+    heuristic_summary = _build_heuristic_summary(tool_name, arguments, result)
+    if tool_name == "research":
+        sources = [item for item in result.get("sources") or [] if isinstance(item, dict)]
+        payload = {
+            "tool": tool_name,
+            "taskFamily": "planner",
+            "evaluationTarget": "internal_llm_role",
+            "input": {
+                "query": arguments.get("query"),
+            },
+            "output": {
+                "searchSessionId": search_session_id,
+                "intent": result.get("intent"),
+                "status": result.get("status"),
+                "summary": result.get("summary"),
+                "routingSummary": result.get("routingSummary"),
+                "coverageSummary": result.get("coverageSummary") or result.get("coverage"),
+                "trustSummary": result.get("trustSummary"),
+                "resultState": result.get("resultState"),
+                "executionProvenance": result.get("executionProvenance"),
+                "stageTimingsMs": telemetry["stageTimingsMs"],
+                "providerOutcomes": telemetry["providerOutcomes"],
+                "providerPathwaySummary": telemetry["providerPathwaySummary"],
+                "confidenceSignals": telemetry["confidenceSignals"],
+                "heuristicSummary": heuristic_summary,
+                "failureSummary": telemetry["failureSummary"],
+                "evidenceGaps": result.get("evidenceGaps") or [],
+                "sourceCount": len(sources),
+                "sources": [_compact_source(source) for source in sources[:8]],
+            },
+            "tags": _tags_with_prompt_family(["captured-live", "guided", "planner"], heuristic_summary),
+        }
+        _maybe_attach_ranking_diagnostics(payload["output"], result)
+        return payload
+    if tool_name == "follow_up_research":
+        sources = [item for item in result.get("sources") or [] if isinstance(item, dict)]
+        payload = {
+            "tool": tool_name,
+            "taskFamily": "synthesis",
+            "evaluationTarget": "internal_llm_role",
+            "input": {
+                "searchSessionId": arguments.get("searchSessionId") or search_session_id,
+                "question": arguments.get("question"),
+            },
+            "output": {
+                "searchSessionId": search_session_id,
+                "answerStatus": result.get("answerStatus"),
+                "answer": result.get("answer"),
+                "selectedEvidenceIds": result.get("selectedEvidenceIds") or [],
+                "selectedLeadIds": result.get("selectedLeadIds") or [],
+                "abstentionDetails": result.get("abstentionDetails"),
+                "resultState": result.get("resultState"),
+                "executionProvenance": result.get("executionProvenance"),
+                "stageTimingsMs": telemetry["stageTimingsMs"],
+                "providerOutcomes": telemetry["providerOutcomes"],
+                "providerPathwaySummary": telemetry["providerPathwaySummary"],
+                "confidenceSignals": telemetry["confidenceSignals"],
+                "heuristicSummary": heuristic_summary,
+                "failureSummary": telemetry["failureSummary"],
+                "evidenceGaps": result.get("evidenceGaps") or [],
+                "sourceCount": len(sources),
+                "sources": [_compact_source(source) for source in sources[:8]],
+            },
+            "tags": _tags_with_prompt_family(["captured-live", "guided", "synthesis"], heuristic_summary),
+        }
+        _maybe_attach_ranking_diagnostics(payload["output"], result)
+        return payload
+    if tool_name == "inspect_source":
+        source = _first_dict(result.get("source"))
+        return {
+            "tool": tool_name,
+            "taskFamily": "provenance",
+            "evaluationTarget": "internal_llm_role",
+            "input": {
+                "searchSessionId": arguments.get("searchSessionId") or search_session_id,
+                "sourceId": arguments.get("sourceId"),
+            },
+            "output": {
+                "searchSessionId": search_session_id,
+                "source": _compact_source(source),
+                "sourceResolution": result.get("sourceResolution"),
+                "resultState": result.get("resultState"),
+                "executionProvenance": result.get("executionProvenance"),
+                "stageTimingsMs": telemetry["stageTimingsMs"],
+                "providerOutcomes": telemetry["providerOutcomes"],
+                "providerPathwaySummary": telemetry["providerPathwaySummary"],
+                "confidenceSignals": telemetry["confidenceSignals"],
+                "directReadRecommendations": _compact_recommendations(result.get("directReadRecommendations")),
+                "heuristicSummary": heuristic_summary,
+            },
+            "tags": _tags_with_prompt_family(["captured-live", "guided", "provenance"], heuristic_summary),
+        }
+    if tool_name == "get_runtime_status":
+        return {
+            "tool": tool_name,
+            "taskFamily": "runtime",
+            "evaluationTarget": "internal_llm_role",
+            "input": {},
+            "output": {
+                "runtimeSummary": result.get("runtimeSummary"),
+                "warnings": result.get("warnings") or [],
+                "heuristicSummary": heuristic_summary,
+            },
+            "tags": _tags_with_prompt_family(["captured-live", "runtime"], heuristic_summary),
+        }
+    if tool_name == "search_papers_smart":
+        structured_sources = [item for item in result.get("structuredSources") or [] if isinstance(item, dict)]
+        strategy_metadata = result.get("strategyMetadata") if isinstance(result.get("strategyMetadata"), dict) else {}
+        payload = {
+            "tool": tool_name,
+            "taskFamily": "planner",
+            "toolRole": "expert_smart_search",
+            "evaluationTarget": "internal_llm_role",
+            "input": {
+                "query": arguments.get("query"),
+                "mode": arguments.get("mode"),
+                "latencyProfile": arguments.get("latencyProfile"),
+            },
+            "output": {
+                "searchSessionId": result.get("searchSessionId"),
+                "resultStatus": result.get("resultStatus"),
+                "answerability": result.get("answerability"),
+                "routingSummary": result.get("routingSummary"),
+                "strategyMetadata": strategy_metadata,
+                "coverageSummary": result.get("coverageSummary"),
+                "providerOutcomes": telemetry["providerOutcomes"],
+                "providerPathwaySummary": telemetry["providerPathwaySummary"],
+                "stageTimingsMs": telemetry["stageTimingsMs"],
+                "confidenceSignals": telemetry["confidenceSignals"],
+                "heuristicSummary": heuristic_summary,
+                "failureSummary": telemetry["failureSummary"],
+                "evidenceGaps": result.get("evidenceGaps") or [],
+                "sourceCount": len(structured_sources),
+                "sources": [_compact_source(source) for source in structured_sources[:8]],
+            },
+            "tags": _tags_with_prompt_family(
+                ["captured-live", "expert", "planner", "search_papers_smart"],
+                heuristic_summary,
+            ),
+        }
+        _maybe_attach_ranking_diagnostics(payload["output"], result)
+        return payload
+    if tool_name == "ask_result_set":
+        evidence = [item for item in result.get("evidence") or [] if isinstance(item, dict)]
+        structured_sources = [item for item in result.get("structuredSources") or [] if isinstance(item, dict)]
+        payload = {
+            "tool": tool_name,
+            "taskFamily": "synthesis",
+            "toolRole": "expert_grounded_qa",
+            "evaluationTarget": "internal_llm_role",
+            "input": {
+                "searchSessionId": arguments.get("searchSessionId"),
+                "question": arguments.get("question"),
+                "answerMode": arguments.get("answerMode"),
+            },
+            "output": {
+                "searchSessionId": result.get("searchSessionId"),
+                "answerStatus": result.get("answerStatus"),
+                "answer": result.get("answer"),
+                "coverageSummary": result.get("coverageSummary"),
+                "providerOutcomes": telemetry["providerOutcomes"],
+                "providerPathwaySummary": telemetry["providerPathwaySummary"],
+                "stageTimingsMs": telemetry["stageTimingsMs"],
+                "confidenceSignals": telemetry["confidenceSignals"],
+                "heuristicSummary": heuristic_summary,
+                "failureSummary": telemetry["failureSummary"],
+                "evidence": evidence[:8],
+                "selectedEvidenceIds": [
+                    str(item.get("evidenceId") or "").strip()
+                    for item in evidence
+                    if str(item.get("evidenceId") or "").strip()
+                ],
+                "sourceCount": len(structured_sources),
+                "sources": [_compact_source(source) for source in structured_sources[:8]],
+            },
+            "tags": _tags_with_prompt_family(
+                ["captured-live", "expert", "synthesis", "ask_result_set"],
+                heuristic_summary,
+            ),
+        }
+        _maybe_attach_ranking_diagnostics(payload["output"], result)
+        return payload
+    if tool_name == "map_research_landscape":
+        themes = [item for item in result.get("themes") or [] if isinstance(item, dict)]
+        structured_sources = [item for item in result.get("structuredSources") or [] if isinstance(item, dict)]
+        return {
+            "tool": tool_name,
+            "taskFamily": "misc",
+            "toolRole": "landscape_mapping",
+            "evaluationTarget": "internal_llm_role",
+            "input": {
+                "searchSessionId": arguments.get("searchSessionId"),
+                "maxThemes": arguments.get("maxThemes"),
+                "latencyProfile": arguments.get("latencyProfile"),
+            },
+            "output": {
+                "searchSessionId": result.get("searchSessionId"),
+                "themeCount": len(themes),
+                "themes": [_compact_theme(theme) for theme in themes[:5]],
+                "gaps": result.get("gaps") or [],
+                "disagreements": result.get("disagreements") or [],
+                "suggestedNextSearches": result.get("suggestedNextSearches") or [],
+                "coverageSummary": result.get("coverageSummary"),
+                "providerOutcomes": telemetry["providerOutcomes"],
+                "providerPathwaySummary": telemetry["providerPathwaySummary"],
+                "stageTimingsMs": telemetry["stageTimingsMs"],
+                "confidenceSignals": telemetry["confidenceSignals"],
+                "heuristicSummary": heuristic_summary,
+                "sourceCount": len(structured_sources),
+                "sources": [_compact_source(source) for source in structured_sources[:8]],
+            },
+            "tags": _tags_with_prompt_family(
+                ["captured-live", "expert", "misc", "map_research_landscape"],
+                heuristic_summary,
+            ),
+        }
+    if tool_name == "expand_research_graph":
+        nodes = [item for item in result.get("nodes") or [] if isinstance(item, dict)]
+        frontier = [item for item in result.get("frontier") or [] if isinstance(item, dict)]
+        return {
+            "tool": tool_name,
+            "taskFamily": "misc",
+            "toolRole": "graph_expansion",
+            "evaluationTarget": "internal_llm_role",
+            "input": {
+                "seedSearchSessionId": arguments.get("seedSearchSessionId"),
+                "seedPaperIds": arguments.get("seedPaperIds") or [],
+                "direction": arguments.get("direction"),
+                "hops": arguments.get("hops"),
+            },
+            "output": {
+                "searchSessionId": result.get("searchSessionId"),
+                "nodeCount": len(nodes),
+                "edgeCount": len(result.get("edges") or []),
+                "frontier": [_compact_graph_node(node) for node in frontier[:8]],
+                "warnings": (result.get("agentHints") or {}).get("warnings") or [],
+                "providerOutcomes": telemetry["providerOutcomes"],
+                "providerPathwaySummary": telemetry["providerPathwaySummary"],
+                "stageTimingsMs": telemetry["stageTimingsMs"],
+                "confidenceSignals": telemetry["confidenceSignals"],
+                "heuristicSummary": heuristic_summary,
+            },
+            "tags": _tags_with_prompt_family(
+                ["captured-live", "expert", "misc", "expand_research_graph"],
+                heuristic_summary,
+            ),
+        }
+    return None
+
+
+def maybe_capture_eval_candidate(
+    *,
+    workspace_registry: Any,
+    tool_name: str,
+    arguments: dict[str, Any],
+    result: dict[str, Any],
+    run_id: str | None = None,
+    batch_id: str | None = None,
+    duration_ms: int | None = None,
+) -> None:
+    capture_fn = getattr(workspace_registry, "capture_eval_event", None)
+    if not callable(capture_fn) or not isinstance(result, dict):
+        return
+    payload = build_eval_capture_payload(tool_name, arguments, result)
+    if payload is None:
+        return
+    capture_fn(
+        event_type="guided_tool_result",
+        payload=payload,
+        search_session_id=result.get("searchSessionId") if isinstance(result.get("searchSessionId"), str) else None,
+        run_id=run_id,
+        batch_id=batch_id,
+        duration_ms=duration_ms,
+    )
+
+
+def load_captured_eval_events(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            rows.append(json.loads(line))
+    return rows
+
+
+def build_review_queue_rows(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    queue: list[dict[str, Any]] = []
+    for event in events:
+        payload = event.get("payload") or {}
+        if not isinstance(payload, dict):
+            continue
+        task_family = str(payload.get("taskFamily") or "").strip()
+        if not task_family:
+            continue
+        event_id = str(event.get("eventId") or "").strip()
+        tool_name = str(payload.get("tool") or "unknown")
+        input_payload = _first_dict(payload.get("input"))
+        output_payload = _first_dict(payload.get("output"))
+        queue.append(
+            {
+                "trace_id": event_id,
+                "run_id": event.get("runId"),
+                "batch_id": event.get("batchId"),
+                "reviewed_at": None,
+                "trace": {
+                    "source_tool": tool_name,
+                    "prompt_family": _first_dict(output_payload.get("heuristicSummary")).get("promptFamily"),
+                    "query": input_payload.get("query"),
+                    "query_context": input_payload.get("query") or input_payload.get("searchSessionId"),
+                    "follow_up_question": input_payload.get("question"),
+                    "source_id": input_payload.get("sourceId"),
+                    "search_session_id": output_payload.get("searchSessionId") or event.get("searchSessionId"),
+                    "duration_ms": event.get("durationMs"),
+                    "telemetry": {
+                        "provider_pathway_summary": output_payload.get("providerPathwaySummary") or {},
+                        "stage_timings_ms": output_payload.get("stageTimingsMs") or {},
+                        "confidence_signals": output_payload.get("confidenceSignals") or {},
+                        "heuristic_summary": output_payload.get("heuristicSummary") or {},
+                        "failure_summary": output_payload.get("failureSummary"),
+                    },
+                    "captured_output": output_payload,
+                },
+                "review": {
+                    "promote": False,
+                    "task_family": task_family,
+                    "id": event_id,
+                    "tags": payload.get("tags") or ["captured-live", task_family],
+                    "expected": {},
+                    "why_it_matters": "Fill in after reviewing this captured live run.",
+                    "evaluation_target": payload.get("evaluationTarget", "internal_llm_role"),
+                    "label_schema_version": 1,
+                    "labels": {
+                        "verdict": None,
+                        "qualityBucket": None,
+                        "split": "unreviewed",
+                        "trainingEligibility": "undecided",
+                        "trainingObjective": None,
+                        "preferredExportFormats": [],
+                        "notes": None,
+                    },
+                },
+            }
+        )
+    return queue
+
+
+def build_batch_summary(
+    report: dict[str, Any],
+    events: list[dict[str, Any]],
+    queue_rows: list[dict[str, Any]],
+    *,
+    batch_id: str | None = None,
+    run_id: str | None = None,
+    scenario_file: str | None = None,
+) -> dict[str, Any]:
+    runs = [item for item in report.get("runs") or [] if isinstance(item, dict)]
+    tool_counts: dict[str, int] = {}
+    for run in runs:
+        tool_name = str(run.get("tool") or "unknown")
+        tool_counts[tool_name] = tool_counts.get(tool_name, 0) + 1
+
+    task_family_counts: dict[str, int] = {}
+    prompt_family_counts: dict[str, int] = {}
+    for row in queue_rows:
+        review = _first_dict(row.get("review"))
+        family = str(review.get("task_family") or "unknown")
+        task_family_counts[family] = task_family_counts.get(family, 0) + 1
+        trace = _first_dict(row.get("trace"))
+        prompt_family = str(
+            trace.get("prompt_family")
+            or _first_dict(_first_dict(trace.get("telemetry")).get("heuristic_summary")).get("promptFamily")
+            or "unknown"
+        )
+        prompt_family_counts[prompt_family] = prompt_family_counts.get(prompt_family, 0) + 1
+
+    durations = [
+        int(event.get("durationMs") or 0) for event in events if isinstance(event, dict) and event.get("durationMs")
+    ]
+    provider_attempts = 0
+    fallback_count = 0
+    total_retries = 0
+    warning_count = 0
+    abstention_count = 0
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        payload = _first_dict(event.get("payload"))
+        output = _first_dict(payload.get("output"))
+        provider_summary = _first_dict(output.get("providerPathwaySummary"))
+        provider_attempts += int(provider_summary.get("attemptCount") or 0)
+        total_retries += int(provider_summary.get("totalRetries") or 0)
+        fallback_count += len(provider_summary.get("fallbackReasons") or [])
+        warning_count += len(output.get("warnings") or [])
+        if str(output.get("answerStatus") or "") in {"abstained", "insufficient_evidence"}:
+            abstention_count += 1
+
+    first_batch_id = next(
+        (item.get("batchId") for item in events if isinstance(item, dict) and item.get("batchId")),
+        None,
+    )
+    first_run_id = next(
+        (item.get("runId") for item in events if isinstance(item, dict) and item.get("runId")),
+        None,
+    )
+
+    return {
+        "batchId": batch_id or report.get("batchId") or first_batch_id,
+        "runId": run_id or report.get("runId") or first_run_id,
+        "generatedAt": report.get("generatedAt"),
+        "scenarioFile": scenario_file or report.get("scenarioFile"),
+        "toolCounts": tool_counts,
+        "taskFamilyCounts": task_family_counts,
+        "promptFamilyCounts": prompt_family_counts,
+        "runCount": len(runs),
+        "capturedEventCount": len(events),
+        "reviewQueueRowCount": len(queue_rows),
+        "totalDurationMs": sum(durations),
+        "maxDurationMs": max(durations, default=0),
+        "providerAttemptCount": provider_attempts,
+        "fallbackCount": fallback_count,
+        "totalRetries": total_retries,
+        "abstentionCount": abstention_count,
+        "warningCount": warning_count,
+        "schemaVersion": 1,
+    }
+
+
+def build_batch_ledger_rows(
+    report: dict[str, Any],
+    events: list[dict[str, Any]],
+    queue_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    runs = [item for item in report.get("runs") or [] if isinstance(item, dict)]
+    ledger_rows: list[dict[str, Any]] = []
+    for index, run in enumerate(runs):
+        event = events[index] if index < len(events) and isinstance(events[index], dict) else {}
+        queue_row = queue_rows[index] if index < len(queue_rows) and isinstance(queue_rows[index], dict) else {}
+        payload = _first_dict(event.get("payload"))
+        output = _first_dict(payload.get("output"))
+        review = _first_dict(queue_row.get("review"))
+        provider_summary = _first_dict(output.get("providerPathwaySummary"))
+        ledger_rows.append(
+            {
+                "batchId": event.get("batchId") or report.get("batchId"),
+                "runId": event.get("runId") or report.get("runId"),
+                "scenarioName": run.get("name"),
+                "tool": run.get("tool"),
+                "taskFamily": payload.get("taskFamily") or review.get("task_family"),
+                "promptFamily": _first_dict(output.get("heuristicSummary")).get("promptFamily"),
+                "searchSessionId": event.get("searchSessionId") or output.get("searchSessionId"),
+                "capturedEventId": event.get("eventId"),
+                "reviewQueueRowId": queue_row.get("trace_id"),
+                "answerStatus": output.get("answerStatus"),
+                "resultStatus": output.get("resultStatus") or output.get("status"),
+                "durationMs": event.get("durationMs"),
+                "sourceCount": output.get("sourceCount"),
+                "providerCount": len(provider_summary.get("providersUsed") or []),
+                "fallbackCount": len(provider_summary.get("fallbackReasons") or []),
+                "totalRetries": provider_summary.get("totalRetries") or 0,
+            }
+        )
+    return ledger_rows
+
+
+def write_batch_ledger_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+    fieldnames = [
+        "batchId",
+        "runId",
+        "scenarioName",
+        "tool",
+        "taskFamily",
+        "promptFamily",
+        "searchSessionId",
+        "capturedEventId",
+        "reviewQueueRowId",
+        "answerStatus",
+        "resultStatus",
+        "durationMs",
+        "sourceCount",
+        "providerCount",
+        "fallbackCount",
+        "totalRetries",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def write_review_queue(path: Path, rows: list[dict[str, Any]]) -> None:
+    with path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row) + "\n")
+
+
+def render_review_queue(rows: list[dict[str, Any]]) -> str:
+    return "".join(json.dumps(row) + "\n" for row in rows)
+
+
+# ---------------------------------------------------------------------------
+# Workstream D: environmental-science benchmark pack + judge rubric
+# ---------------------------------------------------------------------------
+
+ENV_SCI_JUDGE_ROLES: tuple[str, ...] = (
+    "plannerSpecificity",
+    "followUpResponsiveness",
+    "evidenceSufficiency",
+    "provenanceHonesty",
+)
+
+
+@dataclass
+class EnvSciJudgeRubric:
+    """Role-level rubric scores emitted by an LLM judge for an env-sci row.
+
+    Each role score lives in ``[0.0, 1.0]``. ``overall`` is the unweighted mean
+    of the four role scores. ``notes`` is a free-form list of short strings the
+    judge can use to cite concrete evidence behind each score.
+    """
+
+    plannerSpecificity: float = 0.0
+    followUpResponsiveness: float = 0.0
+    evidenceSufficiency: float = 0.0
+    provenanceHonesty: float = 0.0
+    overall: float = 0.0
+    notes: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "plannerSpecificity": float(self.plannerSpecificity),
+            "followUpResponsiveness": float(self.followUpResponsiveness),
+            "evidenceSufficiency": float(self.evidenceSufficiency),
+            "provenanceHonesty": float(self.provenanceHonesty),
+            "overall": float(self.overall),
+            "notes": list(self.notes),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> EnvSciJudgeRubric:
+        def _clamp(value: Any) -> float:
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                return 0.0
+            if number < 0.0:
+                return 0.0
+            if number > 1.0:
+                return 1.0
+            return number
+
+        planner = _clamp(payload.get("plannerSpecificity"))
+        follow_up = _clamp(payload.get("followUpResponsiveness"))
+        evidence = _clamp(payload.get("evidenceSufficiency"))
+        provenance = _clamp(payload.get("provenanceHonesty"))
+        overall_raw = payload.get("overall")
+        if overall_raw is None:
+            overall = (planner + follow_up + evidence + provenance) / 4.0
+        else:
+            overall = _clamp(overall_raw)
+        notes_raw = payload.get("notes") or []
+        notes = [str(item) for item in notes_raw if isinstance(item, str) and item.strip()]
+        return cls(
+            plannerSpecificity=planner,
+            followUpResponsiveness=follow_up,
+            evidenceSufficiency=evidence,
+            provenanceHonesty=provenance,
+            overall=overall,
+            notes=notes,
+        )
+
+
+DEFAULT_ENV_SCI_BENCHMARK_PACK = (
+    Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "evals" / "env_sci_benchmark_pack.json"
+)
+DEFAULT_ENV_SCI_JUDGE_RUBRIC = (
+    Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "evals" / "env_sci_judge_rubric.json"
+)
+
+
+def load_env_sci_benchmark_pack(path: Path | None = None) -> dict[str, Any]:
+    """Load the env-sci benchmark pack JSON and validate the minimum schema."""
+
+    pack_path = path or DEFAULT_ENV_SCI_BENCHMARK_PACK
+    payload = json.loads(pack_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or not isinstance(payload.get("rows"), list):
+        raise ValueError(f"invalid env-sci benchmark pack at {pack_path}: missing 'rows'")
+    return payload
+
+
+def load_env_sci_judge_rubric_template(path: Path | None = None) -> dict[str, Any]:
+    rubric_path = path or DEFAULT_ENV_SCI_JUDGE_RUBRIC
+    payload = json.loads(rubric_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or not isinstance(payload.get("template"), list):
+        raise ValueError(f"invalid env-sci rubric template at {rubric_path}: missing 'template'")
+    return payload
+
+
+def build_env_sci_judge_prompt(
+    captured_row: dict[str, Any],
+    *,
+    expected_row: dict[str, Any] | None = None,
+    template: dict[str, Any] | None = None,
+) -> str:
+    """Render a judge prompt from a captured tool response and an expected-row.
+
+    The returned prompt is a plain string suitable for handing to an LLM judge.
+    It includes the original query, the compacted tool response, and the
+    expected-behavior row (if supplied) so the judge can score each role
+    against concrete guidance. The prompt intentionally asks for strict JSON
+    output keyed by ``ENV_SCI_JUDGE_ROLES`` so round-tripping through
+    :meth:`EnvSciJudgeRubric.from_dict` is safe.
+    """
+
+    rubric = template or load_env_sci_judge_rubric_template()
+    lines = list(rubric.get("template") or [])
+
+    query = ""
+    if isinstance(captured_row, dict):
+        query = str(
+            captured_row.get("query")
+            or captured_row.get("input", {}).get("query")
+            or captured_row.get("payload", {}).get("arguments", {}).get("query")
+            or ""
+        )
+    response_json = json.dumps(captured_row, indent=2, sort_keys=True, default=str)
+    expected_json = json.dumps(expected_row or {}, indent=2, sort_keys=True, default=str)
+
+    prompt = "\n".join(lines)
+    prompt = (
+        prompt.replace("{{query}}", query or "(no query captured)")
+        .replace("{{response_json}}", response_json)
+        .replace("{{expected_json}}", expected_json)
+    )
+
+    role_block_lines = ["", "Role scoring guidance:"]
+    for role in rubric.get("roles") or []:
+        if not isinstance(role, dict):
+            continue
+        role_block_lines.append(f"- {role.get('id')}: {role.get('purpose')}")
+        for guidance in role.get("scoringGuidance") or []:
+            role_block_lines.append(f"    * {guidance}")
+    prompt = prompt + "\n".join(role_block_lines) + "\n"
+    return prompt

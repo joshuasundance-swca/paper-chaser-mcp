@@ -29,6 +29,7 @@ from .provider_langchain import (
     LangChainChatProviderBundle,
     MistralProviderBundle,
     NvidiaProviderBundle,
+    OpenRouterProviderBundle,
 )
 from .provider_openai import AzureOpenAIProviderBundle, OpenAIProviderBundle
 
@@ -43,6 +44,7 @@ __all__ = [
     "MistralProviderBundle",
     "ModelProviderBundle",
     "NvidiaProviderBundle",
+    "OpenRouterProviderBundle",
     "OpenAIProviderBundle",
     "execute_provider_call",
     "execute_provider_call_sync",
@@ -76,6 +78,10 @@ def resolve_provider_bundle(
     mistral_api_key: str | None = None,
     huggingface_api_key: str | None = None,
     huggingface_base_url: str = "https://router.huggingface.co/v1",
+    openrouter_api_key: str | None = None,
+    openrouter_base_url: str = "https://openrouter.ai/api/v1",
+    openrouter_http_referer: str | None = None,
+    openrouter_title: str | None = None,
     provider_registry: ProviderDiagnosticsRegistry | None = None,
 ) -> ModelProviderBundle:
     """Resolve the configured provider bundle with deterministic fallback."""
@@ -121,6 +127,15 @@ def resolve_provider_bundle(
             config,
             huggingface_api_key,
             base_url=huggingface_base_url,
+            provider_registry=provider_registry,
+        )
+    if config.provider == "openrouter":
+        return OpenRouterProviderBundle(
+            config,
+            openrouter_api_key,
+            base_url=openrouter_base_url,
+            http_referer=openrouter_http_referer,
+            title=openrouter_title,
             provider_registry=provider_registry,
         )
     return OpenAIProviderBundle(

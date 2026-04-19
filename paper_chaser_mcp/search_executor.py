@@ -228,8 +228,8 @@ def annotate_paper_trust_metadata(paper: Paper) -> Paper:
     retrieved_url = _paper_retrieved_url(paper)
     source_type = paper.source_type or _paper_source_type(paper)
     access_status = paper.access_status or _paper_access_status(paper, retrieved_url)
-    full_text_observed = bool(
-        paper.full_text_observed
+    full_text_url_found = bool(
+        paper.full_text_url_found
         or paper.pdf_url
         or (
             paper.content_access is not None
@@ -260,8 +260,9 @@ def annotate_paper_trust_metadata(paper: Paper) -> Paper:
             "canonical_url": canonical_url,
             "retrieved_url": retrieved_url,
             "confidence": confidence,
+            "pdf_url": paper.pdf_url or None,
             "is_primary_source": paper.is_primary_source if paper.is_primary_source is not None else False,
-            "full_text_observed": full_text_observed,
+            "full_text_url_found": full_text_url_found,
             "abstract_observed": paper.abstract_observed
             if paper.abstract_observed is not None
             else bool(paper.abstract),

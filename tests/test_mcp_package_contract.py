@@ -5,6 +5,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+import paper_chaser_mcp
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCKERFILE = REPO_ROOT / "Dockerfile"
 SERVER_JSON = REPO_ROOT / "server.json"
@@ -90,6 +92,10 @@ def test_server_json_declares_at_least_one_oci_package() -> None:
 def test_server_json_version_matches_pyproject_version() -> None:
     payload = _read_server_json()
     assert payload["version"] == _read_pyproject_version()
+
+
+def test_runtime_package_version_matches_pyproject_version() -> None:
+    assert paper_chaser_mcp.__version__ == _read_pyproject_version()
 
 
 def test_server_json_primary_package_matches_public_server_name_ghcr_identifier() -> None:

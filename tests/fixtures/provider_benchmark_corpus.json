@@ -243,6 +243,219 @@
       "expected": {
         "goal": "smart_fallback_without_model_corruption"
       }
+    },
+    {
+      "id": "stress_core_science_microplastics_discovery",
+      "category": "broad_topical_discovery",
+      "tool": "research",
+      "inputs": {
+        "query": "Impact of microplastics on freshwater benthic macroinvertebrates",
+        "limit": 5
+      },
+      "expected": {
+        "goal": "stress_test_positive_control",
+        "statusAnyOf": [
+          "succeeded",
+          "partial"
+        ]
+      }
+    },
+    {
+      "id": "stress_data_drought_mariana_trench_amphipods",
+      "category": "safe_abstention",
+      "tool": "research",
+      "inputs": {
+        "query": "PFAS bioaccumulation Mariana Trench amphipods Hirondellea gigas",
+        "limit": 5
+      },
+      "expected": {
+        "goal": "stress_test_data_drought_abstention",
+        "statusAnyOf": [
+          "partial",
+          "abstained"
+        ]
+      }
+    },
+    {
+      "id": "stress_regulatory_6ppd_primary_source",
+      "category": "regulatory_correctness",
+      "tool": "research",
+      "inputs": {
+        "query": "Proposed 2024 EPA TSCA regulations for 6PPD agricultural use",
+        "limit": 5
+      },
+      "expected": {
+        "goal": "stress_test_regulatory_primary_source",
+        "requiresFields": [
+          "intent",
+          "status",
+          "evidenceGaps",
+          "nextActions"
+        ]
+      }
+    },
+    {
+      "id": "stress_pseudoscience_healing_crystals_abstention",
+      "category": "safe_abstention",
+      "tool": "research",
+      "inputs": {
+        "query": "Do healing crystals reverse ocean acidification",
+        "limit": 5
+      },
+      "expected": {
+        "goal": "stress_test_hallucination_resistance",
+        "statusAnyOf": [
+          "abstained",
+          "partial"
+        ]
+      }
+    },
+    {
+      "id": "stress_mixed_intent_guided_blend",
+      "category": "guided_default_profile",
+      "tool": "research",
+      "inputs": {
+        "query": "Compare PFAS remediation literature with current U.S. regulatory guidance for groundwater treatment",
+        "limit": 5
+      },
+      "expected": {
+        "goal": "stress_test_mixed_intent_guided_blend",
+        "statusAnyOf": [
+          "succeeded",
+          "partial",
+          "abstained"
+        ]
+      }
+    },
+    {
+      "id": "stress_follow_up_answered_but_abstaining_fu4b",
+      "category": "safe_abstention",
+      "tool": "follow_up_research",
+      "inputs": {
+        "searchSessionId": "ssn_fixture_placeholder",
+        "question": "Compare the competing interventions and pick the best one."
+      },
+      "expected": {
+        "goal": "stress_test_answered_but_abstaining_follow_up",
+        "answerStatusAnyOf": [
+          "insufficient_evidence",
+          "abstained",
+          "answered"
+        ]
+      }
+    },
+    {
+      "id": "cross_domain_natural_science_pfas_drinking_water",
+      "category": "cross_domain_natural_science",
+      "tool": "research",
+      "inputs": {
+        "query": "PFAS bioaccumulation evidence in freshwater fish across U.S. watersheds",
+        "limit": 5
+      },
+      "expected": {
+        "goal": "positive_control_natural_science_discovery",
+        "statusAnyOf": [
+          "succeeded",
+          "partial"
+        ],
+        "requiresFields": [
+          "status",
+          "summary",
+          "verifiedFindings",
+          "sources"
+        ]
+      }
+    },
+    {
+      "id": "cross_domain_human_dimensions_indigenous_stewardship",
+      "category": "cross_domain_human_dimensions",
+      "tool": "research",
+      "inputs": {
+        "query": "Indigenous-led fire stewardship outcomes in fire-adapted ecosystems",
+        "limit": 5
+      },
+      "expected": {
+        "goal": "positive_control_human_dimensions_discovery",
+        "statusAnyOf": [
+          "succeeded",
+          "partial",
+          "needs_disambiguation"
+        ]
+      }
+    },
+    {
+      "id": "cross_domain_heritage_wildfire_archaeology_off_topic_noise",
+      "category": "cross_domain_heritage_archaeology",
+      "tool": "research",
+      "inputs": {
+        "query": "Post-wildfire effects on lithic and ceramic surface archaeological sites in the Intermountain West",
+        "limit": 5
+      },
+      "expected": {
+        "goal": "off_topic_noise_must_land_in_leads_not_evidence",
+        "statusAnyOf": [
+          "succeeded",
+          "partial",
+          "abstained"
+        ],
+        "leadsMustSeparateFromEvidence": true
+      }
+    },
+    {
+      "id": "cross_domain_regulation_lpc_critical_habitat",
+      "category": "cross_domain_regulation",
+      "tool": "research",
+      "inputs": {
+        "query": "Trace critical habitat designations for the lesser prairie chicken under 50 CFR 17.95",
+        "limit": 5
+      },
+      "expected": {
+        "goal": "regulatory_primary_source_trace",
+        "statusAnyOf": [
+          "succeeded",
+          "partial",
+          "needs_disambiguation"
+        ]
+      }
+    },
+    {
+      "id": "cross_domain_regulation_never_finalized_abstention",
+      "category": "cross_domain_regulation",
+      "tool": "research",
+      "inputs": {
+        "query": "Give me the final 40 CFR citation for a wildfire smoke rule that was never finalized",
+        "limit": 5
+      },
+      "expected": {
+        "goal": "abstention_over_never_finalized_rulemaking",
+        "statusAnyOf": [
+          "abstained",
+          "partial",
+          "needs_disambiguation"
+        ]
+      }
+    },
+    {
+      "id": "cross_domain_known_item_vaswani_attention",
+      "category": "cross_domain_known_item_recovery",
+      "tool": "resolve_reference",
+      "inputs": {
+        "reference": "Attention Is All You Need Vaswani et al 2017"
+      },
+      "expected": {
+        "goal": "canonical_known_item_recovery"
+      }
+    },
+    {
+      "id": "cross_domain_known_item_rockstrom_planetary_boundaries",
+      "category": "cross_domain_known_item_recovery",
+      "tool": "resolve_reference",
+      "inputs": {
+        "reference": "Planetary boundaries: exploring the safe operating space for humanity Rockstrom 2009 Nature"
+      },
+      "expected": {
+        "goal": "canonical_known_item_recovery"
+      }
     }
   ]
 }

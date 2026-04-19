@@ -16,6 +16,8 @@ def test_planner_response_schema_is_openai_strict_compatible() -> None:
     assert schema["additionalProperties"] is False
     assert schema["required"] == [
         "intent",
+        "querySpecificity",
+        "ambiguityLevel",
         "constraints",
         "seedIdentifiers",
         "candidateConcepts",
@@ -25,7 +27,15 @@ def test_planner_response_schema_is_openai_strict_compatible() -> None:
         "anchorValue",
         "requiredPrimarySources",
         "successCriteria",
+        "queryType",
+        "breadthEstimate",
+        "searchAngles",
+        "uncertaintyFlags",
+        "firstPassMode",
+        "retrievalHypotheses",
         "followUpMode",
+        "regulatoryIntent",
+        "subjectCard",
     ]
 
     constraints_ref = schema["properties"]["constraints"]["$ref"]
@@ -62,6 +72,8 @@ def test_planner_response_schema_round_trips_constraints() -> None:
     assert decision.candidate_concepts == ["tool agents"]
     assert decision.provider_plan == ["semantic_scholar", "openalex"]
     assert decision.follow_up_mode == "claim_check"
+    assert decision.query_specificity == "medium"
+    assert decision.ambiguity_level == "low"
 
 
 def test_planner_response_schema_round_trips_regulatory_fields() -> None:

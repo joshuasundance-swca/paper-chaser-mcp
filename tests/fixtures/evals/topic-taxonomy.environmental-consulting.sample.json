@@ -1,0 +1,46 @@
+{
+  "rules": [
+    {
+      "family": "natural_resources",
+      "tags": ["environment", "natural_resources", "restoration"],
+      "keywords": ["restoration", "rangeland", "forest", "watershed", "fuels", "grazing"],
+      "intents": ["discovery", "review", "regulatory"]
+    },
+    {
+      "family": "species_and_habitat_assessment",
+      "tags": ["species", "habitat", "wildlife", "ecology"],
+      "keywords": ["habitat assessment", "species", "occupancy", "avian", "bat", "critical habitat"],
+      "intents": ["discovery", "review", "regulatory"]
+    },
+    {
+      "family": "water_resources_and_wetlands",
+      "tags": ["water_resources", "wetlands", "hydrology"],
+      "keywords": ["wetland", "stream", "hydrology", "delineation", "aquatic resource", "floodplain"],
+      "intents": ["discovery", "review", "regulatory"]
+    },
+    {
+      "family": "contamination_and_remediation",
+      "tags": ["contamination", "remediation", "soil", "groundwater"],
+      "keywords": ["pfas", "groundwater", "remediation", "contaminated site", "risk assessment", "soil vapor"],
+      "intents": ["discovery", "review"]
+    },
+    {
+      "family": "cultural_resources",
+      "tags": ["cultural_resources", "archaeology", "historic_preservation"],
+      "keywords": ["archaeology", "historic property", "section 106", "tribal consultation", "cultural landscape"],
+      "intents": ["discovery", "review", "regulatory"]
+    },
+    {
+      "family": "regulatory_and_permitting",
+      "tags": ["regulatory", "compliance", "permitting", "policy"],
+      "keywords": ["nepa", "esa", "clean water act", "permitting", "section 7", "federal register"],
+      "intents": ["regulatory", "review"]
+    },
+    {
+      "family": "climate_resilience_and_planning",
+      "tags": ["climate", "resilience", "adaptation", "planning"],
+      "keywords": ["resilience", "adaptation", "hazard mitigation", "carbon", "sea level rise", "heat"],
+      "intents": ["discovery", "review"]
+    }
+  ]
+}

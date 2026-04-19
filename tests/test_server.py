@@ -1,4 +1,5 @@
 import importlib
+import json
 from typing import Any
 
 import pytest
@@ -52,6 +53,84 @@ def test_run_server_uses_http_transport_settings() -> None:
             "path": "/custom-mcp",
         }
     ]
+
+
+def test_server_import_defers_env_loading_until_first_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings_module = importlib.import_module("paper_chaser_mcp.settings")
+    server_module = importlib.import_module("paper_chaser_mcp.server")
+    calls: list[dict[str, str] | None] = []
+    original_from_env = settings_module.AppSettings.from_env.__func__
+
+    def _tracking_from_env(
+        cls: type[server.AppSettings],
+        environ: dict[str, str] | None = None,
+    ) -> server.AppSettings:
+        calls.append(environ)
+        return original_from_env(cls, environ)
+
+    monkeypatch.setattr(settings_module.AppSettings, "from_env", classmethod(_tracking_from_env))
+
+    reloaded = importlib.reload(server_module)
+
+    assert calls == []
+    assert reloaded.client is None
+
+    reloaded.build_http_app()
+
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_preserves_result_and_captures_eval_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    trace_path = tmp_path / "captured-events.jsonl"
+    registry = server.WorkspaceRegistry(
+        ttl_seconds=1800,
+        enable_trace_log=False,
+        eval_trace_path=str(trace_path),
+    )
+
+    async def fake_dispatch_tool(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "searchSessionId": "ssn_execute_tool",
+            "intent": "discovery",
+            "status": "succeeded",
+            "summary": "Captured through _execute_tool.",
+            "sources": [{"sourceId": "source-1", "title": "Paper", "provider": "openalex"}],
+            "executionProvenance": {
+                "executionMode": "guided_research",
+                "serverPolicyApplied": "quality_first",
+                "passesRun": 1,
+                "passModes": ["auto"],
+            },
+            "resultState": {
+                "status": "succeeded",
+                "groundedness": "grounded",
+                "hasInspectableSources": True,
+                "canAnswerFollowUp": True,
+                "bestNextInternalAction": "follow_up_research",
+                "missingEvidenceType": "none",
+            },
+        }
+
+    monkeypatch.setattr(server, "dispatch_tool", fake_dispatch_tool)
+    monkeypatch.setattr(server, "workspace_registry", registry)
+    monkeypatch.setenv("PAPER_CHASER_EVAL_RUN_ID", "run_server_test")
+    monkeypatch.setenv("PAPER_CHASER_EVAL_BATCH_ID", "batch_server_test")
+
+    result = await server._execute_tool("research", {"query": "PFAS remediation"})
+
+    assert result["searchSessionId"] == "ssn_execute_tool"
+    payload = json.loads(trace_path.read_text(encoding="utf-8").strip())
+    assert payload["runId"] == "run_server_test"
+    assert payload["batchId"] == "batch_server_test"
+    assert payload["durationMs"] >= 0
+    assert payload["payload"]["tool"] == "research"
+    assert payload["payload"]["output"]["searchSessionId"] == "ssn_execute_tool"
 
 
 def test_streamable_http_app_handles_initialize_and_tool_call(
@@ -110,7 +189,13 @@ def test_streamable_http_app_handles_initialize_and_tool_call(
     assert "inspect_source" in instructions
     assert call_response.status_code == 200
     structured = call_payload["result"]["structuredContent"]
-    assert structured["status"] in {"resolved", "multiple_candidates", "no_match", "regulatory_primary_source"}
+    assert structured["status"] in {
+        "resolved",
+        "multiple_candidates",
+        "needs_disambiguation",
+        "no_match",
+        "regulatory_primary_source",
+    }
     assert structured["resolutionType"]
     assert "nextActions" in structured
     assert call_payload["result"]["isError"] is False
@@ -134,7 +219,13 @@ async def test_fastmcp_client_returns_structured_tool_output(
         )
 
     assert result.data["resolutionType"]
-    assert result.data["status"] in {"resolved", "multiple_candidates", "no_match", "regulatory_primary_source"}
+    assert result.data["status"] in {
+        "resolved",
+        "multiple_candidates",
+        "needs_disambiguation",
+        "no_match",
+        "regulatory_primary_source",
+    }
     assert "nextActions" in result.data
     assert tool_map["research"].annotations.readOnlyHint is True
     assert tool_map["research"].annotations.idempotentHint is True
@@ -389,6 +480,10 @@ def test_server_instructions_surface_continuation_and_schema_cues() -> None:
     assert "agentic UX review loops" in instructions
     assert "reproduction-ready issues" in instructions
     assert "evidence/leads/routingSummary/coverageSummary/evidenceGaps" in instructions
+    assert "underspecified citation-like fragments" in instructions.lower()
+    assert "bestMatch as citation-ready unless status=resolved" in instructions
+    assert "disabled vs suppressed/degraded/" in instructions
+    assert "quota-limited providers are split intentionally" in normalized_instructions
 
 
 @pytest.mark.asyncio
@@ -408,6 +503,9 @@ async def test_agent_workflow_resource_mentions_pivots_and_provider_contracts() 
     assert "answerability" in guide_text
     assert "routingSummary" in guide_text
     assert "abstains" in guide_text or "abstain" in guide_text
+    assert "underspecified citation-like fragment" in guide_text
+    assert "status=resolved" in guide_text
+    assert "configured-off" in guide_text
     assert "Expert/operator-only fallback" in guide_text
     assert "search_papers_smart" in guide_text
     assert "get_provider_diagnostics" in guide_text
@@ -437,5 +535,6 @@ async def test_plan_prompt_mentions_continuation_vs_pivot_and_schema_limits() ->
     assert "search_papers_bulk" in prompt_text
     assert "For regulatory work, prefer the guided path first" in prompt_text
     assert "pagination.nextCursor as opaque" in prompt_text
+    assert "underspecified fragment" in prompt_text
     assert "Mode: smoke." in prompt_text
     assert "GitHub Copilot coding agent" in prompt_text

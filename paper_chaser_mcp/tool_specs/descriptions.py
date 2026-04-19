@@ -15,13 +15,29 @@ TOOL_DESCRIPTIONS = {
         "path, applies a server-owned quality-first policy for this guided flow, returns resultStatus, "
         "answerability, routingSummary, coverageSummary, evidence, leads, and source records, "
         "and abstains or marks partial results "
-        "when evidence is weak, off-topic, or incomplete."
+        "when evidence is weak, off-topic, or incomplete. "
+        "Additive trust and grounding signals include confidenceSignals.evidenceQualityProfile, "
+        "confidenceSignals.synthesisMode, confidenceSignals.evidenceProfileDetail, "
+        "confidenceSignals.synthesisPath, confidenceSignals.trustRevisionNarrative, and the "
+        "trustSummary.authoritativeButWeak missed-escalation bucket for primary-source records "
+        "that are authoritative but not topically responsive (surface to a human or escalate "
+        "to disambiguation rather than treat as grounded evidence). searchStrategy may expose regulatoryIntent "
+        "(current_cfr_text, rulemaking_history, species_dossier, guidance_lookup, "
+        "hybrid_regulatory_plus_literature), intentFamily, subjectCard for species/regulatory "
+        "grounding, and subjectChainGaps describing missing subject-chain evidence."
     ),
     "follow_up_research": (
         "Grounded follow-up over a prior guided research result. Use searchSessionId from research and ask one "
         "specific question. This tool answers only when the saved evidence is strong enough, selects exact "
         "evidence ids when it can ground the answer, and otherwise returns an explicit abstention or "
-        "insufficient-evidence response plus next actions."
+        "insufficient-evidence response plus next actions. "
+        "Responses carry the same additive trust signals as research: "
+        "confidenceSignals.evidenceQualityProfile, confidenceSignals.synthesisMode, "
+        "confidenceSignals.evidenceProfileDetail, confidenceSignals.synthesisPath, "
+        "confidenceSignals.trustRevisionNarrative, and the trustSummary.authoritativeButWeak "
+        "missed-escalation bucket (authoritative primary-source records that are not topically responsive); "
+        "searchStrategy fields (regulatoryIntent, intentFamily, subjectCard, subjectChainGaps) are "
+        "inherited from the saved session."
     ),
     "resolve_reference": (
         "Resolve one reference-like input into the safest next anchor. Accepts citations, DOI strings, DOI URLs, "
@@ -32,11 +48,17 @@ TOOL_DESCRIPTIONS = {
     "inspect_source": (
         "Inspect one source from a prior guided research result. Pass the searchSessionId and an evidence id, "
         "source alias, or source id from the research response to get provenance, trust state, source-access details, "
-        "and the best direct-read follow-through."
+        "and the best direct-read follow-through. "
+        "Responses surface whyClassifiedAsWeakMatch (a one-sentence rationale explaining why an "
+        "authoritative source was treated as a weak or off-topic match) and "
+        "directReadRecommendationDetails entries shaped as {trustLevel, whyRecommended, cautions} "
+        "so agents can prioritize direct reads by quality instead of position."
     ),
     "get_runtime_status": (
         "Guided runtime and provider-status summary. Use this to confirm the active tool profile, transport, "
-        "effective smart provider, enabled coverage, and high-level warnings without reading low-level diagnostics."
+        "effective smart provider, enabled coverage, and explicit "
+        "disabled/suppressed/degraded/quota-limited provider sets, "
+        "and high-level warnings without reading low-level diagnostics."
     ),
     "search_papers": (
         "Primary entry point for quick literature discovery: start here when "

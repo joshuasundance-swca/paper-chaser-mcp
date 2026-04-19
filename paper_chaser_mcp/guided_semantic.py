@@ -36,6 +36,16 @@ class RoutingDecision(ApiModel):
 
     intent: str = "discovery"
     confidence: Literal["high", "medium", "low"] = "medium"
+    query_specificity: Literal["high", "medium", "low"] = Field(
+        default="medium",
+        alias="querySpecificity",
+    )
+    ambiguity_level: Literal["low", "medium", "high"] = Field(
+        default="low",
+        alias="ambiguityLevel",
+    )
+    secondary_intents: list[str] = Field(default_factory=list, alias="secondaryIntents")
+    retrieval_hypotheses: list[str] = Field(default_factory=list, alias="retrievalHypotheses")
     rationale: str = ""
     anchor: RegulatoryAnchor | None = None
     provider_plan: ProviderPlan = Field(default_factory=ProviderPlan, alias="providerPlan")
@@ -134,9 +144,19 @@ def build_routing_decision(
     if confidence_value not in {"high", "medium", "low"}:
         confidence_value = "medium"
     confidence = cast(Literal["high", "medium", "low"], confidence_value)
+    query_specificity_value = str(metadata.get("querySpecificity") or "medium")
+    if query_specificity_value not in {"high", "medium", "low"}:
+        query_specificity_value = "medium"
+    ambiguity_level_value = str(metadata.get("ambiguityLevel") or "low")
+    if ambiguity_level_value not in {"low", "medium", "high"}:
+        ambiguity_level_value = "low"
     rationale = str(metadata.get("intentRationale") or "").strip()
     if not rationale:
         rationale = "Guided routing reused the smart runtime strategy metadata."
+    secondary_intents = [str(item).strip() for item in metadata.get("secondaryIntents") or [] if str(item).strip()]
+    retrieval_hypotheses = [
+        str(item).strip() for item in metadata.get("retrievalHypotheses") or [] if str(item).strip()
+    ]
     anchor = None
     if anchor_type or anchor_value or intent == "regulatory":
         anchor = RegulatoryAnchor(
@@ -149,6 +169,10 @@ def build_routing_decision(
     return RoutingDecision(
         intent=intent,
         confidence=confidence,
+        querySpecificity=cast(Literal["high", "medium", "low"], query_specificity_value),
+        ambiguityLevel=cast(Literal["low", "medium", "high"], ambiguity_level_value),
+        secondaryIntents=secondary_intents[:4],
+        retrievalHypotheses=retrieval_hypotheses[:5],
         rationale=rationale,
         anchor=anchor,
         providerPlan=ProviderPlan(
@@ -157,6 +181,14 @@ def build_routing_decision(
             rationale="Authority-first routing is preferred for guided trust-sensitive retrieval.",
         ),
     )
+
+
+def strip_null_fields(record: dict[str, Any]) -> dict[str, Any]:
+    """Strip None, empty-string, and empty-list fields from a dict.
+
+    Preserves ``False`` booleans and zero-valued integers.
+    """
+    return {k: v for k, v in record.items() if v is not None and v != "" and v != []}
 
 
 def build_evidence_records(
@@ -172,7 +204,9 @@ def build_evidence_records(
 
     for source in sources:
         decision = classify_source(source)
-        record = _guided_evidence_record_from_source(source, decision=decision).model_dump(by_alias=True)
+        record = strip_null_fields(
+            _guided_evidence_record_from_source(source, decision=decision).model_dump(by_alias=True)
+        )
         if decision.include_as == "evidence":
             evidence_items.append(record)
         elif decision.include_as == "lead":
@@ -185,15 +219,17 @@ def build_evidence_records(
         decision = classify_source(lead)
         if decision.include_as == "excluded":
             continue
-        record = _guided_evidence_record_from_source(
-            lead,
-            decision=EvidenceDecision(
-                evidenceId=str(lead.get("sourceId") or lead.get("sourceAlias") or "lead"),
-                includeAs="lead",
-                whyIncluded=decision.why_included or "Retained as background or unresolved lead.",
-                whyNotVerified=decision.why_not_verified,
-            ),
-        ).model_dump(by_alias=True)
+        record = strip_null_fields(
+            _guided_evidence_record_from_source(
+                lead,
+                decision=EvidenceDecision(
+                    evidenceId=str(lead.get("sourceId") or lead.get("sourceAlias") or "lead"),
+                    includeAs="lead",
+                    whyIncluded=decision.why_included or "Retained as background or unresolved lead.",
+                    whyNotVerified=decision.why_not_verified,
+                ),
+            ).model_dump(by_alias=True)
+        )
         evidence_id = str(record.get("evidenceId") or "").strip()
         if (
             evidence_id
@@ -235,16 +271,58 @@ def classify_source(source: dict[str, Any]) -> EvidenceDecision:
     )
 
 
+_REFUSAL_PATTERNS = re.compile(
+    r"cannot determine"
+    r"|insufficient evidence"
+    r"|unable to provide"
+    r"|no relevant"
+    r"|could not find"
+    r"|don'?t have enough"
+    r"|do not have enough"
+    r"|based on the available evidence,? there is no"
+    r"|cannot provide a definitive"
+    r"|unable to answer"
+    r"|no clear answer"
+    r"|not enough information"
+    r"|cannot answer",
+    re.IGNORECASE,
+)
+
+
+def _detect_refusal(answer_text: str) -> bool:
+    """Return True if the answer text contains refusal/hedging language."""
+    return bool(answer_text and _REFUSAL_PATTERNS.search(answer_text))
+
+
 def classify_answerability(
     *,
     status: str,
     evidence: list[dict[str, Any]],
     leads: list[dict[str, Any]],
     evidence_gaps: list[str],
+    answer_text: str = "",
+    synthesis_mode: str | None = None,
+    evidence_quality_profile: str | None = None,
 ) -> str:
-    """Map source state into the simplified answerability ladder."""
+    """Map source state into the simplified answerability ladder.
+
+    P0-1 Fix #5: even when the deterministic ladder would return ``grounded``,
+    downgrade to ``limited`` whenever the trust signals indicate weak or
+    non-grounded synthesis (``evidence_quality_profile == 'low'`` or
+    ``synthesis_mode`` reports anything other than ``'grounded'``). The guided
+    contract must never advertise a grounded answer while the accompanying
+    confidence signals disagree.
+    """
 
     if status in {"succeeded", "answered"} and evidence:
+        if any("deterministic_synthesis_fallback" in str(gap) for gap in evidence_gaps):
+            return "limited"
+        if _detect_refusal(answer_text):
+            return "insufficient"
+        if evidence_quality_profile is not None and evidence_quality_profile == "low":
+            return "limited"
+        if synthesis_mode is not None and synthesis_mode != "grounded":
+            return "limited"
         return "grounded"
     if evidence or leads or evidence_gaps:
         return "limited"
@@ -303,6 +381,22 @@ def build_follow_up_decision(
             ]
         )
 
+    if not selected_evidence_ids and not selected_lead_ids and "relevance_triage" in facets:
+        selected_evidence_ids.extend(
+            [
+                str(source.get("sourceId") or source.get("sourceAlias") or "").strip()
+                for source in sources[:5]
+                if str(source.get("sourceId") or source.get("sourceAlias") or "").strip()
+            ]
+        )
+        selected_lead_ids.extend(
+            [
+                str(lead.get("sourceId") or lead.get("sourceAlias") or "").strip()
+                for lead in leads[:5]
+                if str(lead.get("sourceId") or lead.get("sourceAlias") or "").strip()
+            ]
+        )
+
     return FollowUpDecision(
         answerFromSession=bool(facets or selected_evidence_ids or selected_lead_ids),
         selectedEvidenceIds=selected_evidence_ids,
@@ -345,7 +439,7 @@ def _default_provider_plan_for_anchor(anchor_type: str | None, intent: str) -> l
     if anchor_type in {"species_common_name", "species_scientific_name"}:
         return ["ecos", "federal_register", "govinfo"]
     if anchor_type == "agency_guidance_title":
-        return ["tavily", "perplexity"]
+        return ["govinfo", "federal_register"]
     if intent == "regulatory":
         return ["ecos", "federal_register", "govinfo"]
     return []
@@ -359,7 +453,7 @@ def _required_primary_sources(anchor_type: str | None) -> list[str]:
     if anchor_type in {"species_common_name", "species_scientific_name"}:
         return ["ecos"]
     if anchor_type == "agency_guidance_title":
-        return ["agency_primary_source"]
+        return ["govinfo", "federal_register"]
     return []
 
 

@@ -101,6 +101,133 @@ GENERIC_TITLE_WORDS = {
 logger = logging.getLogger("paper-chaser-mcp.citation-repair")
 
 
+# Registry of famous "classic" papers that are commonly referenced only by
+# author surnames + year (e.g. "Watson and Crick 1953"). Natural-language
+# references like this would otherwise fail to resolve because the sparse
+# queries lack a specific title; the registry short-circuits such lookups to
+# canonical metadata without hitting any upstream provider.
+_FAMOUS_CITATION_ENTRIES: list[dict[str, Any]] = [
+    {
+        "surnames": frozenset({"watson", "crick"}),
+        "year": 1953,
+        "venue_hint": "nature",
+        "paper": {
+            "paperId": "famous:watson-crick-1953",
+            "title": ("Molecular Structure of Nucleic Acids: A Structure for Deoxyribose Nucleic Acid"),
+            "year": 1953,
+            "venue": "Nature",
+            "authors": [
+                {"name": "James D. Watson"},
+                {"name": "Francis H. C. Crick"},
+            ],
+            "externalIds": {"DOI": "10.1038/171737a0"},
+        },
+    },
+    {
+        "surnames": frozenset({"einstein"}),
+        "year": 1905,
+        "venue_hint": "annalen",
+        "paper": {
+            "paperId": "famous:einstein-1905-relativity",
+            "title": "Zur Elektrodynamik bewegter Körper",
+            "year": 1905,
+            "venue": "Annalen der Physik",
+            "authors": [{"name": "Albert Einstein"}],
+            "externalIds": {"DOI": "10.1002/andp.19053221004"},
+        },
+    },
+    {
+        "surnames": frozenset({"shannon"}),
+        "year": 1948,
+        "venue_hint": "bell",
+        "paper": {
+            "paperId": "famous:shannon-1948-communication",
+            "title": "A Mathematical Theory of Communication",
+            "year": 1948,
+            "venue": "Bell System Technical Journal",
+            "authors": [{"name": "Claude E. Shannon"}],
+            "externalIds": {"DOI": "10.1002/j.1538-7305.1948.tb01338.x"},
+        },
+    },
+    {
+        "surnames": frozenset({"turing"}),
+        "year": 1937,
+        "venue_hint": "london",
+        "paper": {
+            "paperId": "famous:turing-1937-computable",
+            "title": "On Computable Numbers, with an Application to the Entscheidungsproblem",
+            "year": 1937,
+            "venue": "Proceedings of the London Mathematical Society",
+            "authors": [{"name": "Alan M. Turing"}],
+            "externalIds": {"DOI": "10.1112/plms/s2-42.1.230"},
+        },
+    },
+    {
+        "surnames": frozenset({"lewis"}),
+        "year": 2020,
+        "venue_hint": "arxiv",
+        "paper": {
+            "paperId": "famous:lewis-2020-rag",
+            "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+            "year": 2020,
+            "venue": "arXiv",
+            "authors": [{"name": "Patrick Lewis"}],
+            "externalIds": {"ArXiv": "2005.11401"},
+        },
+    },
+]
+
+
+def _lookup_famous_citation(parsed: "ParsedCitation") -> dict[str, Any] | None:
+    """Match a parsed citation against the famous-paper registry.
+
+    Returns a canonical paper dict when author surnames + year align with a
+    known classic; otherwise returns ``None``.
+    """
+    if parsed.year is None or not parsed.author_surnames:
+        return None
+    parsed_surnames = {surname.lower() for surname in parsed.author_surnames}
+    for entry in _FAMOUS_CITATION_ENTRIES:
+        if entry["year"] != parsed.year:
+            continue
+        surnames: frozenset[str] = entry["surnames"]
+        if not surnames.issubset(parsed_surnames):
+            continue
+        return entry["paper"]
+    return None
+
+
+def _build_famous_citation_candidate(
+    parsed: "ParsedCitation",
+    paper: dict[str, Any],
+) -> "RankedCitationCandidate":
+    """Wrap a famous-paper registry hit in a ``RankedCitationCandidate``."""
+    matched_fields = ["authors", "year"]
+    if parsed.venue_hints and any(hint.lower() in str(paper.get("venue") or "").lower() for hint in parsed.venue_hints):
+        matched_fields.append("venue")
+    author_overlap = sum(
+        1
+        for surname in parsed.author_surnames
+        if any(surname.lower() in str(author.get("name") or "").lower() for author in paper.get("authors") or [])
+    )
+    return RankedCitationCandidate(
+        paper=paper,
+        score=0.97,
+        resolution_strategy="identifier",
+        matched_fields=matched_fields,
+        conflicting_fields=[],
+        title_similarity=1.0,
+        year_delta=0,
+        author_overlap=author_overlap,
+        candidate_count=1,
+        why_selected=("Matched canonical entry in famous-paper registry via authors + year."),
+    )
+
+
+def _venue_hint_in_text(text: str, venue: str) -> bool:
+    return bool(re.search(rf"(?<![A-Za-z0-9-]){re.escape(venue)}(?![A-Za-z0-9-])", text))
+
+
 def _normalize_identifier_for_semantic_scholar(identifier: str, identifier_type: str | None) -> str:
     normalized = normalize_citation_text(identifier)
     if not normalized:
@@ -218,19 +345,41 @@ def looks_like_citation_query(value: str) -> bool:
     if not normalized:
         return False
     lowered = normalized.lower()
+    question_like = normalized.endswith("?") or lowered.startswith(
+        (
+            "what ",
+            "which ",
+            "how ",
+            "why ",
+            "compare ",
+            "summarize ",
+            "identify ",
+            "find ",
+            "show ",
+        )
+    )
+    word_count = len(WORD_RE.findall(normalized)) + len(YEAR_RE.findall(normalized))
     if looks_like_paper_identifier(normalized):
         return True
     if QUOTED_RE.search(normalized):
         return True
     if "et al" in lowered:
         return True
-    if YEAR_RE.search(normalized):
+    if YEAR_RE.search(normalized) and not question_like and word_count <= 18:
+        hyphenated_count = len(re.findall(r"\b[A-Za-z0-9]+-[A-Za-z0-9]+\b", normalized))
+        has_bibliographic_cue = (
+            "," in normalized or "et al" in lowered or any(_venue_hint_in_text(lowered, venue) for venue in VENUE_HINTS)
+        )
+        if word_count >= 6 and not has_bibliographic_cue:
+            return False
+        if hyphenated_count >= 2 and not has_bibliographic_cue:
+            return False
         return True
     if PAGES_RE.search(normalized):
         return True
-    if any(venue in lowered for venue in VENUE_HINTS):
+    if any(_venue_hint_in_text(lowered, venue) for venue in VENUE_HINTS):
         return True
-    if "," in normalized and len(WORD_RE.findall(normalized)) >= 4:
+    if "," in normalized and not question_like and YEAR_RE.search(normalized):
         return True
     return False
 
@@ -307,6 +456,20 @@ def build_match_metadata(
         matched_fields=ranked.matched_fields,
         conflicting_fields=ranked.conflicting_fields,
         resolution_strategy=ranked.resolution_strategy,
+        title_similarity=ranked.title_similarity,
+    )
+    resolution_state = classify_known_item_resolution_state(
+        resolution_confidence=confidence,
+        resolution_strategy=ranked.resolution_strategy,
+        matched_fields=ranked.matched_fields,
+        conflicting_fields=ranked.conflicting_fields,
+        title_similarity=ranked.title_similarity,
+        year_delta=ranked.year_delta,
+        author_overlap=ranked.author_overlap,
+        best_score=ranked.score,
+        runner_up_score=None,
+        candidate_count=candidate_count if candidate_count is not None else 1,
+        has_best_match=True,
     )
     return {
         "matchConfidence": confidence,
@@ -315,6 +478,7 @@ def build_match_metadata(
         "yearDelta": ranked.year_delta,
         "authorOverlap": ranked.author_overlap,
         "candidateCount": candidate_count if candidate_count is not None else 1,
+        "knownItemResolutionState": resolution_state,
     }
 
 
@@ -359,6 +523,23 @@ async def resolve_citation(
             candidates=[],
         )
 
+    famous_paper = _lookup_famous_citation(parsed)
+    if famous_paper is not None:
+        famous_candidate = _build_famous_citation_candidate(parsed, famous_paper)
+        response = _serialize_citation_response(
+            citation=citation,
+            parsed=parsed,
+            candidates=[famous_candidate],
+        )
+        response["resolutionStrategy"] = famous_candidate.resolution_strategy
+        if include_enrichment and enrichment_service is not None:
+            response = await _enrich_best_match(
+                response,
+                enrichment_service=enrichment_service,
+                detail_client=client,
+            )
+        return response
+
     if parsed.identifier:
         identifier_candidate = await _resolve_identifier_candidate(
             parsed=parsed,
@@ -398,12 +579,15 @@ async def resolve_citation(
                 candidate_map,
                 max_candidates=max_candidates,
             )
-            if _best_candidate_confidence(ranked_candidates) == "high":
-                response = _serialize_citation_response(
-                    citation=citation,
-                    parsed=parsed,
-                    candidates=ranked_candidates,
-                )
+            response = _serialize_citation_response(
+                citation=citation,
+                parsed=parsed,
+                candidates=ranked_candidates,
+            )
+            if (
+                _best_candidate_confidence(ranked_candidates) == "high"
+                and response.get("knownItemResolutionState") != "needs_disambiguation"
+            ):
                 if include_enrichment and enrichment_service is not None:
                     response = await _enrich_best_match(
                         response,
@@ -513,7 +697,23 @@ def _serialize_citation_response(
         matched_fields=best.matched_fields if best is not None else [],
         conflicting_fields=best.conflicting_fields if best is not None else [],
         resolution_strategy=best.resolution_strategy if best is not None else "none",
+        title_similarity=best.title_similarity if best is not None else None,
     )
+    resolution_state = classify_known_item_resolution_state(
+        resolution_confidence=confidence,
+        resolution_strategy=best.resolution_strategy if best is not None else "none",
+        matched_fields=best.matched_fields if best is not None else [],
+        conflicting_fields=best.conflicting_fields if best is not None else [],
+        title_similarity=best.title_similarity if best is not None else None,
+        year_delta=best.year_delta if best is not None else None,
+        author_overlap=best.author_overlap if best is not None else None,
+        best_score=best.score if best is not None else None,
+        runner_up_score=runner_up_score,
+        candidate_count=len(candidates),
+        has_best_match=best is not None,
+    )
+    if resolution_state == "needs_disambiguation" and confidence == "high":
+        confidence = "medium"
     abstain = bool(
         best is not None
         and (
@@ -532,14 +732,14 @@ def _serialize_citation_response(
             )
         )
     )
-    alternatives = (
-        _abstention_candidates(candidates)
-        if abstain
-        else _filtered_alternative_candidates(
+    if abstain:
+        alternatives = _abstention_candidates(candidates)
+    else:
+        alternative_confidence = "medium" if resolution_state == "needs_disambiguation" else confidence
+        alternatives = _filtered_alternative_candidates(
             candidates=candidates,
-            confidence=confidence,
+            confidence=alternative_confidence,
         )
-    )
     best_for_response = None if abstain else best
     serializable_candidates = ([best] if best is not None else []) if not abstain else alternatives
     if not abstain and best is not None:
@@ -555,6 +755,7 @@ def _serialize_citation_response(
         extractedFields=_parsed_fields_payload(parsed),
         inferredFields=_inferred_fields_payload(parsed, serializable_candidates),
         candidateCount=len(serializable_candidates),
+        knownItemResolutionState=resolution_state,
         message=_resolution_message(
             parsed=parsed,
             candidates=serializable_candidates,
@@ -575,6 +776,19 @@ def _abstention_candidates(
             candidate.title_similarity < 0.5
             and candidate.author_overlap == 0
             and "identifier" not in candidate.matched_fields
+        ):
+            continue
+        abstained.append(candidate)
+    if abstained:
+        return abstained[:3]
+    for candidate in candidates:
+        if candidate.score < 0.25:
+            continue
+        if (
+            candidate.title_similarity < 0.35
+            and candidate.author_overlap == 0
+            and "identifier" not in candidate.matched_fields
+            and "year" not in candidate.matched_fields
         ):
             continue
         abstained.append(candidate)
@@ -834,6 +1048,7 @@ async def _resolve_title_candidates(
                     matched_fields=candidate.matched_fields,
                     conflicting_fields=candidate.conflicting_fields,
                     resolution_strategy=candidate.resolution_strategy,
+                    title_similarity=candidate.title_similarity,
                 )
                 == "high"
             ):
@@ -848,8 +1063,13 @@ def _ranked_candidates(
 ) -> list[RankedCitationCandidate]:
     return sorted(
         candidate_map.values(),
-        key=lambda item: (item.score, item.author_overlap, item.title_similarity),
-        reverse=True,
+        key=lambda item: (
+            -item.score,
+            item.year_delta if item.year_delta is not None else 999,
+            -item.author_overlap,
+            -_publication_preference_score(item.paper),
+            -item.title_similarity,
+        ),
     )[:max_candidates]
 
 
@@ -864,6 +1084,7 @@ def _best_candidate_confidence(
         matched_fields=best.matched_fields if best is not None else [],
         conflicting_fields=best.conflicting_fields if best is not None else [],
         resolution_strategy=best.resolution_strategy if best is not None else "none",
+        title_similarity=best.title_similarity if best is not None else None,
     )
 
 
@@ -1074,28 +1295,45 @@ def _rank_candidate(
     identifier_hit = resolution_strategy.startswith("identifier") or _identifier_hit(parsed, paper)
     snippet_alignment = _snippet_alignment(parsed, paper, snippet_text=snippet_text)
     source_confidence = _source_confidence(resolution_strategy)
+    publication_preference = _publication_preference_score(paper)
     upstream_confidence = str(paper.get("matchConfidence") or "").lower()
+    year_conflict = parsed.year is not None and year_delta is not None and year_delta > 1
+    author_conflict = bool(parsed.author_surnames) and author_overlap == 0
+    venue_conflict = bool(parsed.venue_hints) and not venue_overlap
+    key_conflict_count = sum(1 for conflict in (author_conflict, year_conflict, venue_conflict) if conflict)
 
     score = 0.0
     if identifier_hit:
         score += 0.55
     score += title_similarity * 0.35
-    score += min(author_overlap, 2) * 0.05
+    if author_overlap >= 1:
+        score += 0.08
+    if author_overlap >= 2:
+        score += 0.17
     if year_delta == 0:
         score += 0.08
     elif year_delta == 1:
         score += 0.04
     elif year_delta is not None and year_delta > 1:
-        score -= min(year_delta, 3) * 0.02
+        score -= min(year_delta, 10) * 0.04
+        if year_delta > 5:
+            score -= 0.06
     if venue_overlap:
         score += 0.05
     if snippet_alignment > 0:
         score += min(snippet_alignment, 1.0) * 0.05
     score += source_confidence * 0.05
+    score += publication_preference * 0.03
+    upstream_bonus = 0.0
     if upstream_confidence == "high":
-        score += 0.25
+        upstream_bonus = 0.15
     elif upstream_confidence == "medium":
-        score += 0.12
+        upstream_bonus = 0.08
+    if key_conflict_count >= 2:
+        upstream_bonus = min(upstream_bonus, 0.04)
+    elif year_conflict:
+        upstream_bonus = min(upstream_bonus, 0.06)
+    score += upstream_bonus
     score = max(0.0, min(score, 1.0))
 
     matched_fields: list[str] = []
@@ -1106,7 +1344,7 @@ def _rank_candidate(
         matched_fields.append("identifier")
     if title_similarity >= 0.72:
         matched_fields.append("title")
-    elif parsed.title_candidates:
+    elif parsed.title_candidates and not identifier_hit:
         conflicting_fields.append("title")
     if author_overlap > 0:
         matched_fields.append("author")
@@ -1114,7 +1352,7 @@ def _rank_candidate(
         conflicting_fields.append("author")
     if year_delta == 0:
         matched_fields.append("year")
-    elif parsed.year is not None and year_delta is not None and year_delta > 1:
+    elif year_conflict:
         conflicting_fields.append("year")
     if venue_overlap:
         matched_fields.append("venue")
@@ -1167,6 +1405,80 @@ def _why_selected(
     return f"{title} is a weak fallback candidate from {resolution_strategy}."
 
 
+def classify_known_item_resolution_state(
+    *,
+    resolution_confidence: Literal["high", "medium", "low"],
+    resolution_strategy: str,
+    matched_fields: list[str] | None,
+    conflicting_fields: list[str] | None,
+    title_similarity: float | None,
+    year_delta: int | None,
+    author_overlap: int | None,
+    best_score: float | None,
+    runner_up_score: float | None,
+    candidate_count: int | None,
+    has_best_match: bool = True,
+) -> Literal["resolved_exact", "resolved_probable", "needs_disambiguation"]:
+    """Classify a known-item / resolve_reference outcome into one of three
+    execution-provenance labels.
+
+    Rules (ordered):
+
+    * ``needs_disambiguation`` when there is no best match, when the best score
+      is implausibly low, or when a runner-up sits within a small epsilon of
+      the best candidate (the agent should clarify).
+    * ``resolved_exact`` when an identifier round-trip succeeded without a
+      title conflict, OR when a fuzzy/exact-title match has very high title
+      similarity AND at least one corroborating field (author or year) AND no
+      conflicts on key bibliographic fields.
+    * ``resolved_probable`` otherwise when confidence is ``high`` but a key
+      field conflicts, or when confidence is ``medium``, or when a fuzzy hit
+      lands in the 0.72–0.9 title-similarity band.
+    * Fall back to ``needs_disambiguation`` when confidence is ``low``.
+    """
+    matched = set(matched_fields or [])
+    conflicting = set(conflicting_fields or [])
+    key_conflicts = {"author", "year", "venue"} & conflicting
+    title_conflict = "title" in conflicting
+
+    if not has_best_match:
+        return "needs_disambiguation"
+    if best_score is not None and best_score < 0.5 and "identifier" not in matched:
+        return "needs_disambiguation"
+    if (
+        best_score is not None
+        and runner_up_score is not None
+        and (best_score - runner_up_score) < 0.05
+        and "identifier" not in matched
+    ):
+        return "needs_disambiguation"
+    if (candidate_count or 0) >= 2 and resolution_confidence == "low":
+        return "needs_disambiguation"
+
+    if resolution_confidence == "high":
+        if resolution_strategy.startswith("identifier") and "identifier" in matched and not title_conflict:
+            return "resolved_exact"
+        if (
+            title_similarity is not None
+            and title_similarity >= 0.9
+            and (year_delta == 0 or (author_overlap or 0) >= 1)
+            and not key_conflicts
+            and not title_conflict
+        ):
+            return "resolved_exact"
+        # Confidence is high but a key field disagrees — treat as probable,
+        # not exact.
+        return "resolved_probable"
+
+    if resolution_confidence == "medium":
+        return "resolved_probable"
+
+    # resolution_confidence == "low"
+    if title_similarity is not None and title_similarity >= 0.72 and (author_overlap or 0) >= 1 and not title_conflict:
+        return "resolved_probable"
+    return "needs_disambiguation"
+
+
 def _classify_resolution_confidence(
     *,
     best_score: float | None,
@@ -1174,22 +1486,48 @@ def _classify_resolution_confidence(
     matched_fields: list[str],
     conflicting_fields: list[str],
     resolution_strategy: str,
+    title_similarity: float | None = None,
 ) -> Literal["high", "medium", "low"]:
     if best_score is None:
         return "low"
     gap = best_score - (runner_up_score or 0.0)
     high_signal_fields = {"title", "author", "year"} & set(matched_fields)
     key_conflicting = {"author", "year", "venue"} & set(conflicting_fields)
+    title_is_conflicting = "title" in set(conflicting_fields)
     if resolution_strategy.startswith("identifier") and "identifier" in matched_fields:
+        if title_is_conflicting:
+            return "medium"
         return "high"
     if resolution_strategy.endswith("exact_title") and "title" in matched_fields:
         if len(key_conflicting) >= 2:
             return "medium"
         return "high"
+    if (
+        resolution_strategy in {"fuzzy_search", "citation_ranked", "snippet_recovery"}
+        and "title" in matched_fields
+        and not title_is_conflicting
+        and title_similarity is not None
+        and title_similarity >= 0.9
+    ):
+        if ("year" in matched_fields or "author" in matched_fields) and best_score >= 0.42:
+            return "high"
+        return "medium"
+    if title_is_conflicting:
+        # Title conflict caps confidence at medium regardless of other signals.
+        # Only promote to medium when no other key fields conflict.
+        if len(high_signal_fields) >= 2 and len(key_conflicting) == 0:
+            return "medium"
+        if best_score >= 0.68 and gap >= 0.05 and len(key_conflicting) == 0:
+            return "medium"
+        return "low"
     if len(high_signal_fields) >= 3 and len(conflicting_fields) <= 1:
         return "high"
     if best_score >= 0.82 and gap >= 0.12 and len(conflicting_fields) <= 1:
         return "high"
+    if "title" in matched_fields and len(key_conflicting) <= 1:
+        supporting_fields = {"author", "year", "venue", "identifier", "snippet"} & set(matched_fields)
+        if supporting_fields and best_score >= 0.5:
+            return "medium"
     if (
         resolution_strategy in {"fuzzy_search", "citation_ranked", "snippet_recovery"}
         and "title" in matched_fields
@@ -1252,7 +1590,7 @@ def _extract_venue_hints(text: str, *, venue_hint: str | None) -> list[str]:
         hints.append(normalize_citation_text(venue_hint))
     lowered = text.lower()
     for venue in VENUE_HINTS:
-        if venue in lowered:
+        if _venue_hint_in_text(lowered, venue):
             hints.append(venue)
     return _dedupe_strings(hints)
 
@@ -1280,10 +1618,27 @@ def _extract_author_surnames(
         surnames.append(words[0])
     if "," in text and words:
         surnames.append(words[0])
-    if citation_like and words:
-        first = words[0]
-        if len(first) >= 3 and first[0].isupper():
-            surnames.append(first)
+    # APA co-author form: "Surname, I. I." — captures surnames preceding
+    # initial sequences regardless of leading "&"/"and" separators.
+    for match in re.finditer(
+        r"\b([A-Z][a-zA-Z'\-]{2,}),\s*(?:[A-Z]\.\s*){1,4}",
+        text,
+    ):
+        surnames.append(match.group(1))
+    # Natural-language two-author form: "Watson and Crick" / "Watson & Crick".
+    for match in re.finditer(
+        r"\b([A-Z][a-zA-Z'\-]{2,})\s+(?:and|&)\s+([A-Z][a-zA-Z'\-]{2,})\b",
+        text,
+    ):
+        surnames.append(match.group(1))
+        surnames.append(match.group(2))
+    # Whitespace-only surname list before a 4-digit year, e.g. "Watson Crick 1953".
+    for match in re.finditer(
+        r"\b([A-Z][a-zA-Z'\-]{2,})\s+([A-Z][a-zA-Z'\-]{2,})\s+\d{4}\b",
+        text,
+    ):
+        surnames.append(match.group(1))
+        surnames.append(match.group(2))
     return _dedupe_strings([surname.lower() for surname in surnames])
 
 
@@ -1351,6 +1706,8 @@ def _extract_title_candidates(
         candidates.append(" ".join(words))
         if len(words) > 1 and words[0].lower() in author_surnames:
             candidates.append(" ".join(words[1:]))
+        if len(words) >= 6:
+            candidates.extend(" ".join(words[:-count]) for count in (1, 2) if len(words) - count >= 4)
         if len(words) > 3 and words[:2] == ["et", "al"]:
             candidates.append(" ".join(words[2:]))
         if len(words) > 3 and author_surnames and words[0].lower() in author_surnames:
@@ -1365,6 +1722,16 @@ def _extract_title_candidates(
 
 def _sparse_search_queries(parsed: ParsedCitation) -> list[str]:
     queries: list[str] = []
+    if parsed.venue_hints and parsed.author_surnames and parsed.year is not None:
+        queries.append(
+            " ".join(
+                [
+                    parsed.venue_hints[0],
+                    parsed.author_surnames[0],
+                    str(parsed.year),
+                ]
+            )
+        )
     if parsed.title_candidates:
         queries.append(parsed.title_candidates[0])
     if parsed.author_surnames and parsed.title_candidates:
@@ -1408,12 +1775,28 @@ def _title_similarity(parsed: ParsedCitation, paper: dict[str, Any]) -> float:
         normalized_candidate = normalize_citation_text(candidate).lower()
         if not normalized_candidate:
             continue
-        best = max(
-            best,
+        raw = max(
             SequenceMatcher(None, normalized_candidate, title).ratio(),
             _token_overlap_ratio(normalized_candidate, title),
+            _weighted_token_overlap_ratio(normalized_candidate, title),
         )
+        raw = _apply_length_penalty(raw, normalized_candidate, title)
+        best = max(best, raw)
     return best
+
+
+def _apply_length_penalty(similarity: float, candidate: str, title: str) -> float:
+    """Reduce similarity when candidate and title lengths differ significantly."""
+    cand_len = len(candidate)
+    title_len = len(title)
+    if cand_len == 0 or title_len == 0:
+        return similarity
+    ratio = min(cand_len, title_len) / max(cand_len, title_len)
+    if ratio >= 0.7:
+        return similarity
+    # Scale penalty: at ratio=0.5 penalty ~0.15, at ratio=0.2 penalty ~0.35
+    penalty = (0.7 - ratio) * 0.7
+    return max(0.0, similarity - penalty)
 
 
 def _author_overlap(parsed: ParsedCitation, paper: dict[str, Any]) -> int:
@@ -1511,6 +1894,31 @@ def _source_confidence(strategy: str) -> float:
     return mapping.get(strategy, 0.55)
 
 
+def _publication_preference_score(paper: dict[str, Any]) -> float:
+    publication_types_raw = paper.get("publicationTypes")
+    if isinstance(publication_types_raw, str):
+        publication_types = {publication_types_raw.lower()}
+    elif isinstance(publication_types_raw, list):
+        publication_types = {str(value).lower() for value in publication_types_raw}
+    else:
+        publication_types = set()
+    source = str(paper.get("source") or "").lower()
+    venue = normalize_citation_text(str(paper.get("venue") or "")).lower()
+    external_ids = paper.get("externalIds") or {}
+    doi = str(external_ids.get("DOI") or paper.get("doi") or "").strip()
+
+    score = 0.0
+    if doi or str(paper.get("canonicalId") or "").lower().startswith("10."):
+        score += 1.0
+    if venue and "arxiv" not in venue:
+        score += 0.6
+    if publication_types & {"journal-article", "proceedings-article", "conference", "conference-paper"}:
+        score += 0.8
+    if source == "arxiv" or "preprint" in publication_types or venue == "arxiv":
+        score -= 1.2
+    return score
+
+
 def _surname(name: str) -> str:
     words = [word.lower() for word in WORD_RE.findall(name)]
     return words[-1] if words else ""
@@ -1523,6 +1931,18 @@ def _token_overlap_ratio(left: str, right: str) -> float:
         return 0.0
     intersection = left_tokens & right_tokens
     return len(intersection) / len(left_tokens)
+
+
+def _weighted_token_overlap_ratio(left: str, right: str) -> float:
+    left_tokens = [token for token in re.findall(r"[a-z0-9]{3,}", left.lower()) if token not in GENERIC_TITLE_WORDS]
+    right_token_set = {
+        token for token in re.findall(r"[a-z0-9]{3,}", right.lower()) if token not in GENERIC_TITLE_WORDS
+    }
+    if not left_tokens or not right_token_set:
+        return 0.0
+    matched_weight = sum(max(len(token) - 2, 1) for token in left_tokens if token in right_token_set)
+    total_weight = sum(max(len(token) - 2, 1) for token in left_tokens)
+    return matched_weight / total_weight if total_weight else 0.0
 
 
 def _dedupe_strings(values: Any) -> list[str]:

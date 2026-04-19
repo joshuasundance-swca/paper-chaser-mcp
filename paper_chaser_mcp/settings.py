@@ -21,6 +21,7 @@ AgenticProvider = Literal[
     "google",
     "mistral",
     "huggingface",
+    "openrouter",
     "deterministic",
 ]
 AgenticIndexBackend = Literal["memory", "faiss"]
@@ -115,6 +116,10 @@ class AppSettings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     openai_api_key: str | None = None
+    openrouter_api_key: str | None = None
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_http_referer: str | None = None
+    openrouter_title: str | None = None
     nvidia_api_key: str | None = None
     nvidia_nim_base_url: str | None = None
     azure_openai_api_key: str | None = None
@@ -174,6 +179,8 @@ class AppSettings(BaseModel):
     agentic_index_backend: AgenticIndexBackend = "memory"
     session_ttl_seconds: int = 1800
     enable_agentic_trace_log: bool = False
+    enable_eval_trace_capture: bool = False
+    eval_trace_path: str | None = None
     crossref_timeout_seconds: float = 30.0
     unpaywall_timeout_seconds: float = 30.0
     ecos_timeout_seconds: float = 30.0
@@ -194,6 +201,12 @@ class AppSettings(BaseModel):
         hide_disabled_tools_value = env.get("PAPER_CHASER_HIDE_DISABLED_TOOLS")
         return cls(
             openai_api_key=_parse_optional_string(env, "OPENAI_API_KEY"),
+            openrouter_api_key=_parse_optional_string(env, "OPENROUTER_API_KEY"),
+            openrouter_base_url=(
+                env.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip() or "https://openrouter.ai/api/v1"
+            ),
+            openrouter_http_referer=_parse_optional_string(env, "OPENROUTER_HTTP_REFERER"),
+            openrouter_title=_parse_optional_string(env, "OPENROUTER_TITLE"),
             nvidia_api_key=_parse_optional_string(env, "NVIDIA_API_KEY"),
             nvidia_nim_base_url=_parse_optional_string(env, "NVIDIA_NIM_BASE_URL"),
             azure_openai_api_key=_parse_optional_string(env, "AZURE_OPENAI_API_KEY"),
@@ -355,6 +368,12 @@ class AppSettings(BaseModel):
                 "PAPER_CHASER_ENABLE_AGENTIC_TRACE_LOG",
                 False,
             ),
+            enable_eval_trace_capture=_parse_env_bool(
+                env,
+                "PAPER_CHASER_ENABLE_EVAL_TRACE_CAPTURE",
+                False,
+            ),
+            eval_trace_path=_parse_optional_string(env, "PAPER_CHASER_EVAL_TRACE_PATH"),
             crossref_timeout_seconds=_parse_positive_float(
                 env,
                 "CROSSREF_TIMEOUT_SECONDS",
@@ -461,6 +480,12 @@ class AppSettings(BaseModel):
                 f"research={self.guided_research_latency_profile}, follow_up={self.guided_follow_up_latency_profile}, "
                 f"paid providers {'enabled' if self.guided_allow_paid_providers else 'disabled'} when available."
             )
+        if self.enable_eval_trace_capture and not self.eval_trace_path:
+            warnings.append(
+                "Eval trace capture is enabled without PAPER_CHASER_EVAL_TRACE_PATH, "
+                "so captured events will only be emitted to logs unless the runtime "
+                "injects a file sink."
+            )
         return warnings
 
     def _provider_enabled(self, provider: SearchProvider) -> bool:
@@ -498,12 +523,13 @@ def cast_agentic_provider(value: str | None) -> AgenticProvider:
         "google",
         "mistral",
         "huggingface",
+        "openrouter",
         "deterministic",
     }:
         return cast(AgenticProvider, normalized)
     raise ValueError(
         "PAPER_CHASER_AGENTIC_PROVIDER must be one of: openai, azure-openai, "
-        "anthropic, nvidia, google, mistral, huggingface, deterministic"
+        "anthropic, nvidia, google, mistral, huggingface, openrouter, deterministic"
     )
 
 

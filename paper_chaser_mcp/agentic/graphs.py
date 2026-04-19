@@ -7,13 +7,14 @@ import logging
 import re
 import statistics
 import time
+from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Any, Literal, cast
 from uuid import uuid4
 
 from fastmcp import Context
 
-from ..citation_repair import resolve_citation
+from ..citation_repair import build_match_metadata, parse_citation, resolve_citation
 from ..compat import build_agent_hints, build_resource_uris
 from ..enrichment import (
     PaperEnrichmentService,
@@ -39,6 +40,13 @@ from ..provider_runtime import (
     provider_is_paywalled,
 )
 from ..search import _enrich_ss_paper
+from .answer_modes import (
+    SYNTHESIS_MODES,
+    aclassify_question_mode,
+    build_evidence_use_plan,
+    classify_question_mode,
+    evidence_pool_is_weak,
+)
 from .config import AgenticConfig, LatencyProfile
 from .models import (
     AgentHints,
@@ -62,8 +70,11 @@ from .planner import (
     classify_query,
     combine_variants,
     dedupe_variants,
-    detect_literature_intent,
     grounded_expansion_candidates,
+    initial_retrieval_hypotheses,
+    looks_like_exact_title,
+    looks_like_near_known_item_query,
+    normalize_query,
     query_facets,
     query_terms,
     speculative_expansion_candidates,
@@ -73,12 +84,21 @@ from .providers import (
     DeterministicProviderBundle,
     ModelProviderBundle,
 )
-from .ranking import evaluate_speculative_variants, merge_candidates, rerank_candidates
+from .ranking import (
+    evaluate_speculative_variants,
+    merge_candidates,
+    rerank_candidates,
+    summarize_ranking_diagnostics,
+)
 from .retrieval import (
     SMART_RETRIEVAL_FIELDS,
     RetrievalBatch,
     RetrievedCandidate,
     retrieve_variant,
+)
+from .selection_scoring import (
+    infer_comparative_axis,
+    score_papers_for_comparative_axis,
 )
 from .workspace import (
     ExpiredSearchSessionError,
@@ -218,6 +238,73 @@ _AGENCY_AUTHORITY_TERMS = {
     "nih",
     "usda",
 }
+_AGENCY_GUIDANCE_QUERY_NOISE_TERMS = {
+    "actual",
+    "agency",
+    "document",
+    "documents",
+    "drug",
+    "food",
+    "guidance",
+    "industry",
+    "management",
+    "most",
+    "policy",
+    "recent",
+    "relevant",
+    "staff",
+    "what",
+}
+_AGENCY_GUIDANCE_DOCUMENT_TERMS = {
+    "advisories",
+    "advisory",
+    "guidance",
+    "guideline",
+    "guidelines",
+    "notice",
+    "notices",
+    "policies",
+    "policy",
+    "recommendation",
+    "recommendations",
+    "roadmap",
+}
+_AGENCY_GUIDANCE_DISCUSSION_TERMS = {
+    "concept",
+    "concepts",
+    "discussion",
+    "framework",
+    "proposal",
+    "proposals",
+    "proposed",
+}
+_CULTURAL_RESOURCE_DOCUMENT_TERMS = {
+    "106",
+    "achp",
+    "archaeological",
+    "archaeology",
+    "consultation",
+    "cultural",
+    "heritage",
+    "historic",
+    "nagpra",
+    "nhpa",
+    "preservation",
+    "sacred",
+    "shpo",
+    "thpo",
+    "tribal",
+}
+_REGULATORY_QUERY_NOISE_TERMS = {
+    "address",
+    "actions",
+    "current",
+    "federal",
+    "recent",
+    "states",
+    "united",
+    "what",
+}
 _SPECIES_QUERY_NOISE_TERMS = {
     "about",
     "critical",
@@ -339,11 +426,12 @@ class AgenticRuntime:
             "google",
             "mistral",
             "huggingface",
+            "openrouter",
         ]
         configured_provider = self._provider_bundle.configured_provider_name()
         enabled = {provider: False for provider in smart_providers}
         if self._config.enabled and configured_provider in enabled:
-            enabled[configured_provider] = True
+            enabled[configured_provider] = self._provider_bundle.is_available()
         order = ([configured_provider] if configured_provider in enabled else []) + [
             provider for provider in smart_providers if provider != configured_provider
         ]
@@ -550,87 +638,42 @@ class AgenticRuntime:
             )
             if regulatory_result.get("structuredSources"):
                 return regulatory_result
-
-            recovered_anchor, _ = await self._resolve_known_item(normalized_query)
-            if recovered_anchor is not None:
-                await self._emit_smart_search_status(
-                    ctx=ctx,
-                    request_id=request_id,
-                    progress=22,
-                    message="Recovering from empty regulatory route",
-                    detail=(
-                        "Regulatory retrieval returned no on-topic sources; retrying the same query as a "
-                        "semantic known-item recovery."
-                    ),
-                )
-                recovered = await self._search_known_item(
-                    query=normalized_query,
-                    limit=limit,
-                    planner=planner.model_copy(
-                        update={
-                            "intent": "known_item",
-                            "intent_source": "fallback_recovery",
-                            "intent_confidence": "medium",
-                        }
-                    ),
-                    provider_plan=planner.provider_plan or None,
-                    provider_budget=budget_state,
-                    search_session_id=search_session_id,
-                    latency_profile=latency_profile,
-                    request_id=request_id,
-                    include_enrichment=include_enrichment,
-                    provider_outcomes=provider_outcomes,
-                    stage_timings_ms=stage_timings_ms,
-                    normalization_warnings=normalization_warnings,
-                    repaired_inputs=repaired_inputs,
-                    ctx=ctx,
-                )
-                strategy_metadata = recovered.get("strategyMetadata") if isinstance(recovered, dict) else None
-                if isinstance(strategy_metadata, dict):
-                    warnings = list(strategy_metadata.get("driftWarnings") or [])
-                    warnings.append(
-                        "Regulatory routing returned no on-topic sources, so the server retried "
-                        "with semantic known-item recovery."
-                    )
-                    strategy_metadata["intent"] = "known_item"
-                    strategy_metadata["intentSource"] = "fallback_recovery"
-                    strategy_metadata["intentConfidence"] = "medium"
-                    strategy_metadata["recoveryAttempted"] = True
-                    strategy_metadata["recoveryPath"] = ["regulatory", "known_item"]
-                    strategy_metadata["recoveryReason"] = "Regulatory retrieval returned no on-topic sources."
-                    strategy_metadata["anchoredSubject"] = (
-                        recovered.get("results", [{}])[0].get("paper", {}).get("title") or normalized_query
-                    )
-                    strategy_metadata["bestNextInternalAction"] = "get_paper_details"
-                    strategy_metadata["driftWarnings"] = list(dict.fromkeys(warnings))
-                return recovered
-
-            if not detect_literature_intent(query, focus):
-                strategy_metadata = (
-                    regulatory_result.get("strategyMetadata") if isinstance(regulatory_result, dict) else None
-                )
-                if isinstance(strategy_metadata, dict):
-                    strategy_metadata["stoppedRecoveryBecause"] = (
-                        "No adjacent literature intent was detected after the regulatory route returned empty."
-                    )
+            _, _, _agency_guidance_route = _derive_regulatory_query_flags(query=normalized_query, planner=planner)
+            if _agency_guidance_route:
                 return regulatory_result
 
+            # LLM-driven strategy revision — single recovery attempt instead of hard-coded branching.
+            revision = await provider_bundle.arevise_search_strategy(
+                original_query=normalized_query,
+                original_intent="regulatory",
+                tried_providers=sorted(
+                    {str(o.get("provider") or "") for o in provider_outcomes if isinstance(o, dict)}
+                ),
+                result_summary=(
+                    f"Regulatory routing returned no on-topic sources for "
+                    f"'{_truncate_text(normalized_query, limit=96)}'."
+                ),
+                request_id=request_id,
+            )
+            revised_query = str(revision.get("revisedQuery") or normalized_query)
+            revised_intent = str(revision.get("revisedIntent") or "review")
+            revision_rationale = str(revision.get("rationale") or "")
             await self._emit_smart_search_status(
                 ctx=ctx,
                 request_id=request_id,
                 progress=22,
                 message="Recovering from empty regulatory route",
                 detail=(
-                    "Regulatory retrieval returned no on-topic sources; retrying "
-                    f"'{_truncate_text(normalized_query, limit=96)}' "
-                    "as a literature review."
+                    f"LLM revised strategy: intent='{revised_intent}', "
+                    f"query='{_truncate_text(revised_query, limit=80)}'. "
+                    f"Reason: {_truncate_text(revision_rationale, limit=120)}"
                 ),
             )
             recovered = await self.search_papers_smart(
-                query=query,
+                query=revised_query,
                 limit=limit,
                 search_session_id=search_session_id,
-                mode="review",
+                mode=revised_intent if revised_intent != "regulatory" else "review",
                 year=year,
                 venue=venue,
                 focus=focus,
@@ -643,16 +686,26 @@ class AgenticRuntime:
             if isinstance(strategy_metadata, dict):
                 warnings = list(strategy_metadata.get("driftWarnings") or [])
                 warnings.append(
-                    "Regulatory routing returned no on-topic sources, so the server "
-                    "retried with a literature-oriented recovery path."
+                    f"Regulatory routing returned no on-topic sources. LLM revised strategy to "
+                    f"intent='{revised_intent}': {_truncate_text(revision_rationale, limit=160)}"
                 )
                 strategy_metadata["driftWarnings"] = list(dict.fromkeys(warnings))
                 strategy_metadata["intentSource"] = "fallback_recovery"
                 strategy_metadata["intentConfidence"] = "medium"
                 strategy_metadata["recoveryAttempted"] = True
-                strategy_metadata["recoveryPath"] = ["regulatory", "review"]
-                strategy_metadata["recoveryReason"] = "Regulatory retrieval returned no on-topic sources."
+                strategy_metadata["recoveryPath"] = ["regulatory", revised_intent]
+                strategy_metadata["recoveryReason"] = (
+                    revision_rationale or "Regulatory retrieval returned no on-topic sources."
+                )
             return recovered
+
+        initial_candidates = initial_retrieval_hypotheses(
+            normalized_query=normalized_query,
+            focus=focus,
+            planner=planner,
+            config=profile_settings.search_config,
+        )
+        retrieval_hypotheses = list(planner.retrieval_hypotheses or planner.search_angles)
 
         await self._emit_smart_search_status(
             ctx=ctx,
@@ -660,48 +713,58 @@ class AgenticRuntime:
             progress=15,
             message="Running initial retrieval",
             detail=(
-                f"Searching the literal query across enabled providers for "
+                f"Searching {len(initial_candidates)} bounded initial retrieval path(s) for "
                 f"'{_truncate_text(normalized_query, limit=96)}'."
             ),
         )
         first_retrieval_started = time.perf_counter()
-        first_batch = await retrieve_variant(
-            variant=normalized_query,
-            variant_source="from_input",
-            intent=planner.intent,
-            year=year,
-            venue=venue,
-            enable_core=self._enable_core,
-            enable_semantic_scholar=self._enable_semantic_scholar,
-            enable_openalex=self._enable_openalex,
-            enable_scholarapi=self._enable_scholarapi,
-            enable_arxiv=self._enable_arxiv,
-            enable_serpapi=self._enable_serpapi,
-            core_client=self._core_client,
-            semantic_client=self._client,
-            openalex_client=self._openalex_client,
-            scholarapi_client=self._scholarapi_client,
-            arxiv_client=self._arxiv_client,
-            serpapi_client=self._serpapi_client,
-            provider_plan=planner.provider_plan or None,
-            widened=planner.intent == "review",
-            is_expansion=False,
-            allow_serpapi=(self._enable_serpapi and profile_settings.allow_serpapi_on_input),
-            latency_profile=latency_profile,
-            provider_registry=self._provider_registry,
-            provider_budget=budget_state,
-            request_outcomes=provider_outcomes,
-            request_id=request_id,
-        )
+        initial_tasks = [
+            asyncio.create_task(
+                retrieve_variant(
+                    variant=candidate.variant,
+                    variant_source=candidate.source,
+                    intent=planner.intent,
+                    year=year,
+                    venue=venue,
+                    enable_core=self._enable_core,
+                    enable_semantic_scholar=self._enable_semantic_scholar,
+                    enable_openalex=self._enable_openalex,
+                    enable_scholarapi=self._enable_scholarapi,
+                    enable_arxiv=self._enable_arxiv,
+                    enable_serpapi=self._enable_serpapi,
+                    core_client=self._core_client,
+                    semantic_client=self._client,
+                    openalex_client=self._openalex_client,
+                    scholarapi_client=self._scholarapi_client,
+                    arxiv_client=self._arxiv_client,
+                    serpapi_client=self._serpapi_client,
+                    provider_plan=(candidate.provider_plan or planner.provider_plan or None),
+                    widened=planner.intent == "review",
+                    is_expansion=False,
+                    allow_serpapi=(self._enable_serpapi and profile_settings.allow_serpapi_on_input),
+                    latency_profile=latency_profile,
+                    provider_registry=self._provider_registry,
+                    provider_budget=budget_state,
+                    request_outcomes=provider_outcomes,
+                    request_id=request_id,
+                )
+            )
+            for candidate in initial_candidates
+        ]
+        initial_batches = await asyncio.gather(*initial_tasks)
         _finish_stage("firstRetrieval", first_retrieval_started)
+        first_batch = initial_batches[0]
         await self._emit_smart_search_status(
             ctx=ctx,
             request_id=request_id,
             progress=30,
             message="Initial retrieval complete",
-            detail=self._describe_retrieval_batch(first_batch),
+            detail=(
+                f"Completed {len(initial_batches)} initial retrieval path(s). "
+                f"Primary path: {self._describe_retrieval_batch(first_batch)}"
+            ),
         )
-        first_pass_papers = [candidate.paper for candidate in first_batch.candidates]
+        first_pass_papers = [candidate.paper for batch in initial_batches for candidate in batch.candidates]
         if search_session_id:
             try:
                 prior_record = self._workspace_registry.get(search_session_id)
@@ -709,10 +772,11 @@ class AgenticRuntime:
             except (SearchSessionNotFoundError, ExpiredSearchSessionError):
                 pass
 
-        grounded = grounded_expansion_candidates(
+        grounded = await grounded_expansion_candidates(
             original_query=normalized_query,
             papers=first_pass_papers,
             config=profile_settings.search_config,
+            provider_bundle=provider_bundle,
             focus=focus,
             venue=venue,
             year=year,
@@ -723,7 +787,7 @@ class AgenticRuntime:
             recommendation_started = time.perf_counter()
             recommendation_task = asyncio.create_task(
                 self._semantic_recommendation_candidates(
-                    seed_candidates=first_batch.candidates,
+                    seed_candidates=[candidate for batch in initial_batches for candidate in batch.candidates],
                     normalized_query=normalized_query,
                     enabled=True,
                     request_id=request_id,
@@ -770,7 +834,11 @@ class AgenticRuntime:
             config=profile_settings.search_config,
         )
 
-        expansion_variants = variants[1:]
+        initial_variant_keys = {candidate.variant.strip().lower() for candidate in initial_candidates}
+
+        expansion_variants = [
+            candidate for candidate in variants[1:] if candidate.variant.strip().lower() not in initial_variant_keys
+        ]
         grounded_variants = [
             candidate
             for candidate in dedupe_variants(
@@ -818,7 +886,7 @@ class AgenticRuntime:
                             scholarapi_client=self._scholarapi_client,
                             arxiv_client=self._arxiv_client,
                             serpapi_client=self._serpapi_client,
-                            provider_plan=planner.provider_plan or None,
+                            provider_plan=(candidate.provider_plan or planner.provider_plan or None),
                             widened=planner.intent == "review",
                             is_expansion=True,
                             allow_serpapi=(self._enable_serpapi and profile_settings.allow_serpapi_on_expansions),
@@ -878,7 +946,7 @@ class AgenticRuntime:
                         scholarapi_client=self._scholarapi_client,
                         arxiv_client=self._arxiv_client,
                         serpapi_client=self._serpapi_client,
-                        provider_plan=planner.provider_plan or None,
+                        provider_plan=(candidate.provider_plan or planner.provider_plan or None),
                         widened=planner.intent == "review",
                         is_expansion=True,
                         allow_serpapi=(self._enable_serpapi and profile_settings.allow_serpapi_on_expansions),
@@ -941,7 +1009,7 @@ class AgenticRuntime:
                 ),
             )
 
-        all_candidates = list(first_batch.candidates)
+        all_candidates = [candidate for batch in initial_batches for candidate in batch.candidates]
         for batch in remaining_batches:
             all_candidates.extend(batch.candidates)
         all_candidates.extend(recommendation_candidates)
@@ -953,14 +1021,22 @@ class AgenticRuntime:
             if profile_settings.use_embedding_rerank and provider_bundle.supports_embeddings()
             else self._deterministic_bundle
         )
+        candidate_pool_size = profile_settings.search_config.candidate_pool_size
+        if planner.query_specificity == "low" or planner.ambiguity_level != "low":
+            candidate_pool_size = min(candidate_pool_size + 20, 160)
         reranked = await rerank_candidates(
             query=normalized_query,
             merged_candidates=merged,
             provider_bundle=rerank_bundle,
             candidate_concepts=planner.candidate_concepts,
-            candidate_pool_size=profile_settings.search_config.candidate_pool_size,
+            routing_confidence=planner.routing_confidence,
+            query_specificity=planner.query_specificity,
+            ambiguity_level=planner.ambiguity_level,
+            candidate_pool_size=candidate_pool_size,
             request_outcomes=provider_outcomes,
             request_id=request_id,
+            planner_anchor_type=getattr(planner, "anchor_type", None),
+            planner_anchor_value=getattr(planner, "anchor_value", None),
         )
         _finish_stage("rerank", rerank_started)
         (
@@ -988,8 +1064,83 @@ class AgenticRuntime:
             detail=(f"Fusing {len(all_candidates)} candidate(s) into {len(filtered_ranked)} unique ranked paper(s)."),
         )
 
+        if len(filtered_ranked) < 2 and planner.intent_source != "fallback_recovery":
+            revision = await provider_bundle.arevise_search_strategy(
+                original_query=normalized_query,
+                original_intent=planner.intent,
+                tried_providers=sorted(
+                    {
+                        str(candidate.get("provider") or "").strip()
+                        for candidate in reranked
+                        if str(candidate.get("provider") or "").strip()
+                    }
+                ),
+                result_summary=(
+                    f"Smart search routed as {planner.intent} returned only {len(filtered_ranked)} "
+                    f"ranked candidate(s) for '{_truncate_text(normalized_query, limit=96)}'."
+                ),
+                request_id=request_id,
+            )
+            revised_query = normalize_query(str(revision.get("revisedQuery") or normalized_query))
+            revised_intent = str(revision.get("revisedIntent") or planner.intent)
+            revision_rationale = str(revision.get("rationale") or "").strip()
+            if revised_query.lower() != normalized_query.lower() or revised_intent != planner.intent:
+                await self._emit_smart_search_status(
+                    ctx=ctx,
+                    request_id=request_id,
+                    progress=82,
+                    message="Recovering from low-result route",
+                    detail=(
+                        f"LLM revised strategy: intent='{revised_intent}', "
+                        f"query='{_truncate_text(revised_query, limit=80)}'. "
+                        f"Reason: {_truncate_text(revision_rationale, limit=120)}"
+                    ),
+                )
+                recovered = await self.search_papers_smart(
+                    query=revised_query,
+                    limit=limit,
+                    search_session_id=search_session_id,
+                    mode=(
+                        revised_intent
+                        if revised_intent
+                        in {
+                            "auto",
+                            "discovery",
+                            "review",
+                            "known_item",
+                            "author",
+                            "citation",
+                            "regulatory",
+                        }
+                        else "auto"
+                    ),
+                    year=year,
+                    venue=venue,
+                    focus=focus,
+                    latency_profile=latency_profile,
+                    provider_budget=provider_budget,
+                    include_enrichment=include_enrichment,
+                    ctx=ctx,
+                )
+                strategy_metadata = recovered.get("strategyMetadata") if isinstance(recovered, dict) else None
+                if isinstance(strategy_metadata, dict):
+                    warnings = list(strategy_metadata.get("driftWarnings") or [])
+                    warnings.append(
+                        f"Initial {planner.intent} route returned few candidates. LLM revised strategy to "
+                        f"intent='{revised_intent}': {_truncate_text(revision_rationale, limit=160)}"
+                    )
+                    strategy_metadata["driftWarnings"] = list(dict.fromkeys(warnings))
+                    strategy_metadata["intentSource"] = "fallback_recovery"
+                    strategy_metadata["intentConfidence"] = "medium"
+                    strategy_metadata["recoveryAttempted"] = True
+                    strategy_metadata["recoveryPath"] = [planner.intent, revised_intent]
+                    strategy_metadata["recoveryReason"] = (
+                        revision_rationale or "Initial route returned too few results."
+                    )
+                return recovered
+
         providers_used = sorted(
-            {provider for batch in [first_batch, *remaining_batches] for provider in batch.providers_used}
+            {provider for batch in [*initial_batches, *remaining_batches] for provider in batch.providers_used}
             | {candidate.provider for candidate in recommendation_candidates}
         )
         provider_selection = provider_bundle.selection_metadata()
@@ -997,6 +1148,7 @@ class AgenticRuntime:
             provider_selection=provider_selection,
             provider_outcomes=provider_outcomes,
         )
+        ranking_diagnostics = summarize_ranking_diagnostics(reranked, top_n=10)
         strategy_metadata = SearchStrategyMetadata(
             intent=planner.intent,
             intentSource=planner.intent_source,
@@ -1004,10 +1156,26 @@ class AgenticRuntime:
             intentCandidates=planner.intent_candidates,
             secondaryIntents=planner.secondary_intents,
             routingConfidence=planner.routing_confidence,
+            querySpecificity=planner.query_specificity,
+            ambiguityLevel=planner.ambiguity_level,
+            queryType=planner.query_type,
+            regulatorySubintent=planner.regulatory_subintent,
+            regulatoryIntent=planner.regulatory_intent,
+            entityCard=planner.entity_card,
+            subjectCard=planner.subject_card,
+            subjectChainGaps=list(planner.subject_chain_gaps),
+            intentFamily=planner.intent_family,
+            breadthEstimate=planner.breadth_estimate,
+            firstPassMode=planner.first_pass_mode,
             intentRationale=planner.intent_rationale,
             latencyProfile=latency_profile,
             normalizedQuery=normalized_query,
-            queryVariantsTried=[candidate.variant for candidate in variants],
+            queryVariantsTried=_dedupe_variants(
+                [candidate.variant for candidate in initial_candidates + expansion_variants]
+            ),
+            retrievalHypotheses=_dedupe_variants(retrieval_hypotheses),
+            searchAngles=_dedupe_variants(planner.search_angles),
+            uncertaintyFlags=list(dict.fromkeys(planner.uncertainty_flags)),
             acceptedExpansions=_dedupe_variants(
                 [candidate.variant for candidate in grounded if candidate.variant != normalized_query]
                 + [variant for variant in accepted_speculative if variant != normalized_query]
@@ -1029,19 +1197,72 @@ class AgenticRuntime:
             normalizationWarnings=normalization_warnings,
             repairedInputs=repaired_inputs,
             bestNextInternalAction=("ask_result_set" if filtered_ranked else "search_papers_smart"),
+            rankingDiagnostics=ranking_diagnostics,
             **provider_selection,
         )
 
         top_candidates = filtered_ranked[:limit]
-        smart_hits: list[SmartPaperHit] = []
-        for index, candidate in enumerate(top_candidates, start=1):
+        candidate_relevance_inputs: list[
+            tuple[dict[str, Any], ScoreBreakdown, str, Literal["on_topic", "weak_match", "off_topic"]]
+        ] = []
+        borderline_relevance_papers: list[dict[str, Any]] = []
+        borderline_relevance: dict[str, dict[str, Any]] = {}
+        for candidate in top_candidates:
             score_breakdown = ScoreBreakdown.model_validate(candidate["scoreBreakdown"])
-            topical_relevance = _classify_topical_relevance_for_paper(
+            deterministic_topical_relevance = _classify_topical_relevance_for_paper(
                 query=normalized_query,
                 paper=candidate["paper"],
                 query_similarity=score_breakdown.query_similarity,
                 score_breakdown=score_breakdown,
             )
+            paper_id = str(
+                candidate["paper"].get("paperId")
+                or candidate["paper"].get("canonicalId")
+                or candidate["paper"].get("sourceId")
+                or ""
+            ).strip()
+            candidate_relevance_inputs.append((candidate, score_breakdown, paper_id, deterministic_topical_relevance))
+            if deterministic_topical_relevance == "weak_match" and hasattr(
+                provider_bundle, "aclassify_relevance_batch"
+            ):
+                borderline_relevance_papers.append(candidate["paper"])
+        if borderline_relevance_papers:
+            try:
+                borderline_relevance = await provider_bundle.aclassify_relevance_batch(
+                    query=normalized_query,
+                    papers=borderline_relevance_papers,
+                    request_id=request_id,
+                )
+            except Exception:
+                borderline_relevance = {}
+        smart_hits: list[SmartPaperHit] = []
+        llm_classification_overrides = 0
+        for index, (candidate, score_breakdown, paper_id, deterministic_topical_relevance) in enumerate(
+            candidate_relevance_inputs,
+            start=1,
+        ):
+            relevance_entry = borderline_relevance.get(paper_id) or {}
+            llm_classification_raw = relevance_entry.get("classification")
+            llm_classification = cast(Any, llm_classification_raw) if llm_classification_raw else None
+            classification_result = _classify_topical_relevance_with_provenance(
+                query=normalized_query,
+                paper=candidate["paper"],
+                query_similarity=score_breakdown.query_similarity,
+                score_breakdown=score_breakdown,
+                llm_classification=llm_classification,
+            )
+            topical_relevance = classification_result.effective
+            if classification_result.llm_override_ignored:
+                llm_classification_overrides += 1
+                logger.info(
+                    "llm_classification_override_ignored",
+                    extra={
+                        "query": normalized_query,
+                        "paperId": paper_id,
+                        "deterministic": classification_result.deterministic,
+                        "llmClassification": classification_result.llm,
+                    },
+                )
             smart_hits.append(
                 SmartPaperHit(
                     paper=Paper.model_validate(candidate["paper"]),
@@ -1054,9 +1275,18 @@ class AgenticRuntime:
                     matchedConcepts=candidate.get("matchedConcepts") or [],
                     retrievedBy=candidate["providers"],
                     topicalRelevance=topical_relevance,
+                    llmClassification=classification_result.llm,
+                    classificationSource=classification_result.source,
+                    relevanceSource=cast(Any, relevance_entry.get("relevanceSource"))
+                    if relevance_entry.get("relevanceSource")
+                    else None,
+                    relevanceConfidence=relevance_entry.get("relevanceConfidence"),
+                    relevanceReason=relevance_entry.get("relevanceReason"),
                     scoreBreakdown=score_breakdown,
                 )
             )
+        if llm_classification_overrides:
+            strategy_metadata.llm_classification_overrides = llm_classification_overrides
         if include_enrichment and self._enrichment_service is not None and smart_hits:
             await self._emit_smart_search_status(
                 ctx=ctx,
@@ -1081,6 +1311,8 @@ class AgenticRuntime:
                 hit.paper,
                 note=hit.why_matched,
                 topical_relevance=hit.topical_relevance,
+                llm_classification=hit.llm_classification,
+                classification_source=hit.classification_source,
             )
             for hit in smart_hits
         ]
@@ -1098,6 +1330,8 @@ class AgenticRuntime:
                 hit.paper,
                 note=hit.why_matched,
                 topical_relevance=hit.topical_relevance,
+                llm_classification=hit.llm_classification,
+                classification_source=hit.classification_source,
             )
             for hit in smart_hits
         ]
@@ -1145,7 +1379,7 @@ class AgenticRuntime:
             hasInspectableSources=_has_inspectable_sources(source_records),
             bestNextInternalAction=_best_next_internal_action(
                 intent=planner.intent,
-                has_sources=bool(source_records),
+                has_sources=_has_on_topic_sources(source_records),
                 result_status=result_status,
             ),
         )
@@ -1238,6 +1472,18 @@ class AgenticRuntime:
             if profile_settings.use_embedding_rerank and provider_bundle.supports_embeddings()
             else self._deterministic_bundle
         )
+        session_followup_metadata: dict[str, Any] | None = None
+        session_strategy_metadata = record.payload.get("strategyMetadata") if isinstance(record.payload, dict) else None
+        if isinstance(session_strategy_metadata, dict):
+            session_followup_metadata = {
+                "followUpMode": session_strategy_metadata.get("followUpMode"),
+            }
+        initial_question_mode = classify_question_mode(question, session_followup_metadata)
+        contextual_question = _contextualize_follow_up_question(
+            question=question,
+            record=record,
+            question_mode=initial_question_mode,
+        )
 
         await self._emit_tool_progress(
             ctx=ctx,
@@ -1248,11 +1494,10 @@ class AgenticRuntime:
         selected_papers = (
             await self._workspace_registry.asearch_papers(
                 search_session_id,
-                question,
+                contextual_question,
                 top_k=top_k,
-                # Keep evidence selection cheap and deterministic; the explicit
-                # relevance scoring phase below is where model-backed similarity belongs.
-                allow_model_similarity=False,
+                # Use semantic retrieval whenever a smart model-backed provider is active.
+                allow_model_similarity=(self._provider_bundle.configured_provider_name() != "deterministic"),
             )
             or record.papers[:top_k]
         )
@@ -1296,6 +1541,8 @@ class AgenticRuntime:
                         enriched_paper[paper_field] = source_record.get(source_field)
             evidence_papers.append(enriched_paper)
         evidence_texts = [_paper_text(paper) for paper in evidence_papers]
+        if hasattr(provider_bundle, "_mark_provider_used") and hasattr(provider_bundle, "configured_provider_name"):
+            provider_bundle._mark_provider_used(provider_bundle.configured_provider_name())
         synthesis, evidence_scores = await asyncio.gather(
             provider_bundle.aanswer_question(
                 question=question,
@@ -1303,7 +1550,7 @@ class AgenticRuntime:
                 answer_mode=answer_mode,
             ),
             similarity_bundle.abatched_similarity(
-                question,
+                contextual_question,
                 evidence_texts,
             ),
         )
@@ -1312,9 +1559,9 @@ class AgenticRuntime:
                 evidenceId=str(paper.get("sourceId") or paper.get("paperId") or paper.get("canonicalId") or "").strip()
                 or None,
                 paper=Paper.model_validate(paper),
-                excerpt=str(paper.get("abstract") or paper.get("title") or "")[:240],
+                excerpt=str(paper.get("abstract") or paper.get("title") or "")[:600],
                 whyRelevant=_why_matched(
-                    query=question,
+                    query=contextual_question,
                     paper=paper,
                     matched_concepts=[],
                 ),
@@ -1323,16 +1570,6 @@ class AgenticRuntime:
             for paper, score in zip(evidence_papers, evidence_scores, strict=False)
         ]
         answer_text = str(synthesis.get("answer") or "")
-        if _should_use_structured_comparison_answer(
-            question=question,
-            answer_mode=answer_mode,
-            answer_text=answer_text,
-            evidence_papers=evidence_papers,
-        ):
-            answer_text = _build_grounded_comparison_answer(
-                question=question,
-                evidence_papers=evidence_papers,
-            )
         unsupported_asks = list(synthesis.get("unsupportedAsks") or [])
         follow_up_questions = list(synthesis.get("followUpQuestions") or [])
         normalized_confidence = provider_bundle.normalize_confidence(synthesis.get("confidence"))
@@ -1347,27 +1584,178 @@ class AgenticRuntime:
             if str(identifier).strip() in valid_evidence_ids
         ]
         selected_lead_ids = [str(identifier).strip() for identifier in synthesis.get("selectedLeadIds") or []]
+        provider_used = str(
+            (
+                provider_bundle.selection_metadata().get("activeSmartProvider")
+                if hasattr(provider_bundle, "selection_metadata")
+                else None
+            )
+            or provider_bundle.active_provider_name()
+        )
+        degradation_reason: str | None = None
 
         source_records: list[StructuredSourceRecord] = []
         on_topic_evidence = 0
+
+        # LLM batch relevance pre-pass for papers in the middle-zone similarity range.
+        relevance_cache = cast(dict[str, Any], record.metadata.setdefault("relevanceCache", {}))
+        relevance_cache_key = " ".join(str(contextual_question or "").lower().split())
+        question_relevance_cache = cast(dict[str, Any], relevance_cache.setdefault(relevance_cache_key, {}))
+        llm_relevance: dict[str, dict[str, Any]] = {}
+        if hasattr(provider_bundle, "aclassify_relevance_batch"):
+            middle_zone_papers: list[dict[str, Any]] = []
+            for item in evidence:
+                sim = float(item.relevance_score)
+                if 0.12 <= sim <= 0.50:
+                    paper_id = str(item.paper.paper_id or item.paper.canonical_id or item.evidence_id or "").strip()
+                    cached_entry = question_relevance_cache.get(paper_id) if paper_id else None
+                    if isinstance(cached_entry, dict) and str(cached_entry.get("classification") or "").strip():
+                        llm_relevance[paper_id] = {
+                            "classification": str(cached_entry.get("classification") or "weak_match"),
+                            "rationale": str(cached_entry.get("rationale") or ""),
+                            "fallback": bool(cached_entry.get("fallback")),
+                            "provenance": str(cached_entry.get("provenance") or "model").strip() or "model",
+                        }
+                        continue
+                    paper_dict = (
+                        item.paper.model_dump(by_alias=True) if isinstance(item.paper, Paper) else dict(item.paper)
+                    )
+                    middle_zone_papers.append(paper_dict)
+                    if len(middle_zone_papers) >= 20:
+                        break
+            if middle_zone_papers:
+                try:
+                    batch_relevance = await provider_bundle.aclassify_relevance_batch(
+                        query=contextual_question,
+                        papers=middle_zone_papers,
+                    )
+                    for paper_id, entry in batch_relevance.items():
+                        normalized_paper_id = str(paper_id or "").strip()
+                        if not normalized_paper_id:
+                            continue
+                        normalized_entry = {
+                            "classification": str(entry.get("classification") or "weak_match"),
+                            "rationale": str(entry.get("rationale") or "").strip(),
+                            "fallback": bool(entry.get("fallback")),
+                            "provenance": str(entry.get("provenance") or "model").strip() or "model",
+                        }
+                        for key in (
+                            "relevanceSource",
+                            "relevanceConfidence",
+                            "relevanceReason",
+                            "classificationRationale",
+                            "degradedTrigger",
+                        ):
+                            if entry.get(key) is not None:
+                                normalized_entry[key] = entry.get(key)
+                        question_relevance_cache[normalized_paper_id] = normalized_entry
+                        llm_relevance[normalized_paper_id] = normalized_entry
+                except Exception:
+                    llm_relevance = {}
+
+        from .relevance_fallback import classification_provenance_counts
+
+        classification_provenance = classification_provenance_counts(llm_relevance)
+        degraded_classification = bool(classification_provenance.get("degradedClassification"))
+
         for item in evidence:
-            topical_relevance = _classify_topical_relevance_for_paper(
-                query=question,
+            paper_id = str(item.paper.paper_id or item.paper.canonical_id or item.evidence_id or "").strip()
+            relevance_entry = llm_relevance.get(paper_id) or {}
+            relevance_rationale = str(relevance_entry.get("rationale") or "").strip()
+            relevance_provenance = str(relevance_entry.get("provenance") or "model").strip() or "model"
+            classification_result = _classify_topical_relevance_with_provenance(
+                query=contextual_question,
                 paper=item.paper,
                 query_similarity=float(item.relevance_score),
+                llm_classification=cast(Any, relevance_entry.get("classification")),
             )
+            topical_relevance = classification_result.effective
+            if classification_result.llm_override_ignored:
+                logger.info(
+                    "llm_classification_override_ignored",
+                    extra={
+                        "query": question,
+                        "paperId": paper_id,
+                        "deterministic": classification_result.deterministic,
+                        "llmClassification": classification_result.llm,
+                    },
+                )
             if topical_relevance == "on_topic":
                 on_topic_evidence += 1
             source_records.append(
                 _source_record_from_paper(
                     item.paper,
-                    note=item.why_relevant,
+                    note=(
+                        (
+                            relevance_rationale
+                            if relevance_provenance == "model"
+                            else f"{relevance_rationale} [relevance:{relevance_provenance}]".strip()
+                        )
+                        if relevance_rationale
+                        else (
+                            item.why_relevant
+                            if relevance_provenance == "model"
+                            else f"{item.why_relevant} [relevance:{relevance_provenance}]"
+                        )
+                    ),
                     topical_relevance=topical_relevance,
+                    llm_classification=classification_result.llm,
+                    classification_source=classification_result.source,
+                    relevance_source=(
+                        str(relevance_entry.get("relevanceSource")) if relevance_entry.get("relevanceSource") else None
+                    ),
+                    relevance_confidence=(
+                        float(cast(Any, relevance_entry.get("relevanceConfidence")))
+                        if relevance_entry.get("relevanceConfidence") is not None
+                        else None
+                    ),
+                    relevance_reason=(
+                        str(relevance_entry.get("relevanceReason")) if relevance_entry.get("relevanceReason") else None
+                    ),
+                    classification_rationale=(
+                        str(relevance_entry.get("classificationRationale"))
+                        if relevance_entry.get("classificationRationale")
+                        else None
+                    ),
                 )
             )
 
         max_relevance = max((item.relevance_score for item in evidence), default=0.0)
         insufficient_evidence = (not evidence) or (max_relevance < 0.12 and on_topic_evidence == 0)
+        # Build the set of "strong" evidence identifiers: on-topic sources
+        # whose verification status is primary-source or metadata-verified.
+        # This set feeds the strict ``grounded`` answerability gate and the
+        # selected_evidence_ids filter further below.
+        _strong_verification_states = {"verified_primary_source", "verified_metadata"}
+        strong_evidence_ids: set[str] = set()
+        # P0-2: track which on-topic strong sources actually have QA-readable
+        # body text. The ``grounded`` answerability gate (below) requires at
+        # least one selected evidence id in this set; otherwise we downgrade
+        # to ``limited`` with degradation_reason="no_qa_readable_body_text".
+        # Legacy/backfilled records may not populate qa_readable_text; we
+        # treat ``access_status in {body_text_embedded, full_text_verified,
+        # full_text_retrieved}`` as implying QA-readable for back-compat.
+        _qa_readable_access_states = {"body_text_embedded", "full_text_verified", "full_text_retrieved"}
+        qa_readable_evidence_ids: set[str] = set()
+        for _record in source_records:
+            if _record.topical_relevance != "on_topic":
+                continue
+            if str(_record.verification_status or "") not in _strong_verification_states:
+                continue
+            _ident = str(_record.source_id or "").strip()
+            if _ident:
+                strong_evidence_ids.add(_ident)
+                _qa_flag = getattr(_record, "qa_readable_text", None)
+                if _qa_flag is True:
+                    qa_readable_evidence_ids.add(_ident)
+                elif _qa_flag is None and str(_record.access_status or "") in _qa_readable_access_states:
+                    qa_readable_evidence_ids.add(_ident)
+        if strong_evidence_ids:
+            _filtered_selected = [
+                identifier for identifier in selected_evidence_ids if identifier in strong_evidence_ids
+            ]
+            if _filtered_selected:
+                selected_evidence_ids = _filtered_selected
         should_abstain = bool(unsupported_asks) and (
             normalized_confidence == "low" or max_relevance < 0.25 or on_topic_evidence == 0
         )
@@ -1389,15 +1777,176 @@ class AgenticRuntime:
                 )
                 if identifier
             ]
+
+        # LLM-first follow-up answer-mode classification. The deterministic
+        # keyword classifier misses paraphrased synthesis asks such as
+        # "what do these papers say?" (no SYNTHESIS_SHAPE_MARKERS hit, so it
+        # reports ``unknown``). Consult the provider bundle's classifier
+        # first; fall back to the keyword heuristic when no LLM is available.
+        async def _llm_mode_classifier(q: str, modes: tuple[str, ...]) -> str | None:
+            try:
+                return await provider_bundle.aclassify_answer_mode(question=q, modes=modes)
+            except Exception:  # pragma: no cover - defensive
+                return None
+
+        resolved_question_mode = await aclassify_question_mode(
+            question,
+            session_followup_metadata,
+            llm_classifier=_llm_mode_classifier,
+        )
+
+        evidence_use_plan = build_evidence_use_plan(
+            question=question,
+            answer_mode=answer_mode,
+            evidence=evidence,
+            source_records=source_records,
+            unsupported_asks=unsupported_asks,
+            llm_relevance=llm_relevance,
+            question_mode=resolved_question_mode,
+        )
+        question_mode = str(evidence_use_plan.get("answerMode") or "unknown")
+        if (
+            question_mode == "selection"
+            and not bool(evidence_use_plan.get("sufficient"))
+            and not unsupported_asks
+            and answer_text
+            and len(strong_evidence_ids) >= 2
+        ):
+            evidence_use_plan = {
+                **evidence_use_plan,
+                "sufficient": True,
+                "retrievalSufficiency": "thin",
+                "confidence": "medium",
+                "rationale": (
+                    "Selection follow-up can be answered from two strong on-topic sources "
+                    "using deterministic ranking signals."
+                ),
+                "unsupportedComponents": [],
+            }
+        plan_sufficient = bool(evidence_use_plan.get("sufficient"))
+        anchored_selection_source_ids = {
+            str(identifier).strip()
+            for identifier in (evidence_use_plan.get("anchoredSelectionSourceIds") or [])
+            if str(identifier).strip()
+        }
         answerability = str(synthesis.get("answerability") or "limited")
         if answerability not in {"grounded", "limited", "insufficient"}:
             answerability = "limited"
         if answer_status == "answered" and selected_evidence_ids:
-            answerability = "grounded"
+            _normalized_confidence_value = str(normalized_confidence or "").lower()
+            _has_qa_readable_selected = any(
+                identifier in qa_readable_evidence_ids for identifier in selected_evidence_ids
+            )
+            if (
+                provider_used != "deterministic"
+                and strong_evidence_ids
+                and _has_qa_readable_selected
+                and _normalized_confidence_value in {"high", "medium"}
+            ):
+                answerability = "grounded"
+            else:
+                answerability = "limited"
+                if degradation_reason is None:
+                    if not strong_evidence_ids:
+                        degradation_reason = "weak_evidence_pool"
+                    elif not _has_qa_readable_selected:
+                        # P0-2: we have strong (metadata/primary) on-topic
+                        # sources, but none of the selected evidence has QA-
+                        # readable body text. Cannot ground a synthesis
+                        # answer on URL-only or abstract-only metadata.
+                        degradation_reason = "no_qa_readable_body_text"
+                        answer_status = "insufficient_evidence"
+                        answer_payload = None
+                    elif provider_used == "deterministic":
+                        degradation_reason = "deterministic_synthesis_fallback"
+                    else:
+                        degradation_reason = "low_confidence_synthesis"
         elif answer_status == "insufficient_evidence":
             answerability = "insufficient"
         elif answer_status == "abstained" or not selected_evidence_ids:
             answerability = "limited" if (evidence or unsupported_asks or follow_up_questions) else "insufficient"
+        # Evidence-pool quality gate: for synthesis-heavy modes, a pool
+        # dominated by weak_match / off_topic classifications cannot support a
+        # polished answer. But only fire this gate when the plan itself is
+        # *not* already sufficient — otherwise a legitimate 2-paper synthesis
+        # co-located with off-topic noise would be killed.
+        weak_pool = evidence_pool_is_weak(source_records)
+        if question_mode in SYNTHESIS_MODES and weak_pool and not plan_sufficient:
+            answer_status = "insufficient_evidence"
+            answer_payload = None
+            answerability = "insufficient"
+        # Strict synthesis gate: when the plan says the evidence is
+        # insufficient for the requested synthesis mode, never emit a polished
+        # answer. Prefer ``abstained`` when we have unsupported_asks to
+        # surface (we have data but not for this ask), else
+        # ``insufficient_evidence``.
+        if question_mode in SYNTHESIS_MODES and not plan_sufficient:
+            if unsupported_asks:
+                answer_status = "abstained"
+                answerability = "limited"
+            else:
+                answer_status = "insufficient_evidence"
+                answerability = "insufficient"
+            answer_payload = None
+        elif evidence_use_plan.get("retrievalSufficiency") == "insufficient":
+            answer_status = "insufficient_evidence"
+            answer_payload = None
+            answerability = "insufficient"
+        elif (
+            question_mode == "comparison"
+            and evidence_use_plan.get("retrievalSufficiency") == "thin"
+            and answer_status == "insufficient_evidence"
+            and not unsupported_asks
+            and len(evidence) >= 2
+            and answer_text
+        ):
+            answer_status = "answered"
+            answer_payload = answer_text
+            answerability = "limited"
+            if not selected_evidence_ids:
+                selected_evidence_ids = [
+                    identifier
+                    for identifier in (
+                        str(item.evidence_id or item.paper.paper_id or item.paper.canonical_id or "").strip()
+                        for item in evidence[:2]
+                    )
+                    if identifier
+                ]
+        fallback_selected = [
+            entry
+            for entry in llm_relevance.values()
+            if bool(entry.get("fallback")) and str(entry.get("classification") or "") == "on_topic"
+        ]
+        # Generalize the fallback-only gate to all synthesis modes: if the
+        # only on-topic signal came from deterministic fallbacks (LLM call
+        # failed), do not allow a synthesis-heavy answer to stand.
+        if (
+            answer_status == "answered"
+            and question_mode in SYNTHESIS_MODES
+            and len(fallback_selected) >= max(on_topic_evidence, 1)
+        ):
+            answer_status = "insufficient_evidence"
+            answer_payload = None
+            answerability = "insufficient"
+        if unsupported_asks and answer_status == "insufficient_evidence":
+            answer_status = "abstained"
+            answerability = "limited"
+        if (
+            degraded_classification
+            and answer_status == "answered"
+            and provider_used != "deterministic"
+            and classification_provenance.get("total", 0) >= 2
+            and on_topic_evidence <= 1
+            and max_relevance < 0.35
+        ):
+            answer_status = "insufficient_evidence"
+            answer_payload = None
+            answerability = "insufficient"
+            degraded_gap = (
+                "degraded_classification: relevance classifier retried/fell back; require more on-topic evidence."
+            )
+            if degraded_gap not in unsupported_asks:
+                unsupported_asks = unsupported_asks + [degraded_gap]
         await self._emit_tool_progress(
             ctx=ctx,
             progress=2,
@@ -1413,6 +1962,60 @@ class AgenticRuntime:
             evidence_gaps = evidence_gaps + [
                 "Grounded follow-up could not find enough on-topic evidence to answer safely."
             ]
+        if evidence_use_plan is not None:
+            insufficiency_reason = "; ".join(evidence_use_plan.get("unsupportedComponents") or [])
+            if insufficiency_reason:
+                evidence_gaps = evidence_gaps + [f"Evidence use plan: {insufficiency_reason}"]
+        agent_hints = build_agent_hints("ask_result_set", {})
+        if provider_used == "deterministic" and answer_status == "answered":
+            degradation_reason = "deterministic_synthesis_fallback"
+            answerability = "limited"
+            fallback_warning = (
+                "deterministic_synthesis_fallback: follow-up synthesis used a deterministic fallback; "
+                "treat the answer as a lightweight summary."
+            )
+            if fallback_warning not in evidence_gaps:
+                evidence_gaps = evidence_gaps + [fallback_warning]
+            if fallback_warning not in agent_hints.warnings:
+                agent_hints.warnings.append(fallback_warning)
+        top_recommendation = _compute_top_recommendation(
+            question=question,
+            resolved_question_mode=resolved_question_mode,
+            answer_status=answer_status,
+            evidence=evidence,
+            source_records=source_records,
+            strong_evidence_ids=strong_evidence_ids,
+            anchored_selection_source_ids=anchored_selection_source_ids,
+        )
+        if (
+            question_mode == "selection"
+            and top_recommendation is not None
+            and not unsupported_asks
+            and answer_status != "abstained"
+        ):
+            recommended_source_id = str(top_recommendation.get("sourceId") or "").strip()
+            if answer_status != "answered":
+                answer_status = "answered"
+                answerability = "limited"
+                degradation_reason = degradation_reason or "selection_recommendation_only"
+            if not str(answer_payload or "").strip():
+                answer_payload = _selection_answer_from_recommendation(top_recommendation, source_records)
+            if recommended_source_id and not selected_evidence_ids:
+                selected_evidence_ids = [recommended_source_id]
+            evidence_gaps = [
+                gap
+                for gap in evidence_gaps
+                if gap != "Grounded follow-up could not find enough on-topic evidence to answer safely."
+            ]
+        visible_lead_ids = {
+            str(record.source_id or record.source_alias or "").strip()
+            for record in _candidate_leads_from_source_records(source_records)
+            if str(record.source_id or record.source_alias or "").strip()
+        }
+        if visible_lead_ids:
+            selected_lead_ids = [identifier for identifier in selected_lead_ids if identifier in visible_lead_ids]
+        else:
+            selected_lead_ids = []
         response = AskResultSetResponse(
             answer=answer_payload,
             answerStatus=answer_status,
@@ -1424,7 +2027,7 @@ class AgenticRuntime:
             selectedLeadIds=selected_lead_ids,
             confidence=normalized_confidence,
             searchSessionId=search_session_id,
-            agentHints=build_agent_hints("ask_result_set", {}),
+            agentHints=agent_hints,
             resourceUris=build_resource_uris(
                 "ask_result_set",
                 {"results": [{"paper": item.paper.model_dump(by_alias=True)} for item in evidence]},
@@ -1441,6 +2044,12 @@ class AgenticRuntime:
                 search_mode="grounded_follow_up",
                 drift_warnings=[],
             ),
+            providerUsed=provider_used,
+            degradationReason=degradation_reason,
+            evidenceUsePlan=evidence_use_plan,
+            classificationProvenance=classification_provenance if classification_provenance.get("total") else None,
+            degradedClassification=degraded_classification if classification_provenance.get("total") else None,
+            topRecommendation=top_recommendation,
         )
         if self._config.enable_trace_log:
             self._workspace_registry.record_trace(
@@ -2010,9 +2619,9 @@ class AgenticRuntime:
         timeline_events: list[RegulatoryTimelineEvent] = []
         candidate_leads: list[StructuredSourceRecord] = []
         subject: str | None = None
-        current_text_requested = _is_current_cfr_text_request(query)
-        history_requested = _query_requests_regulatory_history(query)
-        agency_guidance_mode = _is_agency_guidance_query(query)
+        current_text_requested, history_requested, agency_guidance_mode = _derive_regulatory_query_flags(
+            query=query, planner=planner
+        )
         govinfo_matched = False
         federal_register_matched = False
 
@@ -2026,7 +2635,27 @@ class AgenticRuntime:
 
         cfr_request = _parse_cfr_request(query)
         cfr_citation = _format_cfr_citation(cfr_request)
-        anchored_subject_terms: set[str] = set()
+        anchored_subject_terms: set[str] = (
+            _agency_guidance_subject_terms(query) if agency_guidance_mode else _regulatory_query_subject_terms(query)
+        )
+        agency_priority_terms: set[str] = (
+            _agency_guidance_priority_terms(query) if agency_guidance_mode else _regulatory_query_priority_terms(query)
+        )
+        agency_facet_terms: list[set[str]] = _agency_guidance_facet_terms(query) if agency_guidance_mode else []
+        prefer_recent_guidance = agency_guidance_mode and _guidance_query_prefers_recency(query)
+        cultural_resource_boost = planner.intent_family == "heritage_cultural_resources"
+        # LLM-first subject-card grounding for document-family ranking and
+        # species-dossier weak-match demotion. Prefer the subject_card already
+        # resolved by classify_query when available.
+        from .subject_grounding import (
+            compute_subject_chain_gaps,
+            resolve_subject_card,
+            species_mentioned,
+        )
+
+        _subject_card = planner.subject_card or resolve_subject_card(query=query, planner=planner)
+        _requested_family: str | None = _subject_card.requested_document_family if _subject_card else None
+        _species_dossier_mode = planner.regulatory_intent == "species_dossier"
         filtered_document_count = 0
         species_anchor_type: str | None = None
 
@@ -2042,8 +2671,45 @@ class AgenticRuntime:
                 documents = list(govinfo_search.get("data") or [])
                 if documents:
                     succeeded.append("govinfo")
-                    for document in documents[:limit]:
+                    ranked_documents = _rank_regulatory_documents(
+                        documents,
+                        subject_terms=anchored_subject_terms,
+                        priority_terms=agency_priority_terms,
+                        facet_terms=agency_facet_terms,
+                        prefer_guidance=True,
+                        prefer_recent=prefer_recent_guidance,
+                        cultural_resource_boost=cultural_resource_boost,
+                        requested_document_family=_requested_family,
+                    )
+                    for document in ranked_documents[:limit]:
                         if not isinstance(document, dict):
+                            continue
+                        if not _regulatory_document_matches_subject(
+                            document,
+                            subject_terms=anchored_subject_terms,
+                            priority_terms=agency_priority_terms,
+                            cfr_citation=None,
+                        ):
+                            filtered_document_count += 1
+                            off_topic_lead = _source_record_from_regulatory_document(
+                                document,
+                                provider="govinfo",
+                                topical_relevance="off_topic",
+                            )
+                            reason_note = (
+                                "Filtered from grounded agency-guidance evidence because it did not match the "
+                                "requested agency-guidance subject."
+                            )
+                            existing_note = off_topic_lead.note
+                            candidate_leads.append(
+                                off_topic_lead.model_copy(
+                                    update={
+                                        "note": (
+                                            f"{reason_note} {existing_note}".strip() if existing_note else reason_note
+                                        )
+                                    }
+                                )
+                            )
                             continue
                         structured_sources.append(
                             _source_record_from_regulatory_document(
@@ -2131,22 +2797,47 @@ class AgenticRuntime:
             started = time.perf_counter()
             try:
                 species_search: dict[str, Any] = {"data": []}
-                for species_query, inferred_anchor_type in _ecos_query_variants(query):
-                    species_search = await self._ecos_client.search_species(
+                species_ecos_origin: str | None = None
+                # Finding 4 (4th rubber-duck pass): collect hits from each
+                # variant and rank them by ``hit_count * provenance_factor``
+                # (raw/corroborated = 1.0, planner-only = 0.9). Previously
+                # the loop broke on the first variant with any hits, so a
+                # planner-only variant could win over a later raw/corroborated
+                # variant that would have offered stronger query-grounded
+                # evidence. The provenance field was stamped on the winner
+                # but nothing downstream actually consumed it.
+                variant_hits: list[tuple[int, str, str, dict[str, Any]]] = []
+                for variant_idx, (
+                    species_query,
+                    inferred_anchor_type,
+                    variant_origin,
+                ) in enumerate(_ecos_query_variants(query, planner=planner)):
+                    variant_search = await self._ecos_client.search_species(
                         query=species_query,
                         limit=min(limit, 5),
                         match_mode="auto",
                     )
-                    species_data = list(species_search.get("data") or [])
-                    if species_data:
-                        species_anchor_type = inferred_anchor_type
-                        break
+                    variant_data = list(variant_search.get("data") or [])
+                    if not variant_data:
+                        continue
+                    variant_hits.append((variant_idx, inferred_anchor_type, variant_origin, variant_search))
+                selected = _rank_ecos_variant_hits(variant_hits)
+                if selected is not None:
+                    species_search = selected[3]
+                    species_anchor_type = selected[1]
+                    species_ecos_origin = selected[2]
                 stage_timings_ms["regulatoryEcosSearch"] = int((time.perf_counter() - started) * 1000)
                 species_data = list(species_search.get("data") or [])
                 if species_data:
                     succeeded.append("ecos")
                     species_hit = species_data[0] if isinstance(species_data[0], dict) else None
                     if species_hit is not None:
+                        # Stamp provenance so downstream ranking can down-weight
+                        # planner-only hits (potential LLM hallucination) vs
+                        # query-corroborated hits.
+                        species_hit["_ecosProvenance"] = (
+                            "corroborated" if species_ecos_origin == "raw" else "planner_only"
+                        )
                         anchored_subject_terms = _extract_subject_terms(
                             str(species_hit.get("commonName") or "") or None,
                             str(species_hit.get("scientificName") or "") or None,
@@ -2231,11 +2922,7 @@ class AgenticRuntime:
                 )
 
         if not anchored_subject_terms:
-            anchored_subject_terms = {
-                term
-                for term in query_terms(query)
-                if term not in _REGULATORY_SUBJECT_STOPWORDS and len(term) > 3 and term not in _GRAPH_GENERIC_TERMS
-            }
+            anchored_subject_terms = _regulatory_query_subject_terms(query)
         fr_query = subject or query
         if self._enable_federal_register and self._federal_register_client is not None:
             attempted.append("federal_register")
@@ -2255,6 +2942,7 @@ class AgenticRuntime:
                         if not _regulatory_document_matches_subject(
                             document,
                             subject_terms=anchored_subject_terms,
+                            priority_terms=agency_priority_terms,
                             cfr_citation=cfr_citation,
                         ):
                             filtered_document_count += 1
@@ -2370,6 +3058,7 @@ class AgenticRuntime:
                         if not _regulatory_document_matches_subject(
                             document,
                             subject_terms=anchored_subject_terms,
+                            priority_terms=agency_priority_terms,
                             cfr_citation=cfr_citation,
                         ):
                             continue
@@ -2413,6 +3102,39 @@ class AgenticRuntime:
                 )
 
         structured_sources = _dedupe_structured_sources(structured_sources)
+        # Species-dossier demotion: when the planner says we are answering a
+        # species dossier question, regulatory hits that do NOT mention the
+        # species must not be presented as on_topic evidence.
+        if _species_dossier_mode and _subject_card is not None:
+            demoted_sources: list[StructuredSourceRecord] = []
+            species_demotion_count = 0
+            for src_record in structured_sources:
+                if src_record.topical_relevance != "on_topic":
+                    demoted_sources.append(src_record)
+                    continue
+                doc_stub = {
+                    "title": src_record.title or "",
+                    "summary": src_record.note or "",
+                    "citation": src_record.citation_text or "",
+                }
+                if species_mentioned(doc_stub, _subject_card):
+                    demoted_sources.append(src_record)
+                    continue
+                species_demotion_count += 1
+                demoted_sources.append(
+                    src_record.model_copy(
+                        update={
+                            "topical_relevance": "weak_match",
+                            "why_classified_as_weak_match": ("species_not_specifically_addressed"),
+                        }
+                    )
+                )
+            structured_sources = demoted_sources
+            if species_demotion_count:
+                evidence_gaps.append(
+                    "Some regulatory documents were demoted to weak_match because "
+                    "they do not specifically address the subject species."
+                )
         timeline_events = sorted(timeline_events, key=lambda event: str(event.event_date or "9999-99-99"))
         if not timeline_events:
             evidence_gaps.append(
@@ -2431,7 +3153,10 @@ class AgenticRuntime:
             )
         if species_hit is None and "ecos" in zero_results:
             evidence_gaps.append("No ECOS species dossier match was found for the query.")
-        current_text_satisfied = (not current_text_requested) or govinfo_matched
+        govinfo_text_retrieved = govinfo_matched and any(
+            s.full_text_url_found for s in structured_sources if s.provider == "govinfo"
+        )
+        current_text_satisfied = (not current_text_requested) or govinfo_text_retrieved
         history_only = bool(current_text_requested and not current_text_satisfied and timeline_events)
         if current_text_requested and not govinfo_matched:
             evidence_gaps.append(
@@ -2450,6 +3175,10 @@ class AgenticRuntime:
         )
 
         provider_selection = self._provider_bundle_for_profile(latency_profile).selection_metadata()
+        # P0-3 item 1: reconcile zero_results against succeeded/failed so a provider
+        # recovered via a fallback path (e.g., govinfo) cannot remain classified as
+        # returning zero results. See docs/ux-remediation-checklist.md.
+        zero_results = [p for p in attempted if p not in succeeded and p not in failed]
         coverage_summary = CoverageSummary(
             providersAttempted=attempted,
             providersSucceeded=succeeded,
@@ -2509,6 +3238,46 @@ class AgenticRuntime:
             if cfr_request or species_hit is not None or agency_guidance_mode
             else ("medium" if anchored_subject_terms else None)
         )
+        retrieval_hypotheses = _regulatory_retrieval_hypotheses(
+            query=query,
+            planner=planner,
+            subject=subject,
+            anchor_type=anchor_type,
+            cfr_citation=cfr_citation,
+            current_text_requested=current_text_requested,
+            history_requested=history_requested,
+            agency_guidance_mode=agency_guidance_mode,
+        )
+        # Ensure hybrid policy+science questions surface a dedicated hypothesis
+        # so downstream tools can see that both regulatory and literature
+        # providers should be consulted.
+        if planner.regulatory_intent == "hybrid_regulatory_plus_literature" and not any(
+            "hybrid_policy_science" in str(entry) for entry in retrieval_hypotheses
+        ):
+            retrieval_hypotheses.append(
+                "hybrid_policy_science: combine regulatory primary sources (Federal Register, CFR, "
+                "agency guidance) with peer-reviewed literature to answer policy+evidence questions."
+            )
+        # Compute subject-chain evidence gaps from the regulatory hits we
+        # retrieved. This surfaces e.g. "ECOS dossier found but no recovery
+        # plan in primary sources" so the caller knows which rung is missing.
+        subject_chain_gap_notes: list[str] = []
+        if _subject_card is not None:
+            document_stubs = [
+                {
+                    "title": record.title or "",
+                    "summary": record.note or "",
+                    "citation": record.citation_text or "",
+                }
+                for record in structured_sources
+            ]
+            subject_chain_gap_notes = compute_subject_chain_gaps(
+                card=_subject_card,
+                regulatory_intent=planner.regulatory_intent,
+                documents=document_stubs,
+            )
+            if subject_chain_gap_notes:
+                evidence_gaps.extend(subject_chain_gap_notes)
         strategy_metadata = SearchStrategyMetadata(
             intent=planner_intent,
             intentSource=planner.intent_source,
@@ -2516,10 +3285,18 @@ class AgenticRuntime:
             intentCandidates=planner.intent_candidates,
             secondaryIntents=planner.secondary_intents,
             routingConfidence=planner.routing_confidence,
+            querySpecificity=planner.query_specificity,
+            ambiguityLevel=planner.ambiguity_level,
+            intentFamily=planner.intent_family,
+            regulatoryIntent=planner.regulatory_intent,
+            regulatorySubintent=planner.regulatory_subintent,
+            subjectCard=_subject_card,
+            subjectChainGaps=subject_chain_gap_notes,
             intentRationale=planner.intent_rationale,
             latencyProfile=latency_profile,
             normalizedQuery=query,
             queryVariantsTried=[query],
+            retrievalHypotheses=retrieval_hypotheses,
             acceptedExpansions=[],
             rejectedExpansions=[],
             speculativeExpansions=[],
@@ -2539,7 +3316,7 @@ class AgenticRuntime:
             repairedInputs=repaired_inputs,
             bestNextInternalAction=_best_next_internal_action(
                 intent=planner_intent,
-                has_sources=bool(structured_sources),
+                has_sources=_has_on_topic_sources(structured_sources),
                 result_status=result_status,
             ),
             **provider_selection,
@@ -2606,7 +3383,7 @@ class AgenticRuntime:
             hasInspectableSources=_has_inspectable_sources(structured_sources),
             bestNextInternalAction=_best_next_internal_action(
                 intent=planner_intent,
-                has_sources=bool(structured_sources),
+                has_sources=_has_on_topic_sources(structured_sources),
                 result_status=result_status,
             ),
         )
@@ -2742,10 +3519,15 @@ class AgenticRuntime:
             intentCandidates=planner.intent_candidates,
             secondaryIntents=planner.secondary_intents,
             routingConfidence=planner.routing_confidence,
+            querySpecificity=planner.query_specificity,
+            ambiguityLevel=planner.ambiguity_level,
+            intentFamily=planner.intent_family,
+            regulatoryIntent=planner.regulatory_intent,
             intentRationale=planner.intent_rationale,
             latencyProfile=latency_profile,
             normalizedQuery=query,
             queryVariantsTried=[query],
+            retrievalHypotheses=[],
             acceptedExpansions=[],
             rejectedExpansions=[],
             speculativeExpansions=[],
@@ -2766,6 +3548,11 @@ class AgenticRuntime:
             anchorType=resolution_strategy,
             anchorStrength=_anchor_strength_for_resolution(resolution_strategy),
             anchoredSubject=str(known_item.get("title") or query),
+            knownItemResolutionState=_known_item_resolution_state_for_strategy(
+                resolution_strategy=resolution_strategy,
+                known_item=known_item,
+                query=query,
+            ),
             normalizationWarnings=normalization_warnings,
             repairedInputs=repaired_inputs,
             bestNextInternalAction="get_paper_details",
@@ -2871,46 +3658,53 @@ class AgenticRuntime:
         if isinstance(best_match, dict) and isinstance(best_match.get("paper"), dict):
             return best_match["paper"], "citation_resolution"
 
-        try:
-            semantic_match = dump_jsonable(await self._client.search_papers_match(query=query, fields=None))
-        except Exception:
-            semantic_match = None
-        if isinstance(semantic_match, dict) and semantic_match.get("paperId"):
-            return semantic_match, str(semantic_match.get("matchStrategy") or "semantic_title_match")
+        parsed = parse_citation(query)
+        resolution_queries = _known_item_resolution_queries(query, parsed)
+
+        for candidate_query in resolution_queries:
+            try:
+                semantic_match = dump_jsonable(
+                    await self._client.search_papers_match(query=candidate_query, fields=None)
+                )
+            except Exception:
+                semantic_match = None
+            if isinstance(semantic_match, dict) and semantic_match.get("paperId"):
+                return semantic_match, str(semantic_match.get("matchStrategy") or "semantic_title_match")
 
         if self._enable_openalex and self._openalex_client is not None:
-            try:
-                autocomplete = await self._openalex_client.paper_autocomplete(query=query, limit=5)
-            except Exception:
-                autocomplete = None
-            if isinstance(autocomplete, dict):
-                for match in autocomplete.get("matches") or []:
-                    if not isinstance(match, dict):
-                        continue
-                    match_id = str(match.get("id") or "").strip()
-                    match_title = str(match.get("displayName") or "").strip()
-                    if not match_id or _known_item_title_similarity(query, match_title) < 0.72:
-                        continue
-                    paper = None
-                    try:
-                        paper = await self._openalex_client.get_paper_details(paper_id=match_id)
-                    except Exception as exc:
-                        logger.debug("OpenAlex known-item detail lookup failed for %s: %s", match_id, exc)
-                    if paper is None:
-                        continue
-                    return dump_jsonable(paper), "openalex_autocomplete"
+            for candidate_query in resolution_queries:
+                try:
+                    autocomplete = await self._openalex_client.paper_autocomplete(query=candidate_query, limit=5)
+                except Exception:
+                    autocomplete = None
+                if isinstance(autocomplete, dict):
+                    for match in autocomplete.get("matches") or []:
+                        if not isinstance(match, dict):
+                            continue
+                        match_id = str(match.get("id") or "").strip()
+                        match_title = str(match.get("displayName") or "").strip()
+                        if not match_id or _known_item_title_similarity(candidate_query, match_title) < 0.72:
+                            continue
+                        paper = None
+                        try:
+                            paper = await self._openalex_client.get_paper_details(paper_id=match_id)
+                        except Exception as exc:
+                            logger.debug("OpenAlex known-item detail lookup failed for %s: %s", match_id, exc)
+                        if paper is None:
+                            continue
+                        return dump_jsonable(paper), "openalex_autocomplete"
 
-            try:
-                openalex_search = await self._openalex_client.search(query=query, limit=3)
-            except Exception:
-                openalex_search = None
-            if isinstance(openalex_search, dict):
-                for paper in openalex_search.get("data") or []:
-                    if not isinstance(paper, dict) or not paper.get("paperId"):
-                        continue
-                    if _known_item_title_similarity(query, str(paper.get("title") or "")) < 0.58:
-                        continue
-                    return paper, "openalex_search"
+                try:
+                    openalex_search = await self._openalex_client.search(query=candidate_query, limit=3)
+                except Exception:
+                    openalex_search = None
+                if isinstance(openalex_search, dict):
+                    for paper in openalex_search.get("data") or []:
+                        if not isinstance(paper, dict) or not paper.get("paperId"):
+                            continue
+                        if _known_item_title_similarity(candidate_query, str(paper.get("title") or "")) < 0.58:
+                            continue
+                        return paper, "openalex_search"
         return None, "none"
 
     async def _fallback_known_item_search(
@@ -3015,10 +3809,15 @@ class AgenticRuntime:
             intentCandidates=planner.intent_candidates,
             secondaryIntents=planner.secondary_intents,
             routingConfidence=planner.routing_confidence,
+            querySpecificity=planner.query_specificity,
+            ambiguityLevel=planner.ambiguity_level,
+            intentFamily=planner.intent_family,
+            regulatoryIntent=planner.regulatory_intent,
             intentRationale=planner.intent_rationale,
             latencyProfile=latency_profile,
             normalizedQuery=query,
             queryVariantsTried=[query],
+            retrievalHypotheses=[],
             acceptedExpansions=[],
             rejectedExpansions=[],
             speculativeExpansions=[],
@@ -3039,6 +3838,7 @@ class AgenticRuntime:
             anchorType="candidate_set",
             anchorStrength="low",
             anchoredSubject=query,
+            knownItemResolutionState="needs_disambiguation",
             normalizationWarnings=normalization_warnings,
             repairedInputs=repaired_inputs,
             bestNextInternalAction=("ask_result_set" if smart_hits else "search_papers_smart"),
@@ -3088,10 +3888,10 @@ class AgenticRuntime:
             evidenceGaps=list(strategy_metadata.drift_warnings),
             structuredSources=source_records,
             resultStatus=result_status,
-            hasInspectableSources=bool(smart_hits),
+            hasInspectableSources=_has_inspectable_sources(source_records),
             bestNextInternalAction=_best_next_internal_action(
                 intent=planner.intent,
-                has_sources=bool(smart_hits),
+                has_sources=_has_on_topic_sources(source_records),
                 result_status=result_status,
             ),
         )
@@ -3315,6 +4115,12 @@ def _source_record_from_paper(
     *,
     note: str | None = None,
     topical_relevance: Literal["on_topic", "weak_match", "off_topic"] | None = None,
+    llm_classification: Literal["on_topic", "weak_match", "off_topic"] | None = None,
+    classification_source: Literal["deterministic", "llm", "llm_tiebreaker"] | None = None,
+    relevance_source: str | None = None,
+    relevance_confidence: float | None = None,
+    relevance_reason: str | None = None,
+    classification_rationale: str | None = None,
 ) -> StructuredSourceRecord:
     source_id = str(paper.canonical_id or paper.paper_id or "") or None
     return StructuredSourceRecord(
@@ -3325,17 +4131,25 @@ def _source_record_from_paper(
         verificationStatus=paper.verification_status,
         accessStatus=paper.access_status,
         topicalRelevance=topical_relevance,
+        llmClassification=llm_classification,
+        classificationSource=classification_source,
         confidence=paper.confidence,
         isPrimarySource=paper.is_primary_source,
         canonicalUrl=paper.canonical_url,
         retrievedUrl=paper.retrieved_url,
-        fullTextObserved=paper.full_text_observed,
+        fullTextUrlFound=paper.full_text_url_found,
+        bodyTextEmbedded=paper.body_text_embedded,
+        qaReadableText=paper.qa_readable_text,
         abstractObserved=paper.abstract_observed,
         openAccessRoute=paper.open_access_route,
         citationText=str(paper.canonical_id or paper.paper_id or "") or None,
         citation=_citation_record_from_paper(paper),
         date=str(paper.publication_date or paper.year or "") or None,
         note=note,
+        relevanceSource=cast(Any, relevance_source) if relevance_source else None,
+        relevanceConfidence=relevance_confidence,
+        relevanceReason=relevance_reason,
+        classificationRationale=classification_rationale,
     )
 
 
@@ -3344,6 +4158,7 @@ def _source_record_from_regulatory_document(
     *,
     provider: str,
     topical_relevance: Literal["on_topic", "weak_match", "off_topic"] | None = "on_topic",
+    why_classified_as_weak_match: str | None = None,
 ) -> StructuredSourceRecord:
     title = str(
         document.get("title") or document.get("citation") or document.get("documentNumber") or "Regulatory source"
@@ -3375,25 +4190,38 @@ def _source_record_from_regulatory_document(
             document.get("note")
             or ("Authoritative CFR text" if document.get("markdown") else "GovInfo primary-source discovery hit")
         )
-    has_full_text = bool(document.get("markdown") or document.get("contentSource"))
+    has_inline_body = bool(document.get("markdown"))
+    has_url = bool(canonical_url)
+    family_match = document.get("_documentFamilyMatch")
+    family_boost = document.get("_documentFamilyBoost")
+    if has_inline_body:
+        access_status: str = "body_text_embedded"
+    elif has_url:
+        access_status = "url_verified"
+    else:
+        access_status = "access_unverified"
+    if has_inline_body:
+        verification_status_default = "verified_primary_source" if provider == "govinfo" else "verified_metadata"
+    else:
+        verification_status_default = "verified_metadata"
     return StructuredSourceRecord(
         sourceId=source_id,
         title=title,
         provider=provider,
         sourceType="primary_regulatory",
-        verificationStatus=str(
-            document.get("verificationStatus")
-            or ("verified_primary_source" if provider == "govinfo" else "verified_metadata")
-        ),
-        accessStatus=("full_text_verified" if has_full_text else "access_unverified"),
-        confidence="high" if provider == "govinfo" else "medium",
+        verificationStatus=str(document.get("verificationStatus") or verification_status_default),
+        accessStatus=access_status,
+        confidence="high" if (provider == "govinfo" and has_inline_body) else "medium",
         topicalRelevance=topical_relevance,
         isPrimarySource=True,
         canonicalUrl=canonical_url,
         retrievedUrl=canonical_url,
-        fullTextObserved=has_full_text,
+        fullTextUrlFound=has_url,
+        fullTextRetrieved=has_inline_body,
+        bodyTextEmbedded=has_inline_body,
+        qaReadableText=has_inline_body,
         abstractObserved=False,
-        openAccessRoute=("non_oa_or_unconfirmed" if (has_full_text or canonical_url) else "unknown"),
+        openAccessRoute=("non_oa_or_unconfirmed" if (has_inline_body or has_url) else "unknown"),
         citationText=citation,
         citation=_citation_record_from_regulatory_document(
             document,
@@ -3403,7 +4231,210 @@ def _source_record_from_regulatory_document(
         ),
         date=str(date or "") or None,
         note=note,
+        whyClassifiedAsWeakMatch=why_classified_as_weak_match,
+        documentFamilyMatch=str(family_match) if family_match else None,
+        documentFamilyBoost=float(family_boost) if isinstance(family_boost, (int, float)) else None,
     )
+
+
+def _compute_top_recommendation(
+    *,
+    question: str,
+    resolved_question_mode: str,
+    answer_status: str,
+    evidence: list[EvidenceItem],
+    source_records: list[StructuredSourceRecord],
+    strong_evidence_ids: set[str],
+    anchored_selection_source_ids: set[str] | None = None,
+) -> dict[str, Any] | None:
+    """Build the P1-2 ``topRecommendation`` payload for selection follow-ups.
+
+    Returns ``None`` unless:
+
+    * ``resolved_question_mode`` is ``comparison`` or ``selection``;
+    * ``answer_status`` is ``answered`` (mirrors the grounded gate; abstained
+      or insufficient_evidence paths never carry a recommendation);
+    * at least two strong, on-topic evidence items are available;
+    * and at least one paper scores above zero on the inferred axis.
+    """
+    if resolved_question_mode not in {"comparison", "selection"}:
+        return None
+    anchored_selection_source_ids = {
+        identifier for identifier in (anchored_selection_source_ids or set()) if identifier
+    }
+    if answer_status != "answered" and not (
+        resolved_question_mode == "selection" and len(anchored_selection_source_ids) == 1
+    ):
+        return None
+    strong_on_topic_evidence = [
+        item
+        for item in evidence
+        if str(item.evidence_id or item.paper.paper_id or item.paper.canonical_id or "").strip() in strong_evidence_ids
+    ]
+    source_record_by_id = {
+        str(record.source_id or "").strip(): record for record in source_records if str(record.source_id or "").strip()
+    }
+    anchored_items = [
+        item
+        for item in strong_on_topic_evidence
+        if str(item.evidence_id or item.paper.paper_id or item.paper.canonical_id or "").strip()
+        in anchored_selection_source_ids
+    ]
+    if resolved_question_mode == "selection" and len(anchored_items) == 1:
+        primary_item = anchored_items[0]
+        primary_pid = str(
+            primary_item.evidence_id or primary_item.paper.paper_id or primary_item.paper.canonical_id or ""
+        ).strip()
+        rationale = _build_anchored_selection_rationale(primary_item, source_record_by_id.get(primary_pid))
+        return {
+            "sourceId": primary_pid,
+            "comparativeAxis": "authority",
+            "recommendationReason": rationale,
+            "axisScore": 1.0,
+            "alternativeRecommendations": [],
+            "axis": "authority",
+            "score": 1.0,
+            "rationale": rationale,
+            "alternatives": [],
+        }
+    if len(strong_on_topic_evidence) < 2:
+        return None
+    papers = [item.paper for item in strong_on_topic_evidence]
+    relevance_scores: dict[str, float] = {}
+    for item in strong_on_topic_evidence:
+        pid = str(item.paper.paper_id or item.paper.canonical_id or "").strip()
+        if pid:
+            relevance_scores[pid] = float(item.relevance_score or 0.0)
+    primary_axis = infer_comparative_axis(question)
+    primary_scores = score_papers_for_comparative_axis(
+        papers,
+        question,
+        primary_axis,
+        relevance_scores=relevance_scores,
+    )
+    if not primary_scores:
+        return None
+    primary_pid, primary_score = max(primary_scores.items(), key=lambda kv: kv[1])
+    if primary_score <= 0.0:
+        return None
+
+    alt_axes: list[str] = [ax for ax in ("recency", "authority", "coverage") if ax != primary_axis]
+    alternatives: list[dict[str, Any]] = []
+    for alt_axis in alt_axes[:2]:
+        alt_scores = score_papers_for_comparative_axis(
+            papers,
+            question,
+            alt_axis,  # type: ignore[arg-type]
+            relevance_scores=relevance_scores,
+        )
+        if not alt_scores:
+            continue
+        alt_pid, alt_score = max(alt_scores.items(), key=lambda kv: kv[1])
+        if alt_score <= 0.0:
+            continue
+        alternatives.append(
+            {
+                "sourceId": alt_pid,
+                "axis": alt_axis,
+                "score": round(alt_score, 4),
+            }
+        )
+
+    # Find the corresponding evidence item for rationale enrichment.
+    ranked_primary_item = cast(
+        EvidenceItem | None,
+        next(
+            (
+                item
+                for item in strong_on_topic_evidence
+                if str(item.paper.paper_id or item.paper.canonical_id or "").strip() == primary_pid
+            ),
+            None,
+        ),
+    )
+    rationale = _build_top_recommendation_rationale(primary_axis, primary_score, ranked_primary_item)
+    comparative_axis = _top_recommendation_axis_label(primary_axis)
+    alternative_recommendations = [
+        {
+            "sourceId": str(entry.get("sourceId") or "").strip(),
+            "comparativeAxis": _top_recommendation_axis_label(str(entry.get("axis") or "")),
+            "axisScore": entry.get("score"),
+        }
+        for entry in alternatives
+        if str(entry.get("sourceId") or "").strip()
+    ]
+    return {
+        "sourceId": primary_pid,
+        "comparativeAxis": comparative_axis,
+        "recommendationReason": rationale,
+        "axisScore": round(primary_score, 4),
+        "alternativeRecommendations": alternative_recommendations,
+        "axis": primary_axis,
+        "score": round(primary_score, 4),
+        "rationale": rationale,
+        "alternatives": alternatives,
+    }
+
+
+def _selection_answer_from_recommendation(
+    top_recommendation: dict[str, Any],
+    source_records: list[StructuredSourceRecord],
+) -> str:
+    source_id = str(top_recommendation.get("sourceId") or "").strip()
+    title = ""
+    if source_id:
+        matched = next((record for record in source_records if str(record.source_id or "").strip() == source_id), None)
+        if matched is not None:
+            title = str(matched.title or matched.citation_text or source_id).strip()
+    reason = str(top_recommendation.get("recommendationReason") or "").strip()
+    if title and reason:
+        return f"Start with {title}. {reason}"
+    if title:
+        return f"Start with {title}."
+    if reason:
+        return reason
+    return "Start with the recommended source from the saved evidence."
+
+
+def _build_anchored_selection_rationale(
+    item: EvidenceItem,
+    source_record: StructuredSourceRecord | None,
+) -> str:
+    source_title = source_record.title if source_record is not None else None
+    title = str(item.paper.title or source_title or "").strip()
+    citation = str(source_record.citation_text or "").strip() if source_record is not None else ""
+    if citation and citation not in title:
+        return f"This is the exact verified primary source for the requested codified text ({citation})."
+    if title:
+        return f"This is the exact verified primary source for the requested codified text ({title})."
+    return "This is the exact verified primary source for the requested codified text."
+
+
+def _top_recommendation_axis_label(axis: str) -> str:
+    return {
+        "beginner": "beginner_friendly",
+        "relevance_fallback": "relevance",
+    }.get(axis, axis)
+
+
+def _build_top_recommendation_rationale(
+    axis: str,
+    score: float,
+    item: EvidenceItem | None,
+) -> str:
+    base = f"Highest score on axis '{axis}' ({score:.2f})."
+    if item is None:
+        return base
+    paper = item.paper
+    if axis == "recency" and paper.year is not None:
+        return f"{base} Published in {paper.year}."
+    if axis == "authority" and paper.citation_count is not None:
+        return f"{base} Citation count: {paper.citation_count}."
+    if axis == "beginner":
+        return f"{base} Title signals beginner-friendly framing."
+    if axis == "coverage":
+        return f"{base} Broadest term overlap with the question."
+    return base
 
 
 def _verified_findings_from_source_records(records: list[StructuredSourceRecord]) -> list[str]:
@@ -3574,9 +4605,12 @@ def _smart_coverage_summary(
         )
         if provider
     ]
+    # Invariant: providers_succeeded and providers_zero_results must be disjoint
+    zero_results_set = set(zero_results)
+    succeeded = [p for p in providers_used if p not in zero_results_set]
     return CoverageSummary(
         providersAttempted=attempted,
-        providersSucceeded=providers_used,
+        providersSucceeded=succeeded,
         providersFailed=failed,
         providersZeroResults=zero_results,
         likelyCompleteness=("partial" if providers_used else ("incomplete" if failed else "unknown")),
@@ -3653,11 +4687,29 @@ def _extract_common_name_candidate(query: str) -> str | None:
     return cleaned
 
 
-def _ecos_query_variants(query: str) -> list[tuple[str, str]]:
-    variants: list[tuple[str, str]] = []
+def _ecos_query_variants(
+    query: str,
+    *,
+    planner: PlannerDecision | None = None,
+) -> list[tuple[str, str, str]]:
+    """Return ECOS query candidates as ``(query, anchor_type, origin)`` tuples.
+
+    ``origin`` is ``"raw"`` for regex/raw-query-derived candidates and
+    ``"planner"`` for candidates supplied by the planner bundle's
+    ``entityCard`` / ``subjectCard``. Raw candidates are emitted first so
+    the ECOS loop tries query-grounded variants before falling back to
+    planner-supplied names — this removes the hallucination-first risk
+    where a plausible-but-wrong LLM species name returns real-but-wrong
+    ECOS data and contaminates downstream ranking. The planner variants
+    still run as a fallback so genuine LLM-emitted names (which can
+    recover from genus-only / subspecies prose the regex misses) keep
+    their recall.
+    """
+
+    variants: list[tuple[str, str, str]] = []
     seen: set[str] = set()
 
-    def _add(candidate: str | None, anchor_type: str) -> None:
+    def _add(candidate: str | None, anchor_type: str, origin: str) -> None:
         if not candidate:
             return
         normalized = " ".join(candidate.split())
@@ -3667,16 +4719,134 @@ def _ecos_query_variants(query: str) -> list[tuple[str, str]]:
         if marker in seen:
             return
         seen.add(marker)
-        variants.append((normalized, anchor_type))
+        variants.append((normalized, anchor_type, origin))
 
-    scientific_name = _extract_scientific_name_candidate(query)
-    _add(scientific_name, "species_scientific_name")
-    common_name = _extract_common_name_candidate(query)
-    if common_name and scientific_name and common_name.lower() == scientific_name.lower():
-        common_name = None
-    _add(common_name, "species_common_name")
-    _add(query, "regulatory_subject_terms")
+    opaque = _is_opaque_query(query)
+
+    # Raw / regex-derived scientific/common-name variants stay first: even for
+    # opaque queries (DOIs / URLs) the extractor almost never fires on them,
+    # but when it does the name is query-grounded and beats any planner
+    # fallback.
+    _add(_extract_scientific_name_candidate(query), "species_scientific_name", "raw")
+    _add(_extract_common_name_candidate(query), "species_common_name", "raw")
+
+    # For opaque queries the raw full-query variant is an identifier — it can
+    # incidentally match ECOS (e.g. a DOI fragment overlapping a species code)
+    # and lock the loop onto real-but-wrong data before the planner names
+    # ever run. Defer the raw-full-query probe until after the planner
+    # fallbacks when the query is opaque. Non-opaque queries keep the
+    # historical ordering so query-grounded subject terms still run first.
+    if not opaque:
+        _add(query, "regulatory_subject_terms", "raw")
+
+    # Planner-supplied names run as a fallback for genus-only / subspecies
+    # prose the regex cannot recover. Downstream callers stamp hits from
+    # these variants with a lower-confidence ``ecosProvenance`` marker.
+    if planner is not None:
+        entity_card = planner.entity_card or {}
+        if isinstance(entity_card, dict):
+            _add(
+                str(entity_card.get("scientificName") or "") or None,
+                "species_scientific_name",
+                "planner",
+            )
+            _add(
+                str(entity_card.get("commonName") or "") or None,
+                "species_common_name",
+                "planner",
+            )
+        if planner.subject_card is not None:
+            _add(planner.subject_card.scientific_name, "species_scientific_name", "planner")
+            _add(planner.subject_card.common_name, "species_common_name", "planner")
+
+    if opaque:
+        _add(query, "regulatory_subject_terms", "raw")
+
     return variants
+
+
+_ECOS_PROVENANCE_RANK: dict[str, int] = {"raw": 0, "planner": 1}
+
+
+def _rank_ecos_variant_hits(
+    variant_hits: list[tuple[int, str, str, dict[str, Any]]],
+) -> tuple[int, str, str, dict[str, Any]] | None:
+    """Finding 4 (5th rubber-duck pass): pick the best ECOS variant result.
+
+    Each entry is ``(variant_idx, anchor_type, origin, search_payload)``. The
+    earlier scoring (``hits * factor`` with a 0.9 planner factor) let a
+    planner-only variant with two incidental hits outrank a corroborated raw
+    variant with one solid hit, defeating the provenance-first intent.
+
+    The ranking key is strictly tiered:
+
+    1. Non-empty variants beat empty ones (a corroborated variant with zero
+       hits cannot stand in for a variant with real hits).
+    2. Provenance rank (raw/query-corroborated beats planner-supplied).
+    3. Hit count (higher wins within the same tier).
+    4. Original ``variant_idx`` to preserve the intentional ordering from
+       ``_ecos_query_variants`` as the final tie-breaker.
+
+    That guarantees any corroborated variant with ``>=1`` hit beats any
+    planner-only variant regardless of hit count, while still using hit count
+    to disambiguate variants sharing a provenance tier. Returns ``None`` when
+    the input is empty.
+    """
+
+    if not variant_hits:
+        return None
+    scored: list[tuple[int, int, int, int, int, str, str, dict[str, Any]]] = []
+    for variant_idx, anchor_type, origin, search_payload in variant_hits:
+        hit_count = len(list(search_payload.get("data") or []))
+        has_hits_rank = 0 if hit_count > 0 else 1
+        provenance_rank = _ECOS_PROVENANCE_RANK.get(origin, 1)
+        scored.append(
+            (
+                has_hits_rank,
+                provenance_rank,
+                -hit_count,
+                variant_idx,
+                hit_count,
+                anchor_type,
+                origin,
+                search_payload,
+            )
+        )
+    scored.sort()
+    *_, variant_idx, _hit_count, anchor_type, origin, search_payload = scored[0]
+    return (variant_idx, anchor_type, origin, search_payload)
+
+
+_OPAQUE_DOI_RE = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Za-z0-9]+\b")
+_OPAQUE_ARXIV_RE = re.compile(r"\barxiv[:\s]*\d{4}\.\d{4,5}\b", re.IGNORECASE)
+
+
+def _is_opaque_query(query: str) -> bool:
+    """Return True when ``query`` looks like an identifier rather than prose.
+
+    Opaque queries (DOIs, arXiv ids, bare URLs, identifier-like tokens with
+    almost no letters) are meaningless as ECOS ``regulatory_subject_terms``
+    probes and tend to match ECOS entries incidentally. The caller uses this
+    to defer the raw full-query variant until after planner-supplied names.
+    """
+
+    text = (query or "").strip()
+    if not text:
+        return False
+    if _OPAQUE_DOI_RE.search(text) or _OPAQUE_ARXIV_RE.search(text):
+        return True
+    lowered = text.lower()
+    if lowered.startswith(("http://", "https://", "www.")):
+        return True
+    # Dense identifier-like tokens: mostly non-alpha, or a single long token
+    # with punctuation characteristic of identifiers.
+    alpha = sum(1 for ch in text if ch.isalpha())
+    total = len(text)
+    if total >= 8 and alpha / total < 0.4:
+        return True
+    if " " not in text and any(ch in text for ch in "/:._") and alpha / max(total, 1) < 0.6:
+        return True
+    return False
 
 
 def _query_requests_regulatory_history(query: str) -> bool:
@@ -3727,6 +4897,62 @@ def _is_current_cfr_text_request(query: str) -> bool:
         "under ",
     )
     return any(marker in lowered for marker in markers) or bool(re.search(r"\b\d+\s*cfr\s+\d+(?:\.\S+)?\b", lowered))
+
+
+def _derive_regulatory_query_flags(
+    *,
+    query: str,
+    planner: PlannerDecision | None,
+) -> tuple[bool, bool, bool]:
+    """Map ``planner.regulatory_intent`` into the three routing booleans.
+
+    LLM-first: when the planner bundle actually ran a real LLM (signalled by
+    ``planner.planner_source == "llm"``) and emitted a definitive
+    ``regulatoryIntent`` label, trust it authoritatively so the LLM signal
+    wins over query keywords (e.g. "listing history of the Pallid Sturgeon"
+    tagged ``species_dossier`` must NOT also activate the rulemaking-history
+    route). Provenance is keyed off ``planner_source`` rather than
+    ``subject_card.source`` because an LLM planner can legitimately emit
+    ``regulatoryIntent`` without also supplying subject-card grounding
+    fields; in that case ``classify_query`` stamps the subject card as
+    ``deterministic_fallback``, but the LLM's regulatory label is still
+    authoritative.
+
+    Falls back to the deterministic keyword/regex helpers when:
+
+    * the bundle is deterministic (``planner_source`` is ``"deterministic"``
+      or ``"deterministic_fallback"``) — in that case ``regulatoryIntent``
+      itself came from deterministic heuristics and is no more reliable than
+      the keyword helpers, so we prefer the keyword helpers to avoid losing
+      secondary routes on queries like "Regulatory history ... under 50 CFR ...";
+    * the LLM emitted ``unspecified`` / ``hybrid_regulatory_plus_literature``
+      / ``None`` — mixed or uncommitted intent, so every keyword-matched
+      sub-route may still be relevant.
+
+    Returns ``(current_text_requested, history_requested, agency_guidance_mode)``.
+    """
+
+    intent = planner.regulatory_intent if planner is not None else None
+    llm_authoritative = (
+        planner is not None
+        and planner.planner_source == "llm"
+        and planner.regulatory_intent_source == "llm"
+        and intent is not None
+    )
+    if llm_authoritative:
+        if intent == "current_cfr_text":
+            return (True, False, False)
+        if intent == "rulemaking_history":
+            return (False, True, False)
+        if intent == "guidance_lookup":
+            return (False, False, True)
+        if intent == "species_dossier":
+            return (False, False, False)
+    return (
+        _is_current_cfr_text_request(query),
+        _query_requests_regulatory_history(query),
+        _is_agency_guidance_query(query),
+    )
 
 
 def _year_text(value: Any) -> str | None:
@@ -3823,7 +5049,48 @@ def _classify_topical_relevance_for_paper(
     paper: dict[str, Any] | Paper,
     query_similarity: float,
     score_breakdown: ScoreBreakdown | None = None,
+    llm_classification: Literal["on_topic", "weak_match", "off_topic"] | None = None,
 ) -> Literal["on_topic", "weak_match", "off_topic"]:
+    return _classify_topical_relevance_with_provenance(
+        query=query,
+        paper=paper,
+        query_similarity=query_similarity,
+        score_breakdown=score_breakdown,
+        llm_classification=llm_classification,
+    ).effective
+
+
+@dataclass(frozen=True)
+class TopicalRelevanceClassification:
+    """Provenance-aware result of the topical-relevance gate.
+
+    ``effective`` is the verdict callers should act on; it matches what the
+    legacy ``_classify_topical_relevance_for_paper`` returned. ``deterministic``
+    is the raw heuristic verdict, ``llm`` is the classifier verdict when
+    available, and ``source`` records which signal produced ``effective``.
+
+    ``llm_override_ignored`` is True exactly when the deterministic fast-path
+    produced a clear on_topic/off_topic verdict and an LLM classification was
+    available but disagreed. The effective verdict is still the deterministic
+    one in that case — the flag is purely for observability so callers can log
+    the override or surface a counter.
+    """
+
+    effective: Literal["on_topic", "weak_match", "off_topic"]
+    deterministic: Literal["on_topic", "weak_match", "off_topic"]
+    llm: Literal["on_topic", "weak_match", "off_topic"] | None
+    source: Literal["deterministic", "llm", "llm_tiebreaker"]
+    llm_override_ignored: bool
+
+
+def _classify_topical_relevance_with_provenance(
+    *,
+    query: str,
+    paper: dict[str, Any] | Paper,
+    query_similarity: float,
+    score_breakdown: ScoreBreakdown | None = None,
+    llm_classification: Literal["on_topic", "weak_match", "off_topic"] | None = None,
+) -> TopicalRelevanceClassification:
     title = str((paper.title if isinstance(paper, Paper) else paper.get("title")) or "")
     body_text = _paper_text(paper.model_dump(by_alias=True) if isinstance(paper, Paper) else paper)
     title_tokens = _graph_topic_tokens(title)
@@ -3857,12 +5124,54 @@ def _classify_topical_relevance_for_paper(
         query_facet_coverage = max(query_facet_coverage, score_breakdown.query_facet_coverage)
         query_anchor_coverage = max(query_anchor_coverage, score_breakdown.query_anchor_coverage)
 
-    return _classify_topical_relevance(
+    deterministic = _classify_topical_relevance(
         query_similarity=query_similarity,
         title_facet_coverage=title_facet_coverage,
         title_anchor_coverage=title_anchor_coverage,
         query_facet_coverage=query_facet_coverage,
         query_anchor_coverage=query_anchor_coverage,
+    )
+    has_title_signal = (title_facet_coverage > 0.0) or (title_anchor_coverage > 0.0)
+    has_title_or_body_signal = has_title_signal or (query_facet_coverage > 0.0) or (query_anchor_coverage > 0.0)
+    fast_path_on_topic = deterministic == "on_topic" and query_similarity > 0.5
+    fast_path_off_topic = deterministic == "off_topic" and query_similarity < 0.12 and not has_title_or_body_signal
+    strict_title_alignment_query = looks_like_exact_title(query) or looks_like_near_known_item_query(query)
+    guard_llm_on_topic_promotion = (
+        strict_title_alignment_query
+        and deterministic == "weak_match"
+        and llm_classification == "on_topic"
+        and not has_title_signal
+    )
+
+    effective: Literal["on_topic", "weak_match", "off_topic"]
+    source: Literal["deterministic", "llm", "llm_tiebreaker"]
+    llm_override_ignored = False
+    if fast_path_on_topic:
+        effective = "on_topic"
+        source = "deterministic"
+        if llm_classification is not None and llm_classification != "on_topic":
+            llm_override_ignored = True
+    elif fast_path_off_topic:
+        effective = "off_topic"
+        source = "deterministic"
+        if llm_classification is not None and llm_classification != "off_topic":
+            llm_override_ignored = True
+    elif guard_llm_on_topic_promotion:
+        effective = deterministic
+        source = "deterministic"
+    elif llm_classification is not None:
+        effective = llm_classification
+        source = "llm_tiebreaker" if deterministic == "weak_match" else "llm"
+    else:
+        effective = deterministic
+        source = "deterministic"
+
+    return TopicalRelevanceClassification(
+        effective=effective,
+        deterministic=deterministic,
+        llm=llm_classification,
+        source=source,
+        llm_override_ignored=llm_override_ignored,
     )
 
 
@@ -3893,6 +5202,51 @@ def _format_cfr_citation(cfr_request: dict[str, Any] | None) -> str | None:
     return f"{title} CFR {part}"
 
 
+def _regulatory_retrieval_hypotheses(
+    *,
+    query: str,
+    planner: PlannerDecision,
+    subject: str | None,
+    anchor_type: str | None,
+    cfr_citation: str | None,
+    current_text_requested: bool,
+    history_requested: bool,
+    agency_guidance_mode: bool,
+) -> list[str]:
+    hypotheses: list[str] = [str(item).strip() for item in planner.retrieval_hypotheses if str(item).strip()]
+    anchor_subject = str(subject or planner.anchor_value or query).strip()
+    if current_text_requested and cfr_citation:
+        hypotheses.append(f"Current codified CFR text for {cfr_citation}.")
+    if cfr_citation and not current_text_requested:
+        hypotheses.append(f"40 CFR incorporation and referenced regulatory text for {cfr_citation}.")
+    if agency_guidance_mode:
+        hypotheses.append(f"Agency guidance documents directly addressing {anchor_subject}.")
+        hypotheses.append(f"Federal Register notices or policy actions relevant to {anchor_subject}.")
+    elif anchor_type in {"species_common_name", "species_scientific_name"}:
+        hypotheses.append(f"ECOS species dossier and supporting recovery-plan materials for {anchor_subject}.")
+        hypotheses.append(f"Federal Register listing or habitat actions for {anchor_subject}.")
+    else:
+        hypotheses.append(f"Federal Register final rule or notice history for {anchor_subject}.")
+        hypotheses.append(f"Current CFR incorporation or agency primary-source text for {anchor_subject}.")
+    if history_requested and not agency_guidance_mode:
+        hypotheses.append(f"Rulemaking timeline milestones for {anchor_subject}.")
+    for facet in query_facets(query):
+        facet_text = str(facet).strip()
+        if facet_text:
+            hypotheses.append(facet_text)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for hypothesis in hypotheses:
+        normalized = str(hypothesis).strip()
+        lowered = normalized.lower()
+        if not normalized or lowered in seen:
+            continue
+        seen.add(lowered)
+        deduped.append(normalized)
+    return deduped[:5]
+
+
 def _cfr_tokens(citation: str | None) -> set[str]:
     if not citation:
         return set()
@@ -3903,6 +5257,7 @@ def _regulatory_document_matches_subject(
     document: dict[str, Any],
     *,
     subject_terms: set[str],
+    priority_terms: set[str] | None = None,
     cfr_citation: str | None,
 ) -> bool:
     title = str(document.get("title") or "")
@@ -3915,11 +5270,14 @@ def _regulatory_document_matches_subject(
     )
     document_tokens = _graph_topic_tokens(document_text)
     title_tokens = _graph_topic_tokens(title)
+    priority_overlap = len(document_tokens & set(priority_terms or set()))
 
     subject_match_required = bool(subject_terms)
     subject_title_overlap = len(subject_terms & title_tokens)
     subject_body_overlap = len(subject_terms & document_tokens)
-    subject_match = subject_title_overlap > 0 or subject_body_overlap >= 2
+    subject_match = subject_title_overlap > 0 or subject_body_overlap >= 2 or priority_overlap >= 2
+    if priority_terms:
+        subject_match = subject_match and priority_overlap > 0
 
     cfr_match = False
     cfr_expected_tokens = _cfr_tokens(cfr_citation)
@@ -3941,6 +5299,163 @@ def _regulatory_document_matches_subject(
     return True
 
 
+def _agency_guidance_subject_terms(query: str) -> set[str]:
+    normalized = re.sub(r"[-_/]+", " ", query.lower())
+    return {
+        term
+        for term in re.findall(r"[a-z0-9]{4,}", normalized)
+        if term not in _REGULATORY_SUBJECT_STOPWORDS
+        and term not in _AGENCY_GUIDANCE_QUERY_NOISE_TERMS
+        and term not in _GRAPH_GENERIC_TERMS
+        and len(term) > 3
+    }
+
+
+def _regulatory_query_subject_terms(query: str) -> set[str]:
+    normalized = re.sub(r"[-_/]+", " ", query.lower())
+    return {
+        term
+        for term in re.findall(r"[a-z0-9]{4,}", normalized)
+        if term not in _REGULATORY_SUBJECT_STOPWORDS
+        and term not in _REGULATORY_QUERY_NOISE_TERMS
+        and term not in _GRAPH_GENERIC_TERMS
+    }
+
+
+def _regulatory_query_priority_terms(query: str) -> set[str]:
+    authority_terms = {term.lower() for term in _AGENCY_AUTHORITY_TERMS if " " not in term}
+    generic_regulatory_acronyms = {
+        "cfr",
+        "esa",
+        "fr",
+        "u.s",
+        "us",
+    }
+    return {
+        token.lower()
+        for token in re.findall(r"\b[A-Z][A-Z0-9-]{2,}\b", query)
+        if token.lower() not in authority_terms and token.lower() not in generic_regulatory_acronyms
+    }
+
+
+def _agency_guidance_priority_terms(query: str) -> set[str]:
+    terms = _agency_guidance_subject_terms(query)
+    for facet in query_facets(query):
+        for token in re.findall(r"[a-z0-9]{4,}", facet.lower()):
+            if token in _GRAPH_GENERIC_TERMS or token in _AGENCY_GUIDANCE_QUERY_NOISE_TERMS:
+                continue
+            if token in _REGULATORY_SUBJECT_STOPWORDS:
+                continue
+            terms.add(token)
+    return terms
+
+
+def _agency_guidance_facet_terms(query: str) -> list[set[str]]:
+    facet_terms: list[set[str]] = []
+    for facet in query_facets(query):
+        tokens = {
+            token
+            for token in re.findall(r"[a-z0-9]{4,}", facet.lower())
+            if token not in _GRAPH_GENERIC_TERMS
+            and token not in _AGENCY_GUIDANCE_QUERY_NOISE_TERMS
+            and token not in _REGULATORY_SUBJECT_STOPWORDS
+        }
+        if len(tokens) >= 2:
+            facet_terms.append(tokens)
+    return facet_terms
+
+
+def _guidance_query_prefers_recency(query: str) -> bool:
+    lowered = query.lower()
+    return any(marker in lowered for marker in {"current", "latest", "new", "newest", "recent"})
+
+
+def _is_species_regulatory_query(query: str) -> bool:
+    lowered = query.lower()
+    regulatory_markers = {"esa", "final rule", "listing history", "listing status", "regulatory history"}
+    species_markers = {
+        "bat",
+        "bird",
+        "condor",
+        "critical habitat",
+        "endangered",
+        "habitat",
+        "listing",
+        "recovery",
+        "species",
+        "threatened",
+        "wildlife",
+    }
+    return any(marker in lowered for marker in regulatory_markers) and any(
+        marker in lowered for marker in species_markers
+    )
+
+
+def _rank_regulatory_documents(
+    documents: list[dict[str, Any]],
+    *,
+    subject_terms: set[str],
+    priority_terms: set[str],
+    facet_terms: list[set[str]],
+    prefer_guidance: bool,
+    prefer_recent: bool,
+    cultural_resource_boost: bool = False,
+    requested_document_family: str | None = None,
+) -> list[dict[str, Any]]:
+    from .subject_grounding import detect_document_family_match
+
+    def _score(document: dict[str, Any]) -> tuple[int, str]:
+        title = str(document.get("title") or "")
+        summary = str(document.get("abstract") or document.get("excerpt") or document.get("summary") or "")
+        tokens = _graph_topic_tokens(" ".join(part for part in [title, summary] if part))
+        title_tokens = _graph_topic_tokens(title)
+        overlap = len(subject_terms & tokens)
+        title_overlap = len(subject_terms & title_tokens)
+        priority_overlap = len(tokens & priority_terms)
+        facet_overlap = 0
+        for facet in facet_terms:
+            required = len(facet) if len(facet) <= 2 else 2
+            if sum(token in tokens for token in facet) >= required:
+                facet_overlap += 1
+        document_type = str(document.get("documentType") or "").lower()
+        publication_date = str(document.get("publicationDate") or "")
+        publication_year_match = re.search(r"\b(19|20)\d{2}\b", publication_date)
+        publication_year = int(publication_year_match.group(0)) if publication_year_match else 0
+        guidance_form_bonus = 8 if (tokens & _AGENCY_GUIDANCE_DOCUMENT_TERMS) else 0
+        discussion_form_penalty = 4 if (tokens & _AGENCY_GUIDANCE_DISCUSSION_TERMS) else 0
+        guidance_bonus = (
+            2 if prefer_guidance and any(token in tokens for token in {"guidance", "framework", "discussion"}) else 0
+        )
+        notice_bonus = 1 if document_type in {"notice", "rule"} else 0
+        recency_bonus = max((publication_year - 2010) * 2, 0) if prefer_recent else 0
+        cultural_overlap = len(tokens & _CULTURAL_RESOURCE_DOCUMENT_TERMS) if cultural_resource_boost else 0
+        cultural_title_overlap = len(title_tokens & _CULTURAL_RESOURCE_DOCUMENT_TERMS) if cultural_resource_boost else 0
+        cultural_bonus = (cultural_title_overlap * 6) + (cultural_overlap * 3)
+        family_match, family_boost_fraction = detect_document_family_match(document, requested_document_family)
+        family_bonus = int(round(family_boost_fraction * 24)) if family_match else 0
+        if family_match:
+            # Annotate the document so the source-record builder can surface
+            # documentFamilyMatch / documentFamilyBoost to callers.
+            document["_documentFamilyMatch"] = family_match
+            document["_documentFamilyBoost"] = round(family_boost_fraction, 3)
+        score = (
+            (title_overlap * 5)
+            + (overlap * 2)
+            + (priority_overlap * 2)
+            + (facet_overlap * 3)
+            + guidance_form_bonus
+            + guidance_bonus
+            + notice_bonus
+            + recency_bonus
+            + cultural_bonus
+            + family_bonus
+            - discussion_form_penalty
+        )
+        return score, publication_date
+
+    return sorted(documents, key=_score, reverse=True)
+
+
 def _paper_text(paper: dict[str, Any]) -> str:
     authors = ", ".join(author.get("name", "") for author in (paper.get("authors") or []) if isinstance(author, dict))
     return " ".join(
@@ -3954,6 +5469,16 @@ def _paper_text(paper: dict[str, Any]) -> str:
         ]
         if part
     )
+
+
+def _initial_retrieval_query_text(*, normalized_query: str, focus: str | None, intent: IntentLabel) -> str:
+    if intent in {"known_item", "author", "citation", "regulatory"}:
+        return normalized_query
+    normalized_focus = normalize_query(str(focus or ""))
+    if not normalized_focus:
+        return normalized_query
+    combined = normalize_query(f"{normalized_query} {normalized_focus}")
+    return combined if combined.lower() != normalized_query.lower() else normalized_query
 
 
 def _truncate_text(value: str, *, limit: int = 72) -> str:
@@ -4160,6 +5685,50 @@ def _known_item_title_similarity(query: str, title: str) -> float:
     return max(SequenceMatcher(None, normalized_query, normalized_title).ratio(), overlap)
 
 
+def _known_item_resolution_queries(query: str, parsed: Any) -> list[str]:
+    queries: list[str] = []
+    normalized_query = normalize_query(query)
+    if normalized_query:
+        queries.append(normalized_query)
+    title_candidates = list(getattr(parsed, "title_candidates", []) or [])
+    author_surnames = list(getattr(parsed, "author_surnames", []) or [])
+    venue_hints = list(getattr(parsed, "venue_hints", []) or [])
+    year = getattr(parsed, "year", None)
+
+    if title_candidates:
+        queries.extend(title_candidates[:3])
+        compact_title_words = [
+            token
+            for token in re.findall(r"[A-Za-z0-9'-]+", title_candidates[0])
+            if len(token) >= 3
+            and token.lower() not in COMMON_QUERY_WORDS
+            and token.lower() not in {"paper", "papers", "article", "articles", "study", "studies"}
+        ]
+        if len(compact_title_words) >= 2:
+            queries.append(" ".join(compact_title_words[:8]))
+        if author_surnames:
+            title_words = re.findall(r"[A-Za-z0-9'-]+", title_candidates[0])[:8]
+            if title_words:
+                queries.append(" ".join([*author_surnames[:2], *title_words]))
+        if venue_hints:
+            queries.append(f"{title_candidates[0]} {venue_hints[0]}")
+    if author_surnames and year is not None:
+        queries.append(" ".join([*author_surnames[:2], str(year)]))
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for candidate in queries:
+        normalized_candidate = normalize_query(candidate)
+        if not normalized_candidate:
+            continue
+        lowered = normalized_candidate.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        deduped.append(normalized_candidate)
+    return deduped
+
+
 def _normalization_metadata(raw_query: str, normalized_query: str) -> tuple[list[str], dict[str, Any]]:
     raw_text = str(raw_query or "")
     normalized_text = str(normalized_query or "")
@@ -4184,6 +5753,41 @@ def _anchor_strength_for_resolution(resolution_strategy: str) -> Literal["high",
     return "low"
 
 
+def _known_item_resolution_state_for_strategy(
+    *,
+    resolution_strategy: str,
+    known_item: dict[str, Any],
+    query: str,
+) -> Literal["resolved_exact", "resolved_probable", "needs_disambiguation"]:
+    """Derive a :data:`KnownItemResolutionState` for a resolved known-item payload.
+
+    Uses the shared citation-repair metadata when available (``citation_resolution``
+    round-trip) and falls back to deterministic title-similarity bands for the
+    secondary resolution strategies.
+    """
+    title = str(known_item.get("title") or "")
+    similarity = _known_item_title_similarity(query, title) if title else 0.0
+    if resolution_strategy == "citation_resolution":
+        metadata = build_match_metadata(
+            query=query,
+            paper=known_item,
+            candidate_count=1,
+            resolution_strategy=resolution_strategy,
+        )
+        state = metadata.get("knownItemResolutionState")
+        if isinstance(state, str) and state in {
+            "resolved_exact",
+            "resolved_probable",
+            "needs_disambiguation",
+        }:
+            return cast(Literal["resolved_exact", "resolved_probable", "needs_disambiguation"], state)
+    if similarity >= 0.9:
+        return "resolved_exact"
+    if similarity >= 0.72:
+        return "resolved_probable"
+    return "needs_disambiguation"
+
+
 def _known_item_recovery_warning(resolution_strategy: str) -> str:
     if resolution_strategy == "semantic_title_match":
         return "Known-item recovery used a semantic title match; verify the anchor before treating it as canonical."
@@ -4196,9 +5800,14 @@ def _known_item_recovery_warning(resolution_strategy: str) -> str:
 
 def _has_inspectable_sources(records: list[StructuredSourceRecord]) -> bool:
     return any(
-        bool(record.canonical_url or record.retrieved_url or record.full_text_observed or record.abstract_observed)
+        record.topical_relevance != "off_topic"
+        and bool(record.canonical_url or record.retrieved_url or record.full_text_url_found or record.abstract_observed)
         for record in records
     )
+
+
+def _has_on_topic_sources(records: list[StructuredSourceRecord]) -> bool:
+    return any(record.topical_relevance != "off_topic" for record in records)
 
 
 def _best_next_internal_action(*, intent: str, has_sources: bool, result_status: str) -> str:
@@ -4470,6 +6079,27 @@ def _graph_intent_text(
             if isinstance(candidate, str) and candidate.strip():
                 return candidate.strip()
     return ""
+
+
+def _contextualize_follow_up_question(
+    *,
+    question: str,
+    record: Any | None,
+    question_mode: str,
+) -> str:
+    normalized_question = str(question or "").strip()
+    if question_mode not in {"comparison", "selection"}:
+        return normalized_question
+    session_intent = _graph_intent_text(record, [])
+    if not session_intent:
+        return normalized_question
+    lowered_question = normalized_question.lower()
+    lowered_intent = session_intent.lower()
+    if lowered_intent and lowered_intent in lowered_question:
+        return normalized_question
+    if not normalized_question:
+        return session_intent
+    return f"{normalized_question} about {session_intent}"
 
 
 def _filter_graph_frontier(

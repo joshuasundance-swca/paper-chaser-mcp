@@ -52,6 +52,7 @@ param enableAgentic bool = false
   'google'
   'mistral'
   'huggingface'
+  'openrouter'
   'deterministic'
 ])
 param agenticProvider string = 'openai'
@@ -61,6 +62,15 @@ param azureOpenAiEndpoint string = ''
 
 @description('Azure OpenAI API version used when agenticProvider is azure-openai. Leave empty to use the application default.')
 param azureOpenAiApiVersion string = ''
+
+@description('OpenRouter base URL used when agenticProvider is openrouter.')
+param openRouterBaseUrl string = 'https://openrouter.ai/api/v1'
+
+@description('Optional OpenRouter HTTP-Referer header used for app attribution.')
+param openRouterHttpReferer string = ''
+
+@description('Optional OpenRouter title header used for app attribution.')
+param openRouterTitle string = ''
 
 @description('Optional NVIDIA NIM base URL used when agenticProvider is nvidia. Leave empty for the hosted NVIDIA API Catalog path.')
 param nvidiaNimBaseUrl string = ''
@@ -280,6 +290,9 @@ module containerApp './modules/containerApp.bicep' = if (deployFull) {
     agenticOpenAiTimeoutSeconds: agenticOpenAiTimeoutSeconds
     azureOpenAiApiVersion: azureOpenAiApiVersion
     azureOpenAiEndpoint: azureOpenAiEndpoint
+    openRouterBaseUrl: openRouterBaseUrl
+    openRouterHttpReferer: openRouterHttpReferer
+    openRouterTitle: openRouterTitle
     huggingFaceBaseUrl: huggingFaceBaseUrl
     nvidiaNimBaseUrl: nvidiaNimBaseUrl
     environmentName: environmentName
@@ -293,6 +306,7 @@ module containerApp './modules/containerApp.bicep' = if (deployFull) {
     keyVaultMistralApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/mistral-api-key'
     keyVaultNvidiaApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/nvidia-api-key'
     keyVaultOpenAiApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/openai-api-key'
+    keyVaultOpenRouterApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/openrouter-api-key'
     keyVaultOpenAlexApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/openalex-api-key'
     keyVaultOpenAlexMailtoSecretUri: '${keyVault.outputs.vaultUri}secrets/openalex-mailto'
     keyVaultScholarApiKeySecretUri: '${keyVault.outputs.vaultUri}secrets/scholarapi-api-key'

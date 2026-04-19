@@ -12,6 +12,7 @@ import uuid
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from ..renderers.resources import (
@@ -99,6 +100,15 @@ def paper_identity_keys(paper: dict[str, Any]) -> set[str]:
     return keys
 
 
+def _fallback_paper_identity_key(paper: dict[str, Any]) -> str:
+    """Return a stable fallback key when a paper lacks portable identifiers."""
+    title = re.sub(r"[^a-z0-9]+", " ", str(paper.get("title") or "").lower()).strip()
+    year = str(paper.get("year") or "").strip()
+    if title:
+        return f"title:{title}|year:{year}"
+    return ""
+
+
 def author_identity_keys(author: dict[str, Any]) -> set[str]:
     """Return the lookup keys that can identify an author across resources."""
     keys: set[str] = set()
@@ -149,6 +159,7 @@ class WorkspaceRegistry:
         *,
         ttl_seconds: int = 1800,
         enable_trace_log: bool = False,
+        eval_trace_path: str | None = None,
         index_backend: str = "memory",
         similarity_fn: Callable[[str, str], float] | None = None,
         async_batched_similarity_fn: Callable[[str, list[str]], Awaitable[list[float]]] | None = None,
@@ -163,6 +174,7 @@ class WorkspaceRegistry:
     ) -> None:
         self._ttl_seconds = ttl_seconds
         self._enable_trace_log = enable_trace_log
+        self._eval_trace_path = Path(eval_trace_path) if eval_trace_path else None
         self._index_backend = index_backend
         self._similarity_fn = similarity_fn
         self._async_batched_similarity_fn = async_batched_similarity_fn
@@ -367,6 +379,44 @@ class WorkspaceRegistry:
         if self._enable_trace_log:
             logger.info("agentic-trace %s", json.dumps(event, sort_keys=True))
 
+    def capture_eval_event(
+        self,
+        *,
+        event_type: str,
+        payload: dict[str, Any],
+        search_session_id: str | None = None,
+        run_id: str | None = None,
+        batch_id: str | None = None,
+        duration_ms: int | None = None,
+    ) -> dict[str, Any]:
+        """Persist a compact eval-candidate event for later review or promotion."""
+        event = {
+            "eventId": f"evt_{uuid.uuid4().hex[:12]}",
+            "timestamp": int(_now() * 1000),
+            "eventType": event_type,
+            "searchSessionId": search_session_id,
+            "runId": run_id,
+            "batchId": batch_id,
+            "durationMs": duration_ms,
+            "payload": payload,
+        }
+        if search_session_id:
+            try:
+                self.record_trace(
+                    search_session_id,
+                    step=f"eval:{event_type}",
+                    payload=payload,
+                )
+            except SearchSessionError:
+                pass
+        if self._enable_trace_log:
+            logger.info("eval-candidate %s", json.dumps(event, sort_keys=True))
+        if self._eval_trace_path is not None:
+            self._eval_trace_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._eval_trace_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event, sort_keys=True) + "\n")
+        return event
+
     def find_paper(self, paper_id: str) -> dict[str, Any] | None:
         """Find a paper payload by any known identifier across active sessions."""
         self._cleanup()
@@ -478,6 +528,7 @@ class WorkspaceRegistry:
     def _attach_source_aliases(payload: dict[str, Any]) -> dict[str, Any]:
         normalized_payload = dict(payload)
         alias_map: dict[str, str] = {}
+        seen_aliases: set[str] = set()
         alias_index = 1
         for key in ("evidence", "leads", "sources", "structuredSources", "candidateLeads", "unverifiedLeads"):
             entries = normalized_payload.get(key)
@@ -494,12 +545,24 @@ class WorkspaceRegistry:
                     continue
                 alias = alias_map.get(source_id)
                 if alias is None:
-                    alias = f"src_{alias_index}"
+                    existing_alias = str(entry.get("sourceAlias") or "").strip()
+                    # Only honor a pre-set sourceAlias when it does not
+                    # collide with another source_id that already claimed it
+                    # in this bucket. Colliding aliases are reissued as
+                    # fresh src_N identifiers so that sessionSourceAliases
+                    # remains a reversible 1:1 map.
+                    if existing_alias and existing_alias not in seen_aliases:
+                        alias = existing_alias
+                    else:
+                        while True:
+                            alias = f"src_{alias_index}"
+                            alias_index += 1
+                            if alias not in seen_aliases:
+                                break
                     alias_map[source_id] = alias
-                    alias_index += 1
+                    seen_aliases.add(alias)
                 updated_entry = dict(entry)
-                if not updated_entry.get("sourceAlias"):
-                    updated_entry["sourceAlias"] = alias
+                updated_entry["sourceAlias"] = alias
                 updated_entries.append(updated_entry)
             normalized_payload[key] = updated_entries
         if alias_map:
@@ -791,22 +854,121 @@ class WorkspaceRegistry:
 
     def _extract_papers(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         papers: list[dict[str, Any]] = []
+        seen_keys: set[str] = set()
+
+        def add_paper(candidate: dict[str, Any]) -> None:
+            identity_keys = paper_identity_keys(candidate)
+            fallback_key = _fallback_paper_identity_key(candidate)
+            dedupe_keys = identity_keys or ({fallback_key} if fallback_key else set())
+            if not dedupe_keys or dedupe_keys & seen_keys:
+                return
+            seen_keys.update(dedupe_keys)
+            papers.append(candidate)
+
+        def year_from_source(candidate: dict[str, Any]) -> int | None:
+            for value in (
+                candidate.get("year"),
+                (candidate.get("citation") or {}).get("year") if isinstance(candidate.get("citation"), dict) else None,
+                candidate.get("date"),
+            ):
+                text = str(value or "").strip()
+                if not text:
+                    continue
+                match = re.search(r"\b(19|20)\d{2}\b", text)
+                if match:
+                    try:
+                        return int(match.group(0))
+                    except ValueError:
+                        continue
+            return None
+
+        def authors_from_source(candidate: dict[str, Any]) -> list[dict[str, Any]]:
+            citation = candidate.get("citation")
+            if not isinstance(citation, dict):
+                return []
+            authors = citation.get("authors")
+            if not isinstance(authors, list):
+                return []
+            normalized: list[dict[str, Any]] = []
+            for author in authors:
+                if isinstance(author, dict):
+                    name = str(author.get("name") or "").strip()
+                    if name:
+                        normalized.append({"name": name})
+                elif isinstance(author, str):
+                    name = author.strip()
+                    if name:
+                        normalized.append({"name": name})
+            return normalized
+
+        def paper_from_source(candidate: dict[str, Any]) -> dict[str, Any] | None:
+            source_id = str(candidate.get("sourceId") or candidate.get("evidenceId") or "").strip()
+            title = str(candidate.get("title") or candidate.get("citationText") or "").strip()
+            if not source_id and not title:
+                return None
+            citation_raw = candidate.get("citation")
+            citation: dict[str, Any] = citation_raw if isinstance(citation_raw, dict) else {}
+            summary = str(
+                candidate.get("summary")
+                or candidate.get("note")
+                or candidate.get("whyIncluded")
+                or candidate.get("whyRelevant")
+                or candidate.get("whyNotVerified")
+                or ""
+            ).strip()
+            paper: dict[str, Any] = {
+                "paperId": source_id or title,
+                "sourceId": source_id or title,
+                "canonicalId": source_id or title,
+                "title": title or source_id,
+                "abstract": str(candidate.get("excerpt") or candidate.get("abstract") or "").strip() or None,
+                "summary": summary or None,
+                "venue": str(
+                    citation.get("journalOrPublisher")
+                    or candidate.get("venue")
+                    or candidate.get("provider")
+                    or candidate.get("source")
+                    or ""
+                ).strip()
+                or None,
+                "year": year_from_source(candidate),
+                "authors": authors_from_source(candidate),
+                "source": str(candidate.get("provider") or candidate.get("source") or "").strip() or None,
+                "canonicalUrl": str(candidate.get("canonicalUrl") or "").strip() or None,
+                "retrievedUrl": str(candidate.get("retrievedUrl") or "").strip() or None,
+                "sourceType": str(candidate.get("sourceType") or "").strip() or None,
+                "verificationStatus": str(candidate.get("verificationStatus") or "").strip() or None,
+                "accessStatus": str(candidate.get("accessStatus") or "").strip() or None,
+                "topicalRelevance": str(candidate.get("topicalRelevance") or "").strip() or None,
+                "confidence": str(candidate.get("confidence") or "").strip() or None,
+            }
+            return {key: value for key, value in paper.items() if value not in (None, "", [], {})}
+
         for candidate in payload.get("data") or []:
             if isinstance(candidate, dict) and ("paperId" in candidate or "title" in candidate):
-                papers.append(candidate)
+                add_paper(candidate)
         for candidate in payload.get("results") or []:
             if isinstance(candidate, dict) and isinstance(candidate.get("paper"), dict):
-                papers.append(candidate["paper"])
+                add_paper(candidate["paper"])
         for candidate in payload.get("representativePapers") or []:
             if isinstance(candidate, dict) and ("paperId" in candidate or "title" in candidate):
-                papers.append(candidate)
+                add_paper(candidate)
         citation_candidates = [
             payload.get("bestMatch"),
             *(payload.get("alternatives") or []),
         ]
         for candidate in citation_candidates:
             if isinstance(candidate, dict) and isinstance(candidate.get("paper"), dict):
-                papers.append(candidate["paper"])
+                add_paper(candidate["paper"])
+        for key in ("evidence", "sources", "structuredSources", "leads", "candidateLeads", "unverifiedLeads"):
+            for candidate in payload.get(key) or []:
+                if not isinstance(candidate, dict):
+                    continue
+                if str(candidate.get("topicalRelevance") or "").strip().lower() == "off_topic":
+                    continue
+                paper = paper_from_source(candidate)
+                if paper is not None:
+                    add_paper(paper)
         return papers
 
     def _extract_authors(self, payload: dict[str, Any]) -> list[dict[str, Any]]:

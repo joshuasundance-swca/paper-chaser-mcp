@@ -115,18 +115,23 @@ async def test_provider_budget_state_and_registry_snapshot() -> None:
     )
 
     snapshot = registry.snapshot(
-        enabled={"huggingface": False, "openalex": True},
-        provider_order=["huggingface", "openalex"],
+        enabled={"huggingface": False, "openrouter": False, "openalex": True},
+        provider_order=["huggingface", "openrouter", "openalex"],
     )
 
     huggingface_snapshot = snapshot["providers"][0]
-    openalex_snapshot = snapshot["providers"][1]
+    openrouter_snapshot = snapshot["providers"][1]
+    openalex_snapshot = snapshot["providers"][2]
     serpapi_snapshot = next(item for item in snapshot["providers"] if item["provider"] == "serpapi_google_scholar")
 
     assert snapshot["providerOrder"][0] == "huggingface"
+    assert snapshot["providerOrder"][1] == "openrouter"
     assert huggingface_snapshot["provider"] == "huggingface"
     assert huggingface_snapshot["enabled"] is False
     assert huggingface_snapshot["paywalled"] is True
+    assert openrouter_snapshot["provider"] == "openrouter"
+    assert openrouter_snapshot["enabled"] is False
+    assert openrouter_snapshot["paywalled"] is True
     assert openalex_snapshot["enabled"] is True
     assert openalex_snapshot["paywalled"] is False
     assert openalex_snapshot["consecutiveFailures"] == 1
@@ -148,12 +153,14 @@ def test_provider_runtime_helper_functions(
     assert policy_for_provider("anthropic").paywalled is True
     assert policy_for_provider("google").paywalled is True
     assert policy_for_provider("huggingface").paywalled is True
+    assert policy_for_provider("openrouter").paywalled is True
     assert policy_for_provider("unknown").concurrency_limit == 2
     assert provider_is_paywalled("scholarapi") is True
     assert provider_is_paywalled("azure-openai") is True
     assert provider_is_paywalled("anthropic") is True
     assert provider_is_paywalled("google") is True
     assert provider_is_paywalled("huggingface") is True
+    assert provider_is_paywalled("openrouter") is True
     assert provider_is_paywalled("openalex") is False
     assert _default_fallback_reason("auth_error") == "Provider authentication failed."
     assert _default_fallback_reason("success") is None

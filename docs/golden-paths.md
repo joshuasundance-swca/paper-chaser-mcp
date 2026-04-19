@@ -33,6 +33,9 @@ gh aw compile test-paper-chaser --dir .github/workflows
 
 1. Start with guided tools.
 2. Let guided `research` use its server-owned quality-first policy; low-context clients should not need to choose `fast`, `balanced`, or `deep` for normal use.
+3. If guided `research` stops early on an underspecified citation-like fragment,
+   treat that `needs_disambiguation` + `clarification` response as a successful
+   guardrail, not a retrieval miss.
 3. Reuse `searchSessionId`; do not restart discovery unless needed.
 4. Treat `abstained`, `insufficient_evidence`, and `needs_disambiguation` as
    successful safety behavior.
@@ -46,9 +49,17 @@ gh aw compile test-paper-chaser --dir .github/workflows
 1. Start with `research` for discovery, literature review, known-item recovery,
    citation repair, and regulatory history asks.
 2. Inspect `resultStatus`, `answerability`, `evidence`, `leads`,
-  `routingSummary`, `coverageSummary`, `evidenceGaps`, `failureSummary`,
-  `executionProvenance`, and `nextActions`.
-3. Save `searchSessionId` for follow-up steps.
+   `routingSummary`, `coverageSummary`, `evidenceGaps`, `failureSummary`,
+   `executionProvenance`, and `nextActions`.
+3. If `resultStatus=needs_disambiguation` and
+   `clarification.reason=underspecified_reference_fragment`, tighten the
+   anchor instead of forcing retrieval. Prefer an exact title, author surname,
+   agency, venue, or year, or pivot into `resolve_reference`.
+3. When `routingSummary.querySpecificity=low` or
+   `routingSummary.ambiguityLevel=medium|high`, treat
+   `routingSummary.retrievalHypotheses` as the server's bounded interpretation
+   of the broad ask rather than as final evidence.
+4. Save `searchSessionId` for follow-up steps.
 
 **Example**
 
@@ -63,44 +74,134 @@ research(query="retrieval-augmented generation for coding agents", limit=5)
 - `resultStatus=succeeded` or `partial` with clear evidence semantics.
 - Evidence and routing fields are usable without reading raw provider payloads.
 - `nextActions` points to the next safe step.
+- `coverageSummary.providersSucceeded` reflects only providers that returned
+  results (zero-result providers are excluded).
+- `failureSummary.fallbackAttempted` is `true` whenever a fallback mode was
+  applied, and `outcome` is `partial_success` (not `no_failure`) when the
+  response abstained with zero sources.
+
+#### How to read the new trust + grounding signals
+
+Guided `research` and `follow_up_research` responses now expose additive trust
+and grounding cues. Treat them as hints layered on top of `answerability` and
+`resultStatus`, not as replacements.
+
+- `confidenceSignals.evidenceQualityProfile` buckets the supporting pool as
+  `strong` (multiple directly responsive sources), `mixed` (some responsive,
+  some weak), `weak` (mostly filtered or adjacent), or `authoritative_but_weak`
+  (primary-source authority without topical fit). Use `strong`/`mixed` to
+  justify confident synthesis; treat `weak` and `authoritative_but_weak` as
+  reasons to qualify claims or route to `inspect_source`.
+- `confidenceSignals.synthesisMode` describes how the answer was assembled
+  (for example `grounded_synthesis`, `evidence_triage`, `session_introspection`,
+  `deterministic_salvage`). Only `grounded_synthesis` should be treated as a
+  normal answer; the others require caution.
+- `confidenceSignals.evidenceProfileDetail` gives a short rationale behind the
+  profile bucket, and `confidenceSignals.synthesisPath` records which synthesis
+  branch ran. `confidenceSignals.trustRevisionNarrative` explains any trust
+  re-grade that happened after initial ranking (for example when a highly
+  ranked record was demoted because the subject chain did not match).
+- `trustSummary.authoritativeButWeak` collects primary-source records that the
+  server judged authoritative (agency rule, CFR text, species listing, etc.)
+  but that did not topically respond to the query. Cite them only after
+  confirming responsiveness with `inspect_source`; do not promote them into
+  grounded evidence.
+- `searchStrategy.regulatoryIntent` (when present) is one of
+  `current_cfr_text`, `rulemaking_history`, `species_dossier`,
+  `guidance_lookup`, or `hybrid_regulatory_plus_literature`. Use it to decide
+  whether to drive with CFR text, Federal Register history, species profiles,
+  agency guidance, or a blended regulatory-plus-literature pass.
+- `searchStrategy.subjectCard` is the subject-grounding card used for species
+  and regulatory workflows. It is populated LLM-first from planner outputs
+  (`entity_card`, `candidate_concepts`, `regulatory_intent`) with a
+  deterministic fallback when no LLM bundle is available. Fields:
+  `commonName`, `scientificName`, `agency`, `requestedDocumentFamily`,
+  `subjectTerms` (up to six candidate concepts), `confidence`
+  (`high` / `medium` / `low` / `deterministic_fallback`), and `source`
+  (`planner_llm` / `deterministic_fallback` / `hybrid`). Use it to confirm the
+  server grounded the right entity before trusting species dossiers or
+  agency-specific summaries. Alias lists, taxonomy trees, and pre-resolved
+  primary-source anchors are *not* on the card today — see the "Known gaps"
+  subsection of `docs/guided-smart-robustness.md`.
+- `searchStrategy.subjectChainGaps` lists missing links in the subject chain
+  (for example `missing_species_specific_evidence`,
+  `missing_rulemaking_history`, `missing_guidance_anchor`). Treat each gap as
+  an explicit evidence boundary and reflect it in any response to the user.
+- `searchStrategy.intentFamily` records the detected intent family (for
+  example `literature_review`, `known_item`, `heritage_cultural_resources`,
+  `regulatory_timeline`). Use it to validate that the server interpreted the
+  ask the same way you did.
 
 ### 2. Grounded follow-up (`follow_up_research`)
 
 1. Use `follow_up_research` with `searchSessionId` from `research`.
-2. Gate on `answerStatus` before trusting the answer body.
+2. Gate on `answerStatus` before trusting the answer body. `answered`/grounded
+   now requires an on-topic, verified source with qa-readable text and a
+   non-deterministic synthesis provider; fallback cases return
+   `insufficient_evidence` with `answer=null`.
 3. If not answered, follow `nextActions` and inspect source-level evidence.
 4. If `searchSessionId` is omitted, expect inference only when exactly one compatible saved session exists.
+5. Responses are **compact by default** — `sources` are collapsed to
+   `selectedEvidenceIds` / `selectedLeadIds`, and legacy
+   `verifiedFindings`/`unverifiedLeads` are omitted. Pass
+   `responseMode="standard"` for full source records, `responseMode="debug"`
+   for full diagnostics, or `includeLegacyFields=true` to restore legacy views.
+6. Comparative / selection asks ("where should I start?", "most recent?",
+   "most authoritative?") expose a `topRecommendation` payload with
+   `sourceId`, `recommendationReason`, and inferred `comparativeAxis`.
+7. A uniquely anchored recommendation ask can safely return `answerStatus=answered`
+   with a narrow recommendation-first answer plus `topRecommendation` even when
+   the broader answerability remains `limited`.
 
 **Example**
 
 ```text
 follow_up_research(searchSessionId="...", question="What evaluation tradeoffs show up here?")
-→ if answerStatus=answered: use answer + evidence
+→ if answerStatus=answered: use answer + selectedEvidenceIds (resolve to evidence records via the saved session)
 → if answerStatus=abstained|insufficient_evidence: inspect_source + refine research query
+→ if you need full source records inline: re-run with responseMode="standard"
+→ for selection asks: read topRecommendation.sourceId + topRecommendation.recommendationReason
 ```
 
 **Success signals**
 
 - No answer-shaped filler when evidence is weak.
 - Explicit unsupported asks and evidence gaps on abstention paths.
+- Mixed saved sessions can still answer relevance-triage questions by classifying
+  saved sources and leads into on-topic evidence, weaker context, and off-topic items.
+- `answerStatus` is now validated against both deterministic refusal patterns
+  and optional LLM-based validation when a provider bundle is available.
+- `canAnswerFollowUp` reflects capability (`has_sources AND has_session`), not
+  just permission.
 
 ### 3. Known-item and citation cleanup (`resolve_reference`)
 
 1. Use `resolve_reference` when the user already has a citation, DOI, URL,
    arXiv id, title fragment, or regulatory reference.
-2. Treat `status` as the decision gate:
-   `resolved`, `multiple_candidates`, `no_match`, `regulatory_primary_source`.
-3. Use `bestMatch`/`alternatives` and `nextActions` to decide whether to pivot
+2. Treat `status` as the decision gate. The full set is:
+   `resolved` (one confident match), `multiple_candidates` (several plausible
+   matches — pick from `bestMatch`/`alternatives`), `needs_disambiguation`
+   (best match's key metadata — author/year/venue — conflicts and is unsafe to
+   cite directly), `no_match`, and `regulatory_primary_source`.
+3. Treat `bestMatch` as citation-ready only when `status=resolved`. For
+   `multiple_candidates` and `needs_disambiguation`, use it as a lead that
+   still needs user confirmation or a stronger clue.
+4. Use `bestMatch`/`alternatives` and `nextActions` to decide whether to pivot
    back into `research` with a stronger anchor.
-4. Exact DOI, arXiv, and supported paper URLs should resolve as direct anchors before fuzzy recovery.
+5. Exact DOI, arXiv, and supported paper URLs should resolve as direct anchors before fuzzy recovery.
 
 ### 4. Source-level audit (`inspect_source`)
 
 1. Use `inspect_source` with `searchSessionId` and `sourceId` from guided
    outputs.
 2. Review provenance and trust state before citing.
-3. Follow direct-read recommendations for primary sources.
-4. If `searchSessionId` is omitted and more than one compatible session exists, provide it explicitly instead of expecting newest-session rebinding.
+3. Use `whyClassifiedAsWeakMatch` plus `confidenceSignals.sourceScopeLabel` /
+  `confidenceSignals.sourceScopeReason` to distinguish authoritative but scope-limited records from directly responsive ones.
+4. Follow direct-read recommendations for primary sources. When
+  `directReadRecommendationDetails` is present, each entry carries
+  `{trustLevel, whyRecommended, cautions}`; prefer higher `trustLevel` entries
+  first and honor the `cautions` when summarizing the source.
+5. If `searchSessionId` is omitted and more than one compatible session exists, provide it explicitly instead of expecting newest-session rebinding.
 
 **Success signals**
 
@@ -111,9 +212,35 @@ follow_up_research(searchSessionId="...", question="What evaluation tradeoffs sh
 
 1. Use `get_runtime_status` when behavior differs across environments.
 2. Check `runtimeSummary.effectiveProfile`, transport, smart provider status,
-   provider visibility, and warnings.
+   provider visibility, provider state sets, and warnings.
 3. Use this before troubleshooting with expert diagnostics.
-4. Interpret `configuredSmartProvider` as the configured bundle and `activeSmartProvider` as the latest effective execution path, including deterministic fallback.
+4. Interpret `configuredSmartProvider` as the configured bundle and `activeSmartProvider` as the latest effective execution path, including deterministic fallback after a confirmed fallback. Before the first smart call settles, expect an explicit provisional warning instead of a fallback claim.
+5. Prefer the consolidated structured health fields over string-parsing:
+   - `runtimeSummary.healthStatus` is one of
+     `nominal | degraded | fallback_active | critical`.
+     - `nominal`: configured smart provider healthy and no optional providers disabled.
+      - `degraded`: smart provider is still provisional, or one or more optional providers are disabled or suppressed.
+     - `fallback_active`: configured smart provider is unavailable and deterministic fallback is in use.
+     - `critical`: the smart layer failed to initialize and no usable smart fallback is present.
+    - `runtimeSummary.fallbackActive` is a boolean mirror of the fallback state; when true,
+      `runtimeSummary.fallbackReason` carries a human-readable explanation (omitted otherwise).
+    - Provider-set semantics are explicit:
+      - `configuredProviderSet`: providers whose rows report `enabled=true`.
+      - `activeProviderSet`: configured providers whose rows report `runtimeAvailability=active`.
+      - `disabledProviderSet`: providers whose rows report `enabled=false`; this is the configured-disabled bucket only.
+      - `suppressedProviderSet`: configured providers temporarily held out at runtime (`runtimeAvailability=suppressed`).
+      - `degradedProviderSet`: configured, non-suppressed providers with recent runtime failures (`runtimeHealth=degraded`).
+      - `quotaLimitedProviderSet`: configured providers with quota exhaustion or zero-capacity metadata (`runtimeHealth=quota_limited`), whether or not suppression is active.
+    - `runtimeSummary.structuredWarnings` is a list of
+      `{code, severity, message, subject}` entries. `severity` is one of
+      `info | warning | critical`. Known `code` values include
+       `smart_provider_fallback`, `smart_provider_unsettled`, `provider_disabled`, `provider_suppressed`,
+      `provider_quota_limited`, `provider_degraded`, `chat_only_smart_provider`, `tools_hidden`, `stdio_transport`, `ecos_tls_disabled`,
+      `guided_hides_expert`, and `narrow_provider_order`.
+   - The legacy `runtimeSummary.warnings: list[str]` (also mirrored as the
+     top-level `warnings` field on the tool response) is preserved for
+     backward compatibility and stays byte-identical to the strings emitted in
+     `structuredWarnings[*].message`.
 
 ## Regulatory-specific guided behavior
 
@@ -125,6 +252,18 @@ For species/regulatory requests in `research`:
    `status=needs_disambiguation` or `abstained`, not fabricated chronology.
 4. Unrelated Federal Register hits should not appear as verified findings or
    timeline events.
+5. For broad agency-guidance prompts, expect the top guided summary to prefer
+  the most relevant query-anchored guidance or policy documents and to retain
+  weaker authority records as leads rather than grounded evidence.
+6. For hybrid regulatory-plus-literature asks, expect guided `research` to run
+   a blended pass when routing stays low-specificity or high-ambiguity. The
+   summary and `routingSummary.passModes` should make that explicit.
+7. Papers without DOI or other identifiers now default to `unverified`
+   verification status (previously `verified_metadata`). This tightens
+   integrity for regulatory workflows where identifier coverage is sparse.
+8. Regulatory source-type recognition is expanded (13 types, up from 4),
+   covering rules, proposed rules, notices, executive orders, presidential
+   documents, and guidance documents.
 
 ## Expert fallback paths (intentional)
 
@@ -162,6 +301,27 @@ search_species_ecos(...) / list_species_documents_ecos(...)
 → get_cfr_text(...)
 ```
 
+### 4. Repo-local eval bootstrap and workflow handoff
+
+Use this when the task is evaluating planner or workflow behavior in this repo
+rather than answering an end-user research question.
+
+1. Start with `scripts/generate_eval_topics.py` for planner-led topic
+  generation, taxonomy assignment, ranking, pruning, balancing, and scenario
+  emission.
+2. Use `scripts/run_eval_autopilot.py` when you want profile-driven generation,
+  immutable run bundles, holdout reporting, and guarded workflow handoff.
+3. Use `scripts/run_eval_workflow.py` when you intentionally want expert batch
+  capture, review or promotion, dataset splitting, and live provider-matrix
+  evaluation.
+4. For narrow one-seed experiments, prefer the checked-in exploratory profiles
+  over ad hoc threshold edits. `single-seed-exploratory-review` keeps review
+  gating, `single-seed-exploratory-safe` relaxes safe-policy thresholds, and
+  `single-seed-diagnostic-force` is the explicit downstream-debugging path.
+5. Prefer single-seed diversification when you need broader one-seed coverage;
+  it asks the planner for review, regulatory, and methods-oriented variants
+  instead of relying only on looser workflow gating.
+
 ## Abstention and clarification policy
 
 - **Never hide abstention**: do not convert abstained outputs into prose
@@ -190,3 +350,12 @@ search_species_ecos(...) / list_species_documents_ecos(...)
 - Expand benchmark corpus coverage for guided abstention and clarification
   quality.
 - Continue reducing expert-only round trips for common guided workflows.
+- Keep the eval-bootstrap docs, server guidance, and sample autopilot profiles
+  synchronized whenever guarded workflow thresholds or single-seed
+  diversification behavior changes.
+- Monitor citation-repair behavior after the tightened year-mismatch penalty
+  and reduced upstream-confidence bonus to catch regressions in near-miss
+  resolution scenarios.
+- Continue with cross-domain remediation plan workstreams (reranking,
+  relevance-classification resilience, cultural-resource routing) now that the
+  schema and runtime foundations from the stress-test remediation are in place.
