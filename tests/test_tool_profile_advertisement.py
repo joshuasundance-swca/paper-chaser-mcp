@@ -90,6 +90,111 @@ ALL_PROVIDER_ENABLE_FLAGS: dict[str, bool] = {
 NO_PROVIDER_ENABLE_FLAGS: dict[str, bool] = {key: False for key in ALL_PROVIDER_ENABLE_FLAGS}
 
 
+# Phase 1 exact-inventory snapshots.
+#
+# The subset assertions below catch deletions from the expert surface. These
+# two frozensets additionally pin the *exact* set so accidental additions or
+# silent renames during Phases 2-12 also fail fast. If you intentionally add
+# or remove a tool from the expert surface, update these constants in the
+# same commit.
+#
+# * ``EXPECTED_EXPERT_TOOL_NAMES`` — the full public contract advertised when
+#   every provider enable-flag is ``True`` and ``hide_disabled_tools=False``.
+# * ``EXPECTED_EXPERT_VISIBLE_WITH_ALL_DISABLED`` — what remains visible when
+#   ``hide_disabled_tools=True`` and every provider enable-flag is ``False``.
+#   These are the tools whose visibility does *not* depend on a provider flag
+#   (e.g. OpenAlex-backed guided helpers that the filter currently does not
+#   gate, plus always-on guided entrypoints).
+EXPECTED_EXPERT_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "ask_result_set",
+        "batch_get_authors",
+        "batch_get_papers",
+        "enrich_paper",
+        "expand_research_graph",
+        "follow_up_research",
+        "get_author_articles_serpapi",
+        "get_author_info",
+        "get_author_info_openalex",
+        "get_author_papers",
+        "get_author_papers_openalex",
+        "get_author_profile_serpapi",
+        "get_cfr_text",
+        "get_document_text_ecos",
+        "get_federal_register_document",
+        "get_paper_authors",
+        "get_paper_citation_formats",
+        "get_paper_citations",
+        "get_paper_citations_openalex",
+        "get_paper_details",
+        "get_paper_details_openalex",
+        "get_paper_metadata_crossref",
+        "get_paper_open_access_unpaywall",
+        "get_paper_pdf_scholarapi",
+        "get_paper_recommendations",
+        "get_paper_recommendations_post",
+        "get_paper_references",
+        "get_paper_references_openalex",
+        "get_paper_text_scholarapi",
+        "get_paper_texts_scholarapi",
+        "get_provider_diagnostics",
+        "get_runtime_status",
+        "get_serpapi_account_status",
+        "get_species_profile_ecos",
+        "inspect_source",
+        "list_papers_scholarapi",
+        "list_species_documents_ecos",
+        "map_research_landscape",
+        "paper_autocomplete",
+        "paper_autocomplete_openalex",
+        "research",
+        "resolve_citation",
+        "resolve_reference",
+        "search_authors",
+        "search_authors_openalex",
+        "search_entities_openalex",
+        "search_federal_register",
+        "search_papers",
+        "search_papers_arxiv",
+        "search_papers_bulk",
+        "search_papers_core",
+        "search_papers_match",
+        "search_papers_openalex",
+        "search_papers_openalex_bulk",
+        "search_papers_openalex_by_entity",
+        "search_papers_scholarapi",
+        "search_papers_semantic_scholar",
+        "search_papers_serpapi",
+        "search_papers_serpapi_cited_by",
+        "search_papers_serpapi_versions",
+        "search_papers_smart",
+        "search_snippets",
+        "search_species_ecos",
+    }
+)
+
+EXPECTED_EXPERT_VISIBLE_WITH_ALL_DISABLED: frozenset[str] = frozenset(
+    {
+        "enrich_paper",
+        "follow_up_research",
+        "get_author_info_openalex",
+        "get_author_papers_openalex",
+        "get_paper_citations_openalex",
+        "get_paper_details_openalex",
+        "get_paper_pdf_scholarapi",
+        "get_paper_references_openalex",
+        "get_paper_text_scholarapi",
+        "get_paper_texts_scholarapi",
+        "get_provider_diagnostics",
+        "get_runtime_status",
+        "inspect_source",
+        "research",
+        "resolve_reference",
+        "search_authors_openalex",
+    }
+)
+
+
 def _settings_from_env_vars(
     monkeypatch: pytest.MonkeyPatch,
     env: dict[str, str],
@@ -168,6 +273,55 @@ def test_expert_profile_superset_includes_guided_and_expert_surface() -> None:
     assert EXPERT_REGULATORY_TOOLS <= names
     # Expert profile is strictly larger than guided.
     assert names > GUIDED_TOOLS
+
+
+def test_expert_profile_exact_inventory_all_enabled() -> None:
+    """Pin the exact expert surface when every provider flag is enabled.
+
+    This catches silent additions or renames as well as deletions. Update
+    :data:`EXPECTED_EXPERT_TOOL_NAMES` in the same commit as any intentional
+    change to the expert tool inventory.
+    """
+    names = {
+        tool.name
+        for tool in get_tool_definitions(
+            tool_profile="expert",
+            hide_disabled_tools=False,
+            enabled_flags=ALL_PROVIDER_ENABLE_FLAGS,
+        )
+    }
+    unexpected = names - EXPECTED_EXPERT_TOOL_NAMES
+    missing = EXPECTED_EXPERT_TOOL_NAMES - names
+    assert names == EXPECTED_EXPERT_TOOL_NAMES, (
+        "Expert tool inventory drifted. "
+        f"unexpected={sorted(unexpected)} missing={sorted(missing)}. "
+        "Update EXPECTED_EXPERT_TOOL_NAMES if this is intentional."
+    )
+
+
+def test_expert_profile_exact_inventory_all_disabled_hidden() -> None:
+    """Pin the exact expert surface when ``hide_disabled_tools`` hides everything gated.
+
+    Expresses the always-visible expert core: tools whose visibility does not
+    depend on any provider enable-flag. If this set changes, the provider
+    gating in :mod:`paper_chaser_mcp.tool_specs` changed — update
+    :data:`EXPECTED_EXPERT_VISIBLE_WITH_ALL_DISABLED` in the same commit.
+    """
+    names = {
+        tool.name
+        for tool in get_tool_definitions(
+            tool_profile="expert",
+            hide_disabled_tools=True,
+            enabled_flags=NO_PROVIDER_ENABLE_FLAGS,
+        )
+    }
+    unexpected = names - EXPECTED_EXPERT_VISIBLE_WITH_ALL_DISABLED
+    missing = EXPECTED_EXPERT_VISIBLE_WITH_ALL_DISABLED - names
+    assert names == EXPECTED_EXPERT_VISIBLE_WITH_ALL_DISABLED, (
+        "Always-visible expert tool set drifted when all provider flags are off. "
+        f"unexpected={sorted(unexpected)} missing={sorted(missing)}. "
+        "Update EXPECTED_EXPERT_VISIBLE_WITH_ALL_DISABLED if this is intentional."
+    )
 
 
 def test_hide_disabled_tools_masks_provider_gated_expert_tools() -> None:
