@@ -112,6 +112,7 @@ KNOWN_TEST_SEAMS: frozenset[tuple[str, str]] = frozenset(
         ("paper_chaser_mcp.search", "_enrich_ss_paper"),
         ("paper_chaser_mcp.search", "_metadata"),
         ("paper_chaser_mcp.search", "_result_quality"),
+        ("paper_chaser_mcp.server", "_execute_tool"),
     }
 )
 
