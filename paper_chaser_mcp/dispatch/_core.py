@@ -7,29 +7,29 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from typing import Any, Callable, Literal, cast
 
-from .agentic.planner import (
+from ..agentic.planner import (
     detect_literature_intent,
     detect_regulatory_intent,
     looks_like_exact_title,
     query_facets,
     query_terms,
 )
-from .agentic.provider_helpers import generate_evidence_gaps_without_llm
-from .citation_repair import looks_like_citation_query, looks_like_paper_identifier, parse_citation, resolve_citation
-from .clients.scholarapi import (
+from ..agentic.provider_helpers import generate_evidence_gaps_without_llm
+from ..citation_repair import looks_like_citation_query, looks_like_paper_identifier, parse_citation, resolve_citation
+from ..clients.scholarapi import (
     ScholarApiError,
     ScholarApiKeyMissingError,
     ScholarApiQuotaError,
     ScholarApiUpstreamError,
 )
-from .clients.serpapi import SerpApiKeyMissingError
-from .compat import augment_tool_result, build_clarification
-from .enrichment import (
+from ..clients.serpapi import SerpApiKeyMissingError
+from ..compat import augment_tool_result, build_clarification
+from ..enrichment import (
     PaperEnrichmentService,
     attach_enrichments_to_paper_payload,
     hydrate_paper_for_enrichment,
 )
-from .guided_semantic import (
+from ..guided_semantic import (
     build_evidence_records,
     build_follow_up_decision,
     build_routing_decision,
@@ -37,9 +37,9 @@ from .guided_semantic import (
     explicit_source_reference,
     strip_null_fields,
 )
-from .identifiers import resolve_doi_from_paper_payload
-from .models import TOOL_INPUT_MODELS, CitationFormatsResponse, RuntimeSummary, dump_jsonable
-from .models.common import (
+from ..identifiers import resolve_doi_from_paper_payload
+from ..models import TOOL_INPUT_MODELS, CitationFormatsResponse, RuntimeSummary, dump_jsonable
+from ..models.common import (
     AbstentionDetails,
     CitationFormat,
     ConfidenceSignals,
@@ -54,7 +54,7 @@ from .models.common import (
     SessionResolution,
     SourceResolution,
 )
-from .models.tools import (
+from ..models.tools import (
     AskResultSetArgs,
     BasicSearchPapersArgs,
     EcosSpeciesLookupArgs,
@@ -79,9 +79,9 @@ from .models.tools import (
     SearchSpeciesEcosArgs,
     SmartSearchPapersArgs,
 )
-from .provider_runtime import ProviderOutcomeEnvelope, ProviderStatusBucket, policy_for_provider
-from .search import search_papers_with_fallback
-from .utils.cursor import (
+from ..provider_runtime import ProviderOutcomeEnvelope, ProviderStatusBucket, policy_for_provider
+from ..search import search_papers_with_fallback
+from ..utils.cursor import (
     OFFSET_TOOLS,
     PROVIDER,
     SUPPORTED_VERSIONS,
