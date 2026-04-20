@@ -101,6 +101,8 @@ KNOWN_TEST_SEAMS: frozenset[tuple[str, str]] = frozenset(
         ("paper_chaser_mcp.dispatch.normalization", "_guided_normalize_whitespace"),
         ("paper_chaser_mcp.dispatch.normalization", "_guided_normalize_year_hint"),
         ("paper_chaser_mcp.dispatch.normalization", "_guided_strip_research_prefix"),
+        ("paper_chaser_mcp.dispatch.paging", "_cursor_to_offset"),
+        ("paper_chaser_mcp.dispatch.paging", "_encode_next_cursor"),
         ("paper_chaser_mcp.dispatch.relevance", "_facet_match"),
         ("paper_chaser_mcp.dispatch.relevance", "_paper_topical_relevance"),
         ("paper_chaser_mcp.dispatch.relevance", "_tokenize_relevance_text"),
