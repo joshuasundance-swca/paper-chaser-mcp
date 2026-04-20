@@ -128,9 +128,7 @@ PUBLIC_API: dict[str, tuple[str, ...]] = {
 
 # Flat list of (module, symbol) pairs for parametrization.
 PUBLIC_API_PAIRS: list[tuple[str, str]] = [
-    (module, symbol)
-    for module, symbols in PUBLIC_API.items()
-    for symbol in symbols
+    (module, symbol) for module, symbols in PUBLIC_API.items() for symbol in symbols
 ]
 
 # The 5 guided-profile tools enumerated in the README / golden paths.
@@ -170,9 +168,7 @@ def test_public_symbol_is_importable(module_name: str, symbol_name: str) -> None
         # instantiate because many take required config. Confirming it is a
         # type is enough.
         assert isinstance(value, type)
-    elif inspect.isfunction(value) or inspect.ismethod(value) or inspect.isbuiltin(
-        value
-    ):
+    elif inspect.isfunction(value) or inspect.ismethod(value) or inspect.isbuiltin(value):
         assert callable(value)
 
 
@@ -191,8 +187,7 @@ def test_guided_profile_exposes_five_tools() -> None:
     guided = get_tool_definitions(tool_profile="guided")
     names = {tool.name for tool in guided}
     assert names == GUIDED_TOOL_NAMES, (
-        f"Guided profile drifted. Expected {sorted(GUIDED_TOOL_NAMES)}, "
-        f"got {sorted(names)}"
+        f"Guided profile drifted. Expected {sorted(GUIDED_TOOL_NAMES)}, got {sorted(names)}"
     )
 
 
@@ -203,12 +198,9 @@ def test_expert_profile_is_superset_of_guided() -> None:
     expert = get_tool_definitions(tool_profile="expert")
     expert_names = {tool.name for tool in expert}
     assert GUIDED_TOOL_NAMES.issubset(expert_names), (
-        "Expert profile is missing guided tools: "
-        f"{sorted(GUIDED_TOOL_NAMES - expert_names)}"
+        f"Expert profile is missing guided tools: {sorted(GUIDED_TOOL_NAMES - expert_names)}"
     )
-    assert len(expert_names) > len(GUIDED_TOOL_NAMES), (
-        "Expert profile must be a strict superset of the guided profile."
-    )
+    assert len(expert_names) > len(GUIDED_TOOL_NAMES), "Expert profile must be a strict superset of the guided profile."
 
 
 def test_tool_specs_iter_matches_get_tool_definitions() -> None:

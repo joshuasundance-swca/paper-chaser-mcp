@@ -234,10 +234,7 @@ def test_fastmcp_server_list_tools_matches_guided_contract() -> None:
         return {tool.name for tool in tools}
 
     if server.settings.tool_profile != "guided":
-        pytest.skip(
-            "Live server not in guided profile; test validates the default "
-            "CI baseline contract."
-        )
+        pytest.skip("Live server not in guided profile; test validates the default CI baseline contract.")
 
     names = asyncio.run(_collect())
     assert GUIDED_TOOLS <= names

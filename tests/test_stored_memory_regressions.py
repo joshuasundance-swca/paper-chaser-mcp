@@ -87,15 +87,11 @@ async def test_runtime_provider_sets_are_internally_consistent_with_detailed_row
     disabled_set = set(summary["disabledProviderSet"])
 
     # Active and disabled sets must be disjoint.
-    assert not (active_set & disabled_set), (
-        f"providers cannot be both active and disabled: {active_set & disabled_set}"
-    )
+    assert not (active_set & disabled_set), f"providers cannot be both active and disabled: {active_set & disabled_set}"
 
     # Every provider named in either set must have a corresponding detail row.
     for name in active_set | disabled_set:
-        assert name in rows_by_name, (
-            f"provider {name!r} appears in active/disabled set but has no detail row"
-        )
+        assert name in rows_by_name, f"provider {name!r} appears in active/disabled set but has no detail row"
 
     # Disabled rows must not claim enabled=True.
     for name in disabled_set:
@@ -139,9 +135,7 @@ def test_eval_trace_capture_warning_path(
 
     assert settings.enable_eval_trace_capture is expect_capture_enabled
     warning_present = any(_EVAL_TRACE_WARNING_FRAGMENT in w for w in warnings)
-    assert warning_present is expect_warning, (
-        f"eval-trace warning presence mismatch: env={env}, warnings={warnings}"
-    )
+    assert warning_present is expect_warning, f"eval-trace warning presence mismatch: env={env}, warnings={warnings}"
 
 
 # ---------------------------------------------------------------------------

@@ -144,14 +144,10 @@ def test_hard_cap_not_breached_outside_allowlist() -> None:
         lines = _count_lines(rel)
         if lines > HARD_CAP_LINES:
             offenders.append((rel, lines))
-    assert not offenders, (
-        f"Modules breach the {HARD_CAP_LINES}-line hard cap: {offenders}"
-    )
+    assert not offenders, f"Modules breach the {HARD_CAP_LINES}-line hard cap: {offenders}"
 
 
 def test_allowlist_entries_exist() -> None:
     """Keep the allowlist honest - every entry must point at a real file."""
-    missing = sorted(
-        rel for rel in OVERSIZE_ALLOWLIST if not (PACKAGE_ROOT.parent / rel).is_file()
-    )
+    missing = sorted(rel for rel in OVERSIZE_ALLOWLIST if not (PACKAGE_ROOT.parent / rel).is_file())
     assert not missing, f"OVERSIZE_ALLOWLIST references missing files: {missing}"

@@ -147,9 +147,7 @@ def _assert_structural_contract(name: str, live: dict[str, Any]) -> dict[str, An
     assert existing is not None, f"fixture {name!r} could not be loaded"
 
     missing = sorted(set(existing) - set(normalized))
-    assert not missing, (
-        f"{name}: pinned top-level keys disappeared from response: {missing}"
-    )
+    assert not missing, f"{name}: pinned top-level keys disappeared from response: {missing}"
 
     for key, reference_value in existing.items():
         live_value = normalized[key]
@@ -160,8 +158,7 @@ def _assert_structural_contract(name: str, live: dict[str, Any]) -> dict[str, An
         if reference_value is None or live_value is None:
             continue
         assert type(live_value) is type(reference_value), (
-            f"{name}: type mismatch on {key!r}: "
-            f"{type(live_value).__name__} vs {type(reference_value).__name__}"
+            f"{name}: type mismatch on {key!r}: {type(live_value).__name__} vs {type(reference_value).__name__}"
         )
     return normalized
 
@@ -210,18 +207,14 @@ async def test_characterization_get_runtime_status(
     normalized = _assert_structural_contract("get_runtime_status", payload)
 
     required = {"status", "runtimeSummary", "providerOrder", "providers", "warnings"}
-    assert required.issubset(normalized), (
-        f"missing required keys: {sorted(required - set(normalized))}"
-    )
+    assert required.issubset(normalized), f"missing required keys: {sorted(required - set(normalized))}"
     assert isinstance(normalized["providerOrder"], list)
     assert isinstance(normalized["providers"], list)
     assert isinstance(normalized["warnings"], list)
     # Provider rows are order-significant elsewhere but for characterization we
     # only pin that the set of provider names is stable.
     provider_names = {row.get("provider") for row in normalized["providers"]}
-    assert provider_names == set(normalized["providerOrder"]), (
-        "provider rows drifted away from providerOrder"
-    )
+    assert provider_names == set(normalized["providerOrder"]), "provider rows drifted away from providerOrder"
 
 
 @pytest.mark.asyncio
@@ -248,9 +241,7 @@ async def test_characterization_research(
         "routingSummary",
         "searchSessionId",
     }
-    assert required.issubset(normalized), (
-        f"missing required keys: {sorted(required - set(normalized))}"
-    )
+    assert required.issubset(normalized), f"missing required keys: {sorted(required - set(normalized))}"
     assert normalized["status"] in {
         "succeeded",
         "partial",
@@ -307,9 +298,7 @@ async def test_characterization_follow_up_research(
         "sessionResolution",
         "sourcesSuppressed",
     }
-    assert required.issubset(normalized), (
-        f"missing required keys: {sorted(required - set(normalized))}"
-    )
+    assert required.issubset(normalized), f"missing required keys: {sorted(required - set(normalized))}"
     assert normalized["answerStatus"] in {
         "answered",
         "abstained",
@@ -348,9 +337,7 @@ async def test_characterization_resolve_reference(
         "nextActions",
         "knownItemResolutionState",
     }
-    assert required.issubset(normalized), (
-        f"missing required keys: {sorted(required - set(normalized))}"
-    )
+    assert required.issubset(normalized), f"missing required keys: {sorted(required - set(normalized))}"
     assert normalized["status"] in {
         "resolved",
         "no_match",
@@ -383,8 +370,7 @@ async def test_characterization_inspect_source(
     sources = initial.get("sources") or initial.get("structuredSources") or []
     if not session_id or not sources:
         pytest.skip(
-            "deterministic research produced no inspectable sources; "
-            "inspect_source cannot be characterized this run",
+            "deterministic research produced no inspectable sources; inspect_source cannot be characterized this run",
         )
     source_id = sources[0].get("sourceId")
     if not source_id:
@@ -409,9 +395,7 @@ async def test_characterization_inspect_source(
         "sessionResolution",
         "executionProvenance",
     }
-    assert required.issubset(normalized), (
-        f"missing required keys: {sorted(required - set(normalized))}"
-    )
+    assert required.issubset(normalized), f"missing required keys: {sorted(required - set(normalized))}"
     assert normalized["answerability"] in {
         "grounded",
         "limited",
@@ -450,9 +434,7 @@ async def test_characterization_search_papers_smart(
         "resourceUris",
         "agentHints",
     }
-    assert required.issubset(normalized), (
-        f"missing required keys: {sorted(required - set(normalized))}"
-    )
+    assert required.issubset(normalized), f"missing required keys: {sorted(required - set(normalized))}"
     assert isinstance(normalized["results"], list)
     assert isinstance(normalized["strategyMetadata"], dict)
     assert isinstance(normalized["coverageSummary"], dict)
