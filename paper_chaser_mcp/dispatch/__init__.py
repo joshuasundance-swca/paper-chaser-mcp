@@ -13,6 +13,9 @@ surface that must remain re-exportable (see :data:`__all__`).
 
 from __future__ import annotations
 
+import sys as _sys
+from types import ModuleType as _ModuleType
+
 from . import _core
 from ._core import *  # noqa: F401, F403
 
@@ -21,13 +24,43 @@ from ._core import *  # noqa: F401, F403
 # up as concrete import errors rather than as silent attribute failures.
 from ._core import (  # noqa: F401
     _answer_follow_up_from_session_state,
+    _apply_follow_up_response_mode,
+    _assign_verification_status,
     _authoritative_but_weak_source_ids,
+    _build_provider_diagnostics_snapshot,
+    _compose_why_classified_weak_match,
     _cursor_to_offset,
+    _direct_read_recommendation_details,
+    _direct_read_recommendations,
+    _evidence_quality_detail,
+    _guided_abstention_details_payload,
+    _guided_best_next_internal_action,
     _guided_citation_from_paper,
+    _guided_confidence_signals,
     _guided_contract_fields,
+    _guided_deterministic_evidence_gaps,
+    _guided_failure_summary,
+    _guided_finalize_response,
+    _guided_is_mixed_intent_query,
+    _guided_machine_failure_payload,
+    _guided_mentions_literature,
+    _guided_merge_coverage_summaries,
+    _guided_next_actions,
+    _guided_normalize_follow_up_arguments,
+    _guided_normalize_inspect_arguments,
+    _guided_result_meaning,
+    _guided_result_state,
+    _guided_saved_session_topicality,
     _guided_session_state,
+    _guided_should_add_review_pass,
+    _guided_source_metadata_answers,
     _guided_source_record_from_paper,
+    _guided_source_record_from_structured_source,
+    _guided_sources_from_fr_documents,
+    _guided_summary,
     _guided_trust_summary,
+    _paper_topical_relevance,
+    _synthesis_path,
     dispatch_tool,
 )
 
@@ -47,8 +80,6 @@ del _globals, _name
 # fake)``) also mutate the binding that live helper functions in ``_core`` see.
 # Before the Phase 2 package conversion, ``dispatch`` was a single module so
 # patches took effect immediately; the shim below preserves that behavior.
-import sys as _sys
-from types import ModuleType as _ModuleType
 
 
 class _DispatchPackageModule(_ModuleType):

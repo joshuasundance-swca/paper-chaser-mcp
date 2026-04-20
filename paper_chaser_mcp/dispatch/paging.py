@@ -22,7 +22,6 @@ from ..utils.cursor import (
     is_legacy_offset,
 )
 
-
 CURSOR_REUSE_HINT = (
     "Pass pagination.nextCursor back exactly as returned. Do not derive, edit, "
     "or fabricate cursors, and do not reuse them across a different tool or "

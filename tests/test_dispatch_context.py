@@ -22,6 +22,7 @@ from __future__ import annotations
 import dataclasses
 import inspect
 import pickle
+from typing import Any
 
 import pytest
 
@@ -39,11 +40,7 @@ def _dispatch_tool_fields() -> dict[str, inspect.Parameter]:
     excluded from the context bag — they change on every dispatch.
     """
     sig = inspect.signature(dispatch_tool)
-    return {
-        name: param
-        for name, param in sig.parameters.items()
-        if name not in {"name", "arguments"}
-    }
+    return {name: param for name, param in sig.parameters.items() if name not in {"name", "arguments"}}
 
 
 def test_dispatch_context_covers_every_dispatch_tool_dependency() -> None:
@@ -70,17 +67,15 @@ def test_dispatch_context_defaults_mirror_dispatch_tool() -> None:
         else:
             if field.default_factory is not dataclasses.MISSING:
                 assert field.default_factory() == param.default, (
-                    f"{name}: default_factory={field.default_factory()!r} vs "
-                    f"dispatch_tool default={param.default!r}"
+                    f"{name}: default_factory={field.default_factory()!r} vs dispatch_tool default={param.default!r}"
                 )
             else:
                 assert field.default == param.default, (
-                    f"{name}: DispatchContext default={field.default!r} vs "
-                    f"dispatch_tool default={param.default!r}"
+                    f"{name}: DispatchContext default={field.default!r} vs dispatch_tool default={param.default!r}"
                 )
 
 
-def _minimal_required_kwargs() -> dict[str, object]:
+def _minimal_required_kwargs() -> dict[str, Any]:
     """Smallest set of kwargs that satisfies every required dispatch_tool arg."""
     return {
         "client": None,

@@ -11,8 +11,6 @@ from ..agentic.planner import (
     detect_literature_intent,
     detect_regulatory_intent,
     looks_like_exact_title,
-    query_facets,
-    query_terms,
 )
 from ..agentic.provider_helpers import generate_evidence_gaps_without_llm
 from ..citation_repair import looks_like_citation_query, looks_like_paper_identifier, parse_citation, resolve_citation
@@ -86,22 +84,26 @@ from ..utils.cursor import (
     PROVIDER,
     SUPPORTED_VERSIONS,
     compute_context_hash,
-    cursor_from_offset,
     cursor_from_token,
     decode_bulk_cursor,
-    decode_cursor,
-    is_legacy_offset,
 )
 from .context import DispatchContext, build_dispatch_context
+from .normalization import (
+    _guided_normalize_citation_surface,
+    _guided_normalize_source_locator,
+    _guided_normalize_whitespace,
+    _guided_normalize_year_hint,
+    _guided_strip_research_prefix,
+)
 from .paging import _cursor_to_offset, _encode_next_cursor
-from .relevance import (
+from .relevance import (  # noqa: F401 — re-exported for dispatch package namespace
     _facet_match,
     _paper_topical_relevance,
     _tokenize_relevance_text,
     _topical_relevance_from_signals,
     compute_topical_relevance,
 )
-from .snippet_fallback import (
+from .snippet_fallback import (  # noqa: F401 — re-exported for dispatch package namespace
     _maybe_fallback_snippet_search,
     _snippet_fallback_query,
     _snippet_fallback_results,
@@ -1408,21 +1410,6 @@ _GUIDED_LITERATURE_TERMS = {
     "studies",
     "systematic review",
 }
-
-
-from .normalization import (
-    _GUIDED_CFR_PART_RE,
-    _GUIDED_CFR_SECTION_RE,
-    _GUIDED_FR_CITATION_RE,
-    _GUIDED_QUERY_PREFIX_PATTERNS,
-    _GUIDED_YEAR_RANGE_RE,
-    _GUIDED_YEAR_RE,
-    _guided_normalize_citation_surface,
-    _guided_normalize_source_locator,
-    _guided_normalize_whitespace,
-    _guided_normalize_year_hint,
-    _guided_strip_research_prefix,
-)
 
 
 def _guided_note_repair(

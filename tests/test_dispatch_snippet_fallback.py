@@ -16,7 +16,7 @@ from paper_chaser_mcp.dispatch.snippet_fallback import (
 class TestSnippetFallbackQuery:
     def test_extracts_alphanumeric_tokens(self) -> None:
         assert (
-            _snippet_fallback_query("  \"retrieval-augmented generation, 2024!\"  ")
+            _snippet_fallback_query('  "retrieval-augmented generation, 2024!"  ')
             == "retrieval augmented generation 2024"
         )
 
@@ -107,9 +107,7 @@ class TestMaybeFallbackSnippetSearch:
     async def test_empty_fallback_query_returns_serialized(self) -> None:
         serialized: dict[str, Any] = {"degraded": True, "data": []}
         client = _FakeClient()
-        out = await _maybe_fallback_snippet_search(
-            serialized=serialized, args_dict={"query": ""}, client=client
-        )
+        out = await _maybe_fallback_snippet_search(serialized=serialized, args_dict={"query": ""}, client=client)
         assert out is serialized
         assert client.last_call is None
 

@@ -14,7 +14,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-
 _GUIDED_QUERY_PREFIX_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
         r"^\s*(?:please\s+|kindly\s+)?(?:help\s+me\s+)?(?:find|search(?:\s+for)?|look\s+up|research|summarize|show)\s+"

@@ -37,22 +37,13 @@ class TestGuidedNormalizeSourceLocator:
 
 class TestGuidedStripResearchPrefix:
     def test_strips_find_papers_about(self) -> None:
-        assert (
-            _guided_strip_research_prefix("please find papers about transformers")
-            == "transformers"
-        )
+        assert _guided_strip_research_prefix("please find papers about transformers") == "transformers"
 
     def test_strips_help_me_research(self) -> None:
-        assert (
-            _guided_strip_research_prefix("help me research attention mechanisms")
-            == "attention mechanisms"
-        )
+        assert _guided_strip_research_prefix("help me research attention mechanisms") == "attention mechanisms"
 
     def test_returns_unchanged_when_no_prefix(self) -> None:
-        assert (
-            _guided_strip_research_prefix("transformer architectures")
-            == "transformer architectures"
-        )
+        assert _guided_strip_research_prefix("transformer architectures") == "transformer architectures"
 
 
 class TestGuidedNormalizeCitationSurface:
