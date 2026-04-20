@@ -92,6 +92,7 @@ from ..utils.cursor import (
     decode_cursor,
     is_legacy_offset,
 )
+from .context import DispatchContext, build_dispatch_context
 
 ToolArgBuilder = Callable[[dict[str, Any]], dict[str, Any]]
 CURSOR_REUSE_HINT = (
@@ -6057,51 +6058,55 @@ async def dispatch_tool(
         provider_registry=provider_registry,
     )
 
+    # Phase 2 Step 2: collect every dependency into a single frozen
+    # ``DispatchContext`` bag. The inner ``_dispatch_internal`` forwarder (and,
+    # in later phases, extracted branch helpers) pass this single object
+    # around instead of re-spelling the 40-kwarg list on every call.
+    dispatch_ctx: DispatchContext = build_dispatch_context(
+        client=client,
+        core_client=core_client,
+        openalex_client=openalex_client,
+        scholarapi_client=scholarapi_client,
+        arxiv_client=arxiv_client,
+        enable_core=enable_core,
+        enable_semantic_scholar=enable_semantic_scholar,
+        enable_openalex=enable_openalex,
+        enable_scholarapi=enable_scholarapi,
+        enable_arxiv=enable_arxiv,
+        serpapi_client=serpapi_client,
+        enable_serpapi=enable_serpapi,
+        crossref_client=crossref_client,
+        unpaywall_client=unpaywall_client,
+        ecos_client=ecos_client,
+        federal_register_client=federal_register_client,
+        govinfo_client=govinfo_client,
+        enable_crossref=enable_crossref,
+        enable_unpaywall=enable_unpaywall,
+        enable_ecos=enable_ecos,
+        enable_federal_register=enable_federal_register,
+        enable_govinfo_cfr=enable_govinfo_cfr,
+        enrichment_service=resolved_enrichment_service,
+        provider_order=provider_order,
+        provider_registry=provider_registry,
+        workspace_registry=workspace_registry,
+        agentic_runtime=agentic_runtime,
+        transport_mode=transport_mode,
+        tool_profile=tool_profile,
+        hide_disabled_tools=hide_disabled_tools,
+        session_ttl_seconds=session_ttl_seconds,
+        embeddings_enabled=embeddings_enabled,
+        guided_research_latency_profile=guided_research_latency_profile,
+        guided_follow_up_latency_profile=guided_follow_up_latency_profile,
+        guided_allow_paid_providers=guided_allow_paid_providers,
+        guided_escalation_enabled=guided_escalation_enabled,
+        guided_escalation_max_passes=guided_escalation_max_passes,
+        guided_escalation_allow_paid_providers=guided_escalation_allow_paid_providers,
+        ctx=ctx,
+        allow_elicitation=allow_elicitation,
+    )
+
     async def _dispatch_internal(tool_name: str, tool_arguments: dict[str, Any]) -> dict[str, Any]:
-        return await dispatch_tool(
-            tool_name,
-            tool_arguments,
-            client=client,
-            core_client=core_client,
-            openalex_client=openalex_client,
-            scholarapi_client=scholarapi_client,
-            arxiv_client=arxiv_client,
-            enable_core=enable_core,
-            enable_semantic_scholar=enable_semantic_scholar,
-            enable_openalex=enable_openalex,
-            enable_scholarapi=enable_scholarapi,
-            enable_arxiv=enable_arxiv,
-            serpapi_client=serpapi_client,
-            enable_serpapi=enable_serpapi,
-            crossref_client=crossref_client,
-            unpaywall_client=unpaywall_client,
-            ecos_client=ecos_client,
-            federal_register_client=federal_register_client,
-            govinfo_client=govinfo_client,
-            enable_crossref=enable_crossref,
-            enable_unpaywall=enable_unpaywall,
-            enable_ecos=enable_ecos,
-            enable_federal_register=enable_federal_register,
-            enable_govinfo_cfr=enable_govinfo_cfr,
-            enrichment_service=resolved_enrichment_service,
-            provider_order=provider_order,
-            provider_registry=provider_registry,
-            workspace_registry=workspace_registry,
-            agentic_runtime=agentic_runtime,
-            transport_mode=transport_mode,
-            tool_profile=tool_profile,
-            hide_disabled_tools=hide_disabled_tools,
-            session_ttl_seconds=session_ttl_seconds,
-            embeddings_enabled=embeddings_enabled,
-            guided_research_latency_profile=guided_research_latency_profile,
-            guided_follow_up_latency_profile=guided_follow_up_latency_profile,
-            guided_allow_paid_providers=guided_allow_paid_providers,
-            guided_escalation_enabled=guided_escalation_enabled,
-            guided_escalation_max_passes=guided_escalation_max_passes,
-            guided_escalation_allow_paid_providers=guided_escalation_allow_paid_providers,
-            ctx=ctx,
-            allow_elicitation=allow_elicitation,
-        )
+        return await dispatch_tool(tool_name, tool_arguments, **dispatch_ctx.as_kwargs())
 
     if name == "get_runtime_status":
         cast(GetRuntimeStatusArgs, TOOL_INPUT_MODELS[name].model_validate(arguments))
