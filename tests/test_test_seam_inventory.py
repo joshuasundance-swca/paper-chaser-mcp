@@ -14,6 +14,8 @@ import importlib
 from pathlib import Path
 
 TESTS_DIR = Path(__file__).parent
+REPO_ROOT = TESTS_DIR.parent
+SCRIPTS_DIR = REPO_ROOT / "scripts"
 PACKAGE_PREFIX = "paper_chaser_mcp"
 
 
@@ -118,12 +120,53 @@ KNOWN_TEST_SEAMS: frozenset[tuple[str, str]] = frozenset(
 
 
 def _discover_private_seams() -> set[tuple[str, str]]:
-    """Walk ``tests/`` and collect private ``from paper_chaser_mcp.*`` imports."""
+    """Recursively walk ``tests/`` and collect private ``from paper_chaser_mcp.*`` imports."""
 
     seams: set[tuple[str, str]] = set()
-    for path in sorted(TESTS_DIR.glob("*.py")):
-        if path.name == Path(__file__).name:
+    self_name = Path(__file__).name
+    for path in sorted(TESTS_DIR.rglob("*.py")):
+        if path.name == self_name:
             continue
+        source = path.read_text(encoding="utf-8")
+        try:
+            tree = ast.parse(source, filename=str(path))
+        except SyntaxError:  # pragma: no cover - defensive
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            module = node.module
+            if module is None or not module.startswith(PACKAGE_PREFIX):
+                continue
+            for alias in node.names:
+                name = alias.name
+                if not name.startswith("_"):
+                    continue
+                if name.startswith("__") and name.endswith("__"):
+                    continue
+                seams.add((module, name))
+    return seams
+
+
+# Private ``paper_chaser_mcp.*`` symbols imported by files under ``scripts/``.
+# This mirrors ``KNOWN_TEST_SEAMS`` but tracks the script-side surface
+# separately so a refactor has to explicitly acknowledge expansion on either
+# side. Today only ``scripts/run_expert_eval_batch.py`` reaches into a
+# private seam; anything new must be added here or eliminated.
+KNOWN_SCRIPT_SEAMS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("paper_chaser_mcp.server", "_execute_tool"),
+    }
+)
+
+
+def _discover_private_script_seams() -> set[tuple[str, str]]:
+    """Recursively walk ``scripts/`` and collect private ``from paper_chaser_mcp.*`` imports."""
+
+    seams: set[tuple[str, str]] = set()
+    if not SCRIPTS_DIR.exists():
+        return seams
+    for path in sorted(SCRIPTS_DIR.rglob("*.py")):
         source = path.read_text(encoding="utf-8")
         try:
             tree = ast.parse(source, filename=str(path))
@@ -180,5 +223,46 @@ def test_known_seams_still_importable() -> None:
     assert not missing, (
         "Pinned private test seams are no longer importable. Either restore "
         "the re-export or update KNOWN_TEST_SEAMS: "
+        f"{missing}"
+    )
+
+
+def test_no_new_private_script_seams() -> None:
+    """Fail if any NEW private ``paper_chaser_mcp`` seam appears under ``scripts/``.
+
+    The script-side private surface is tracked separately from the test
+    surface. Adding a new one is a durable coupling that reviewers should
+    see explicitly in the diff.
+    """
+
+    discovered = _discover_private_script_seams()
+    new_seams = discovered - KNOWN_SCRIPT_SEAMS
+    assert not new_seams, (
+        "New private paper_chaser_mcp script seams detected. Either eliminate "
+        "the private import or add it to KNOWN_SCRIPT_SEAMS explicitly: "
+        f"{sorted(new_seams)}"
+    )
+
+
+def test_known_script_seams_still_importable() -> None:
+    """Every pinned script seam must remain importable.
+
+    Mirrors :func:`test_known_seams_still_importable` for the ``scripts/``
+    tree so production entry points like ``run_expert_eval_batch.py`` do
+    not silently lose their private handshake with the package.
+    """
+
+    missing: list[tuple[str, str]] = []
+    for module_name, attr_name in sorted(KNOWN_SCRIPT_SEAMS):
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            missing.append((module_name, attr_name))
+            continue
+        if not hasattr(module, attr_name):
+            missing.append((module_name, attr_name))
+    assert not missing, (
+        "Pinned private script seams are no longer importable. Either restore "
+        "the re-export or update KNOWN_SCRIPT_SEAMS: "
         f"{missing}"
     )
