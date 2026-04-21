@@ -12,7 +12,7 @@ from ...models import (
     ExpansionCandidate,
     PlannerDecision,
 )
-from ...provider_helpers import (
+from ..helpers import (
     COMMON_QUERY_WORDS,
     GAP_QUESTION_MARKERS,
     AnswerStatusValidation,

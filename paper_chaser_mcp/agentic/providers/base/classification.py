@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from ...provider_helpers import COMMON_QUERY_WORDS, _lexical_similarity, _tokenize
+from ..helpers import COMMON_QUERY_WORDS, _lexical_similarity, _tokenize
 
 _FALLBACK_RELEVANCE_STOPWORDS = COMMON_QUERY_WORDS | {
     "current",
