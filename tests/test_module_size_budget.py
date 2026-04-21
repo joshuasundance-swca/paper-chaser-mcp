@@ -67,6 +67,9 @@ BASELINE_OVERSIZE_EXTRAS: frozenset[str] = frozenset(
         "paper_chaser_mcp/models/tools.py",
         "paper_chaser_mcp/clients/semantic_scholar/client.py",
         "paper_chaser_mcp/clients/ecos/client.py",
+        # Phase 3 leftovers: guided submodules extracted from dispatch/_core.py
+        # that exceed the soft cap. Phase 3b will split these further.
+        "paper_chaser_mcp/dispatch/guided/trust.py",
     }
 )
 
@@ -102,6 +105,7 @@ BASELINE_LINE_COUNTS: dict[str, int] = {
     "paper_chaser_mcp/clients/semantic_scholar/client.py": 1_179,
     "paper_chaser_mcp/compat.py": 690,
     "paper_chaser_mcp/dispatch/_core.py": 9_344,
+    "paper_chaser_mcp/dispatch/guided/trust.py": 984,
     "paper_chaser_mcp/enrichment.py": 816,
     "paper_chaser_mcp/eval_canary.py": 728,
     "paper_chaser_mcp/eval_curation.py": 965,
