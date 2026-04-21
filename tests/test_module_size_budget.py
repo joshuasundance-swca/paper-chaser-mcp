@@ -35,7 +35,6 @@ PLAN_OVERSIZE_MODULES: frozenset[str] = frozenset(
     {
         "paper_chaser_mcp/dispatch/_core.py",
         "paper_chaser_mcp/agentic/graphs/_core.py",
-        "paper_chaser_mcp/citation_repair/_core.py",
         "paper_chaser_mcp/server.py",
         "paper_chaser_mcp/agentic/planner/_core.py",
         "paper_chaser_mcp/eval_curation.py",
@@ -87,6 +86,16 @@ BASELINE_OVERSIZE_EXTRAS: frozenset[str] = frozenset(
         # verbatim into ``bundle.py``. Concrete provider adapters live in
         # ``adapters.py``. A follow-up phase can split the bundle further.
         "paper_chaser_mcp/agentic/providers/langchain/bundle.py",
+        # Phase 9a: ``citation_repair/_core.py`` was split into ``normalization``,
+        # ``candidates``, and ``api``. ``api.py`` owns the async
+        # ``resolve_citation`` orchestrator plus every provider-layered
+        # ``_resolve_*`` helper, response serialization, abstention filters,
+        # and the famous-paper candidate bridge. Those pieces are tightly
+        # coupled through the resolution state machine and are cheaper to
+        # keep together than to interleave with ``candidates``. A later phase
+        # can peel the serialization helpers into their own module once the
+        # Phase 9b ranking rebalance lands and the contract stabilizes.
+        "paper_chaser_mcp/citation_repair/api.py",
     }
 )
 
@@ -116,7 +125,7 @@ BASELINE_LINE_COUNTS: dict[str, int] = {
     "paper_chaser_mcp/agentic/providers/openai/bundle.py": 1_826,
     "paper_chaser_mcp/agentic/ranking.py": 690,
     "paper_chaser_mcp/agentic/workspace.py": 979,
-    "paper_chaser_mcp/citation_repair/_core.py": 1_677,
+    "paper_chaser_mcp/citation_repair/api.py": 880,
     "paper_chaser_mcp/clients/ecos/client.py": 963,
     "paper_chaser_mcp/clients/semantic_scholar/client.py": 1_179,
     "paper_chaser_mcp/compat.py": 690,

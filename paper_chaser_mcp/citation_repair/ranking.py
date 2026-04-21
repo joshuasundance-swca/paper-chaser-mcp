@@ -25,13 +25,8 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Any
 
-from ._core import (
-    GENERIC_TITLE_WORDS,
-    WORD_RE,
-    ParsedCitation,
-    _why_selected,
-    normalize_citation_text,
-)
+from .candidates import ParsedCitation, _why_selected
+from .normalization import GENERIC_TITLE_WORDS, WORD_RE, normalize_citation_text
 
 __all__ = (
     "RankedCitationCandidate",
