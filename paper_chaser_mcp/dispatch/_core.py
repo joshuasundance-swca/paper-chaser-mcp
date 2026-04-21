@@ -69,7 +69,7 @@ from ..utils.cursor import (
     decode_bulk_cursor,
 )
 from .context import DispatchContext, build_dispatch_context
-from .normalization import (
+from .normalization import (  # noqa: F401 — re-exported for dispatch package namespace
     _guided_normalize_citation_surface,
     _guided_normalize_source_locator,
     _guided_normalize_whitespace,
