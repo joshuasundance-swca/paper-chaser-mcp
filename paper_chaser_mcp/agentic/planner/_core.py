@@ -25,7 +25,7 @@ from ..models import (
     PlannerDecision,
     RegulatoryIntentLabel,
 )
-from ..providers import ModelProviderBundle
+from ..provider_base import ModelProviderBundle
 from .constants import (
     GENERIC_EVIDENCE_WORDS,
     VARIANT_DEDUPE_STOPWORDS,

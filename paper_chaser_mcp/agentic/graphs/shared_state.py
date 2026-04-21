@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..providers import COMMON_QUERY_WORDS
+from ..provider_helpers import COMMON_QUERY_WORDS
 
 SMART_SEARCH_PROGRESS_TOTAL = 100.0
 

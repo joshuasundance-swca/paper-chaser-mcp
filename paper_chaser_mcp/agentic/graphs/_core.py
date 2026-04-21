@@ -69,7 +69,7 @@ from ..planner import (
     normalize_query,
     speculative_expansion_candidates,
 )
-from ..providers import (
+from ..provider_base import (
     DeterministicProviderBundle,
     ModelProviderBundle,
 )
