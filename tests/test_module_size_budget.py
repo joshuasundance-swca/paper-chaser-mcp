@@ -91,7 +91,7 @@ OVERSIZE_ALLOWLIST: frozenset[str] = PLAN_OVERSIZE_MODULES | BASELINE_OVERSIZE_E
 # wins.
 BASELINE_LINE_COUNTS: dict[str, int] = {
     "paper_chaser_mcp/agentic/answer_modes.py": 658,
-    "paper_chaser_mcp/agentic/graphs/_core.py": 4_869,
+    "paper_chaser_mcp/agentic/graphs/_core.py": 4_300,
     "paper_chaser_mcp/agentic/models.py": 870,
     "paper_chaser_mcp/agentic/planner/_core.py": 734,
     "paper_chaser_mcp/agentic/provider_base.py": 840,
