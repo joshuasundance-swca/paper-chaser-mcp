@@ -31,7 +31,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  COVERAGE_FAIL_UNDER: '85'
+  COVERAGE_FAIL_UNDER: '87'
   PYTHON_VERSION: '3.14'
 
 jobs:

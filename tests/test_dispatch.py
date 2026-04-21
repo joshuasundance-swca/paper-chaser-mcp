@@ -4352,7 +4352,10 @@ async def test_resolve_reference_multiple_candidates_without_best_match_uses_mes
             "knownItemResolutionState": "needs_disambiguation",
         }
 
-    monkeypatch.setattr(dispatch_module, "resolve_citation", fake_resolve_citation)
+    monkeypatch.setattr(
+        "paper_chaser_mcp.dispatch._core.resolve_citation",
+        fake_resolve_citation,
+    )
 
     payload = _payload(await server.call_tool("resolve_reference", {"reference": "ambiguous reference"}))
 

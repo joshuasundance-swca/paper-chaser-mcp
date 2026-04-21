@@ -84,7 +84,7 @@ repos:
     hooks:
       - id: typos
         types_or: [text]
-        exclude: ^(\.github/workflows/test-scholar-search\.lock\.yml|infra/.*\.json|docs/pr-prep/.*\.(diff|txt))$
+        exclude: ^(\.github/workflows/test-scholar-search\.lock\.yml|infra/.*\.json|docs/pr-prep/.*\.(diff|txt)|tests/fixtures/characterization/.*\.jsonl)$
 
   - repo: https://github.com/shellcheck-py/shellcheck-py
     rev: v0.11.0.1
@@ -150,7 +150,7 @@ repos:
 
       - id: pytest-coverage
         name: pytest coverage
-        entry: python -m pytest --cov=paper_chaser_mcp --cov-report=term-missing --cov-fail-under=85
+        entry: python -m pytest --cov=paper_chaser_mcp --cov-report=term-missing --cov-fail-under=87
         language: python
         additional_dependencies:
           - anyio>=4.0.0

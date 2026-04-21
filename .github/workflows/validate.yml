@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 env:
-  COVERAGE_FAIL_UNDER: '85'
+  COVERAGE_FAIL_UNDER: '87'
   GH_AW_VERSION: v0.65.6
 
 jobs:

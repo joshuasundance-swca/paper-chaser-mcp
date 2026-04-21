@@ -1,0 +1,173 @@
+"""Backward-compatibility shim for :mod:`paper_chaser_mcp.citation_repair`.
+
+Phase 9a split this module into three cohesive siblings:
+
+* :mod:`.normalization` — regexes, vocab constants, and stateless text /
+  identifier normalizers.
+* :mod:`.candidates` — :class:`ParsedCitation`, feature extractors, famous-paper
+  registry, sparse query synthesis, and confidence classifiers.
+* :mod:`.api` — the async :func:`resolve_citation` orchestrator and its
+  provider-layered helpers.
+
+The :mod:`.ranking` module continues to own candidate scoring.
+
+This shim preserves every public and private symbol the package and its tests
+imported through ``citation_repair._core`` before the split, so existing
+imports and the identity tests in ``tests/test_citation_repair_ranking.py``
+and ``tests/test_citation_repair_identity.py`` continue to work. New code
+should import from the specific sibling module instead.
+"""
+
+from __future__ import annotations
+
+from .api import (
+    _abstention_candidates,
+    _best_candidate_confidence,
+    _build_famous_citation_candidate,
+    _enrich_best_match,
+    _filtered_alternative_candidates,
+    _inferred_fields_payload,
+    _merge_ranked_candidate,
+    _paper_identity_key,
+    _parsed_fields_payload,
+    _ranked_candidates,
+    _resolution_message,
+    _resolve_identifier_candidate,
+    _resolve_snippet_candidates,
+    _resolve_sparse_metadata_candidates,
+    _resolve_title_candidates,
+    _serialize_citation_response,
+    _snippet_text,
+    _to_candidate_model,
+    logger,
+    resolve_citation,
+)
+from .candidates import (
+    _FAMOUS_CITATION_ENTRIES,
+    ParsedCitation,
+    _classify_resolution_confidence,
+    _extract_author_surnames,
+    _extract_identifier,
+    _extract_pages,
+    _extract_title_candidates,
+    _extract_venue_hints,
+    _extract_volume_issue,
+    _extract_year,
+    _lookup_famous_citation,
+    _sparse_search_queries,
+    _why_selected,
+    build_match_metadata,
+    classify_known_item_resolution_state,
+    looks_like_citation_query,
+    parse_citation,
+)
+from .normalization import (
+    ARXIV_RE,
+    DOI_RE,
+    GENERIC_TITLE_WORDS,
+    NON_PAPER_TERMS,
+    PAGES_RE,
+    QUOTED_RE,
+    REGULATORY_CITATION_RE,
+    REGULATORY_TERMS,
+    URL_RE,
+    VENUE_HINTS,
+    WORD_RE,
+    YEAR_RE,
+    _dedupe_strings,
+    _normalize_identifier_for_openalex,
+    _normalize_identifier_for_semantic_scholar,
+    _venue_hint_in_text,
+    looks_like_paper_identifier,
+    looks_like_url,
+    normalize_citation_text,
+)
+from .ranking import (
+    RankedCitationCandidate,
+    _apply_length_penalty,
+    _author_overlap,
+    _identifier_hit,
+    _publication_preference_score,
+    _rank_candidate,
+    _snippet_alignment,
+    _source_confidence,
+    _surname,
+    _title_similarity,
+    _token_overlap_ratio,
+    _venue_overlap,
+    _weighted_token_overlap_ratio,
+    _year_delta,
+)
+
+__all__ = (
+    "ARXIV_RE",
+    "DOI_RE",
+    "GENERIC_TITLE_WORDS",
+    "NON_PAPER_TERMS",
+    "PAGES_RE",
+    "QUOTED_RE",
+    "REGULATORY_CITATION_RE",
+    "REGULATORY_TERMS",
+    "URL_RE",
+    "VENUE_HINTS",
+    "WORD_RE",
+    "YEAR_RE",
+    "ParsedCitation",
+    "RankedCitationCandidate",
+    "_FAMOUS_CITATION_ENTRIES",
+    "_abstention_candidates",
+    "_apply_length_penalty",
+    "_author_overlap",
+    "_best_candidate_confidence",
+    "_build_famous_citation_candidate",
+    "_classify_resolution_confidence",
+    "_dedupe_strings",
+    "_enrich_best_match",
+    "_extract_author_surnames",
+    "_extract_identifier",
+    "_extract_pages",
+    "_extract_title_candidates",
+    "_extract_venue_hints",
+    "_extract_volume_issue",
+    "_extract_year",
+    "_filtered_alternative_candidates",
+    "_identifier_hit",
+    "_inferred_fields_payload",
+    "_lookup_famous_citation",
+    "_merge_ranked_candidate",
+    "_normalize_identifier_for_openalex",
+    "_normalize_identifier_for_semantic_scholar",
+    "_paper_identity_key",
+    "_parsed_fields_payload",
+    "_publication_preference_score",
+    "_rank_candidate",
+    "_ranked_candidates",
+    "_resolution_message",
+    "_resolve_identifier_candidate",
+    "_resolve_snippet_candidates",
+    "_resolve_sparse_metadata_candidates",
+    "_resolve_title_candidates",
+    "_serialize_citation_response",
+    "_snippet_alignment",
+    "_snippet_text",
+    "_source_confidence",
+    "_sparse_search_queries",
+    "_surname",
+    "_title_similarity",
+    "_to_candidate_model",
+    "_token_overlap_ratio",
+    "_venue_hint_in_text",
+    "_venue_overlap",
+    "_weighted_token_overlap_ratio",
+    "_why_selected",
+    "_year_delta",
+    "build_match_metadata",
+    "classify_known_item_resolution_state",
+    "logger",
+    "looks_like_citation_query",
+    "looks_like_paper_identifier",
+    "looks_like_url",
+    "normalize_citation_text",
+    "parse_citation",
+    "resolve_citation",
+)
