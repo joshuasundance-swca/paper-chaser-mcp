@@ -19,15 +19,6 @@ from ...citation_repair import (
     looks_like_citation_query as looks_like_citation_query,
 )
 from . import _core as _core
-from ._core import (
-    classify_query as classify_query,
-)
-from ._core import (
-    grounded_expansion_candidates as grounded_expansion_candidates,
-)
-from ._core import (
-    speculative_expansion_candidates as speculative_expansion_candidates,
-)
 from .constants import (
     _CULTURAL_RESOURCE_MARKERS as _CULTURAL_RESOURCE_MARKERS,
 )
@@ -105,6 +96,15 @@ from .normalization import (
 )
 from .normalization import (
     query_terms as query_terms,
+)
+from .orchestrator import (
+    classify_query as classify_query,
+)
+from .orchestrator import (
+    grounded_expansion_candidates as grounded_expansion_candidates,
+)
+from .orchestrator import (
+    speculative_expansion_candidates as speculative_expansion_candidates,
 )
 from .reconciliation import (
     _VALID_REGULATORY_INTENTS as _VALID_REGULATORY_INTENTS,
