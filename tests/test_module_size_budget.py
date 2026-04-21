@@ -34,7 +34,7 @@ HARD_CAP_LINES = 2_500
 PLAN_OVERSIZE_MODULES: frozenset[str] = frozenset(
     {
         "paper_chaser_mcp/dispatch/_core.py",
-        "paper_chaser_mcp/agentic/graphs.py",
+        "paper_chaser_mcp/agentic/graphs/_core.py",
         "paper_chaser_mcp/agentic/provider_openai.py",
         "paper_chaser_mcp/agentic/provider_langchain.py",
         "paper_chaser_mcp/citation_repair/_core.py",
@@ -91,7 +91,7 @@ OVERSIZE_ALLOWLIST: frozenset[str] = PLAN_OVERSIZE_MODULES | BASELINE_OVERSIZE_E
 # wins.
 BASELINE_LINE_COUNTS: dict[str, int] = {
     "paper_chaser_mcp/agentic/answer_modes.py": 658,
-    "paper_chaser_mcp/agentic/graphs.py": 6_169,
+    "paper_chaser_mcp/agentic/graphs/_core.py": 4_869,
     "paper_chaser_mcp/agentic/models.py": 870,
     "paper_chaser_mcp/agentic/planner/_core.py": 734,
     "paper_chaser_mcp/agentic/provider_base.py": 840,

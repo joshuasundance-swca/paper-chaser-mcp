@@ -21,8 +21,10 @@ PACKAGE_PREFIX = "paper_chaser_mcp"
 
 KNOWN_TEST_SEAMS: frozenset[tuple[str, str]] = frozenset(
     {
+        ("paper_chaser_mcp.agentic.graphs", "_FACADE_EXPORTS"),
         ("paper_chaser_mcp.agentic.graphs", "_build_grounded_comparison_answer"),
         ("paper_chaser_mcp.agentic.graphs", "_classify_topical_relevance_with_provenance"),
+        ("paper_chaser_mcp.agentic.graphs", "_core"),
         ("paper_chaser_mcp.agentic.graphs", "_derive_regulatory_query_flags"),
         ("paper_chaser_mcp.agentic.graphs", "_ecos_query_variants"),
         ("paper_chaser_mcp.agentic.graphs", "_finalize_theme_label"),
@@ -36,6 +38,7 @@ KNOWN_TEST_SEAMS: frozenset[tuple[str, str]] = frozenset(
         ("paper_chaser_mcp.agentic.graphs", "_rank_ecos_variant_hits"),
         ("paper_chaser_mcp.agentic.graphs", "_rank_regulatory_documents"),
         ("paper_chaser_mcp.agentic.graphs", "_source_record_from_regulatory_document"),
+        ("paper_chaser_mcp.agentic.graphs.shared_state", "_GRAPH_GENERIC_TERMS"),
         ("paper_chaser_mcp.agentic.planner", "_CULTURAL_RESOURCE_MARKERS"),
         ("paper_chaser_mcp.agentic.planner", "_DEFINITIONAL_PATTERNS"),
         ("paper_chaser_mcp.agentic.planner", "_detect_cultural_resource_intent"),

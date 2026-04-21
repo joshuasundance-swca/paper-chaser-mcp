@@ -2487,8 +2487,8 @@ async def test_search_papers_smart_known_item_fallback_honors_provider_plan(
         semantic.calls.append(("search_papers_match", dict(kwargs)))
         return {"matchFound": False}
 
-    monkeypatch.setattr("paper_chaser_mcp.agentic.graphs.classify_query", fake_classify_query)
-    monkeypatch.setattr("paper_chaser_mcp.agentic.graphs.resolve_citation", fake_resolve_citation)
+    monkeypatch.setattr("paper_chaser_mcp.agentic.graphs._core.classify_query", fake_classify_query)
+    monkeypatch.setattr("paper_chaser_mcp.agentic.graphs._core.resolve_citation", fake_resolve_citation)
     semantic.search_papers_match = fake_search_papers_match  # type: ignore[method-assign]
 
     smart = await runtime.search_papers_smart(
@@ -2549,7 +2549,7 @@ async def test_search_papers_smart_known_item_fallback_honors_scholarapi_budget_
         semantic.calls.append(("search_papers_match", dict(kwargs)))
         return {"matchFound": False}
 
-    monkeypatch.setattr("paper_chaser_mcp.agentic.graphs.resolve_citation", fake_resolve_citation)
+    monkeypatch.setattr("paper_chaser_mcp.agentic.graphs._core.resolve_citation", fake_resolve_citation)
     semantic.search_papers_match = fake_search_papers_match  # type: ignore[method-assign]
 
     smart = await runtime.search_papers_smart(
@@ -3801,7 +3801,7 @@ async def test_expand_research_graph_uses_scored_frontier_for_next_hop(
         return [0.8 for _ in related_papers]
 
     monkeypatch.setattr(
-        "paper_chaser_mcp.agentic.graphs._graph_frontier_scores",
+        "paper_chaser_mcp.agentic.graphs._core._graph_frontier_scores",
         _fake_frontier_scores,
     )
 
@@ -4015,7 +4015,7 @@ async def test_search_papers_smart_known_item_falls_back_to_title_match_instead_
             "matchStrategy": "fuzzy_search",
         }
 
-    monkeypatch.setattr("paper_chaser_mcp.agentic.graphs.resolve_citation", fake_resolve_citation)
+    monkeypatch.setattr("paper_chaser_mcp.agentic.graphs._core.resolve_citation", fake_resolve_citation)
     semantic.search_papers_match = fake_search_papers_match  # type: ignore[method-assign]
 
     smart = await runtime.search_papers_smart(
@@ -4073,7 +4073,7 @@ async def test_search_papers_smart_known_item_uses_openalex_autocomplete_when_ot
             "expansionIdStatus": "portable",
         }
 
-    monkeypatch.setattr("paper_chaser_mcp.agentic.graphs.resolve_citation", fake_resolve_citation)
+    monkeypatch.setattr("paper_chaser_mcp.agentic.graphs._core.resolve_citation", fake_resolve_citation)
     semantic.search_papers_match = fake_search_papers_match  # type: ignore[method-assign]
     openalex.paper_autocomplete = fake_openalex_autocomplete  # type: ignore[method-assign]
     openalex.get_paper_details = fake_openalex_details  # type: ignore[method-assign]
@@ -4117,7 +4117,7 @@ async def test_search_papers_smart_known_item_retries_parsed_title_candidates_wh
             }
         return {"matchFound": False}
 
-    monkeypatch.setattr("paper_chaser_mcp.agentic.graphs.resolve_citation", fake_resolve_citation)
+    monkeypatch.setattr("paper_chaser_mcp.agentic.graphs._core.resolve_citation", fake_resolve_citation)
     semantic.search_papers_match = fake_search_papers_match  # type: ignore[method-assign]
 
     smart = await runtime.search_papers_smart(

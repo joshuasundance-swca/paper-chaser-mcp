@@ -7,23 +7,20 @@ import logging
 import re
 import statistics
 import time
-from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Any, Literal, cast
 from uuid import uuid4
 
 from fastmcp import Context
 
-from ..citation_repair import build_match_metadata, parse_citation, resolve_citation
-from ..compat import build_agent_hints, build_resource_uris
-from ..enrichment import (
+from ...citation_repair import build_match_metadata, parse_citation, resolve_citation
+from ...compat import build_agent_hints, build_resource_uris
+from ...enrichment import (
     PaperEnrichmentService,
     attach_enrichments_to_paper_payload,
     hydrate_paper_for_enrichment,
 )
-from ..identifiers import resolve_doi_from_paper_payload
-from ..models import (
-    CitationRecord,
+from ...models import (
     CoverageSummary,
     FailureSummary,
     Paper,
@@ -33,22 +30,22 @@ from ..models import (
     VerificationStatus,
     dump_jsonable,
 )
-from ..provider_runtime import (
+from ...provider_runtime import (
     ProviderBudgetState,
     ProviderDiagnosticsRegistry,
     execute_provider_call,
     provider_is_paywalled,
 )
-from ..search import _enrich_ss_paper
-from .answer_modes import (
+from ...search import _enrich_ss_paper
+from ..answer_modes import (
     SYNTHESIS_MODES,
     aclassify_question_mode,
     build_evidence_use_plan,
     classify_question_mode,
     evidence_pool_is_weak,
 )
-from .config import AgenticConfig, LatencyProfile
-from .models import (
+from ..config import AgenticConfig, LatencyProfile
+from ..models import (
     AgentHints,
     AskResultSetResponse,
     EvidenceItem,
@@ -66,298 +63,129 @@ from .models import (
     StructuredSourceRecord,
     StructuredToolError,
 )
-from .planner import (
+from ..planner import (
     classify_query,
     combine_variants,
     dedupe_variants,
     grounded_expansion_candidates,
     initial_retrieval_hypotheses,
-    looks_like_exact_title,
-    looks_like_near_known_item_query,
     normalize_query,
     query_facets,
     query_terms,
     speculative_expansion_candidates,
 )
-from .providers import (
+from ..providers import (
     COMMON_QUERY_WORDS,
     DeterministicProviderBundle,
     ModelProviderBundle,
 )
-from .ranking import (
+from ..ranking import (
     evaluate_speculative_variants,
     merge_candidates,
     rerank_candidates,
     summarize_ranking_diagnostics,
 )
-from .retrieval import (
+from ..retrieval import (
     SMART_RETRIEVAL_FIELDS,
     RetrievalBatch,
     RetrievedCandidate,
     retrieve_variant,
 )
-from .selection_scoring import (
+from ..selection_scoring import (
     infer_comparative_axis,
     score_papers_for_comparative_axis,
 )
-from .workspace import (
+from ..workspace import (
     ExpiredSearchSessionError,
     SearchSessionNotFoundError,
     WorkspaceRegistry,
 )
 
 logger = logging.getLogger("paper-chaser-mcp")
-SMART_SEARCH_PROGRESS_TOTAL = 100.0
-_GRAPH_GENERIC_TERMS = COMMON_QUERY_WORDS | {
-    "effect",
-    "effects",
-    "environmental",
-    "impact",
-    "impacts",
-    "response",
-    "responses",
-    "review",
-    "wildlife",
-}
-_COMPARISON_MARKERS = {
-    "compare",
-    "compared",
-    "comparing",
-    "comparison",
-    "differences",
-    "different",
-    "tradeoff",
-    "tradeoffs",
-    "versus",
-    "vs",
-}
-_THEME_LABEL_STOPWORDS = _GRAPH_GENERIC_TERMS | {
-    "about",
-    "across",
-    "among",
-    "analysis",
-    "and",
-    "approach",
-    "approaches",
-    "based",
-    "between",
-    "cluster",
-    "clusters",
-    "for",
-    "from",
-    "into",
-    "method",
-    "methods",
-    "model",
-    "models",
-    "or",
-    "that",
-    "the",
-    "these",
-    "theme",
-    "themes",
-    "theory",
-    "those",
-    "using",
-    "with",
-}
+
+from .hooks import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7a plan
+    _consume_background_task,
+    _describe_retrieval_batch,
+    _skip_context_notifications,
+    _truncate_text,
+)
+from .regulatory_routing import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7a plan
+    _ECOS_PROVENANCE_RANK,
+    _OPAQUE_ARXIV_RE,
+    _OPAQUE_DOI_RE,
+    _agency_guidance_facet_terms,
+    _agency_guidance_priority_terms,
+    _agency_guidance_subject_terms,
+    _cfr_tokens,
+    _derive_regulatory_query_flags,
+    _ecos_query_variants,
+    _extract_common_name_candidate,
+    _extract_scientific_name_candidate,
+    _extract_subject_terms,
+    _format_cfr_citation,
+    _guidance_query_prefers_recency,
+    _is_agency_guidance_query,
+    _is_current_cfr_text_request,
+    _is_opaque_query,
+    _is_species_regulatory_query,
+    _parse_cfr_request,
+    _query_requests_regulatory_history,
+    _rank_ecos_variant_hits,
+    _rank_regulatory_documents,
+    _regulatory_document_matches_subject,
+    _regulatory_query_priority_terms,
+    _regulatory_query_subject_terms,
+    _regulatory_retrieval_hypotheses,
+)
+from .shared_state import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7a plan
+    _AGENCY_AUTHORITY_TERMS,
+    _AGENCY_GUIDANCE_DISCUSSION_TERMS,
+    _AGENCY_GUIDANCE_DOCUMENT_TERMS,
+    _AGENCY_GUIDANCE_QUERY_NOISE_TERMS,
+    _AGENCY_GUIDANCE_TERMS,
+    _CFR_DOC_TYPE_GENERIC,
+    _COMPARISON_FOCUS_STOPWORDS,
+    _COMPARISON_MARKERS,
+    _CULTURAL_RESOURCE_DOCUMENT_TERMS,
+    _GRAPH_GENERIC_TERMS,
+    _REGULATORY_QUERY_NOISE_TERMS,
+    _REGULATORY_SUBJECT_STOPWORDS,
+    _SPECIES_QUERY_NOISE_TERMS,
+    _THEME_LABEL_STOPWORDS,
+    END,
+    SMART_SEARCH_PROGRESS_TOTAL,
+    START,
+    InMemorySaver,
+    StateGraph,
+)
+from .source_records import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7a plan
+    TopicalRelevanceClassification,
+    _answerability_from_source_records,
+    _candidate_leads_from_source_records,
+    _citation_record_from_paper,
+    _citation_record_from_regulatory_document,
+    _classify_topical_relevance,
+    _classify_topical_relevance_for_paper,
+    _classify_topical_relevance_with_provenance,
+    _coverage_summary_line,
+    _dedupe_structured_sources,
+    _evidence_from_source_records,
+    _graph_topic_tokens,
+    _lead_reason_for_source_record,
+    _likely_unverified_from_source_records,
+    _paper_text,
+    _records_with_lead_reasons,
+    _routing_summary_from_strategy,
+    _source_record_from_paper,
+    _source_record_from_regulatory_document,
+    _verified_findings_from_source_records,
+    _why_matched,
+    _year_text,
+)
 
 
 def _paid_providers_used(providers: list[str]) -> list[str]:
     return sorted({provider for provider in providers if provider_is_paywalled(provider)})
-
-
-_COMPARISON_FOCUS_STOPWORDS = _THEME_LABEL_STOPWORDS | {
-    "noise",
-    "paper",
-    "papers",
-    "results",
-    "study",
-    "studies",
-}
-_REGULATORY_SUBJECT_STOPWORDS = {
-    "act",
-    "administration",
-    "agency",
-    "analysis",
-    "code",
-    "codified",
-    "current",
-    "decision",
-    "critical",
-    "document",
-    "documents",
-    "designation",
-    "drug",
-    "endangered",
-    "fda",
-    "federal",
-    "final",
-    "food",
-    "functions",
-    "guidance",
-    "habitat",
-    "history",
-    "industry",
-    "listed",
-    "listing",
-    "notice",
-    "part",
-    "plants",
-    "profile",
-    "profiles",
-    "recovery",
-    "register",
-    "regulatory",
-    "review",
-    "rule",
-    "section",
-    "software",
-    "species",
-    "status",
-    "text",
-    "threatened",
-    "title",
-    "under",
-    "wildlife",
-}
-_AGENCY_GUIDANCE_TERMS = {
-    "guidance",
-    "guideline",
-    "policy",
-    "staff",
-}
-_AGENCY_AUTHORITY_TERMS = {
-    "agency",
-    "cdc",
-    "cms",
-    "epa",
-    "fda",
-    "food and drug administration",
-    "hhs",
-    "nih",
-    "usda",
-}
-_AGENCY_GUIDANCE_QUERY_NOISE_TERMS = {
-    "actual",
-    "agency",
-    "document",
-    "documents",
-    "drug",
-    "food",
-    "guidance",
-    "industry",
-    "management",
-    "most",
-    "policy",
-    "recent",
-    "relevant",
-    "staff",
-    "what",
-}
-_AGENCY_GUIDANCE_DOCUMENT_TERMS = {
-    "advisories",
-    "advisory",
-    "guidance",
-    "guideline",
-    "guidelines",
-    "notice",
-    "notices",
-    "policies",
-    "policy",
-    "recommendation",
-    "recommendations",
-    "roadmap",
-}
-_AGENCY_GUIDANCE_DISCUSSION_TERMS = {
-    "concept",
-    "concepts",
-    "discussion",
-    "framework",
-    "proposal",
-    "proposals",
-    "proposed",
-}
-_CULTURAL_RESOURCE_DOCUMENT_TERMS = {
-    "106",
-    "achp",
-    "archaeological",
-    "archaeology",
-    "consultation",
-    "cultural",
-    "heritage",
-    "historic",
-    "nagpra",
-    "nhpa",
-    "preservation",
-    "sacred",
-    "shpo",
-    "thpo",
-    "tribal",
-}
-_REGULATORY_QUERY_NOISE_TERMS = {
-    "address",
-    "actions",
-    "current",
-    "federal",
-    "recent",
-    "states",
-    "united",
-    "what",
-}
-_SPECIES_QUERY_NOISE_TERMS = {
-    "about",
-    "critical",
-    "current",
-    "cfr",
-    "dossier",
-    "ecos",
-    "endangered",
-    "federal",
-    "final",
-    "history",
-    "listing",
-    "plants",
-    "profile",
-    "register",
-    "regulatory",
-    "rule",
-    "say",
-    "species",
-    "status",
-    "text",
-    "threatened",
-    "under",
-    "what",
-    "wildlife",
-}
-_CFR_DOC_TYPE_GENERIC = {
-    "and",
-    "cfr",
-    "chapter",
-    "part",
-    "section",
-    "subchapter",
-    "title",
-}
-
-InMemorySaver: Any = None
-StateGraph: Any = None
-START: Any = "__start__"
-END: Any = "__end__"
-
-try:  # pragma: no cover - optional dependency
-    from langgraph.checkpoint.memory import InMemorySaver as _InMemorySaver
-    from langgraph.graph import END as _END
-    from langgraph.graph import START as _START
-    from langgraph.graph import StateGraph as _StateGraph
-
-    InMemorySaver = _InMemorySaver
-    StateGraph = _StateGraph
-    START = _START
-    END = _END
-except ImportError:  # pragma: no cover - optional dependency
-    pass
 
 
 class AgenticRuntime:
@@ -511,37 +339,15 @@ class AgenticRuntime:
 
     @staticmethod
     def _skip_context_notifications(ctx: Context) -> bool:
-        transport = getattr(ctx, "transport", None)
-        if not isinstance(transport, str):
-            return False
-        return transport.lower() == "stdio"
+        return _skip_context_notifications(ctx)
 
     @staticmethod
     def _consume_background_task(task: asyncio.Task[Any]) -> None:
-        try:
-            task.result()
-        except asyncio.CancelledError:
-            return
-        except Exception:
-            logger.debug(
-                "Best-effort context notification failed.",
-                exc_info=True,
-            )
+        _consume_background_task(task)
 
     @staticmethod
     def _describe_retrieval_batch(batch: RetrievalBatch) -> str:
-        providers_text = ", ".join(batch.providers_used) if batch.providers_used else "none"
-        message = (
-            f"Variant '{_truncate_text(batch.variant)}' finished with "
-            f"{len(batch.candidates)} candidate(s) from {providers_text}."
-        )
-        if batch.provider_errors:
-            errors_text = "; ".join(
-                f"{provider}: {_truncate_text(error, limit=90)}"
-                for provider, error in sorted(batch.provider_errors.items())
-            )
-            message = f"{message} Errors: {errors_text}."
-        return message
+        return _describe_retrieval_batch(batch)
 
     async def search_papers_smart(
         self,
@@ -1653,7 +1459,7 @@ class AgenticRuntime:
                 except Exception:
                     llm_relevance = {}
 
-        from .relevance_fallback import classification_provenance_counts
+        from ..relevance_fallback import classification_provenance_counts
 
         classification_provenance = classification_provenance_counts(llm_relevance)
         degraded_classification = bool(classification_provenance.get("degradedClassification"))
@@ -2647,7 +2453,7 @@ class AgenticRuntime:
         # LLM-first subject-card grounding for document-family ranking and
         # species-dossier weak-match demotion. Prefer the subject_card already
         # resolved by classify_query when available.
-        from .subject_grounding import (
+        from ..subject_grounding import (
             compute_subject_chain_gaps,
             resolve_subject_card,
             species_mentioned,
@@ -4096,147 +3902,6 @@ class AgenticRuntime:
         return compiled
 
 
-def _why_matched(
-    *,
-    query: str,
-    paper: dict[str, Any],
-    matched_concepts: list[str],
-) -> str:
-    title = str(paper.get("title") or paper.get("paperId") or "paper")
-    if matched_concepts:
-        return f"{title} matched concepts {', '.join(matched_concepts[:3])}."
-    if paper.get("venue"):
-        return f"{title} matched the query and carries useful venue context from {paper['venue']}."
-    return f"{title} was retained because it stayed close to the original query after fusion and deduplication."
-
-
-def _source_record_from_paper(
-    paper: Paper,
-    *,
-    note: str | None = None,
-    topical_relevance: Literal["on_topic", "weak_match", "off_topic"] | None = None,
-    llm_classification: Literal["on_topic", "weak_match", "off_topic"] | None = None,
-    classification_source: Literal["deterministic", "llm", "llm_tiebreaker"] | None = None,
-    relevance_source: str | None = None,
-    relevance_confidence: float | None = None,
-    relevance_reason: str | None = None,
-    classification_rationale: str | None = None,
-) -> StructuredSourceRecord:
-    source_id = str(paper.canonical_id or paper.paper_id or "") or None
-    return StructuredSourceRecord(
-        sourceId=source_id,
-        title=paper.title,
-        provider=paper.source,
-        sourceType=paper.source_type,
-        verificationStatus=paper.verification_status,
-        accessStatus=paper.access_status,
-        topicalRelevance=topical_relevance,
-        llmClassification=llm_classification,
-        classificationSource=classification_source,
-        confidence=paper.confidence,
-        isPrimarySource=paper.is_primary_source,
-        canonicalUrl=paper.canonical_url,
-        retrievedUrl=paper.retrieved_url,
-        fullTextUrlFound=paper.full_text_url_found,
-        bodyTextEmbedded=paper.body_text_embedded,
-        qaReadableText=paper.qa_readable_text,
-        abstractObserved=paper.abstract_observed,
-        openAccessRoute=paper.open_access_route,
-        citationText=str(paper.canonical_id or paper.paper_id or "") or None,
-        citation=_citation_record_from_paper(paper),
-        date=str(paper.publication_date or paper.year or "") or None,
-        note=note,
-        relevanceSource=cast(Any, relevance_source) if relevance_source else None,
-        relevanceConfidence=relevance_confidence,
-        relevanceReason=relevance_reason,
-        classificationRationale=classification_rationale,
-    )
-
-
-def _source_record_from_regulatory_document(
-    document: dict[str, Any],
-    *,
-    provider: str,
-    topical_relevance: Literal["on_topic", "weak_match", "off_topic"] | None = "on_topic",
-    why_classified_as_weak_match: str | None = None,
-) -> StructuredSourceRecord:
-    title = str(
-        document.get("title") or document.get("citation") or document.get("documentNumber") or "Regulatory source"
-    )
-    canonical_url = (
-        document.get("url")
-        or document.get("htmlUrl")
-        or document.get("sourceUrl")
-        or document.get("govInfoLink")
-        or document.get("pdfUrl")
-    )
-    citation = (
-        str(document.get("citation") or document.get("frCitation") or document.get("documentNumber") or "") or None
-    )
-    source_id = citation or str(document.get("documentNumber") or document.get("speciesId") or "") or None
-    date = document.get("documentDate") or document.get("publicationDate") or document.get("effectiveDate")
-    note = None
-    if provider == "ecos":
-        note = str(document.get("documentType") or document.get("documentKind") or "ECOS dossier document")
-    elif provider == "federal_register":
-        cfr_refs = document.get("cfrReferences") or []
-        note = (
-            ", ".join(cfr_refs)
-            if isinstance(cfr_refs, list) and cfr_refs
-            else "Federal Register primary-source discovery hit"
-        )
-    elif provider == "govinfo":
-        note = str(
-            document.get("note")
-            or ("Authoritative CFR text" if document.get("markdown") else "GovInfo primary-source discovery hit")
-        )
-    has_inline_body = bool(document.get("markdown"))
-    has_url = bool(canonical_url)
-    family_match = document.get("_documentFamilyMatch")
-    family_boost = document.get("_documentFamilyBoost")
-    if has_inline_body:
-        access_status: str = "body_text_embedded"
-    elif has_url:
-        access_status = "url_verified"
-    else:
-        access_status = "access_unverified"
-    if has_inline_body:
-        verification_status_default = "verified_primary_source" if provider == "govinfo" else "verified_metadata"
-    else:
-        verification_status_default = "verified_metadata"
-    return StructuredSourceRecord(
-        sourceId=source_id,
-        title=title,
-        provider=provider,
-        sourceType="primary_regulatory",
-        verificationStatus=str(document.get("verificationStatus") or verification_status_default),
-        accessStatus=access_status,
-        confidence="high" if (provider == "govinfo" and has_inline_body) else "medium",
-        topicalRelevance=topical_relevance,
-        isPrimarySource=True,
-        canonicalUrl=canonical_url,
-        retrievedUrl=canonical_url,
-        fullTextUrlFound=has_url,
-        fullTextRetrieved=has_inline_body,
-        bodyTextEmbedded=has_inline_body,
-        qaReadableText=has_inline_body,
-        abstractObserved=False,
-        openAccessRoute=("non_oa_or_unconfirmed" if (has_inline_body or has_url) else "unknown"),
-        citationText=citation,
-        citation=_citation_record_from_regulatory_document(
-            document,
-            provider=provider,
-            citation_text=citation,
-            canonical_url=str(canonical_url or "") or None,
-        ),
-        date=str(date or "") or None,
-        note=note,
-        whyClassifiedAsWeakMatch=why_classified_as_weak_match,
-        documentFamilyMatch=str(family_match) if family_match else None,
-        documentFamilyBoost=float(family_boost) if isinstance(family_boost, (int, float)) else None,
-    )
-
-
 def _compute_top_recommendation(
     *,
     question: str,
@@ -4437,141 +4102,6 @@ def _build_top_recommendation_rationale(
     return base
 
 
-def _verified_findings_from_source_records(records: list[StructuredSourceRecord]) -> list[str]:
-    findings: list[str] = []
-    for record in records:
-        if record.verification_status not in {"verified_primary_source", "verified_metadata"}:
-            continue
-        if record.topical_relevance != "on_topic":
-            continue
-        title = record.title or record.citation_text or "Verified source"
-        suffix = f" ({record.citation_text})" if record.citation_text and record.citation_text not in title else ""
-        note = f": {record.note}" if record.note else ""
-        findings.append(f"{title}{suffix}{note}")
-    return findings[:6]
-
-
-def _likely_unverified_from_source_records(records: list[StructuredSourceRecord]) -> list[str]:
-    leads: list[str] = []
-    for record in records:
-        if (
-            record.verification_status in {"verified_primary_source", "verified_metadata"}
-            and record.topical_relevance == "on_topic"
-        ):
-            continue
-        title = record.title or record.citation_text or "Unverified source"
-        note = f": {record.note}" if record.note else ""
-        leads.append(f"{title}{note}")
-    return leads[:6]
-
-
-def _lead_reason_for_source_record(record: StructuredSourceRecord) -> str:
-    if record.topical_relevance == "off_topic":
-        return "Excluded from grounded evidence because it drifted off the anchored subject."
-    if record.verification_status not in {"verified_primary_source", "verified_metadata"}:
-        return "Retained as a lead because the source is not yet verified strongly enough to support a grounded answer."
-    return "Retained as a lead because it is related context, but not strong enough to ground the answer on its own."
-
-
-def _records_with_lead_reasons(records: list[StructuredSourceRecord]) -> list[StructuredSourceRecord]:
-    enriched: list[StructuredSourceRecord] = []
-    for record in records:
-        reason = _lead_reason_for_source_record(record)
-        why_not_verified = record.why_not_verified
-        if why_not_verified is None:
-            if record.verification_status not in {"verified_primary_source", "verified_metadata"}:
-                why_not_verified = f"Verification status was {record.verification_status or 'unverified'}."
-            elif record.topical_relevance and record.topical_relevance != "on_topic":
-                why_not_verified = f"Topical relevance was {record.topical_relevance}."
-        enriched.append(
-            record.model_copy(
-                update={
-                    "lead_reason": record.lead_reason or reason,
-                    "why_not_verified": why_not_verified,
-                }
-            )
-        )
-    return enriched
-
-
-def _candidate_leads_from_source_records(records: list[StructuredSourceRecord]) -> list[StructuredSourceRecord]:
-    leads: list[StructuredSourceRecord] = []
-    for record in records:
-        if (
-            record.verification_status in {"verified_primary_source", "verified_metadata"}
-            and record.topical_relevance == "on_topic"
-        ):
-            continue
-        leads.append(record)
-    return _records_with_lead_reasons(_dedupe_structured_sources(leads)[:6])
-
-
-def _evidence_from_source_records(records: list[StructuredSourceRecord]) -> list[StructuredSourceRecord]:
-    evidence: list[StructuredSourceRecord] = []
-    for record in records:
-        if record.verification_status not in {"verified_primary_source", "verified_metadata"}:
-            continue
-        if record.topical_relevance != "on_topic":
-            continue
-        evidence.append(record)
-    return _dedupe_structured_sources(evidence)[:6]
-
-
-def _answerability_from_source_records(
-    *,
-    result_status: str,
-    evidence: list[StructuredSourceRecord],
-    leads: list[StructuredSourceRecord],
-    evidence_gaps: list[str],
-) -> Literal["grounded", "limited", "insufficient"]:
-    if result_status == "succeeded" and evidence:
-        return "grounded"
-    if evidence or leads or evidence_gaps:
-        return "limited"
-    return "insufficient"
-
-
-def _routing_summary_from_strategy(
-    *,
-    strategy_metadata: SearchStrategyMetadata,
-    coverage_summary: CoverageSummary | None,
-    result_status: str,
-    evidence_gaps: list[str],
-) -> dict[str, Any]:
-    providers_attempted = list((coverage_summary.providers_attempted if coverage_summary else []) or [])
-    providers_succeeded = list((coverage_summary.providers_succeeded if coverage_summary else []) or [])
-    providers_failed = list((coverage_summary.providers_failed if coverage_summary else []) or [])
-    provider_plan = list(
-        cast(list[str] | None, getattr(strategy_metadata, "provider_plan", None))
-        or strategy_metadata.providers_used
-        or []
-    )
-    return {
-        "intent": strategy_metadata.intent,
-        "decisionConfidence": strategy_metadata.routing_confidence or strategy_metadata.intent_confidence,
-        "anchorType": strategy_metadata.anchor_type,
-        "anchorValue": strategy_metadata.anchored_subject,
-        "providerPlan": provider_plan,
-        "providersAttempted": providers_attempted,
-        "providersMatched": providers_succeeded,
-        "providersFailed": providers_failed,
-        "providersNotAttempted": [provider for provider in provider_plan if provider not in providers_attempted],
-        "whyPartial": (evidence_gaps[0] if (result_status != "succeeded" and evidence_gaps) else None),
-    }
-
-
-def _dedupe_structured_sources(records: list[StructuredSourceRecord]) -> list[StructuredSourceRecord]:
-    deduped: list[StructuredSourceRecord] = []
-    seen: set[tuple[str | None, str | None, str | None]] = set()
-    for record in records:
-        key = (record.title, record.canonical_url, record.citation_text)
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(record)
-    return deduped
-
-
 def _smart_coverage_summary(
     *,
     providers_used: list[str],
@@ -4652,825 +4182,6 @@ def _smart_failure_summary(
     )
 
 
-def _is_agency_guidance_query(query: str) -> bool:
-    lowered = query.lower()
-    if not any(term in lowered for term in _AGENCY_GUIDANCE_TERMS):
-        return False
-    return any(term in lowered for term in _AGENCY_AUTHORITY_TERMS)
-
-
-def _extract_scientific_name_candidate(query: str) -> str | None:
-    match = re.search(r"\b([A-Z][a-z]{2,})\s+([a-z][a-z-]{2,})\b", query)
-    if not match:
-        return None
-    return f"{match.group(1)} {match.group(2)}"
-
-
-def _extract_common_name_candidate(query: str) -> str | None:
-    cleaned = re.sub(r"\b\d+\s*CFR\s*(?:Part\s*)?\d+(?:\.[\dA-Za-z-]+)?\b", " ", query, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\b\d{4}-\d{4,6}\b", " ", cleaned)
-    cleaned = re.sub(
-        r"\b(?:"
-        + "|".join(re.escape(term) for term in sorted(_SPECIES_QUERY_NOISE_TERMS, key=len, reverse=True))
-        + r")\b",
-        " ",
-        cleaned,
-        flags=re.IGNORECASE,
-    )
-    cleaned = " ".join(cleaned.split(" "))
-    cleaned = " ".join(part for part in cleaned.split() if part)
-    if not cleaned:
-        return None
-    token_count = len(re.findall(r"[A-Za-z][A-Za-z'-]{1,}", cleaned))
-    if token_count < 2:
-        return None
-    return cleaned
-
-
-def _ecos_query_variants(
-    query: str,
-    *,
-    planner: PlannerDecision | None = None,
-) -> list[tuple[str, str, str]]:
-    """Return ECOS query candidates as ``(query, anchor_type, origin)`` tuples.
-
-    ``origin`` is ``"raw"`` for regex/raw-query-derived candidates and
-    ``"planner"`` for candidates supplied by the planner bundle's
-    ``entityCard`` / ``subjectCard``. Raw candidates are emitted first so
-    the ECOS loop tries query-grounded variants before falling back to
-    planner-supplied names — this removes the hallucination-first risk
-    where a plausible-but-wrong LLM species name returns real-but-wrong
-    ECOS data and contaminates downstream ranking. The planner variants
-    still run as a fallback so genuine LLM-emitted names (which can
-    recover from genus-only / subspecies prose the regex misses) keep
-    their recall.
-    """
-
-    variants: list[tuple[str, str, str]] = []
-    seen: set[str] = set()
-
-    def _add(candidate: str | None, anchor_type: str, origin: str) -> None:
-        if not candidate:
-            return
-        normalized = " ".join(candidate.split())
-        if not normalized:
-            return
-        marker = normalized.lower()
-        if marker in seen:
-            return
-        seen.add(marker)
-        variants.append((normalized, anchor_type, origin))
-
-    opaque = _is_opaque_query(query)
-
-    # Raw / regex-derived scientific/common-name variants stay first: even for
-    # opaque queries (DOIs / URLs) the extractor almost never fires on them,
-    # but when it does the name is query-grounded and beats any planner
-    # fallback.
-    _add(_extract_scientific_name_candidate(query), "species_scientific_name", "raw")
-    _add(_extract_common_name_candidate(query), "species_common_name", "raw")
-
-    # For opaque queries the raw full-query variant is an identifier — it can
-    # incidentally match ECOS (e.g. a DOI fragment overlapping a species code)
-    # and lock the loop onto real-but-wrong data before the planner names
-    # ever run. Defer the raw-full-query probe until after the planner
-    # fallbacks when the query is opaque. Non-opaque queries keep the
-    # historical ordering so query-grounded subject terms still run first.
-    if not opaque:
-        _add(query, "regulatory_subject_terms", "raw")
-
-    # Planner-supplied names run as a fallback for genus-only / subspecies
-    # prose the regex cannot recover. Downstream callers stamp hits from
-    # these variants with a lower-confidence ``ecosProvenance`` marker.
-    if planner is not None:
-        entity_card = planner.entity_card or {}
-        if isinstance(entity_card, dict):
-            _add(
-                str(entity_card.get("scientificName") or "") or None,
-                "species_scientific_name",
-                "planner",
-            )
-            _add(
-                str(entity_card.get("commonName") or "") or None,
-                "species_common_name",
-                "planner",
-            )
-        if planner.subject_card is not None:
-            _add(planner.subject_card.scientific_name, "species_scientific_name", "planner")
-            _add(planner.subject_card.common_name, "species_common_name", "planner")
-
-    if opaque:
-        _add(query, "regulatory_subject_terms", "raw")
-
-    return variants
-
-
-_ECOS_PROVENANCE_RANK: dict[str, int] = {"raw": 0, "planner": 1}
-
-
-def _rank_ecos_variant_hits(
-    variant_hits: list[tuple[int, str, str, dict[str, Any]]],
-) -> tuple[int, str, str, dict[str, Any]] | None:
-    """Finding 4 (5th rubber-duck pass): pick the best ECOS variant result.
-
-    Each entry is ``(variant_idx, anchor_type, origin, search_payload)``. The
-    earlier scoring (``hits * factor`` with a 0.9 planner factor) let a
-    planner-only variant with two incidental hits outrank a corroborated raw
-    variant with one solid hit, defeating the provenance-first intent.
-
-    The ranking key is strictly tiered:
-
-    1. Non-empty variants beat empty ones (a corroborated variant with zero
-       hits cannot stand in for a variant with real hits).
-    2. Provenance rank (raw/query-corroborated beats planner-supplied).
-    3. Hit count (higher wins within the same tier).
-    4. Original ``variant_idx`` to preserve the intentional ordering from
-       ``_ecos_query_variants`` as the final tie-breaker.
-
-    That guarantees any corroborated variant with ``>=1`` hit beats any
-    planner-only variant regardless of hit count, while still using hit count
-    to disambiguate variants sharing a provenance tier. Returns ``None`` when
-    the input is empty.
-    """
-
-    if not variant_hits:
-        return None
-    scored: list[tuple[int, int, int, int, int, str, str, dict[str, Any]]] = []
-    for variant_idx, anchor_type, origin, search_payload in variant_hits:
-        hit_count = len(list(search_payload.get("data") or []))
-        has_hits_rank = 0 if hit_count > 0 else 1
-        provenance_rank = _ECOS_PROVENANCE_RANK.get(origin, 1)
-        scored.append(
-            (
-                has_hits_rank,
-                provenance_rank,
-                -hit_count,
-                variant_idx,
-                hit_count,
-                anchor_type,
-                origin,
-                search_payload,
-            )
-        )
-    scored.sort()
-    *_, variant_idx, _hit_count, anchor_type, origin, search_payload = scored[0]
-    return (variant_idx, anchor_type, origin, search_payload)
-
-
-_OPAQUE_DOI_RE = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Za-z0-9]+\b")
-_OPAQUE_ARXIV_RE = re.compile(r"\barxiv[:\s]*\d{4}\.\d{4,5}\b", re.IGNORECASE)
-
-
-def _is_opaque_query(query: str) -> bool:
-    """Return True when ``query`` looks like an identifier rather than prose.
-
-    Opaque queries (DOIs, arXiv ids, bare URLs, identifier-like tokens with
-    almost no letters) are meaningless as ECOS ``regulatory_subject_terms``
-    probes and tend to match ECOS entries incidentally. The caller uses this
-    to defer the raw full-query variant until after planner-supplied names.
-    """
-
-    text = (query or "").strip()
-    if not text:
-        return False
-    if _OPAQUE_DOI_RE.search(text) or _OPAQUE_ARXIV_RE.search(text):
-        return True
-    lowered = text.lower()
-    if lowered.startswith(("http://", "https://", "www.")):
-        return True
-    # Dense identifier-like tokens: mostly non-alpha, or a single long token
-    # with punctuation characteristic of identifiers.
-    alpha = sum(1 for ch in text if ch.isalpha())
-    total = len(text)
-    if total >= 8 and alpha / total < 0.4:
-        return True
-    if " " not in text and any(ch in text for ch in "/:._") and alpha / max(total, 1) < 0.6:
-        return True
-    return False
-
-
-def _query_requests_regulatory_history(query: str) -> bool:
-    lowered = query.lower()
-    return any(
-        marker in lowered
-        for marker in (
-            "federal register",
-            "history",
-            "listing history",
-            "rulemaking",
-            "timeline",
-            "proposed rule",
-            "final rule",
-            "chronology",
-        )
-    )
-
-
-def _parse_cfr_request(query: str) -> dict[str, Any] | None:
-    match = re.search(
-        r"\b(?P<title>\d+)\s*CFR\s*(?:Part\s*)?(?P<part>\d+)(?:\.(?P<section>[\dA-Za-z-]+))?",
-        query,
-        re.IGNORECASE,
-    )
-    if not match:
-        return None
-    return {
-        "title_number": int(match.group("title")),
-        "part_number": int(match.group("part")),
-        "section_number": match.group("section"),
-    }
-
-
-def _is_current_cfr_text_request(query: str) -> bool:
-    lowered = query.lower()
-    if _parse_cfr_request(query) is None:
-        return False
-    markers = (
-        "current cfr",
-        "current text",
-        "codified text",
-        "cfr section",
-        "what does",
-        "what does the",
-        "text of",
-        "say about",
-        "under ",
-    )
-    return any(marker in lowered for marker in markers) or bool(re.search(r"\b\d+\s*cfr\s+\d+(?:\.\S+)?\b", lowered))
-
-
-def _derive_regulatory_query_flags(
-    *,
-    query: str,
-    planner: PlannerDecision | None,
-) -> tuple[bool, bool, bool]:
-    """Map ``planner.regulatory_intent`` into the three routing booleans.
-
-    LLM-first: when the planner bundle actually ran a real LLM (signalled by
-    ``planner.planner_source == "llm"``) and emitted a definitive
-    ``regulatoryIntent`` label, trust it authoritatively so the LLM signal
-    wins over query keywords (e.g. "listing history of the Pallid Sturgeon"
-    tagged ``species_dossier`` must NOT also activate the rulemaking-history
-    route). Provenance is keyed off ``planner_source`` rather than
-    ``subject_card.source`` because an LLM planner can legitimately emit
-    ``regulatoryIntent`` without also supplying subject-card grounding
-    fields; in that case ``classify_query`` stamps the subject card as
-    ``deterministic_fallback``, but the LLM's regulatory label is still
-    authoritative.
-
-    Falls back to the deterministic keyword/regex helpers when:
-
-    * the bundle is deterministic (``planner_source`` is ``"deterministic"``
-      or ``"deterministic_fallback"``) — in that case ``regulatoryIntent``
-      itself came from deterministic heuristics and is no more reliable than
-      the keyword helpers, so we prefer the keyword helpers to avoid losing
-      secondary routes on queries like "Regulatory history ... under 50 CFR ...";
-    * the LLM emitted ``unspecified`` / ``hybrid_regulatory_plus_literature``
-      / ``None`` — mixed or uncommitted intent, so every keyword-matched
-      sub-route may still be relevant.
-
-    Returns ``(current_text_requested, history_requested, agency_guidance_mode)``.
-    """
-
-    intent = planner.regulatory_intent if planner is not None else None
-    llm_authoritative = (
-        planner is not None
-        and planner.planner_source == "llm"
-        and planner.regulatory_intent_source == "llm"
-        and intent is not None
-    )
-    if llm_authoritative:
-        if intent == "current_cfr_text":
-            return (True, False, False)
-        if intent == "rulemaking_history":
-            return (False, True, False)
-        if intent == "guidance_lookup":
-            return (False, False, True)
-        if intent == "species_dossier":
-            return (False, False, False)
-    return (
-        _is_current_cfr_text_request(query),
-        _query_requests_regulatory_history(query),
-        _is_agency_guidance_query(query),
-    )
-
-
-def _year_text(value: Any) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    match = re.search(r"\b(19|20)\d{2}\b", text)
-    return match.group(0) if match else text[:4]
-
-
-def _citation_record_from_paper(paper: Paper) -> CitationRecord | None:
-    doi, _ = resolve_doi_from_paper_payload(paper)
-    authors = [str(author.name).strip() for author in paper.authors if getattr(author, "name", None)]
-    journal_or_publisher = (
-        paper.enrichments.crossref.publisher if paper.enrichments and paper.enrichments.crossref else None
-    ) or paper.venue
-    url = paper.canonical_url or paper.retrieved_url or paper.url or paper.pdf_url
-    if not any([authors, paper.title, paper.year, journal_or_publisher, doi, url]):
-        return None
-    return CitationRecord(
-        authors=authors,
-        year=_year_text(paper.publication_date or paper.year),
-        title=paper.title,
-        journalOrPublisher=journal_or_publisher,
-        doi=doi,
-        url=url,
-        sourceType=paper.source_type,
-        confidence=cast(Any, paper.confidence),
-    )
-
-
-def _citation_record_from_regulatory_document(
-    document: dict[str, Any],
-    *,
-    provider: str,
-    citation_text: str | None,
-    canonical_url: str | None,
-) -> CitationRecord:
-    return CitationRecord(
-        authors=[],
-        year=_year_text(
-            document.get("documentDate") or document.get("publicationDate") or document.get("effectiveDate")
-        ),
-        title=str(document.get("title") or citation_text or "Regulatory source"),
-        journalOrPublisher=(
-            "GovInfo" if provider == "govinfo" else ("Federal Register" if provider == "federal_register" else "ECOS")
-        ),
-        doi=None,
-        url=canonical_url,
-        sourceType="primary_regulatory",
-        confidence=("high" if provider == "govinfo" else "medium"),
-    )
-
-
-def _coverage_summary_line(
-    *,
-    attempted: list[str],
-    failed: list[str],
-    zero_results: list[str],
-    likely_completeness: str,
-) -> str:
-    return (
-        f"{len(attempted)} provider(s) searched, {len(failed)} failed, "
-        f"{len(zero_results)} returned zero results, likely completeness: {likely_completeness}."
-    )
-
-
-def _classify_topical_relevance(
-    *,
-    query_similarity: float,
-    title_facet_coverage: float,
-    title_anchor_coverage: float,
-    query_facet_coverage: float,
-    query_anchor_coverage: float,
-) -> Literal["on_topic", "weak_match", "off_topic"]:
-    has_title_signal = (title_facet_coverage > 0.0) or (title_anchor_coverage > 0.0)
-    has_title_or_body_signal = has_title_signal or (query_facet_coverage > 0.0) or (query_anchor_coverage > 0.0)
-    has_facet_signal = (title_facet_coverage > 0.0) or (query_facet_coverage > 0.0)
-    # Require a multi-token phrase match (facet) for the standard threshold, or a
-    # strict majority of query terms when no phrase match exists.  A single-token
-    # title hit with low similarity is a weak signal, not grounded evidence.
-    if has_title_signal and ((has_facet_signal and query_similarity >= 0.25) or query_similarity > 0.5):
-        return "on_topic"
-    if query_similarity < 0.12 or not has_title_or_body_signal:
-        return "off_topic"
-    return "weak_match"
-
-
-def _classify_topical_relevance_for_paper(
-    *,
-    query: str,
-    paper: dict[str, Any] | Paper,
-    query_similarity: float,
-    score_breakdown: ScoreBreakdown | None = None,
-    llm_classification: Literal["on_topic", "weak_match", "off_topic"] | None = None,
-) -> Literal["on_topic", "weak_match", "off_topic"]:
-    return _classify_topical_relevance_with_provenance(
-        query=query,
-        paper=paper,
-        query_similarity=query_similarity,
-        score_breakdown=score_breakdown,
-        llm_classification=llm_classification,
-    ).effective
-
-
-@dataclass(frozen=True)
-class TopicalRelevanceClassification:
-    """Provenance-aware result of the topical-relevance gate.
-
-    ``effective`` is the verdict callers should act on; it matches what the
-    legacy ``_classify_topical_relevance_for_paper`` returned. ``deterministic``
-    is the raw heuristic verdict, ``llm`` is the classifier verdict when
-    available, and ``source`` records which signal produced ``effective``.
-
-    ``llm_override_ignored`` is True exactly when the deterministic fast-path
-    produced a clear on_topic/off_topic verdict and an LLM classification was
-    available but disagreed. The effective verdict is still the deterministic
-    one in that case — the flag is purely for observability so callers can log
-    the override or surface a counter.
-    """
-
-    effective: Literal["on_topic", "weak_match", "off_topic"]
-    deterministic: Literal["on_topic", "weak_match", "off_topic"]
-    llm: Literal["on_topic", "weak_match", "off_topic"] | None
-    source: Literal["deterministic", "llm", "llm_tiebreaker"]
-    llm_override_ignored: bool
-
-
-def _classify_topical_relevance_with_provenance(
-    *,
-    query: str,
-    paper: dict[str, Any] | Paper,
-    query_similarity: float,
-    score_breakdown: ScoreBreakdown | None = None,
-    llm_classification: Literal["on_topic", "weak_match", "off_topic"] | None = None,
-) -> TopicalRelevanceClassification:
-    title = str((paper.title if isinstance(paper, Paper) else paper.get("title")) or "")
-    body_text = _paper_text(paper.model_dump(by_alias=True) if isinstance(paper, Paper) else paper)
-    title_tokens = _graph_topic_tokens(title)
-    body_tokens = _graph_topic_tokens(body_text)
-    anchors = [term for term in query_terms(query) if term not in _GRAPH_GENERIC_TERMS]
-    facets = query_facets(query)
-
-    title_anchor_hits = sum(term in title_tokens for term in anchors)
-    body_anchor_hits = sum(term in body_tokens for term in anchors)
-    title_anchor_coverage = (title_anchor_hits / len(anchors)) if anchors else 0.0
-    query_anchor_coverage = (body_anchor_hits / len(anchors)) if anchors else 0.0
-
-    def _facet_coverage(tokens: set[str]) -> float:
-        if not facets:
-            return 0.0
-        matched = 0
-        for facet in facets:
-            facet_tokens = [token for token in re.findall(r"[a-z0-9]{3,}", facet.lower()) if token]
-            if not facet_tokens:
-                continue
-            required = len(facet_tokens) if len(facet_tokens) <= 2 else 2
-            if sum(token in tokens for token in facet_tokens) >= required:
-                matched += 1
-        return matched / len(facets)
-
-    title_facet_coverage = _facet_coverage(title_tokens)
-    query_facet_coverage = _facet_coverage(body_tokens)
-    if score_breakdown is not None:
-        title_facet_coverage = max(title_facet_coverage, score_breakdown.title_facet_coverage)
-        title_anchor_coverage = max(title_anchor_coverage, score_breakdown.title_anchor_coverage)
-        query_facet_coverage = max(query_facet_coverage, score_breakdown.query_facet_coverage)
-        query_anchor_coverage = max(query_anchor_coverage, score_breakdown.query_anchor_coverage)
-
-    deterministic = _classify_topical_relevance(
-        query_similarity=query_similarity,
-        title_facet_coverage=title_facet_coverage,
-        title_anchor_coverage=title_anchor_coverage,
-        query_facet_coverage=query_facet_coverage,
-        query_anchor_coverage=query_anchor_coverage,
-    )
-    has_title_signal = (title_facet_coverage > 0.0) or (title_anchor_coverage > 0.0)
-    has_title_or_body_signal = has_title_signal or (query_facet_coverage > 0.0) or (query_anchor_coverage > 0.0)
-    fast_path_on_topic = deterministic == "on_topic" and query_similarity > 0.5
-    fast_path_off_topic = deterministic == "off_topic" and query_similarity < 0.12 and not has_title_or_body_signal
-    strict_title_alignment_query = looks_like_exact_title(query) or looks_like_near_known_item_query(query)
-    guard_llm_on_topic_promotion = (
-        strict_title_alignment_query
-        and deterministic == "weak_match"
-        and llm_classification == "on_topic"
-        and not has_title_signal
-    )
-
-    effective: Literal["on_topic", "weak_match", "off_topic"]
-    source: Literal["deterministic", "llm", "llm_tiebreaker"]
-    llm_override_ignored = False
-    if fast_path_on_topic:
-        effective = "on_topic"
-        source = "deterministic"
-        if llm_classification is not None and llm_classification != "on_topic":
-            llm_override_ignored = True
-    elif fast_path_off_topic:
-        effective = "off_topic"
-        source = "deterministic"
-        if llm_classification is not None and llm_classification != "off_topic":
-            llm_override_ignored = True
-    elif guard_llm_on_topic_promotion:
-        effective = deterministic
-        source = "deterministic"
-    elif llm_classification is not None:
-        effective = llm_classification
-        source = "llm_tiebreaker" if deterministic == "weak_match" else "llm"
-    else:
-        effective = deterministic
-        source = "deterministic"
-
-    return TopicalRelevanceClassification(
-        effective=effective,
-        deterministic=deterministic,
-        llm=llm_classification,
-        source=source,
-        llm_override_ignored=llm_override_ignored,
-    )
-
-
-def _extract_subject_terms(*names: str | None) -> set[str]:
-    tokens: set[str] = set()
-    for name in names:
-        if not name:
-            continue
-        for token in re.findall(r"[a-z0-9]{3,}", name.lower()):
-            if token in _REGULATORY_SUBJECT_STOPWORDS:
-                continue
-            if len(token) <= 3:
-                continue
-            tokens.add(token)
-    return tokens
-
-
-def _format_cfr_citation(cfr_request: dict[str, Any] | None) -> str | None:
-    if not cfr_request:
-        return None
-    title = cfr_request.get("title_number")
-    part = cfr_request.get("part_number")
-    section = cfr_request.get("section_number")
-    if title is None or part is None:
-        return None
-    if section:
-        return f"{title} CFR {part}.{section}"
-    return f"{title} CFR {part}"
-
-
-def _regulatory_retrieval_hypotheses(
-    *,
-    query: str,
-    planner: PlannerDecision,
-    subject: str | None,
-    anchor_type: str | None,
-    cfr_citation: str | None,
-    current_text_requested: bool,
-    history_requested: bool,
-    agency_guidance_mode: bool,
-) -> list[str]:
-    hypotheses: list[str] = [str(item).strip() for item in planner.retrieval_hypotheses if str(item).strip()]
-    anchor_subject = str(subject or planner.anchor_value or query).strip()
-    if current_text_requested and cfr_citation:
-        hypotheses.append(f"Current codified CFR text for {cfr_citation}.")
-    if cfr_citation and not current_text_requested:
-        hypotheses.append(f"40 CFR incorporation and referenced regulatory text for {cfr_citation}.")
-    if agency_guidance_mode:
-        hypotheses.append(f"Agency guidance documents directly addressing {anchor_subject}.")
-        hypotheses.append(f"Federal Register notices or policy actions relevant to {anchor_subject}.")
-    elif anchor_type in {"species_common_name", "species_scientific_name"}:
-        hypotheses.append(f"ECOS species dossier and supporting recovery-plan materials for {anchor_subject}.")
-        hypotheses.append(f"Federal Register listing or habitat actions for {anchor_subject}.")
-    else:
-        hypotheses.append(f"Federal Register final rule or notice history for {anchor_subject}.")
-        hypotheses.append(f"Current CFR incorporation or agency primary-source text for {anchor_subject}.")
-    if history_requested and not agency_guidance_mode:
-        hypotheses.append(f"Rulemaking timeline milestones for {anchor_subject}.")
-    for facet in query_facets(query):
-        facet_text = str(facet).strip()
-        if facet_text:
-            hypotheses.append(facet_text)
-
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for hypothesis in hypotheses:
-        normalized = str(hypothesis).strip()
-        lowered = normalized.lower()
-        if not normalized or lowered in seen:
-            continue
-        seen.add(lowered)
-        deduped.append(normalized)
-    return deduped[:5]
-
-
-def _cfr_tokens(citation: str | None) -> set[str]:
-    if not citation:
-        return set()
-    return {token for token in re.findall(r"[a-z0-9]{2,}", citation.lower()) if token not in _CFR_DOC_TYPE_GENERIC}
-
-
-def _regulatory_document_matches_subject(
-    document: dict[str, Any],
-    *,
-    subject_terms: set[str],
-    priority_terms: set[str] | None = None,
-    cfr_citation: str | None,
-) -> bool:
-    title = str(document.get("title") or "")
-    summary = str(document.get("abstract") or document.get("excerpt") or document.get("summary") or "")
-    cfr_refs_raw = document.get("cfrReferences")
-    cfr_refs = cfr_refs_raw if isinstance(cfr_refs_raw, list) else []
-    cfr_ref_text = " ".join(str(ref) for ref in cfr_refs)
-    document_text = " ".join(
-        part for part in [title, summary, str(document.get("citation") or ""), cfr_ref_text] if part
-    )
-    document_tokens = _graph_topic_tokens(document_text)
-    title_tokens = _graph_topic_tokens(title)
-    priority_overlap = len(document_tokens & set(priority_terms or set()))
-
-    subject_match_required = bool(subject_terms)
-    subject_title_overlap = len(subject_terms & title_tokens)
-    subject_body_overlap = len(subject_terms & document_tokens)
-    subject_match = subject_title_overlap > 0 or subject_body_overlap >= 2 or priority_overlap >= 2
-    if priority_terms:
-        subject_match = subject_match and priority_overlap > 0
-
-    cfr_match = False
-    cfr_expected_tokens = _cfr_tokens(cfr_citation)
-    if cfr_expected_tokens:
-        for ref in cfr_refs:
-            ref_tokens = _cfr_tokens(str(ref))
-            if cfr_expected_tokens.issubset(ref_tokens):
-                cfr_match = True
-                break
-        if not cfr_match:
-            cfr_match = cfr_expected_tokens.issubset(_cfr_tokens(str(document.get("citation") or "")))
-
-    if subject_match_required and cfr_expected_tokens:
-        return subject_match and cfr_match
-    if subject_match_required:
-        return subject_match
-    if cfr_expected_tokens:
-        return cfr_match
-    return True
-
-
-def _agency_guidance_subject_terms(query: str) -> set[str]:
-    normalized = re.sub(r"[-_/]+", " ", query.lower())
-    return {
-        term
-        for term in re.findall(r"[a-z0-9]{4,}", normalized)
-        if term not in _REGULATORY_SUBJECT_STOPWORDS
-        and term not in _AGENCY_GUIDANCE_QUERY_NOISE_TERMS
-        and term not in _GRAPH_GENERIC_TERMS
-        and len(term) > 3
-    }
-
-
-def _regulatory_query_subject_terms(query: str) -> set[str]:
-    normalized = re.sub(r"[-_/]+", " ", query.lower())
-    return {
-        term
-        for term in re.findall(r"[a-z0-9]{4,}", normalized)
-        if term not in _REGULATORY_SUBJECT_STOPWORDS
-        and term not in _REGULATORY_QUERY_NOISE_TERMS
-        and term not in _GRAPH_GENERIC_TERMS
-    }
-
-
-def _regulatory_query_priority_terms(query: str) -> set[str]:
-    authority_terms = {term.lower() for term in _AGENCY_AUTHORITY_TERMS if " " not in term}
-    generic_regulatory_acronyms = {
-        "cfr",
-        "esa",
-        "fr",
-        "u.s",
-        "us",
-    }
-    return {
-        token.lower()
-        for token in re.findall(r"\b[A-Z][A-Z0-9-]{2,}\b", query)
-        if token.lower() not in authority_terms and token.lower() not in generic_regulatory_acronyms
-    }
-
-
-def _agency_guidance_priority_terms(query: str) -> set[str]:
-    terms = _agency_guidance_subject_terms(query)
-    for facet in query_facets(query):
-        for token in re.findall(r"[a-z0-9]{4,}", facet.lower()):
-            if token in _GRAPH_GENERIC_TERMS or token in _AGENCY_GUIDANCE_QUERY_NOISE_TERMS:
-                continue
-            if token in _REGULATORY_SUBJECT_STOPWORDS:
-                continue
-            terms.add(token)
-    return terms
-
-
-def _agency_guidance_facet_terms(query: str) -> list[set[str]]:
-    facet_terms: list[set[str]] = []
-    for facet in query_facets(query):
-        tokens = {
-            token
-            for token in re.findall(r"[a-z0-9]{4,}", facet.lower())
-            if token not in _GRAPH_GENERIC_TERMS
-            and token not in _AGENCY_GUIDANCE_QUERY_NOISE_TERMS
-            and token not in _REGULATORY_SUBJECT_STOPWORDS
-        }
-        if len(tokens) >= 2:
-            facet_terms.append(tokens)
-    return facet_terms
-
-
-def _guidance_query_prefers_recency(query: str) -> bool:
-    lowered = query.lower()
-    return any(marker in lowered for marker in {"current", "latest", "new", "newest", "recent"})
-
-
-def _is_species_regulatory_query(query: str) -> bool:
-    lowered = query.lower()
-    regulatory_markers = {"esa", "final rule", "listing history", "listing status", "regulatory history"}
-    species_markers = {
-        "bat",
-        "bird",
-        "condor",
-        "critical habitat",
-        "endangered",
-        "habitat",
-        "listing",
-        "recovery",
-        "species",
-        "threatened",
-        "wildlife",
-    }
-    return any(marker in lowered for marker in regulatory_markers) and any(
-        marker in lowered for marker in species_markers
-    )
-
-
-def _rank_regulatory_documents(
-    documents: list[dict[str, Any]],
-    *,
-    subject_terms: set[str],
-    priority_terms: set[str],
-    facet_terms: list[set[str]],
-    prefer_guidance: bool,
-    prefer_recent: bool,
-    cultural_resource_boost: bool = False,
-    requested_document_family: str | None = None,
-) -> list[dict[str, Any]]:
-    from .subject_grounding import detect_document_family_match
-
-    def _score(document: dict[str, Any]) -> tuple[int, str]:
-        title = str(document.get("title") or "")
-        summary = str(document.get("abstract") or document.get("excerpt") or document.get("summary") or "")
-        tokens = _graph_topic_tokens(" ".join(part for part in [title, summary] if part))
-        title_tokens = _graph_topic_tokens(title)
-        overlap = len(subject_terms & tokens)
-        title_overlap = len(subject_terms & title_tokens)
-        priority_overlap = len(tokens & priority_terms)
-        facet_overlap = 0
-        for facet in facet_terms:
-            required = len(facet) if len(facet) <= 2 else 2
-            if sum(token in tokens for token in facet) >= required:
-                facet_overlap += 1
-        document_type = str(document.get("documentType") or "").lower()
-        publication_date = str(document.get("publicationDate") or "")
-        publication_year_match = re.search(r"\b(19|20)\d{2}\b", publication_date)
-        publication_year = int(publication_year_match.group(0)) if publication_year_match else 0
-        guidance_form_bonus = 8 if (tokens & _AGENCY_GUIDANCE_DOCUMENT_TERMS) else 0
-        discussion_form_penalty = 4 if (tokens & _AGENCY_GUIDANCE_DISCUSSION_TERMS) else 0
-        guidance_bonus = (
-            2 if prefer_guidance and any(token in tokens for token in {"guidance", "framework", "discussion"}) else 0
-        )
-        notice_bonus = 1 if document_type in {"notice", "rule"} else 0
-        recency_bonus = max((publication_year - 2010) * 2, 0) if prefer_recent else 0
-        cultural_overlap = len(tokens & _CULTURAL_RESOURCE_DOCUMENT_TERMS) if cultural_resource_boost else 0
-        cultural_title_overlap = len(title_tokens & _CULTURAL_RESOURCE_DOCUMENT_TERMS) if cultural_resource_boost else 0
-        cultural_bonus = (cultural_title_overlap * 6) + (cultural_overlap * 3)
-        family_match, family_boost_fraction = detect_document_family_match(document, requested_document_family)
-        family_bonus = int(round(family_boost_fraction * 24)) if family_match else 0
-        if family_match:
-            # Annotate the document so the source-record builder can surface
-            # documentFamilyMatch / documentFamilyBoost to callers.
-            document["_documentFamilyMatch"] = family_match
-            document["_documentFamilyBoost"] = round(family_boost_fraction, 3)
-        score = (
-            (title_overlap * 5)
-            + (overlap * 2)
-            + (priority_overlap * 2)
-            + (facet_overlap * 3)
-            + guidance_form_bonus
-            + guidance_bonus
-            + notice_bonus
-            + recency_bonus
-            + cultural_bonus
-            + family_bonus
-            - discussion_form_penalty
-        )
-        return score, publication_date
-
-    return sorted(documents, key=_score, reverse=True)
-
-
-def _paper_text(paper: dict[str, Any]) -> str:
-    authors = ", ".join(author.get("name", "") for author in (paper.get("authors") or []) if isinstance(author, dict))
-    return " ".join(
-        part
-        for part in [
-            str(paper.get("title") or ""),
-            str(paper.get("abstract") or ""),
-            str(paper.get("venue") or ""),
-            str(paper.get("year") or ""),
-            authors,
-        ]
-        if part
-    )
-
-
 def _initial_retrieval_query_text(*, normalized_query: str, focus: str | None, intent: IntentLabel) -> str:
     if intent in {"known_item", "author", "citation", "regulatory"}:
         return normalized_query
@@ -5479,13 +4190,6 @@ def _initial_retrieval_query_text(*, normalized_query: str, focus: str | None, i
         return normalized_query
     combined = normalize_query(f"{normalized_query} {normalized_focus}")
     return combined if combined.lower() != normalized_query.lower() else normalized_query
-
-
-def _truncate_text(value: str, *, limit: int = 72) -> str:
-    normalized = " ".join(value.split())
-    if len(normalized) <= limit:
-        return normalized
-    return f"{normalized[: max(limit - 3, 1)].rstrip()}..."
 
 
 def _comparison_requested(question: str, answer_mode: str) -> bool:
@@ -6113,10 +4817,6 @@ def _filter_graph_frontier(
     if retained:
         return retained
     return ranked_related[: min(3, len(ranked_related))]
-
-
-def _graph_topic_tokens(text: str) -> set[str]:
-    return {token for token in re.findall(r"[a-z0-9]{3,}", text.lower()) if token not in _GRAPH_GENERIC_TERMS}
 
 
 def _result_coverage_label(candidates: list[dict[str, Any]]) -> str:
