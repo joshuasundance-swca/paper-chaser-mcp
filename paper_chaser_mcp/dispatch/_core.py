@@ -59,7 +59,10 @@ from .normalization import (  # noqa: F401 — re-exported for dispatch package 
     _guided_normalize_year_hint,
     _guided_strip_research_prefix,
 )
-from .paging import _cursor_to_offset, _encode_next_cursor  # noqa: F401 — ``_encode_next_cursor`` re-exported for backward-compat
+from .paging import (  # noqa: F401 — ``_encode_next_cursor`` re-exported for backward-compat
+    _cursor_to_offset,
+    _encode_next_cursor,
+)
 from .relevance import (  # noqa: F401 — re-exported for dispatch package namespace
     _facet_match,
     _paper_topical_relevance,
