@@ -83,6 +83,7 @@ KNOWN_TEST_SEAMS: frozenset[tuple[str, str]] = frozenset(
         ("paper_chaser_mcp.dispatch", "_apply_follow_up_response_mode"),
         ("paper_chaser_mcp.dispatch", "_assign_verification_status"),
         ("paper_chaser_mcp.dispatch", "_authoritative_but_weak_source_ids"),
+        ("paper_chaser_mcp.dispatch", "_core"),
         ("paper_chaser_mcp.dispatch", "_cursor_to_offset"),
         ("paper_chaser_mcp.dispatch", "_guided_citation_from_paper"),
         ("paper_chaser_mcp.dispatch", "_guided_confidence_signals"),
