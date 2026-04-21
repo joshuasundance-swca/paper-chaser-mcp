@@ -5,11 +5,19 @@ from __future__ import annotations
 import pytest
 
 from paper_chaser_mcp.agentic.models import PlannerDecision
-from paper_chaser_mcp.agentic.planner import reconciliation as reconciliation_module
 from paper_chaser_mcp.agentic.planner._core import (
     _VALID_REGULATORY_INTENTS,
     _derive_regulatory_intent,
     _has_literature_corroboration,
+)
+from paper_chaser_mcp.agentic.planner.reconciliation import (
+    _VALID_REGULATORY_INTENTS as _reconciliation_VALID_REGULATORY_INTENTS,
+)
+from paper_chaser_mcp.agentic.planner.reconciliation import (
+    _derive_regulatory_intent as _reconciliation_derive_regulatory_intent,
+)
+from paper_chaser_mcp.agentic.planner.reconciliation import (
+    _has_literature_corroboration as _reconciliation_has_literature_corroboration,
 )
 
 
@@ -73,15 +81,17 @@ def test_derive_regulatory_intent_demotes_hybrid_without_corroboration() -> None
 
 
 def test_reconciliation_submodule_exposes_expected_symbols() -> None:
+    import paper_chaser_mcp.agentic.planner.reconciliation as reconciliation_submodule
+
     expected = {"_VALID_REGULATORY_INTENTS", "_has_literature_corroboration", "_derive_regulatory_intent"}
-    missing = expected - set(dir(reconciliation_module))
+    missing = expected - set(dir(reconciliation_submodule))
     assert not missing, f"reconciliation submodule missing: {missing}"
 
 
 def test_core_symbols_identity_matches_reconciliation_submodule() -> None:
-    assert _VALID_REGULATORY_INTENTS is reconciliation_module._VALID_REGULATORY_INTENTS
-    assert _has_literature_corroboration is reconciliation_module._has_literature_corroboration
-    assert _derive_regulatory_intent is reconciliation_module._derive_regulatory_intent
+    assert _VALID_REGULATORY_INTENTS is _reconciliation_VALID_REGULATORY_INTENTS
+    assert _has_literature_corroboration is _reconciliation_has_literature_corroboration
+    assert _derive_regulatory_intent is _reconciliation_derive_regulatory_intent
 
 
 if __name__ == "__main__":  # pragma: no cover

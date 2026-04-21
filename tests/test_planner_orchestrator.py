@@ -124,10 +124,7 @@ async def test_grounded_expansion_candidates_adds_constraints_and_dedupes() -> N
 @pytest.mark.asyncio
 async def test_speculative_expansion_candidates_respects_bound() -> None:
     bundle = _ExpansionBundle(
-        speculative=[
-            ExpansionCandidate(variant=f"variant {i}", source="speculative", rationale="r")
-            for i in range(10)
-        ]
+        speculative=[ExpansionCandidate(variant=f"variant {i}", source="speculative", rationale="r") for i in range(10)]
     )
     result = await speculative_expansion_candidates(
         original_query="climate",

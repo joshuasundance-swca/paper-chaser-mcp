@@ -4,13 +4,27 @@ from __future__ import annotations
 
 from paper_chaser_mcp.agentic.config import AgenticConfig
 from paper_chaser_mcp.agentic.models import IntentCandidate, PlannerDecision
-from paper_chaser_mcp.agentic.planner import hypotheses as hypotheses_module
 from paper_chaser_mcp.agentic.planner._core import (
     _ordered_provider_plan,
     _sort_intent_candidates,
     _source_for_intent_candidate,
     _upsert_intent_candidate,
     initial_retrieval_hypotheses,
+)
+from paper_chaser_mcp.agentic.planner.hypotheses import (
+    _ordered_provider_plan as _hypotheses_ordered_provider_plan,
+)
+from paper_chaser_mcp.agentic.planner.hypotheses import (
+    _sort_intent_candidates as _hypotheses_sort_intent_candidates,
+)
+from paper_chaser_mcp.agentic.planner.hypotheses import (
+    _source_for_intent_candidate as _hypotheses_source_for_intent_candidate,
+)
+from paper_chaser_mcp.agentic.planner.hypotheses import (
+    _upsert_intent_candidate as _hypotheses_upsert_intent_candidate,
+)
+from paper_chaser_mcp.agentic.planner.hypotheses import (
+    initial_retrieval_hypotheses as _hypotheses_initial_retrieval_hypotheses,
 )
 
 
@@ -146,8 +160,8 @@ def test_sort_intent_candidates_preferred_first() -> None:
 
 
 def test_core_symbols_identity_matches_hypotheses() -> None:
-    assert _source_for_intent_candidate is hypotheses_module._source_for_intent_candidate
-    assert _ordered_provider_plan is hypotheses_module._ordered_provider_plan
-    assert initial_retrieval_hypotheses is hypotheses_module.initial_retrieval_hypotheses
-    assert _upsert_intent_candidate is hypotheses_module._upsert_intent_candidate
-    assert _sort_intent_candidates is hypotheses_module._sort_intent_candidates
+    assert _source_for_intent_candidate is _hypotheses_source_for_intent_candidate
+    assert _ordered_provider_plan is _hypotheses_ordered_provider_plan
+    assert initial_retrieval_hypotheses is _hypotheses_initial_retrieval_hypotheses
+    assert _upsert_intent_candidate is _hypotheses_upsert_intent_candidate
+    assert _sort_intent_candidates is _hypotheses_sort_intent_candidates

@@ -6,13 +6,27 @@ import pytest
 
 from paper_chaser_mcp.agentic.config import AgenticConfig
 from paper_chaser_mcp.agentic.models import ExpansionCandidate
-from paper_chaser_mcp.agentic.planner import variants as variants_module
 from paper_chaser_mcp.agentic.planner._core import (
     _signatures_are_near_duplicates,
     _top_evidence_phrases,
     _variant_signature,
     combine_variants,
     dedupe_variants,
+)
+from paper_chaser_mcp.agentic.planner.variants import (
+    _signatures_are_near_duplicates as _variants_signatures_are_near_duplicates,
+)
+from paper_chaser_mcp.agentic.planner.variants import (
+    _top_evidence_phrases as _variants_top_evidence_phrases,
+)
+from paper_chaser_mcp.agentic.planner.variants import (
+    _variant_signature as _variants_variant_signature,
+)
+from paper_chaser_mcp.agentic.planner.variants import (
+    combine_variants as _variants_combine_variants,
+)
+from paper_chaser_mcp.agentic.planner.variants import (
+    dedupe_variants as _variants_dedupe_variants,
 )
 
 
@@ -117,6 +131,8 @@ def test_top_evidence_phrases_returns_recurring_bigrams() -> None:
 
 
 def test_variants_submodule_exposes_expected_symbols() -> None:
+    import paper_chaser_mcp.agentic.planner.variants as variants_submodule
+
     expected = {
         "combine_variants",
         "dedupe_variants",
@@ -124,16 +140,16 @@ def test_variants_submodule_exposes_expected_symbols() -> None:
         "_signatures_are_near_duplicates",
         "_top_evidence_phrases",
     }
-    missing = expected - set(dir(variants_module))
+    missing = expected - set(dir(variants_submodule))
     assert not missing, f"variants submodule missing: {missing}"
 
 
 def test_core_symbols_identity_matches_variants_submodule() -> None:
-    assert combine_variants is variants_module.combine_variants
-    assert dedupe_variants is variants_module.dedupe_variants
-    assert _variant_signature is variants_module._variant_signature
-    assert _signatures_are_near_duplicates is variants_module._signatures_are_near_duplicates
-    assert _top_evidence_phrases is variants_module._top_evidence_phrases
+    assert combine_variants is _variants_combine_variants
+    assert dedupe_variants is _variants_dedupe_variants
+    assert _variant_signature is _variants_variant_signature
+    assert _signatures_are_near_duplicates is _variants_signatures_are_near_duplicates
+    assert _top_evidence_phrases is _variants_top_evidence_phrases
 
 
 if __name__ == "__main__":  # pragma: no cover
