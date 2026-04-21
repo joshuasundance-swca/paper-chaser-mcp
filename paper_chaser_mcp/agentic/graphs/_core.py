@@ -186,6 +186,12 @@ from .shared_state import (  # noqa: E402,F401 - preserve legacy call-site names
     InMemorySaver,
     StateGraph,
 )
+from .smart_graph import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7c-2 plan
+    _dedupe_variants,
+    _initial_retrieval_query_text,
+    _result_coverage_label,
+    _smart_failure_summary,
+)
 from .source_records import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7a plan
     TopicalRelevanceClassification,
     _answerability_from_source_records,
@@ -4183,43 +4189,6 @@ def _smart_coverage_summary(
     )
 
 
-def _smart_failure_summary(
-    *,
-    provider_outcomes: list[dict[str, Any]],
-    fallback_attempted: bool,
-) -> FailureSummary | None:
-    failures = [
-        outcome
-        for outcome in provider_outcomes
-        if str(outcome.get("statusBucket") or "") not in {"success", "empty", "skipped", ""}
-    ]
-    if not failures:
-        return None
-    failed_providers = sorted({str(outcome.get("provider") or "unknown") for outcome in failures})
-    return FailureSummary(
-        outcome="fallback_success",
-        whatFailed="One or more smart-search providers or provider-side stages failed.",
-        whatStillWorked="The smart workflow returned the strongest available partial result set.",
-        fallbackAttempted=fallback_attempted,
-        fallbackMode="smart_provider_fallback",
-        primaryPathFailureReason=", ".join(failed_providers),
-        completenessImpact=(
-            "Coverage may be partial because these providers or stages failed: " + ", ".join(failed_providers) + "."
-        ),
-        recommendedNextAction="review_partial_results",
-    )
-
-
-def _initial_retrieval_query_text(*, normalized_query: str, focus: str | None, intent: IntentLabel) -> str:
-    if intent in {"known_item", "author", "citation", "regulatory"}:
-        return normalized_query
-    normalized_focus = normalize_query(str(focus or ""))
-    if not normalized_focus:
-        return normalized_query
-    combined = normalize_query(f"{normalized_query} {normalized_focus}")
-    return combined if combined.lower() != normalized_query.lower() else normalized_query
-
-
 def _has_inspectable_sources(records: list[StructuredSourceRecord]) -> bool:
     return any(
         record.topical_relevance != "off_topic"
@@ -4242,26 +4211,6 @@ def _best_next_internal_action(*, intent: str, has_sources: bool, result_status:
     if result_status == "partial":
         return "search_papers_smart"
     return "resolve_reference"
-
-
-def _result_coverage_label(candidates: list[dict[str, Any]]) -> str:
-    if len(candidates) >= 20:
-        return "broad"
-    if len(candidates) >= 8:
-        return "moderate"
-    return "narrow"
-
-
-def _dedupe_variants(variants: list[str]) -> list[str]:
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for variant in variants:
-        lowered = variant.strip().lower()
-        if not lowered or lowered in seen:
-            continue
-        seen.add(lowered)
-        deduped.append(variant)
-    return deduped
 
 
 def _smart_provider_fallback_warnings(
