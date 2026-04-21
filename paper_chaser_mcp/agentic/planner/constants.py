@@ -4,13 +4,19 @@ Phase 6 extracted these from the ``planner`` monolith so the regex patterns and
 keyword/stopword sets live in a dependency-free module that every other
 planner submodule can import without creating cycles. Only ``re`` and the
 provider-layer ``COMMON_QUERY_WORDS`` allowlist are needed here.
+
+Phase 7c-1 rewired the ``COMMON_QUERY_WORDS`` import to come directly from
+``provider_helpers`` (its native definition site) so importing this module
+does not pull in the heavy ``.providers`` facade — which would drag in
+``provider_langchain`` / ``provider_openai`` and re-create the
+``planner -> providers -> provider_base -> planner`` latent cycle.
 """
 
 from __future__ import annotations
 
 import re
 
-from ..providers import COMMON_QUERY_WORDS
+from ..provider_helpers import COMMON_QUERY_WORDS
 
 DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:A-Za-z0-9]+", re.IGNORECASE)
 ARXIV_RE = re.compile(r"(?:arxiv:)?\d{4}\.\d{4,5}(?:v\d+)?", re.IGNORECASE)

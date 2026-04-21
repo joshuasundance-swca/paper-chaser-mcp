@@ -19,54 +19,6 @@ from ...citation_repair import (
     looks_like_citation_query as looks_like_citation_query,
 )
 from . import _core as _core
-from ._core import (
-    _VALID_REGULATORY_INTENTS as _VALID_REGULATORY_INTENTS,
-)
-from ._core import (
-    _derive_regulatory_intent as _derive_regulatory_intent,
-)
-from ._core import (
-    _has_literature_corroboration as _has_literature_corroboration,
-)
-from ._core import (
-    _ordered_provider_plan as _ordered_provider_plan,
-)
-from ._core import (
-    _signatures_are_near_duplicates as _signatures_are_near_duplicates,
-)
-from ._core import (
-    _sort_intent_candidates as _sort_intent_candidates,
-)
-from ._core import (
-    _source_for_intent_candidate as _source_for_intent_candidate,
-)
-from ._core import (
-    _top_evidence_phrases as _top_evidence_phrases,
-)
-from ._core import (
-    _upsert_intent_candidate as _upsert_intent_candidate,
-)
-from ._core import (
-    _variant_signature as _variant_signature,
-)
-from ._core import (
-    classify_query as classify_query,
-)
-from ._core import (
-    combine_variants as combine_variants,
-)
-from ._core import (
-    dedupe_variants as dedupe_variants,
-)
-from ._core import (
-    grounded_expansion_candidates as grounded_expansion_candidates,
-)
-from ._core import (
-    initial_retrieval_hypotheses as initial_retrieval_hypotheses,
-)
-from ._core import (
-    speculative_expansion_candidates as speculative_expansion_candidates,
-)
 from .constants import (
     _CULTURAL_RESOURCE_MARKERS as _CULTURAL_RESOURCE_MARKERS,
 )
@@ -112,6 +64,21 @@ from .constants import (
 from .constants import (
     VARIANT_DEDUPE_STOPWORDS as VARIANT_DEDUPE_STOPWORDS,
 )
+from .hypotheses import (
+    _ordered_provider_plan as _ordered_provider_plan,
+)
+from .hypotheses import (
+    _sort_intent_candidates as _sort_intent_candidates,
+)
+from .hypotheses import (
+    _source_for_intent_candidate as _source_for_intent_candidate,
+)
+from .hypotheses import (
+    _upsert_intent_candidate as _upsert_intent_candidate,
+)
+from .hypotheses import (
+    initial_retrieval_hypotheses as initial_retrieval_hypotheses,
+)
 from .normalization import (
     looks_like_exact_title as looks_like_exact_title,
 )
@@ -129,6 +96,24 @@ from .normalization import (
 )
 from .normalization import (
     query_terms as query_terms,
+)
+from .orchestrator import (
+    classify_query as classify_query,
+)
+from .orchestrator import (
+    grounded_expansion_candidates as grounded_expansion_candidates,
+)
+from .orchestrator import (
+    speculative_expansion_candidates as speculative_expansion_candidates,
+)
+from .reconciliation import (
+    _VALID_REGULATORY_INTENTS as _VALID_REGULATORY_INTENTS,
+)
+from .reconciliation import (
+    _derive_regulatory_intent as _derive_regulatory_intent,
+)
+from .reconciliation import (
+    _has_literature_corroboration as _has_literature_corroboration,
 )
 from .regulatory import (
     _detect_cultural_resource_intent as _detect_cultural_resource_intent,
@@ -169,8 +154,69 @@ from .specificity import (
 from .specificity import (
     _query_starts_broad as _query_starts_broad,
 )
+from .variants import (
+    _signatures_are_near_duplicates as _signatures_are_near_duplicates,
+)
+from .variants import (
+    _top_evidence_phrases as _top_evidence_phrases,
+)
+from .variants import (
+    _variant_signature as _variant_signature,
+)
+from .variants import (
+    combine_variants as combine_variants,
+)
+from .variants import (
+    dedupe_variants as dedupe_variants,
+)
 
-__all__ = [
+# Phase 7c-1: explicit facade allowlist.
+#
+# Every name re-exported by this package is enumerated here. ``__all__`` is
+# derived from this tuple, and the ``test_planner_facade_allowlist`` freeze
+# test pins the set so accidental additions or deletions require a deliberate
+# edit. Alphabetical ordering keeps diffs minimal and focused. Submodules
+# (``_core``, ``constants``, ``hypotheses``, ``normalization``, ``orchestrator``,
+# ``reconciliation``, ``regulatory``, ``specificity``, ``variants``) are
+# intentionally not listed: they leak as ``types.ModuleType`` via ordinary
+# package loading, and the allowlist test filters them out.
+_FACADE_EXPORTS: tuple[str, ...] = (
+    "AGENCY_REGULATORY_MARKERS",
+    "ARXIV_RE",
+    "DOI_RE",
+    "FACET_SPLIT_RE",
+    "GENERIC_EVIDENCE_WORDS",
+    "HYPOTHESIS_QUERY_STOPWORDS",
+    "LITERATURE_QUERY_TERMS",
+    "QUERYISH_TITLE_BLOCKERS",
+    "QUERY_FACET_TOKEN_ALLOWLIST",
+    "REGULATORY_QUERY_TERMS",
+    "STRONG_REGULATORY_TITLE_BLOCKERS",
+    "TITLE_STOPWORDS",
+    "VARIANT_DEDUPE_STOPWORDS",
+    "_CULTURAL_RESOURCE_MARKERS",
+    "_DEFINITIONAL_PATTERNS",
+    "_VALID_REGULATORY_INTENTS",
+    "_confidence_rank",
+    "_derive_regulatory_intent",
+    "_detect_cultural_resource_intent",
+    "_estimate_ambiguity_level",
+    "_estimate_query_specificity",
+    "_has_literature_corroboration",
+    "_infer_entity_card",
+    "_infer_regulatory_subintent",
+    "_is_definitional_query",
+    "_looks_broad_concept_query",
+    "_ordered_provider_plan",
+    "_query_starts_broad",
+    "_signatures_are_near_duplicates",
+    "_sort_intent_candidates",
+    "_source_for_intent_candidate",
+    "_strong_known_item_signal",
+    "_strong_regulatory_signal",
+    "_top_evidence_phrases",
+    "_upsert_intent_candidate",
+    "_variant_signature",
     "classify_query",
     "combine_variants",
     "dedupe_variants",
@@ -178,6 +224,7 @@ __all__ = [
     "detect_regulatory_intent",
     "grounded_expansion_candidates",
     "initial_retrieval_hypotheses",
+    "looks_like_citation_query",
     "looks_like_exact_title",
     "looks_like_near_known_item_query",
     "looks_like_url",
@@ -185,4 +232,13 @@ __all__ = [
     "query_facets",
     "query_terms",
     "speculative_expansion_candidates",
-]
+)
+
+
+__all__ = list(_FACADE_EXPORTS)
+
+# Scrub the ``from __future__`` alias out of the package namespace so the
+# facade surface reflects only what ``_FACADE_EXPORTS`` advertises. Otherwise
+# ``dir(paper_chaser_mcp.agentic.planner)`` would expose ``annotations`` as
+# an accidental leak, matching the graphs/dispatch allowlist pattern.
+del annotations

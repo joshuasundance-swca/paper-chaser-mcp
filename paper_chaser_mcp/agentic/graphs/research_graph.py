@@ -15,7 +15,7 @@ import time
 from typing import Any
 
 from ..planner import query_facets, query_terms
-from ..providers import ModelProviderBundle
+from ..provider_base import ModelProviderBundle
 from .shared_state import _GRAPH_GENERIC_TERMS
 from .source_records import _graph_topic_tokens, _paper_text
 

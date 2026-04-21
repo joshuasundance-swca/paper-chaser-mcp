@@ -12,7 +12,7 @@ import statistics
 from typing import Any
 
 from ..models import LandscapeTheme
-from ..providers import ModelProviderBundle
+from ..provider_base import ModelProviderBundle
 from .shared_state import _THEME_LABEL_STOPWORDS
 from .source_records import _paper_text
 

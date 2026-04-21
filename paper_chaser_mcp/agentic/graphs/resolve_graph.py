@@ -17,7 +17,7 @@ from typing import Any, Literal, cast
 
 from ...citation_repair import build_match_metadata
 from ..planner import normalize_query
-from ..providers import COMMON_QUERY_WORDS
+from ..provider_helpers import COMMON_QUERY_WORDS
 
 
 def _known_item_title_similarity(query: str, title: str) -> float:
