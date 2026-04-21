@@ -35,17 +35,12 @@ PLAN_OVERSIZE_MODULES: frozenset[str] = frozenset(
     {
         "paper_chaser_mcp/dispatch/_core.py",
         "paper_chaser_mcp/agentic/graphs/_core.py",
-        "paper_chaser_mcp/agentic/planner/_core.py",
         "paper_chaser_mcp/agentic/workspace.py",
         "paper_chaser_mcp/search.py",
         "paper_chaser_mcp/provider_runtime.py",
         "paper_chaser_mcp/agentic/models.py",
         "paper_chaser_mcp/enrichment.py",
         "paper_chaser_mcp/search_executor.py",
-        "paper_chaser_mcp/agentic/ranking.py",
-        "paper_chaser_mcp/compat.py",
-        "paper_chaser_mcp/agentic/answer_modes.py",
-        "paper_chaser_mcp/settings.py",
     }
 )
 
@@ -113,19 +108,15 @@ OVERSIZE_ALLOWLIST: frozenset[str] = PLAN_OVERSIZE_MODULES | BASELINE_OVERSIZE_E
 # mark. That way this guard only protects against regressions, not celebrated
 # wins.
 BASELINE_LINE_COUNTS: dict[str, int] = {
-    "paper_chaser_mcp/agentic/answer_modes.py": 658,
     "paper_chaser_mcp/agentic/graphs/_core.py": 3_256,
     "paper_chaser_mcp/agentic/graphs/smart_graph.py": 1_074,
     "paper_chaser_mcp/agentic/models.py": 870,
-    "paper_chaser_mcp/agentic/planner/_core.py": 64,
     "paper_chaser_mcp/agentic/providers/langchain/bundle.py": 1_421,
     "paper_chaser_mcp/agentic/providers/openai/bundle.py": 1_826,
-    "paper_chaser_mcp/agentic/ranking.py": 690,
     "paper_chaser_mcp/agentic/workspace.py": 979,
     "paper_chaser_mcp/citation_repair/api.py": 880,
     "paper_chaser_mcp/clients/ecos/client.py": 963,
     "paper_chaser_mcp/clients/semantic_scholar/client.py": 1_179,
-    "paper_chaser_mcp/compat.py": 690,
     "paper_chaser_mcp/dispatch/_core.py": 3_665,
     "paper_chaser_mcp/dispatch/guided/trust.py": 984,
     "paper_chaser_mcp/enrichment.py": 816,
@@ -134,7 +125,6 @@ BASELINE_LINE_COUNTS: dict[str, int] = {
     "paper_chaser_mcp/provider_runtime.py": 920,
     "paper_chaser_mcp/search.py": 992,
     "paper_chaser_mcp/search_executor.py": 855,
-    "paper_chaser_mcp/settings.py": 569,
 }
 
 BASELINE_GROWTH_TOLERANCE_LINES = 50
