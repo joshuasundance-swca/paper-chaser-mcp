@@ -35,7 +35,6 @@ import pytest
 from paper_chaser_mcp.citation_repair.candidates import ParsedCitation
 from paper_chaser_mcp.citation_repair.ranking import _rank_candidate
 
-
 # ---------------------------------------------------------------------------
 # Scenario 1 — Year-conflict dominance.
 # ---------------------------------------------------------------------------

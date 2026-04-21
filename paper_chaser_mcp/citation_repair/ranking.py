@@ -45,6 +45,30 @@ __all__ = (
     "_surname",
 )
 
+# ---------------------------------------------------------------------------
+# Phase 9b ranking-bias constants.
+#
+# Before Phase 9b the formula gave title_similarity weight 0.35 and a full
+# 0.15 upstream matchConfidence="high" bonus with only soft year and author
+# gating. That let a newer paper with a similar title and a high upstream
+# confidence outrank the canonical older citation whenever the cited year
+# disagreed by just a few years, or whenever the candidate had zero author-
+# surname overlap with the parsed citation. The constants below encode the
+# rebalance: year disagreements of 2+ years carry at least a flat 0.15
+# penalty, author-surname disagreement carries a 0.15 penalty of its own,
+# and an upstream matchConfidence="high" without at least one corroborating
+# signal (identifier hit, year match, or author-surname overlap) is capped
+# at 0.12 instead of the full 0.15.
+# ---------------------------------------------------------------------------
+_YEAR_DISAGREEMENT_PENALTY: float = 0.15
+"""Minimum score penalty when parsed year and candidate year differ by ≥2."""
+
+_AUTHOR_DISAGREEMENT_PENALTY: float = 0.15
+"""Score penalty when parsed supplies ≥1 surname but the candidate shares none."""
+
+_UNCORROBORATED_CONFIDENCE_CAP: float = 0.12
+"""Cap on the upstream matchConfidence bonus when no other strong signal corroborates."""
+
 
 @dataclass(slots=True)
 class RankedCitationCandidate:
@@ -97,7 +121,12 @@ def _rank_candidate(
     publication_preference = _publication_preference_score(paper)
     upstream_confidence = str(paper.get("matchConfidence") or "").lower()
     year_conflict = parsed.year is not None and year_delta is not None and year_delta > 1
-    author_conflict = bool(parsed.author_surnames) and author_overlap == 0
+    # Phase 9b: filter out "surnames" the parser lifted out of title tokens
+    # (e.g. a title ending in "Language Models" can produce bogus surnames
+    # "language"/"models"). Only treat a missing overlap as a real author
+    # conflict when at least one parsed surname is not itself a title token.
+    reliable_surnames = _reliable_parsed_surnames(parsed)
+    author_conflict = bool(reliable_surnames) and author_overlap == 0
     venue_conflict = bool(parsed.venue_hints) and not venue_overlap
     key_conflict_count = sum(1 for conflict in (author_conflict, year_conflict, venue_conflict) if conflict)
 
@@ -114,7 +143,11 @@ def _rank_candidate(
     elif year_delta == 1:
         score += 0.04
     elif year_delta is not None and year_delta > 1:
-        score -= min(year_delta, 10) * 0.04
+        # Phase 9b: enforce a firm floor on the year-disagreement penalty so
+        # small deltas (e.g. delta == 2, where the old formula only cost
+        # 0.08) cannot be overpowered by a slightly shinier title or an
+        # upstream matchConfidence bonus.
+        score -= max(_YEAR_DISAGREEMENT_PENALTY, min(year_delta, 10) * 0.04)
         if year_delta > 5:
             score -= 0.06
     if venue_overlap:
@@ -123,6 +156,12 @@ def _rank_candidate(
         score += min(snippet_alignment, 1.0) * 0.05
     score += source_confidence * 0.05
     score += publication_preference * 0.03
+    # Phase 9b: if the parsed citation declared author surnames and the
+    # candidate has author data with zero surname overlap, apply a firm
+    # penalty. This gates an upstream high matchConfidence from
+    # steamrolling a clearly-different-author candidate past the real one.
+    if author_conflict and paper.get("authors"):
+        score -= _AUTHOR_DISAGREEMENT_PENALTY
     upstream_bonus = 0.0
     if upstream_confidence == "high":
         upstream_bonus = 0.15
@@ -132,6 +171,13 @@ def _rank_candidate(
         upstream_bonus = min(upstream_bonus, 0.04)
     elif year_conflict:
         upstream_bonus = min(upstream_bonus, 0.06)
+    # Phase 9b: if matchConfidence is the ONLY strong signal - no identifier
+    # hit, no year match, no author-surname overlap - cap it at
+    # ``_UNCORROBORATED_CONFIDENCE_CAP``. A bare upstream "high" label must
+    # not by itself push a candidate into the high-confidence band.
+    uncorroborated = not identifier_hit and year_delta != 0 and author_overlap == 0
+    if uncorroborated:
+        upstream_bonus = min(upstream_bonus, _UNCORROBORATED_CONFIDENCE_CAP)
     score += upstream_bonus
     score = max(0.0, min(score, 1.0))
 
@@ -329,6 +375,25 @@ def _publication_preference_score(paper: dict[str, Any]) -> float:
 def _surname(name: str) -> str:
     words = [word.lower() for word in WORD_RE.findall(name)]
     return words[-1] if words else ""
+
+
+def _reliable_parsed_surnames(parsed: ParsedCitation) -> list[str]:
+    """Return parsed surnames excluding those that are obviously title tokens.
+
+    The citation parser can misidentify capitalized trailing words in a
+    title (e.g. "...Language Models") as author surnames. When a claimed
+    surname also appears as a token in any of the parsed title candidates,
+    we treat it as unreliable so the author-disagreement penalty doesn't
+    fire on what is really a title-parsing artifact.
+    """
+    if not parsed.author_surnames:
+        return []
+    title_tokens: set[str] = set()
+    for candidate in parsed.title_candidates or ():
+        title_tokens.update(token.lower() for token in re.findall(r"[a-z0-9]{3,}", candidate.lower()))
+    if not title_tokens:
+        return list(parsed.author_surnames)
+    return [s for s in parsed.author_surnames if s.lower() not in title_tokens]
 
 
 def _token_overlap_ratio(left: str, right: str) -> float:
