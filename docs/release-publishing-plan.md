@@ -142,7 +142,7 @@ Before tagging, run at minimum:
 ```bash
 python -m pip check
 pre-commit run --all-files
-python -m pytest --cov=paper_chaser_mcp --cov-report=term-missing --cov-fail-under=85
+python -m pytest --cov=paper_chaser_mcp --cov-report=term-missing --cov-fail-under=87
 python -m mypy --config-file pyproject.toml
 python -m ruff check .
 python -m bandit -c pyproject.toml -r paper_chaser_mcp
