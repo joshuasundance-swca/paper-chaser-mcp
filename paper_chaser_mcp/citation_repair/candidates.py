@@ -34,7 +34,7 @@ from .normalization import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - import-time forward references only.
-    from .ranking import RankedCitationCandidate
+    pass
 
 
 # Registry of famous "classic" papers that are commonly referenced only by
