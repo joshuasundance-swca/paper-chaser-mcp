@@ -20,6 +20,9 @@ from ...citation_repair import (
 )
 from . import _core as _core
 from ._core import (
+    _VALID_REGULATORY_INTENTS as _VALID_REGULATORY_INTENTS,
+)
+from ._core import (
     _derive_regulatory_intent as _derive_regulatory_intent,
 )
 from ._core import (
@@ -42,9 +45,6 @@ from ._core import (
 )
 from ._core import (
     _upsert_intent_candidate as _upsert_intent_candidate,
-)
-from ._core import (
-    _VALID_REGULATORY_INTENTS as _VALID_REGULATORY_INTENTS,
 )
 from ._core import (
     _variant_signature as _variant_signature,

@@ -2,8 +2,22 @@
 
 from __future__ import annotations
 
-from paper_chaser_mcp.agentic import planner as legacy_planner
 from paper_chaser_mcp.agentic.models import IntentCandidate
+from paper_chaser_mcp.agentic.planner import (
+    _estimate_ambiguity_level as _facade_estimate_ambiguity_level,
+)
+from paper_chaser_mcp.agentic.planner import (
+    _estimate_query_specificity as _facade_estimate_query_specificity,
+)
+from paper_chaser_mcp.agentic.planner import (
+    _is_definitional_query as _facade_is_definitional_query,
+)
+from paper_chaser_mcp.agentic.planner import (
+    _looks_broad_concept_query as _facade_looks_broad_concept_query,
+)
+from paper_chaser_mcp.agentic.planner import (
+    _query_starts_broad as _facade_query_starts_broad,
+)
 from paper_chaser_mcp.agentic.planner.specificity import (
     _estimate_ambiguity_level,
     _estimate_query_specificity,
@@ -104,11 +118,10 @@ def test_estimate_ambiguity_level_handles_confidence_mix() -> None:
 
 
 def test_legacy_planner_reexports_specificity_helpers() -> None:
-    for name in (
-        "_estimate_query_specificity",
-        "_estimate_ambiguity_level",
-        "_query_starts_broad",
-        "_is_definitional_query",
-        "_looks_broad_concept_query",
-    ):
-        assert hasattr(legacy_planner, name), f"legacy planner missing {name}"
+    # Private helpers are pinned via direct-from-import identity checks so the
+    # seam firewall (tests/test_test_seam_inventory.py) can see them.
+    assert _facade_estimate_query_specificity is _estimate_query_specificity
+    assert _facade_estimate_ambiguity_level is _estimate_ambiguity_level
+    assert _facade_query_starts_broad is _query_starts_broad
+    assert _facade_is_definitional_query is _is_definitional_query
+    assert _facade_looks_broad_concept_query is _looks_broad_concept_query

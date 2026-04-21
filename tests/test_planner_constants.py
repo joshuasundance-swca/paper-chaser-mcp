@@ -10,7 +10,15 @@ from __future__ import annotations
 import re
 
 from paper_chaser_mcp.agentic import planner as legacy_planner
+from paper_chaser_mcp.agentic.planner import (
+    _CULTURAL_RESOURCE_MARKERS as _facade_cultural_resource_markers,
+)
+from paper_chaser_mcp.agentic.planner import (
+    _DEFINITIONAL_PATTERNS as _facade_definitional_patterns,
+)
 from paper_chaser_mcp.agentic.planner.constants import (
+    _CULTURAL_RESOURCE_MARKERS,
+    _DEFINITIONAL_PATTERNS,
     AGENCY_REGULATORY_MARKERS,
     ARXIV_RE,
     DOI_RE,
@@ -24,8 +32,6 @@ from paper_chaser_mcp.agentic.planner.constants import (
     STRONG_REGULATORY_TITLE_BLOCKERS,
     TITLE_STOPWORDS,
     VARIANT_DEDUPE_STOPWORDS,
-    _CULTURAL_RESOURCE_MARKERS,
-    _DEFINITIONAL_PATTERNS,
 )
 
 
@@ -70,9 +76,8 @@ def test_regulatory_query_terms_contain_key_keywords() -> None:
 
 
 def test_legacy_planner_module_reexports_constants() -> None:
-    # Every constant must remain accessible via the legacy dotted path so that
-    # ``paper_chaser_mcp.agentic.planner.DOI_RE`` keeps resolving for callers
-    # that did not migrate to the new ``planner.constants`` submodule yet.
+    # Public constants remain accessible via the legacy dotted path so callers
+    # that did not migrate to ``planner.constants`` keep working.
     for name in (
         "DOI_RE",
         "ARXIV_RE",
@@ -86,8 +91,11 @@ def test_legacy_planner_module_reexports_constants() -> None:
         "STRONG_REGULATORY_TITLE_BLOCKERS",
         "AGENCY_REGULATORY_MARKERS",
         "REGULATORY_QUERY_TERMS",
-        "_CULTURAL_RESOURCE_MARKERS",
         "VARIANT_DEDUPE_STOPWORDS",
-        "_DEFINITIONAL_PATTERNS",
     ):
         assert hasattr(legacy_planner, name), f"legacy planner missing {name}"
+
+    # Private constants are pinned via direct-from-import identity checks so
+    # the seam firewall (tests/test_test_seam_inventory.py) can see them.
+    assert _facade_cultural_resource_markers is _CULTURAL_RESOURCE_MARKERS
+    assert _facade_definitional_patterns is _DEFINITIONAL_PATTERNS

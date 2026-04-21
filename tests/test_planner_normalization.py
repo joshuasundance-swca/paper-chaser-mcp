@@ -52,9 +52,7 @@ def test_looks_like_near_known_item_query_identifies_short_id() -> None:
     assert looks_like_near_known_item_query("Toolformer")
     assert looks_like_near_known_item_query("Med-PaLM")
     # Long conceptual question should not look near-known-item.
-    assert not looks_like_near_known_item_query(
-        "what is the difference between supervised and unsupervised learning"
-    )
+    assert not looks_like_near_known_item_query("what is the difference between supervised and unsupervised learning")
 
 
 def test_legacy_planner_reexports_normalization_helpers() -> None:
