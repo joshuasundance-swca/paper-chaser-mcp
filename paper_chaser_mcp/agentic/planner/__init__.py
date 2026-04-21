@@ -20,25 +20,10 @@ from ...citation_repair import (
 )
 from . import _core as _core
 from ._core import (
-    _ordered_provider_plan as _ordered_provider_plan,
-)
-from ._core import (
-    _sort_intent_candidates as _sort_intent_candidates,
-)
-from ._core import (
-    _source_for_intent_candidate as _source_for_intent_candidate,
-)
-from ._core import (
-    _upsert_intent_candidate as _upsert_intent_candidate,
-)
-from ._core import (
     classify_query as classify_query,
 )
 from ._core import (
     grounded_expansion_candidates as grounded_expansion_candidates,
-)
-from ._core import (
-    initial_retrieval_hypotheses as initial_retrieval_hypotheses,
 )
 from ._core import (
     speculative_expansion_candidates as speculative_expansion_candidates,
@@ -87,6 +72,21 @@ from .constants import (
 )
 from .constants import (
     VARIANT_DEDUPE_STOPWORDS as VARIANT_DEDUPE_STOPWORDS,
+)
+from .hypotheses import (
+    _ordered_provider_plan as _ordered_provider_plan,
+)
+from .hypotheses import (
+    _sort_intent_candidates as _sort_intent_candidates,
+)
+from .hypotheses import (
+    _source_for_intent_candidate as _source_for_intent_candidate,
+)
+from .hypotheses import (
+    _upsert_intent_candidate as _upsert_intent_candidate,
+)
+from .hypotheses import (
+    initial_retrieval_hypotheses as initial_retrieval_hypotheses,
 )
 from .normalization import (
     looks_like_exact_title as looks_like_exact_title,

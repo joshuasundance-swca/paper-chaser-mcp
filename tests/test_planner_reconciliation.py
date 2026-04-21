@@ -7,9 +7,9 @@ import pytest
 from paper_chaser_mcp.agentic.models import PlannerDecision
 from paper_chaser_mcp.agentic.planner import reconciliation as reconciliation_module
 from paper_chaser_mcp.agentic.planner._core import (
+    _VALID_REGULATORY_INTENTS,
     _derive_regulatory_intent,
     _has_literature_corroboration,
-    _VALID_REGULATORY_INTENTS,
 )
 
 
