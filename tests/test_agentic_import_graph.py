@@ -109,7 +109,6 @@ def test_model_provider_bundle_is_reachable_from_provider_base() -> None:
         "from paper_chaser_mcp.agentic.provider_base import ModelProviderBundle",
     )
     assert returncode == 0, (
-        "ModelProviderBundle must be importable from provider_base. "
-        f"stdout={stdout!r} stderr={stderr!r}"
+        f"ModelProviderBundle must be importable from provider_base. stdout={stdout!r} stderr={stderr!r}"
     )
     assert "OK" in stdout

@@ -11,8 +11,6 @@ helpers; Phase 7 will split those out further.
 
 from __future__ import annotations
 
-import re
-from collections import Counter
 from typing import Any, Literal, cast
 
 from ..config import AgenticConfig
@@ -26,10 +24,6 @@ from ..models import (
     RegulatoryIntentLabel,
 )
 from ..provider_base import ModelProviderBundle
-from .constants import (
-    GENERIC_EVIDENCE_WORDS,
-    VARIANT_DEDUPE_STOPWORDS,
-)
 from .normalization import (
     looks_like_exact_title,
     normalize_query,
@@ -48,6 +42,21 @@ from .specificity import (
     _confidence_rank,
     _is_definitional_query,
     _looks_broad_concept_query,
+)
+from .variants import (
+    _signatures_are_near_duplicates as _signatures_are_near_duplicates,
+)
+from .variants import (
+    _top_evidence_phrases as _top_evidence_phrases,
+)
+from .variants import (
+    _variant_signature as _variant_signature,
+)
+from .variants import (
+    combine_variants as combine_variants,
+)
+from .variants import (
+    dedupe_variants as dedupe_variants,
 )
 
 
@@ -612,121 +621,7 @@ async def speculative_expansion_candidates(
     )[: config.max_speculative_variants]
 
 
-def combine_variants(
-    *,
-    original_query: str,
-    grounded: list[ExpansionCandidate],
-    speculative: list[ExpansionCandidate],
-    config: AgenticConfig,
-) -> list[ExpansionCandidate]:
-    """Return the capped variant list in grounded-first order."""
-    variants = [
-        ExpansionCandidate(
-            variant=normalize_query(original_query),
-            source="from_input",
-            rationale="Literal user query.",
-        )
-    ]
-    variants.extend(grounded[: config.max_grounded_variants])
-    variants.extend(speculative[: config.max_speculative_variants])
-
-    deduped: list[ExpansionCandidate] = []
-    seen: set[str] = set()
-    seen_signatures: list[frozenset[str]] = []
-    for candidate in variants:
-        lowered = candidate.variant.lower()
-        if lowered in seen:
-            continue
-        signature = _variant_signature(candidate.variant)
-        if any(_signatures_are_near_duplicates(signature, prior) for prior in seen_signatures):
-            continue
-        seen.add(lowered)
-        seen_signatures.append(signature)
-        deduped.append(candidate)
-        if len(deduped) >= config.max_total_variants:
-            break
-    return deduped
-
-
-def dedupe_variants(
-    candidates: list[ExpansionCandidate],
-    *,
-    config: AgenticConfig,
-) -> list[ExpansionCandidate]:
-    """Apply the same near-duplicate suppression used by final variant planning."""
-
-    deduped: list[ExpansionCandidate] = []
-    seen: set[str] = set()
-    seen_signatures: list[frozenset[str]] = []
-    for candidate in candidates:
-        lowered = candidate.variant.lower()
-        if lowered in seen:
-            continue
-        signature = _variant_signature(candidate.variant)
-        if any(_signatures_are_near_duplicates(signature, prior) for prior in seen_signatures):
-            continue
-        seen.add(lowered)
-        seen_signatures.append(signature)
-        deduped.append(candidate)
-        if len(deduped) >= config.max_total_variants:
-            break
-    return deduped
-
-
-def _variant_signature(text: str) -> frozenset[str]:
-    tokens = {
-        token
-        for token in re.findall(r"[A-Za-z0-9]{3,}", normalize_query(text).lower())
-        if token not in VARIANT_DEDUPE_STOPWORDS
-    }
-    return frozenset(tokens)
-
-
-def _signatures_are_near_duplicates(
-    left: frozenset[str],
-    right: frozenset[str],
-) -> bool:
-    if not left or not right:
-        return False
-    if left == right:
-        return True
-    overlap = len(left & right)
-    shorter = min(len(left), len(right))
-    longer = max(len(left), len(right))
-    if shorter == 0:
-        return False
-    coverage = overlap / shorter
-    jaccard = overlap / len(left | right)
-    return coverage >= 0.8 or (coverage >= 0.67 and jaccard >= 0.5 and longer <= 8)
-
-
-def _top_evidence_phrases(
-    papers: list[dict[str, Any]],
-    *,
-    limit: int,
-) -> list[str]:
-    phrases: Counter[str] = Counter()
-    for paper in papers[:10]:
-        title = str(paper.get("title") or "")
-        per_paper_phrases: set[str] = set()
-        title_words = re.findall(r"[A-Za-z0-9]{2,}", title.lower())
-        for index in range(len(title_words) - 1):
-            left = title_words[index]
-            right = title_words[index + 1]
-            if left in GENERIC_EVIDENCE_WORDS or right in GENERIC_EVIDENCE_WORDS or len(left) < 3 or len(right) < 3:
-                continue
-            bigram = f"{left} {right}"
-            if len(bigram) < 9:
-                continue
-            per_paper_phrases.add(bigram)
-        phrases.update(per_paper_phrases)
-    scored = [(phrase, count) for phrase, count in phrases.items() if count >= 2]
-    scored.sort(
-        key=lambda item: (
-            item[0].count(" "),
-            item[1],
-            len(item[0]),
-        ),
-        reverse=True,
-    )
-    return [phrase for phrase, _ in scored[:limit]]
+# Phase 7c-1: combine_variants, dedupe_variants, _variant_signature,
+# _signatures_are_near_duplicates, and _top_evidence_phrases were extracted
+# to ``paper_chaser_mcp.agentic.planner.variants``. See the top-of-module
+# re-imports for identity-preserving access via ``planner._core``.

@@ -32,31 +32,16 @@ from ._core import (
     _ordered_provider_plan as _ordered_provider_plan,
 )
 from ._core import (
-    _signatures_are_near_duplicates as _signatures_are_near_duplicates,
-)
-from ._core import (
     _sort_intent_candidates as _sort_intent_candidates,
 )
 from ._core import (
     _source_for_intent_candidate as _source_for_intent_candidate,
 )
 from ._core import (
-    _top_evidence_phrases as _top_evidence_phrases,
-)
-from ._core import (
     _upsert_intent_candidate as _upsert_intent_candidate,
 )
 from ._core import (
-    _variant_signature as _variant_signature,
-)
-from ._core import (
     classify_query as classify_query,
-)
-from ._core import (
-    combine_variants as combine_variants,
-)
-from ._core import (
-    dedupe_variants as dedupe_variants,
 )
 from ._core import (
     grounded_expansion_candidates as grounded_expansion_candidates,
@@ -168,6 +153,21 @@ from .specificity import (
 )
 from .specificity import (
     _query_starts_broad as _query_starts_broad,
+)
+from .variants import (
+    _signatures_are_near_duplicates as _signatures_are_near_duplicates,
+)
+from .variants import (
+    _top_evidence_phrases as _top_evidence_phrases,
+)
+from .variants import (
+    _variant_signature as _variant_signature,
+)
+from .variants import (
+    combine_variants as combine_variants,
+)
+from .variants import (
+    dedupe_variants as dedupe_variants,
 )
 
 __all__ = [
