@@ -35,7 +35,6 @@ PLAN_OVERSIZE_MODULES: frozenset[str] = frozenset(
     {
         "paper_chaser_mcp/dispatch/_core.py",
         "paper_chaser_mcp/agentic/graphs/_core.py",
-        "paper_chaser_mcp/server.py",
         "paper_chaser_mcp/agentic/planner/_core.py",
         "paper_chaser_mcp/eval_curation.py",
         "paper_chaser_mcp/agentic/workspace.py",
@@ -139,7 +138,6 @@ BASELINE_LINE_COUNTS: dict[str, int] = {
     "paper_chaser_mcp/provider_runtime.py": 920,
     "paper_chaser_mcp/search.py": 992,
     "paper_chaser_mcp/search_executor.py": 855,
-    "paper_chaser_mcp/server.py": 1_214,
     "paper_chaser_mcp/settings.py": 569,
 }
 

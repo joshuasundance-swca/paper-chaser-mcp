@@ -148,6 +148,20 @@ __all__ = [
     "list_tools",
     "call_tool",
     "main",
+    "_build_signature",
+    "_format_tool_display_name",
+    "_parameter_default",
+    "_parameter_name",
+    "_sanitize_registered_tool_schema",
+    "_tool_tags",
+    "_author_resource_payload",
+    "_paper_resource_payload",
+    "_resource_text",
+    "register_resources",
+    "register_prompts",
+    "AGENT_WORKFLOW_GUIDE",
+    "GUIDED_SERVER_INSTRUCTIONS",
+    "SERVER_INSTRUCTIONS",
 ]
 
 
