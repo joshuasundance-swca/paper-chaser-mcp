@@ -7,29 +7,27 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from typing import Any, Callable, Literal, cast
 
-from .agentic.planner import (
+from ..agentic.planner import (
     detect_literature_intent,
     detect_regulatory_intent,
     looks_like_exact_title,
-    query_facets,
-    query_terms,
 )
-from .agentic.provider_helpers import generate_evidence_gaps_without_llm
-from .citation_repair import looks_like_citation_query, looks_like_paper_identifier, parse_citation, resolve_citation
-from .clients.scholarapi import (
+from ..agentic.provider_helpers import generate_evidence_gaps_without_llm
+from ..citation_repair import looks_like_citation_query, looks_like_paper_identifier, parse_citation, resolve_citation
+from ..clients.scholarapi import (
     ScholarApiError,
     ScholarApiKeyMissingError,
     ScholarApiQuotaError,
     ScholarApiUpstreamError,
 )
-from .clients.serpapi import SerpApiKeyMissingError
-from .compat import augment_tool_result, build_clarification
-from .enrichment import (
+from ..clients.serpapi import SerpApiKeyMissingError
+from ..compat import augment_tool_result, build_clarification
+from ..enrichment import (
     PaperEnrichmentService,
     attach_enrichments_to_paper_payload,
     hydrate_paper_for_enrichment,
 )
-from .guided_semantic import (
+from ..guided_semantic import (
     build_evidence_records,
     build_follow_up_decision,
     build_routing_decision,
@@ -37,9 +35,9 @@ from .guided_semantic import (
     explicit_source_reference,
     strip_null_fields,
 )
-from .identifiers import resolve_doi_from_paper_payload
-from .models import TOOL_INPUT_MODELS, CitationFormatsResponse, RuntimeSummary, dump_jsonable
-from .models.common import (
+from ..identifiers import resolve_doi_from_paper_payload
+from ..models import TOOL_INPUT_MODELS, CitationFormatsResponse, RuntimeSummary, dump_jsonable
+from ..models.common import (
     AbstentionDetails,
     CitationFormat,
     ConfidenceSignals,
@@ -54,7 +52,7 @@ from .models.common import (
     SessionResolution,
     SourceResolution,
 )
-from .models.tools import (
+from ..models.tools import (
     AskResultSetArgs,
     BasicSearchPapersArgs,
     EcosSpeciesLookupArgs,
@@ -79,18 +77,36 @@ from .models.tools import (
     SearchSpeciesEcosArgs,
     SmartSearchPapersArgs,
 )
-from .provider_runtime import ProviderOutcomeEnvelope, ProviderStatusBucket, policy_for_provider
-from .search import search_papers_with_fallback
-from .utils.cursor import (
+from ..provider_runtime import ProviderOutcomeEnvelope, ProviderStatusBucket, policy_for_provider
+from ..search import search_papers_with_fallback
+from ..utils.cursor import (
     OFFSET_TOOLS,
     PROVIDER,
     SUPPORTED_VERSIONS,
     compute_context_hash,
-    cursor_from_offset,
     cursor_from_token,
     decode_bulk_cursor,
-    decode_cursor,
-    is_legacy_offset,
+)
+from .context import DispatchContext, build_dispatch_context
+from .normalization import (
+    _guided_normalize_citation_surface,
+    _guided_normalize_source_locator,
+    _guided_normalize_whitespace,
+    _guided_normalize_year_hint,
+    _guided_strip_research_prefix,
+)
+from .paging import _cursor_to_offset, _encode_next_cursor
+from .relevance import (  # noqa: F401 — re-exported for dispatch package namespace
+    _facet_match,
+    _paper_topical_relevance,
+    _tokenize_relevance_text,
+    _topical_relevance_from_signals,
+    compute_topical_relevance,
+)
+from .snippet_fallback import (  # noqa: F401 — re-exported for dispatch package namespace
+    _maybe_fallback_snippet_search,
+    _snippet_fallback_query,
+    _snippet_fallback_results,
 )
 
 ToolArgBuilder = Callable[[dict[str, Any]], dict[str, Any]]
@@ -230,191 +246,6 @@ async def _call_explicit_scholarapi_tool(
         )
         provider_registry.record(outcome, policy=policy_for_provider("scholarapi"))
     return payload
-
-
-def _cursor_to_offset(
-    cursor: str | None,
-    tool: str | None = None,
-    context_hash: str | None = None,
-    expected_provider: str = PROVIDER,
-) -> int | None:
-    """Decode an opaque pagination cursor to an integer offset.
-
-    Accepts both structured server-issued cursors (URL-safe base64 JSON) and
-    legacy plain integer strings for backward compatibility.
-
-    Returns ``None`` when *cursor* is ``None`` (start from the beginning).
-
-    When *tool* is provided, structured cursors are validated to ensure they
-    were issued by the same tool.  When *context_hash* is also provided, the
-    cursor's embedded hash is compared against the current request's context,
-    so a cursor from a different query on the same tool is rejected.
-
-    In production all dispatch handlers pass *tool* and *context_hash*
-    explicitly.  Passing ``tool=None`` skips cross-tool validation; this is
-    intentional only for the ``cursor=None`` early-return path.
-
-    Raises ``ValueError`` for stale, mistyped, corrupted, cross-tool, or
-    cross-query cursors, unsupported versions, unknown providers, and negative
-    integer offsets.
-    """
-    if cursor is None:
-        return None
-    if is_legacy_offset(cursor):
-        offset = int(cursor)
-        if offset < 0:
-            raise ValueError(
-                f"Invalid pagination cursor {cursor!r}: offset must be non-negative. "
-                "code=INVALID_CURSOR. "
-                f"{CURSOR_REUSE_HINT} Restart the request without a cursor."
-            )
-        return offset
-    # Structured cursor: decode and validate
-    try:
-        state = decode_cursor(cursor)
-    except ValueError:
-        raise ValueError(
-            f"Invalid pagination cursor {cursor!r}: cannot be decoded. "
-            "code=INVALID_CURSOR. "
-            f"{CURSOR_REUSE_HINT} Restart the request without a cursor."
-        )
-    if state.provider != expected_provider:
-        raise ValueError(
-            f"Invalid pagination cursor: cursor provider {state.provider!r} does not "
-            f"match expected provider {expected_provider!r}. "
-            "code=INVALID_CURSOR. "
-            f"{CURSOR_REUSE_HINT} Restart the request without a cursor."
-        )
-    if state.version not in SUPPORTED_VERSIONS:
-        raise ValueError(
-            f"Invalid pagination cursor: cursor version {state.version} is not "
-            f"supported (supported: {sorted(SUPPORTED_VERSIONS)}). "
-            "code=INVALID_CURSOR. "
-            f"{CURSOR_REUSE_HINT} Restart the request without a cursor."
-        )
-    if tool is not None and state.tool != tool:
-        raise ValueError(
-            f"Invalid pagination cursor: cursor was issued by tool {state.tool!r} "
-            f"but is being used with tool {tool!r}. "
-            "code=INVALID_CURSOR. "
-            f"{CURSOR_REUSE_HINT} Restart the request without a cursor."
-        )
-    if context_hash is not None and state.context_hash is not None and state.context_hash != context_hash:
-        raise ValueError(
-            "Invalid pagination cursor: cursor was issued for a different query "
-            "context and cannot be reused here. "
-            "code=INVALID_CURSOR. "
-            f"{CURSOR_REUSE_HINT} Restart the request without a cursor."
-        )
-    return state.offset
-
-
-def _encode_next_cursor(
-    result: dict[str, Any],
-    tool: str,
-    context_hash: str | None = None,
-    provider: str = PROVIDER,
-) -> dict[str, Any]:
-    """Re-encode a plain integer ``nextCursor`` in *result* as a structured cursor.
-
-    Operates on the serialized dict returned by ``dump_jsonable``.  The
-    ``pagination`` key is present on all offset-backed tool responses.
-
-    The *context_hash* is embedded into the new cursor so that future requests
-    can validate that the cursor belongs to the same query stream.
-
-    If ``pagination.nextCursor`` is already a structured (non-integer) cursor or
-    is ``None``, the result is returned unchanged.
-    """
-    pagination = result.get("pagination")
-    if not isinstance(pagination, dict):
-        return result
-    raw_cursor = pagination.get("nextCursor")
-    if raw_cursor is None:
-        return result
-    if is_legacy_offset(raw_cursor):
-        pagination["nextCursor"] = cursor_from_offset(
-            tool,
-            int(raw_cursor),
-            context_hash=context_hash,
-            provider=provider,
-        )
-    return result
-
-
-def _snippet_fallback_query(query: str) -> str:
-    normalized = " ".join(str(query or "").strip().strip("\"'").split())
-    tokens = re.findall(r"[A-Za-z0-9]{3,}", normalized)
-    return " ".join(tokens[:10]) if tokens else normalized
-
-
-def _snippet_fallback_results(
-    degraded_payload: dict[str, Any],
-    papers_payload: dict[str, Any],
-) -> dict[str, Any]:
-    fallback_items: list[dict[str, Any]] = []
-    for index, paper in enumerate((papers_payload.get("data") or []), start=1):
-        if not isinstance(paper, dict):
-            continue
-        snippet_text = str(paper.get("abstract") or paper.get("title") or "").strip()
-        if not snippet_text:
-            continue
-        fallback_items.append(
-            {
-                "score": round(max(0.0, 1.0 - ((index - 1) * 0.05)), 6),
-                "snippet": {
-                    "text": snippet_text[:400],
-                    "snippetKind": "fallback_paper_match",
-                    "section": "abstract" if paper.get("abstract") else "title",
-                },
-                "paper": {
-                    "paperId": paper.get("paperId"),
-                    "title": paper.get("title"),
-                    "year": paper.get("year"),
-                    "url": paper.get("url"),
-                },
-            }
-        )
-    if not fallback_items:
-        return degraded_payload
-
-    payload = dict(degraded_payload)
-    payload["data"] = fallback_items
-    payload["fallbackUsed"] = "search_papers"
-    payload["message"] = (
-        "Semantic Scholar snippet search could not serve this query, so the "
-        "server returned best-effort paper matches from search_papers instead."
-    )
-    return payload
-
-
-async def _maybe_fallback_snippet_search(
-    *,
-    serialized: dict[str, Any],
-    args_dict: dict[str, Any],
-    client: Any,
-) -> dict[str, Any]:
-    if serialized.get("degraded") is not True or serialized.get("data"):
-        return serialized
-    fallback_query = _snippet_fallback_query(str(args_dict.get("query") or ""))
-    if not fallback_query:
-        return serialized
-    try:
-        fallback_payload = dump_jsonable(
-            await client.search_papers(
-                query=fallback_query,
-                limit=args_dict.get("limit", 10),
-                fields=["paperId", "title", "year", "url", "abstract"],
-                year=args_dict.get("year"),
-                publication_date_or_year=args_dict.get("publication_date_or_year"),
-                fields_of_study=args_dict.get("fields_of_study"),
-                min_citation_count=args_dict.get("min_citation_count"),
-                venue=[args_dict["venue"]] if args_dict.get("venue") else None,
-            )
-        )
-    except Exception:
-        return serialized
-    return _snippet_fallback_results(serialized, fallback_payload)
 
 
 def _cursor_to_bulk_token(
@@ -1112,75 +943,6 @@ def _build_provider_diagnostics_snapshot(
     return snapshot
 
 
-def _tokenize_relevance_text(value: str) -> set[str]:
-    return set(re.findall(r"[a-z0-9]{2,}", value.lower()))
-
-
-def _facet_match(tokens: set[str], facet: str) -> bool:
-    facet_tokens = _tokenize_relevance_text(facet)
-    return bool(facet_tokens) and facet_tokens.issubset(tokens)
-
-
-def _topical_relevance_from_signals(
-    *,
-    query_similarity: float,
-    title_facet_coverage: float,
-    title_anchor_coverage: float,
-    query_facet_coverage: float,
-    query_anchor_coverage: float,
-) -> str:
-    title_has_anchor = title_facet_coverage > 0 or title_anchor_coverage > 0
-    body_has_anchor = query_facet_coverage > 0 or query_anchor_coverage > 0
-    has_facet_signal = title_facet_coverage > 0 or query_facet_coverage > 0
-    # Require a multi-token phrase match (facet) for the standard threshold, or a
-    # strict majority of query terms when no phrase match exists.  A single-token
-    # title hit with low similarity is a weak signal, not grounded evidence.
-    if title_has_anchor and ((has_facet_signal and query_similarity >= 0.25) or query_similarity > 0.5):
-        return "on_topic"
-    if query_similarity < 0.12 or not (title_has_anchor or body_has_anchor):
-        return "off_topic"
-    return "weak_match"
-
-
-def compute_topical_relevance(query: str, source: dict[str, Any]) -> str:
-    """Canonical topical-relevance classifier shared by guided paths.
-
-    Used by both the paper/smart retrieval path and the Federal Register
-    document converter so that research and inspect_source produce the same
-    relevance label for the same ``(query, source)`` pair. Returns one of
-    ``on_topic``, ``weak_match``, or ``off_topic``.
-    """
-    facets = query_facets(query)
-    terms = query_terms(query)
-    title_tokens = _tokenize_relevance_text(str(source.get("title") or ""))
-    body_text_parts = [
-        str(source.get("title") or ""),
-        str(source.get("abstract") or ""),
-        str(source.get("venue") or ""),
-        str(source.get("note") or ""),
-    ]
-    paper_tokens = _tokenize_relevance_text(" ".join(part for part in body_text_parts if part))
-    matched_terms = [term for term in terms if term in paper_tokens]
-    matched_title_terms = [term for term in terms if term in title_tokens]
-    matched_facets = [facet for facet in facets if _facet_match(paper_tokens, facet)]
-    matched_title_facets = [facet for facet in facets if _facet_match(title_tokens, facet)]
-    term_coverage = len(matched_terms) / len(terms) if terms else 0.0
-    title_term_coverage = len(matched_title_terms) / len(terms) if terms else 0.0
-    query_similarity = max(term_coverage, title_term_coverage)
-    return _topical_relevance_from_signals(
-        query_similarity=query_similarity,
-        title_facet_coverage=(len(matched_title_facets) / len(facets) if facets else 0.0),
-        title_anchor_coverage=title_term_coverage,
-        query_facet_coverage=(len(matched_facets) / len(facets) if facets else 0.0),
-        query_anchor_coverage=term_coverage,
-    )
-
-
-def _paper_topical_relevance(query: str, paper: dict[str, Any]) -> str:
-    """Backward-compatible wrapper around :func:`compute_topical_relevance`."""
-    return compute_topical_relevance(query, paper)
-
-
 def _guided_source_id(candidate: dict[str, Any], *, fallback_prefix: str, index: int) -> str:
     for key in (
         "sourceId",
@@ -1648,82 +1410,6 @@ _GUIDED_LITERATURE_TERMS = {
     "studies",
     "systematic review",
 }
-
-
-_GUIDED_QUERY_PREFIX_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(
-        r"^\s*(?:please\s+|kindly\s+)?(?:help\s+me\s+)?(?:find|search(?:\s+for)?|look\s+up|research|summarize|show)\s+"
-        r"(?:papers?|literature|studies|evidence|sources?|information)\s+(?:about|on|for)\s+",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"^\s*(?:please\s+|kindly\s+)?(?:help\s+me\s+)?(?:find|search(?:\s+for)?|look\s+up|research|summarize|show)\s+",
-        re.IGNORECASE,
-    ),
-)
-
-_GUIDED_CFR_SECTION_RE = re.compile(
-    r"\b(?P<title>\d{1,2})\s*c\.?\s*f\.?\s*r\.?\s*(?P<part>\d{1,4})\s*(?:[.\-:/]\s*|\s+)(?P<section>\d{1,4})\b",
-    re.IGNORECASE,
-)
-_GUIDED_CFR_PART_RE = re.compile(
-    r"\b(?P<title>\d{1,2})\s*c\.?\s*f\.?\s*r\.?\s*part\s*(?P<part>\d{1,4})\b",
-    re.IGNORECASE,
-)
-_GUIDED_FR_CITATION_RE = re.compile(
-    r"\b(?P<volume>\d+)\s*f\.?\s*r\.?\s*(?P<page>\d+)\b",
-    re.IGNORECASE,
-)
-_GUIDED_YEAR_RANGE_RE = re.compile(r"\b(?P<start>(?:19|20)\d{2})\s*[-:/]\s*(?P<end>(?:19|20)\d{2})\b")
-_GUIDED_YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
-
-
-def _guided_normalize_whitespace(value: Any) -> str:
-    return " ".join(str(value or "").strip().split())
-
-
-def _guided_normalize_source_locator(value: Any) -> str:
-    normalized = _guided_normalize_whitespace(value).lower().rstrip("/")
-    if not normalized:
-        return ""
-    normalized = re.sub(r"^https?://", "", normalized)
-    normalized = re.sub(r"^www\.", "", normalized)
-    return normalized
-
-
-def _guided_strip_research_prefix(query: str) -> str:
-    stripped = query
-    for pattern in _GUIDED_QUERY_PREFIX_PATTERNS:
-        candidate = pattern.sub("", stripped, count=1).strip()
-        if candidate and candidate != stripped:
-            return candidate
-    return stripped
-
-
-def _guided_normalize_citation_surface(text: str) -> str:
-    normalized = text
-    normalized = _GUIDED_CFR_SECTION_RE.sub(r"\g<title> CFR \g<part>.\g<section>", normalized)
-    normalized = _GUIDED_CFR_PART_RE.sub(r"\g<title> CFR Part \g<part>", normalized)
-    normalized = _GUIDED_FR_CITATION_RE.sub(r"\g<volume> FR \g<page>", normalized)
-    return normalized
-
-
-def _guided_normalize_year_hint(value: Any) -> str | None:
-    text = _guided_normalize_whitespace(value)
-    if not text:
-        return None
-    range_match = _GUIDED_YEAR_RANGE_RE.search(text)
-    if range_match:
-        start = range_match.group("start")
-        end = range_match.group("end")
-        return f"{start}:{end}" if start <= end else f"{end}:{start}"
-    years = _GUIDED_YEAR_RE.findall(text)
-    if len(years) >= 2:
-        start, end = years[0], years[1]
-        return f"{start}:{end}" if start <= end else f"{end}:{start}"
-    if years:
-        return years[0]
-    return text
 
 
 def _guided_note_repair(
@@ -6057,51 +5743,55 @@ async def dispatch_tool(
         provider_registry=provider_registry,
     )
 
+    # Phase 2 Step 2: collect every dependency into a single frozen
+    # ``DispatchContext`` bag. The inner ``_dispatch_internal`` forwarder (and,
+    # in later phases, extracted branch helpers) pass this single object
+    # around instead of re-spelling the 40-kwarg list on every call.
+    dispatch_ctx: DispatchContext = build_dispatch_context(
+        client=client,
+        core_client=core_client,
+        openalex_client=openalex_client,
+        scholarapi_client=scholarapi_client,
+        arxiv_client=arxiv_client,
+        enable_core=enable_core,
+        enable_semantic_scholar=enable_semantic_scholar,
+        enable_openalex=enable_openalex,
+        enable_scholarapi=enable_scholarapi,
+        enable_arxiv=enable_arxiv,
+        serpapi_client=serpapi_client,
+        enable_serpapi=enable_serpapi,
+        crossref_client=crossref_client,
+        unpaywall_client=unpaywall_client,
+        ecos_client=ecos_client,
+        federal_register_client=federal_register_client,
+        govinfo_client=govinfo_client,
+        enable_crossref=enable_crossref,
+        enable_unpaywall=enable_unpaywall,
+        enable_ecos=enable_ecos,
+        enable_federal_register=enable_federal_register,
+        enable_govinfo_cfr=enable_govinfo_cfr,
+        enrichment_service=resolved_enrichment_service,
+        provider_order=provider_order,
+        provider_registry=provider_registry,
+        workspace_registry=workspace_registry,
+        agentic_runtime=agentic_runtime,
+        transport_mode=transport_mode,
+        tool_profile=tool_profile,
+        hide_disabled_tools=hide_disabled_tools,
+        session_ttl_seconds=session_ttl_seconds,
+        embeddings_enabled=embeddings_enabled,
+        guided_research_latency_profile=guided_research_latency_profile,
+        guided_follow_up_latency_profile=guided_follow_up_latency_profile,
+        guided_allow_paid_providers=guided_allow_paid_providers,
+        guided_escalation_enabled=guided_escalation_enabled,
+        guided_escalation_max_passes=guided_escalation_max_passes,
+        guided_escalation_allow_paid_providers=guided_escalation_allow_paid_providers,
+        ctx=ctx,
+        allow_elicitation=allow_elicitation,
+    )
+
     async def _dispatch_internal(tool_name: str, tool_arguments: dict[str, Any]) -> dict[str, Any]:
-        return await dispatch_tool(
-            tool_name,
-            tool_arguments,
-            client=client,
-            core_client=core_client,
-            openalex_client=openalex_client,
-            scholarapi_client=scholarapi_client,
-            arxiv_client=arxiv_client,
-            enable_core=enable_core,
-            enable_semantic_scholar=enable_semantic_scholar,
-            enable_openalex=enable_openalex,
-            enable_scholarapi=enable_scholarapi,
-            enable_arxiv=enable_arxiv,
-            serpapi_client=serpapi_client,
-            enable_serpapi=enable_serpapi,
-            crossref_client=crossref_client,
-            unpaywall_client=unpaywall_client,
-            ecos_client=ecos_client,
-            federal_register_client=federal_register_client,
-            govinfo_client=govinfo_client,
-            enable_crossref=enable_crossref,
-            enable_unpaywall=enable_unpaywall,
-            enable_ecos=enable_ecos,
-            enable_federal_register=enable_federal_register,
-            enable_govinfo_cfr=enable_govinfo_cfr,
-            enrichment_service=resolved_enrichment_service,
-            provider_order=provider_order,
-            provider_registry=provider_registry,
-            workspace_registry=workspace_registry,
-            agentic_runtime=agentic_runtime,
-            transport_mode=transport_mode,
-            tool_profile=tool_profile,
-            hide_disabled_tools=hide_disabled_tools,
-            session_ttl_seconds=session_ttl_seconds,
-            embeddings_enabled=embeddings_enabled,
-            guided_research_latency_profile=guided_research_latency_profile,
-            guided_follow_up_latency_profile=guided_follow_up_latency_profile,
-            guided_allow_paid_providers=guided_allow_paid_providers,
-            guided_escalation_enabled=guided_escalation_enabled,
-            guided_escalation_max_passes=guided_escalation_max_passes,
-            guided_escalation_allow_paid_providers=guided_escalation_allow_paid_providers,
-            ctx=ctx,
-            allow_elicitation=allow_elicitation,
-        )
+        return await dispatch_tool(tool_name, tool_arguments, **dispatch_ctx.as_kwargs())
 
     if name == "get_runtime_status":
         cast(GetRuntimeStatusArgs, TOOL_INPUT_MODELS[name].model_validate(arguments))
