@@ -105,6 +105,45 @@ async def test_method_and_direct_call_return_equivalent_shape() -> None:
     assert len(via_method["results"]) == len(via_direct["results"])
 
 
+@pytest.mark.asyncio
+async def test_run_search_papers_smart_honors_core_classify_query_monkeypatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``run_search_papers_smart`` must resolve ``classify_query`` through the
+    ``_core`` module seam so tests can monkeypatch planning without touching
+    the method wrapper. This pins the deliberate re-export at
+    ``paper_chaser_mcp.agentic.graphs._core.classify_query`` (see Phase 7c-4).
+    """
+
+    from paper_chaser_mcp.agentic.graphs import _core
+
+    class _Sentinel(Exception):
+        pass
+
+    calls: list[dict[str, object]] = []
+
+    async def _fake_classify_query(**kwargs: object) -> tuple[str, object]:
+        calls.append(kwargs)
+        raise _Sentinel("monkeypatched classify_query invoked")
+
+    monkeypatch.setattr(_core, "classify_query", _fake_classify_query)
+
+    semantic = RecordingSemanticClient()
+    openalex = RecordingOpenAlexClient()
+    _, runtime = _deterministic_runtime(semantic=semantic, openalex=openalex)
+
+    with pytest.raises(_Sentinel):
+        await run_search_papers_smart(
+            runtime,
+            query="graphene oxide membranes",
+            limit=5,
+            latency_profile="fast",
+        )
+
+    assert len(calls) == 1, "monkeypatched classify_query was not routed through _core seam"
+    assert calls[0].get("query") == "graphene oxide membranes"
+
+
 def test_method_delegate_body_is_thin() -> None:
     """The ``AgenticRuntime.search_papers_smart`` method is a thin delegate
     whose executable body consists of nothing more than the local import and
