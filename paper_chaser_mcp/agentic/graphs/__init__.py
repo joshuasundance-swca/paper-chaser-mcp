@@ -41,9 +41,6 @@ from ._core import (
     _ecos_query_variants as _ecos_query_variants,
 )
 from ._core import (
-    _finalize_theme_label as _finalize_theme_label,
-)
-from ._core import (
     _has_inspectable_sources as _has_inspectable_sources,
 )
 from ._core import (
@@ -75,6 +72,9 @@ from .research_graph import (
 )
 from .followup_graph import (
     _build_grounded_comparison_answer as _build_grounded_comparison_answer,
+)
+from .inspect_graph import (
+    _finalize_theme_label as _finalize_theme_label,
 )
 
 # ---------------------------------------------------------------------------
