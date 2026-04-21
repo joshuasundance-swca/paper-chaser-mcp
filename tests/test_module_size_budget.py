@@ -104,7 +104,7 @@ BASELINE_LINE_COUNTS: dict[str, int] = {
     "paper_chaser_mcp/clients/ecos/client.py": 963,
     "paper_chaser_mcp/clients/semantic_scholar/client.py": 1_179,
     "paper_chaser_mcp/compat.py": 690,
-    "paper_chaser_mcp/dispatch/_core.py": 9_344,
+    "paper_chaser_mcp/dispatch/_core.py": 3_665,
     "paper_chaser_mcp/dispatch/guided/trust.py": 984,
     "paper_chaser_mcp/enrichment.py": 816,
     "paper_chaser_mcp/eval_canary.py": 728,
@@ -148,7 +148,17 @@ def _build_params() -> list[Any]:
     params: list[Any] = []
     for rel in _ALL_PACKAGE_FILES:
         marks: tuple[pytest.MarkDecorator, ...] = ()
-        if rel in OVERSIZE_ALLOWLIST:
+        if rel == "paper_chaser_mcp/dispatch/_core.py":
+            marks = (
+                pytest.mark.xfail(
+                    strict=True,
+                    reason=(
+                        "Phase 5 finalize: dispatch/_core.py oversize is pinned strict. "
+                        "If this XPASSes (module now <= soft cap), remove from OVERSIZE_ALLOWLIST."
+                    ),
+                ),
+            )
+        elif rel in OVERSIZE_ALLOWLIST:
             marks = (
                 pytest.mark.xfail(
                     strict=False,
