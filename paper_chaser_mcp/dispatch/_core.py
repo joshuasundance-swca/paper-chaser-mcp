@@ -986,26 +986,6 @@ _GUIDED_LITERATURE_TERMS = {
     "studies",
     "systematic review",
 }
-
-
-def _guided_note_repair(
-    repairs: list[dict[str, str]],
-    *,
-    field: str,
-    original: Any,
-    normalized: Any,
-    reason: str,
-) -> None:
-    if original == normalized:
-        return
-    repairs.append(
-        {
-            "field": field,
-            "from": str(original if original is not None else ""),
-            "to": str(normalized if normalized is not None else ""),
-            "reason": reason,
-        }
-    )
 def _guided_extract_question(arguments: dict[str, Any]) -> Any:
     return next(
         (arguments.get(key) for key in ("question", "prompt", "query") if arguments.get(key) is not None),
@@ -1324,70 +1304,6 @@ def _guided_normalization_payload(normalization: dict[str, Any]) -> dict[str, An
         }
     )
     return payload.model_dump(by_alias=True, exclude_none=True)
-def _guided_underspecified_reference_clarification(
-    *,
-    query: str,
-    focus: str | None,
-) -> dict[str, Any] | None:
-    combined = _guided_normalize_whitespace(" ".join(part for part in [query, focus or ""] if part))
-    if not combined or looks_like_paper_identifier(combined):
-        return None
-    parsed = parse_citation(combined)
-    if parsed.identifier:
-        return None
-
-    citation_like = bool(
-        parsed.year is not None or looks_like_citation_query(combined) or looks_like_exact_title(combined)
-    )
-    if not citation_like:
-        return None
-
-    if parsed.author_surnames or parsed.venue_hints:
-        return None
-
-    strongest_candidate_words = max(
-        (len(_guided_reference_signal_words(candidate)) for candidate in parsed.title_candidates),
-        default=0,
-    )
-    weak_anchor = strongest_candidate_words <= 4
-    uncertainty_hits = sum(
-        1
-        for marker in _GUIDED_REFERENCE_UNCERTAINTY_MARKERS
-        if re.search(rf"\b{re.escape(marker)}\b", combined, re.IGNORECASE)
-    )
-    if not weak_anchor or (uncertainty_hits == 0 and not parsed.looks_like_non_paper):
-        return None
-
-    if parsed.looks_like_non_paper or detect_regulatory_intent(query, focus):
-        return {
-            "reason": "underspecified_reference_fragment",
-            "question": (
-                "This looks like a vague reference fragment and may point to either a paper or a policy-style "
-                "document. Add an exact title, one author surname, an agency or venue, or confirm which type "
-                "of source you want before the server guesses."
-            ),
-            "options": [
-                "add exact title",
-                "add author surname",
-                "add agency or venue",
-                "paper vs policy source",
-            ],
-            "canProceedWithoutAnswer": True,
-        }
-    return {
-        "reason": "underspecified_reference_fragment",
-        "question": (
-            "This looks like a vague paper/reference fragment. Add an exact title, one author surname, or a "
-            "venue/year clue before guided research infers a likely paper from weak hints."
-        ),
-        "options": [
-            "add exact title",
-            "add author surname",
-            "add venue or year",
-            "use resolve_reference",
-        ],
-        "canProceedWithoutAnswer": True,
-    }
 def _normalize_author_key(name: str) -> tuple[str, str]:
     """Return (surname_lower, first_initial_lower) for dedup grouping."""
     parts = name.strip().split()
@@ -6630,4 +6546,8 @@ from .guided.trust import (  # noqa: E402,F401 — Phase 3 re-export seam
     _guided_sources_all_off_topic,
     _guided_summary,
     _guided_trust_summary,
+)
+from .guided.resolve_reference import (  # noqa: E402,F401 — Phase 3 re-export seam
+    _guided_note_repair,
+    _guided_underspecified_reference_clarification,
 )
