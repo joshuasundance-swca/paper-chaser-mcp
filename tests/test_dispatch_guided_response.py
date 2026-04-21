@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import pytest
 
-from paper_chaser_mcp.dispatch.guided import response as response_mod
+from paper_chaser_mcp.dispatch.guided.response import (
+    _guided_compact_response_if_needed,
+    _guided_contract_fields,
+    _guided_finalize_response,
+)
 
 
 class TestCompactResponseIfNeeded:
     def test_passthrough_for_unrelated_tool(self) -> None:
         payload = {"foo": "bar"}
-        result = response_mod._guided_compact_response_if_needed(
+        result = _guided_compact_response_if_needed(
             tool_name="search_papers",
             response=payload,
         )
@@ -18,7 +22,7 @@ class TestCompactResponseIfNeeded:
 
     def test_passthrough_when_follow_up_not_insufficient(self) -> None:
         payload = {"answerStatus": "answered", "foo": "bar"}
-        result = response_mod._guided_compact_response_if_needed(
+        result = _guided_compact_response_if_needed(
             tool_name="follow_up_research",
             response=payload,
         )
@@ -32,7 +36,7 @@ class TestCompactResponseIfNeeded:
             "evidence": [{"id": "e1"}],
             "unusedField": "dropped",
         }
-        result = response_mod._guided_compact_response_if_needed(
+        result = _guided_compact_response_if_needed(
             tool_name="follow_up_research",
             response=payload,
         )
@@ -42,7 +46,7 @@ class TestCompactResponseIfNeeded:
 
     def test_compacts_research_abstained(self) -> None:
         payload = {"status": "abstained", "evidence": [], "unusedField": "dropped"}
-        result = response_mod._guided_compact_response_if_needed(
+        result = _guided_compact_response_if_needed(
             tool_name="research",
             response=payload,
         )
@@ -51,7 +55,7 @@ class TestCompactResponseIfNeeded:
 
     def test_research_non_abstained_passthrough(self) -> None:
         payload = {"status": "answered", "evidence": []}
-        result = response_mod._guided_compact_response_if_needed(
+        result = _guided_compact_response_if_needed(
             tool_name="research",
             response=payload,
         )
@@ -61,7 +65,7 @@ class TestCompactResponseIfNeeded:
 class TestFinalizeResponse:
     def test_strips_empty_legacy_lists(self) -> None:
         payload = {"verifiedFindings": [], "unverifiedLeads": [], "status": "answered"}
-        result = response_mod._guided_finalize_response(
+        result = _guided_finalize_response(
             tool_name="research",
             response=payload,
         )
@@ -70,7 +74,7 @@ class TestFinalizeResponse:
 
     def test_sets_legacy_fields_included_flag(self) -> None:
         payload = {"status": "answered"}
-        result = response_mod._guided_finalize_response(
+        result = _guided_finalize_response(
             tool_name="research",
             response=payload,
         )
@@ -78,7 +82,7 @@ class TestFinalizeResponse:
 
     def test_applies_compaction_for_abstained_research(self) -> None:
         payload = {"status": "abstained", "extraneous": "data"}
-        result = response_mod._guided_finalize_response(
+        result = _guided_finalize_response(
             tool_name="research",
             response=payload,
         )
@@ -88,4 +92,4 @@ class TestFinalizeResponse:
 class TestContractFieldsSmoke:
     @pytest.mark.asyncio
     async def test_callable_and_returns_dict(self) -> None:
-        assert callable(response_mod._guided_contract_fields)
+        assert callable(_guided_contract_fields)

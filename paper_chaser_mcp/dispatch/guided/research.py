@@ -276,5 +276,5 @@ def _guided_normalization_payload(normalization: dict[str, Any]) -> dict[str, An
     )
     return payload.model_dump(by_alias=True, exclude_none=True)
 
-logger = logging.getLogger(__name__)
 
+logger = logging.getLogger(__name__)

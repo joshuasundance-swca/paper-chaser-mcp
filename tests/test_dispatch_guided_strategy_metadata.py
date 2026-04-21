@@ -5,22 +5,35 @@ from __future__ import annotations
 import pytest
 
 from paper_chaser_mcp.dispatch.guided import strategy_metadata as sm
+from paper_chaser_mcp.dispatch.guided.strategy_metadata import (
+    _guided_abstention_details_payload,
+    _guided_execution_provenance_payload,
+    _guided_is_agency_guidance_query,
+    _guided_is_known_item_query,
+    _guided_is_mixed_intent_query,
+    _guided_live_strategy_metadata,
+    _guided_mentions_literature,
+    _guided_provider_budget_payload,
+    _guided_reference_signal_words,
+    _guided_should_escalate_research,
+    _guided_strategy_metadata_from_runs,
+)
 
 
 def test__guided_provider_budget_payload_returns_bool_shape() -> None:
-    assert sm._guided_provider_budget_payload(allow_paid_providers=True) == {"allowPaidProviders": True}
-    assert sm._guided_provider_budget_payload(allow_paid_providers=False) == {"allowPaidProviders": False}
+    assert _guided_provider_budget_payload(allow_paid_providers=True) == {"allowPaidProviders": True}
+    assert _guided_provider_budget_payload(allow_paid_providers=False) == {"allowPaidProviders": False}
 
 
 def test__guided_execution_provenance_payload_minimum() -> None:
-    payload = sm._guided_execution_provenance_payload(execution_mode="guided")
+    payload = _guided_execution_provenance_payload(execution_mode="guided")
     assert payload["executionMode"] == "guided"
     assert payload["serverPolicyApplied"] == "quality_first"
     assert payload["passesRun"] == 0
 
 
 def test__guided_execution_provenance_payload_deterministic_fallback_flag() -> None:
-    payload = sm._guided_execution_provenance_payload(
+    payload = _guided_execution_provenance_payload(
         execution_mode="guided",
         strategy_metadata={
             "configuredSmartProvider": "openai",
@@ -31,7 +44,7 @@ def test__guided_execution_provenance_payload_deterministic_fallback_flag() -> N
 
 
 def test__guided_live_strategy_metadata_preserves_user_metadata() -> None:
-    out = sm._guided_live_strategy_metadata(
+    out = _guided_live_strategy_metadata(
         agentic_runtime=None,
         strategy_metadata={"intent": "discovery"},
         latency_profile="quality",
@@ -42,7 +55,7 @@ def test__guided_live_strategy_metadata_preserves_user_metadata() -> None:
 
 def test__guided_abstention_details_payload_returns_none_for_settled_status() -> None:
     assert (
-        sm._guided_abstention_details_payload(
+        _guided_abstention_details_payload(
             status="settled",
             sources=[],
             evidence_gaps=[],
@@ -53,7 +66,7 @@ def test__guided_abstention_details_payload_returns_none_for_settled_status() ->
 
 
 def test__guided_abstention_details_payload_emits_for_abstained() -> None:
-    payload = sm._guided_abstention_details_payload(
+    payload = _guided_abstention_details_payload(
         status="abstained",
         sources=[],
         evidence_gaps=[],
@@ -69,33 +82,33 @@ def test__guided_strategy_metadata_from_runs_merges_first_wins() -> None:
         {"strategyMetadata": {"intent": "discovery", "providersUsed": ["a"]}},
         {"strategyMetadata": {"intent": "review", "providersUsed": ["b"]}},
     ]
-    out = sm._guided_strategy_metadata_from_runs(runs)
+    out = _guided_strategy_metadata_from_runs(runs)
     assert out["intent"] == "discovery"
     assert out["providersUsed"] == ["a", "b"]
 
 
 def test__guided_strategy_metadata_from_runs_handles_empty() -> None:
-    assert sm._guided_strategy_metadata_from_runs([]) == {}
+    assert _guided_strategy_metadata_from_runs([]) == {}
 
 
 def test__guided_is_agency_guidance_query() -> None:
-    assert sm._guided_is_agency_guidance_query("EPA guidance on stormwater") is True
-    assert sm._guided_is_agency_guidance_query("systematic review") is False
+    assert _guided_is_agency_guidance_query("EPA guidance on stormwater") is True
+    assert _guided_is_agency_guidance_query("systematic review") is False
 
 
 def test__guided_is_known_item_query_detects_doi() -> None:
-    assert sm._guided_is_known_item_query("10.1234/abcd") is True
-    assert sm._guided_is_known_item_query("foo") is False
+    assert _guided_is_known_item_query("10.1234/abcd") is True
+    assert _guided_is_known_item_query("foo") is False
 
 
 def test__guided_mentions_literature() -> None:
-    assert sm._guided_mentions_literature("systematic review of X") is True
-    assert sm._guided_mentions_literature("recipe for bread") is False
+    assert _guided_mentions_literature("systematic review of X") is True
+    assert _guided_mentions_literature("recipe for bread") is False
 
 
 def test__guided_is_mixed_intent_query_respects_planner() -> None:
     assert (
-        sm._guided_is_mixed_intent_query(
+        _guided_is_mixed_intent_query(
             "something",
             planner_regulatory_intent="hybrid_regulatory_plus_literature",
         )
@@ -107,13 +120,13 @@ def test__guided_reference_signal_words_strips_generics() -> None:
     # ``paper about X`` should surface only the meaningful tokens. The
     # exact generic-word lists live in _core; we assert the stopword
     # "a"/"the" at minimum gets dropped.
-    out = sm._guided_reference_signal_words("The paper")
+    out = _guided_reference_signal_words("The paper")
     assert "the" not in out
 
 
 def test__guided_should_escalate_research_disallows_when_sources_present() -> None:
     assert (
-        sm._guided_should_escalate_research(
+        _guided_should_escalate_research(
             intent="discovery",
             status="abstained",
             sources=[{"sourceId": "s"}],
@@ -128,7 +141,7 @@ def test__guided_should_escalate_research_disallows_when_sources_present() -> No
 
 def test__guided_should_escalate_research_escalates_empty_abstained() -> None:
     assert (
-        sm._guided_should_escalate_research(
+        _guided_should_escalate_research(
             intent="discovery",
             status="abstained",
             sources=[],

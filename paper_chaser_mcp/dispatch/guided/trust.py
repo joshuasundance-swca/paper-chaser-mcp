@@ -671,6 +671,7 @@ def _guided_machine_failure_payload(
     if execution_provenance is not None:
         payload["executionProvenance"] = execution_provenance
     from .research import _guided_normalization_payload  # noqa: E402 — avoid circular import
+
     normalization_payload = _guided_normalization_payload(normalization or {})
     if normalization_payload is not None:
         payload["inputNormalization"] = normalization_payload

@@ -5,28 +5,34 @@ from __future__ import annotations
 import pytest
 
 from paper_chaser_mcp.dispatch.guided import trust as trust_mod
+from paper_chaser_mcp.dispatch.guided.trust import (
+    _guided_deterministic_fallback_used,
+    _guided_failure_summary,
+    _guided_follow_up_status,
+    _guided_missing_evidence_type,
+    _guided_next_actions,
+    _guided_partial_recovery_possible,
+    _guided_result_meaning,
+    _guided_sources_all_off_topic,
+    _guided_summary,
+    _guided_trust_summary,
+)
 
 
 def test__guided_sources_all_off_topic_empty_false() -> None:
-    assert trust_mod._guided_sources_all_off_topic([]) is False
+    assert _guided_sources_all_off_topic([]) is False
 
 
 def test__guided_sources_all_off_topic_all_off_topic_true() -> None:
-    assert (
-        trust_mod._guided_sources_all_off_topic([{"topicalRelevance": "off_topic"}, {"topicalRelevance": "off_topic"}])
-        is True
-    )
+    assert _guided_sources_all_off_topic([{"topicalRelevance": "off_topic"}, {"topicalRelevance": "off_topic"}]) is True
 
 
 def test__guided_sources_all_off_topic_mixed_false() -> None:
-    assert (
-        trust_mod._guided_sources_all_off_topic([{"topicalRelevance": "off_topic"}, {"topicalRelevance": "on_topic"}])
-        is False
-    )
+    assert _guided_sources_all_off_topic([{"topicalRelevance": "off_topic"}, {"topicalRelevance": "on_topic"}]) is False
 
 
 def test__guided_trust_summary_empty_returns_schema_shape() -> None:
-    out = trust_mod._guided_trust_summary([], [])
+    out = _guided_trust_summary([], [])
     assert out["verifiedSourceCount"] == 0
     assert out["verifiedPrimarySourceCount"] == 0
     assert out["evidenceGapCount"] == 0
@@ -47,18 +53,18 @@ def test__guided_trust_summary_counts_primary_sources() -> None:
             "topicalRelevance": "on_topic",
         },
     ]
-    out = trust_mod._guided_trust_summary(sources, [])
+    out = _guided_trust_summary(sources, [])
     assert out["verifiedPrimarySourceCount"] == 2
     assert out["fullTextVerifiedPrimarySourceCount"] == 1
 
 
 def test__guided_trust_summary_subject_chain_gaps() -> None:
-    out = trust_mod._guided_trust_summary([], [], subject_chain_gaps=["missing regulator"])
+    out = _guided_trust_summary([], [], subject_chain_gaps=["missing regulator"])
     assert out["subjectChainGaps"] == ["missing regulator"]
 
 
 def test__guided_missing_evidence_type_off_topic_only() -> None:
-    category = trust_mod._guided_missing_evidence_type(
+    category = _guided_missing_evidence_type(
         status="abstained",
         evidence_gaps=[],
         sources=[{"topicalRelevance": "off_topic"}],
@@ -67,7 +73,7 @@ def test__guided_missing_evidence_type_off_topic_only() -> None:
 
 
 def test__guided_failure_summary_returns_payload_when_not_failing() -> None:
-    out = trust_mod._guided_failure_summary(
+    out = _guided_failure_summary(
         failure_summary=None,
         status="succeeded",
         sources=[{"topicalRelevance": "on_topic"}],
@@ -79,22 +85,22 @@ def test__guided_failure_summary_returns_payload_when_not_failing() -> None:
 
 
 def test__guided_deterministic_fallback_used_returns_false_for_none() -> None:
-    assert trust_mod._guided_deterministic_fallback_used(None) is False
+    assert _guided_deterministic_fallback_used(None) is False
 
 
 def test__guided_partial_recovery_possible_returns_bool() -> None:
-    result = trust_mod._guided_partial_recovery_possible(coverage_summary=None, failure_summary=None)
+    result = _guided_partial_recovery_possible(coverage_summary=None, failure_summary=None)
     assert isinstance(result, bool)
 
 
 def test__guided_follow_up_status_respects_allowed_values() -> None:
-    assert trust_mod._guided_follow_up_status("succeeded") == "succeeded"
-    assert trust_mod._guided_follow_up_status("abstained") == "abstained"
-    assert trust_mod._guided_follow_up_status(None)  # some default string
+    assert _guided_follow_up_status("succeeded") == "succeeded"
+    assert _guided_follow_up_status("abstained") == "abstained"
+    assert _guided_follow_up_status(None)  # some default string
 
 
 def test__guided_next_actions_returns_list() -> None:
-    out = trust_mod._guided_next_actions(
+    out = _guided_next_actions(
         search_session_id="s1",
         status="succeeded",
         has_sources=True,
@@ -104,7 +110,7 @@ def test__guided_next_actions_returns_list() -> None:
 
 
 def test__guided_result_meaning_returns_string() -> None:
-    out = trust_mod._guided_result_meaning(
+    out = _guided_result_meaning(
         status="succeeded",
         verified_findings=[],
         evidence_gaps=[],
@@ -117,7 +123,7 @@ def test__guided_result_meaning_returns_string() -> None:
 
 
 def test__guided_summary_returns_string() -> None:
-    out = trust_mod._guided_summary(
+    out = _guided_summary(
         intent="discovery",
         status="succeeded",
         findings=[],

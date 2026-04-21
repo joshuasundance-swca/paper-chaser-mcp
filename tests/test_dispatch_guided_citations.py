@@ -16,11 +16,21 @@ from __future__ import annotations
 import pytest
 
 from paper_chaser_mcp.dispatch.guided import citations as citations_mod
+from paper_chaser_mcp.dispatch.guided.citations import (
+    _assign_verification_status,
+    _guided_citation_from_paper,
+    _guided_citation_from_structured_source,
+    _guided_journal_or_publisher,
+    _guided_normalize_access_axes,
+    _guided_normalize_verification_status,
+    _guided_open_access_route,
+    _guided_year_text,
+)
 
 
 def test__assign_verification_status_regulatory_needs_body_text() -> None:
     assert (
-        citations_mod._assign_verification_status(
+        _assign_verification_status(
             source_type="federal_register_rule",
             body_text_embedded=True,
         )
@@ -28,7 +38,7 @@ def test__assign_verification_status_regulatory_needs_body_text() -> None:
     )
     # URL-only regulatory hit falls back to verified_metadata.
     assert (
-        citations_mod._assign_verification_status(
+        _assign_verification_status(
             source_type="federal_register_rule",
             full_text_url_found=True,
             body_text_embedded=False,
@@ -39,14 +49,14 @@ def test__assign_verification_status_regulatory_needs_body_text() -> None:
 
 def test__assign_verification_status_scholarly_with_doi() -> None:
     assert (
-        citations_mod._assign_verification_status(
+        _assign_verification_status(
             source_type="scholarly_article",
             has_doi=True,
         )
         == "verified_metadata"
     )
     assert (
-        citations_mod._assign_verification_status(
+        _assign_verification_status(
             source_type="scholarly_article",
             has_doi=False,
         )
@@ -55,9 +65,7 @@ def test__assign_verification_status_scholarly_with_doi() -> None:
 
 
 def test__guided_normalize_access_axes_body_text_implies_full_text_observed() -> None:
-    access_status, url_found, observed, body, qa = citations_mod._guided_normalize_access_axes(
-        {"accessStatus": "body_text_embedded"}
-    )
+    access_status, url_found, observed, body, qa = _guided_normalize_access_axes({"accessStatus": "body_text_embedded"})
     assert access_status == "body_text_embedded"
     assert body is True
     assert observed is True
@@ -66,9 +74,7 @@ def test__guided_normalize_access_axes_body_text_implies_full_text_observed() ->
 
 
 def test__guided_normalize_access_axes_qa_readable_upgrades_body() -> None:
-    access_status, _url_found, observed, body, qa = citations_mod._guided_normalize_access_axes(
-        {"qaReadableText": True}
-    )
+    access_status, _url_found, observed, body, qa = _guided_normalize_access_axes({"qaReadableText": True})
     assert access_status == "qa_readable_text"
     assert qa is True
     assert body is True
@@ -76,7 +82,7 @@ def test__guided_normalize_access_axes_qa_readable_upgrades_body() -> None:
 
 
 def test__guided_normalize_access_axes_url_only() -> None:
-    access_status, url_found, observed, body, qa = citations_mod._guided_normalize_access_axes(
+    access_status, url_found, observed, body, qa = _guided_normalize_access_axes(
         {"fullTextUrlFound": True, "canonicalUrl": "https://example.com"}
     )
     assert access_status == "url_verified"
@@ -87,7 +93,7 @@ def test__guided_normalize_access_axes_url_only() -> None:
 
 
 def test__guided_normalize_verification_status_downgrades_regulatory_without_body() -> None:
-    status = citations_mod._guided_normalize_verification_status(
+    status = _guided_normalize_verification_status(
         {"verificationStatus": "verified_primary_source"},
         source_type="federal_register_rule",
         full_text_url_found=True,
@@ -97,35 +103,32 @@ def test__guided_normalize_verification_status_downgrades_regulatory_without_bod
 
 
 def test__guided_open_access_route_prefers_explicit_value() -> None:
-    assert (
-        citations_mod._guided_open_access_route({"openAccessRoute": "repository_open_access"})
-        == "repository_open_access"
-    )
+    assert _guided_open_access_route({"openAccessRoute": "repository_open_access"}) == "repository_open_access"
 
 
 def test__guided_open_access_route_detects_mirror_only() -> None:
-    assert citations_mod._guided_open_access_route({"retrievedUrl": "https://sci-hub.example/abc"}) == "mirror_only"
+    assert _guided_open_access_route({"retrievedUrl": "https://sci-hub.example/abc"}) == "mirror_only"
 
 
 def test__guided_open_access_route_repository_provider() -> None:
-    assert citations_mod._guided_open_access_route({"provider": "arxiv"}) == "repository_open_access"
+    assert _guided_open_access_route({"provider": "arxiv"}) == "repository_open_access"
 
 
 def test__guided_open_access_route_unknown_default() -> None:
-    assert citations_mod._guided_open_access_route({}) == "unknown"
+    assert _guided_open_access_route({}) == "unknown"
 
 
 def test__guided_citation_from_structured_source_returns_none_when_no_fields() -> None:
-    assert citations_mod._guided_citation_from_structured_source({}) is None
+    assert _guided_citation_from_structured_source({}) is None
 
 
 def test__guided_citation_from_structured_source_passthrough_when_dict() -> None:
     existing = {"title": "X", "year": "2020"}
-    assert citations_mod._guided_citation_from_structured_source({"citation": existing}) is existing
+    assert _guided_citation_from_structured_source({"citation": existing}) is existing
 
 
 def test__guided_citation_from_structured_source_builds_from_surface() -> None:
-    result = citations_mod._guided_citation_from_structured_source(
+    result = _guided_citation_from_structured_source(
         {"title": "A title", "date": "March 2021", "sourceType": "scholarly_article"}
     )
     assert result is not None
@@ -136,11 +139,11 @@ def test__guided_citation_from_structured_source_builds_from_surface() -> None:
 
 
 def test__guided_citation_from_paper_none_when_empty() -> None:
-    assert citations_mod._guided_citation_from_paper({}, None) is None
+    assert _guided_citation_from_paper({}, None) is None
 
 
 def test__guided_citation_from_paper_dedupes_authors() -> None:
-    result = citations_mod._guided_citation_from_paper(
+    result = _guided_citation_from_paper(
         {
             "title": "Example",
             "authors": [{"name": "Ada Lovelace"}, {"name": "A Lovelace"}, {"name": "Ada Lovelace"}],
@@ -154,23 +157,21 @@ def test__guided_citation_from_paper_dedupes_authors() -> None:
 
 
 def test__guided_year_text_extracts_four_digit_year() -> None:
-    assert citations_mod._guided_year_text("Published March 2021") == "2021"
-    assert citations_mod._guided_year_text("1999-07-01") == "1999"
-    assert citations_mod._guided_year_text("") is None
-    assert citations_mod._guided_year_text(None) is None
-    assert citations_mod._guided_year_text("not a year") is None
+    assert _guided_year_text("Published March 2021") == "2021"
+    assert _guided_year_text("1999-07-01") == "1999"
+    assert _guided_year_text("") is None
+    assert _guided_year_text(None) is None
+    assert _guided_year_text("not a year") is None
 
 
 def test__guided_journal_or_publisher_prefers_crossref_publisher() -> None:
-    assert (
-        citations_mod._guided_journal_or_publisher({"enrichments": {"crossref": {"publisher": "Nature"}}}) == "Nature"
-    )
+    assert _guided_journal_or_publisher({"enrichments": {"crossref": {"publisher": "Nature"}}}) == "Nature"
 
 
 def test__guided_journal_or_publisher_falls_back_to_venue_then_provider() -> None:
-    assert citations_mod._guided_journal_or_publisher({"venue": "Cell"}) == "Cell"
-    assert citations_mod._guided_journal_or_publisher({"provider": "arxiv"}) == "arxiv"
-    assert citations_mod._guided_journal_or_publisher({}) is None
+    assert _guided_journal_or_publisher({"venue": "Cell"}) == "Cell"
+    assert _guided_journal_or_publisher({"provider": "arxiv"}) == "arxiv"
+    assert _guided_journal_or_publisher({}) is None
 
 
 # Prevent unused-import false positives if citations_mod's exported API changes.

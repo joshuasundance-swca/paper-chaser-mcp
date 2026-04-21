@@ -7,6 +7,15 @@ import types
 import pytest
 
 from paper_chaser_mcp.dispatch.guided import sessions as sessions_mod
+from paper_chaser_mcp.dispatch.guided.sessions import (
+    _guided_active_session_ids,
+    _guided_enrich_records_from_saved_session,
+    _guided_extract_search_session_id,
+    _guided_infer_single_session_id,
+    _guided_saved_session_topicality,
+    _guided_session_exists,
+    _guided_session_findings,
+)
 
 
 def _make_registry(records: dict[str, object] | None = None) -> types.SimpleNamespace:
@@ -47,53 +56,53 @@ def _make_record(
 
 def test__guided_session_exists_returns_false_on_missing() -> None:
     registry = _make_registry({})
-    assert sessions_mod._guided_session_exists(workspace_registry=registry, search_session_id="unknown") is False
+    assert _guided_session_exists(workspace_registry=registry, search_session_id="unknown") is False
 
 
 def test__guided_session_exists_returns_true_when_present() -> None:
     record = _make_record(session_id="s1")
     registry = _make_registry({"s1": record})
-    assert sessions_mod._guided_session_exists(workspace_registry=registry, search_session_id="s1") is True
+    assert _guided_session_exists(workspace_registry=registry, search_session_id="s1") is True
 
 
 def test__guided_session_exists_rejects_empty_id() -> None:
     registry = _make_registry({"s1": _make_record(session_id="s1")})
-    assert sessions_mod._guided_session_exists(workspace_registry=registry, search_session_id="") is False
+    assert _guided_session_exists(workspace_registry=registry, search_session_id="") is False
 
 
 def test__guided_session_exists_handles_none_registry() -> None:
-    assert sessions_mod._guided_session_exists(workspace_registry=None, search_session_id="x") is False
+    assert _guided_session_exists(workspace_registry=None, search_session_id="x") is False
 
 
 def test__guided_active_session_ids_sorts_by_created_at_desc() -> None:
     r1 = _make_record(session_id="old", created_at=100.0)
     r2 = _make_record(session_id="new", created_at=500.0)
     registry = _make_registry({"old": r1, "new": r2})
-    assert sessions_mod._guided_active_session_ids(registry) == ["new", "old"]
+    assert _guided_active_session_ids(registry) == ["new", "old"]
 
 
 def test__guided_active_session_ids_skips_expired() -> None:
     r1 = _make_record(session_id="alive", created_at=200.0)
     r2 = _make_record(session_id="dead", created_at=300.0, expired=True)
     registry = _make_registry({"alive": r1, "dead": r2})
-    assert sessions_mod._guided_active_session_ids(registry) == ["alive"]
+    assert _guided_active_session_ids(registry) == ["alive"]
 
 
 def test__guided_active_session_ids_returns_empty_for_none() -> None:
-    assert sessions_mod._guided_active_session_ids(None) == []
+    assert _guided_active_session_ids(None) == []
 
 
 def test__guided_extract_search_session_id_tries_every_alias() -> None:
-    assert sessions_mod._guided_extract_search_session_id({"searchSessionId": "a"}) == "a"
-    assert sessions_mod._guided_extract_search_session_id({"search_session_id": "b"}) == "b"
-    assert sessions_mod._guided_extract_search_session_id({"sessionId": "c"}) == "c"
-    assert sessions_mod._guided_extract_search_session_id({"session_id": "d"}) == "d"
-    assert sessions_mod._guided_extract_search_session_id({"session": "e"}) == "e"
-    assert sessions_mod._guided_extract_search_session_id({}) is None
+    assert _guided_extract_search_session_id({"searchSessionId": "a"}) == "a"
+    assert _guided_extract_search_session_id({"search_session_id": "b"}) == "b"
+    assert _guided_extract_search_session_id({"sessionId": "c"}) == "c"
+    assert _guided_extract_search_session_id({"session_id": "d"}) == "d"
+    assert _guided_extract_search_session_id({"session": "e"}) == "e"
+    assert _guided_extract_search_session_id({}) is None
 
 
 def test__guided_saved_session_topicality_all_off_topic() -> None:
-    has, all_off = sessions_mod._guided_saved_session_topicality(
+    has, all_off = _guided_saved_session_topicality(
         [{"topicalRelevance": "off_topic"}, {"topicalRelevance": "off_topic"}]
     )
     assert has is True
@@ -101,7 +110,7 @@ def test__guided_saved_session_topicality_all_off_topic() -> None:
 
 
 def test__guided_saved_session_topicality_mixed() -> None:
-    has, all_off = sessions_mod._guided_saved_session_topicality(
+    has, all_off = _guided_saved_session_topicality(
         [{"topicalRelevance": "on_topic"}, {"topicalRelevance": "off_topic"}]
     )
     assert has is True
@@ -109,8 +118,8 @@ def test__guided_saved_session_topicality_mixed() -> None:
 
 
 def test__guided_saved_session_topicality_empty() -> None:
-    assert sessions_mod._guided_saved_session_topicality(None) == (False, False)
-    assert sessions_mod._guided_saved_session_topicality([]) == (False, False)
+    assert _guided_saved_session_topicality(None) == (False, False)
+    assert _guided_saved_session_topicality([]) == (False, False)
 
 
 def test__guided_session_findings_reuses_finding_dicts() -> None:
@@ -119,7 +128,7 @@ def test__guided_session_findings_reuses_finding_dicts() -> None:
             {"claim": "A", "supportingSourceIds": ["s1"], "trustLevel": "verified"},
         ]
     }
-    out = sessions_mod._guided_session_findings(payload, sources=[])
+    out = _guided_session_findings(payload, sources=[])
     assert len(out) == 1
     assert out[0]["claim"] == "A"
 
@@ -133,19 +142,19 @@ def test__guided_session_findings_falls_back_to_source_derivation() -> None:
             "verificationStatus": "verified_primary_source",
         }
     ]
-    out = sessions_mod._guided_session_findings({}, sources)
+    out = _guided_session_findings({}, sources)
     assert out and out[0]["claim"] == "t"
 
 
 def test__guided_infer_single_session_id_returns_none_when_no_records() -> None:
     registry = _make_registry({})
-    assert sessions_mod._guided_infer_single_session_id(registry) is None
+    assert _guided_infer_single_session_id(registry) is None
 
 
 def test__guided_enrich_records_from_saved_session_merges_by_title() -> None:
     saved = [{"sourceId": "saved1", "title": "Same", "isPrimarySource": True}]
     current = [{"sourceId": "cur1", "title": "Same"}]
-    out = sessions_mod._guided_enrich_records_from_saved_session(current, saved)
+    out = _guided_enrich_records_from_saved_session(current, saved)
     assert len(out) == 1
     assert out[0]["isPrimarySource"] is True
     # ``_guided_merge_source_records`` is called with (best_match, record),

@@ -5,6 +5,10 @@ from __future__ import annotations
 import pytest
 
 from paper_chaser_mcp.dispatch.guided import findings as findings_mod
+from paper_chaser_mcp.dispatch.guided.findings import (
+    _guided_findings_from_sources,
+    _guided_unverified_leads_from_sources,
+)
 
 
 def _src(**overrides: object) -> dict[str, object]:
@@ -19,7 +23,7 @@ def _src(**overrides: object) -> dict[str, object]:
 
 
 def test__guided_findings_from_sources_keeps_verified_on_topic() -> None:
-    findings = findings_mod._guided_findings_from_sources([_src()])
+    findings = _guided_findings_from_sources([_src()])
     assert len(findings) == 1
     assert findings[0]["claim"] == "A Paper"
     assert findings[0]["supportingSourceIds"] == ["s1"]
@@ -30,13 +34,13 @@ def test__guided_findings_from_sources_skips_off_topic_or_unverified() -> None:
     off_topic = _src(topicalRelevance="weak_match")
     unverified = _src(sourceId="s2", verificationStatus="unverified")
     missing_claim = _src(sourceId="", title="", note="", verificationStatus="verified_metadata")
-    out = findings_mod._guided_findings_from_sources([off_topic, unverified, missing_claim])
+    out = _guided_findings_from_sources([off_topic, unverified, missing_claim])
     assert out == []
 
 
 def test__guided_findings_from_sources_falls_back_through_claim_keys() -> None:
     src = _src(title="", note="A note claim")
-    out = findings_mod._guided_findings_from_sources([src])
+    out = _guided_findings_from_sources([src])
     assert out and out[0]["claim"] == "A note claim"
 
 
@@ -47,7 +51,7 @@ def test__guided_unverified_leads_from_sources_keeps_non_verified() -> None:
         topicalRelevance="weak_match",
         verificationStatus="unverified",
     )
-    out = findings_mod._guided_unverified_leads_from_sources([verified, lead])
+    out = _guided_unverified_leads_from_sources([verified, lead])
     assert len(out) == 1
     assert out[0]["sourceId"] == "s2"
 
@@ -56,14 +60,14 @@ def test__guided_unverified_leads_from_sources_deduplicates_by_source_id() -> No
     dup1 = _src(sourceId="s1", verificationStatus="unverified")
     dup2 = _src(sourceId="s1", verificationStatus="unverified")
     new = _src(sourceId="s2", verificationStatus="unverified")
-    out = findings_mod._guided_unverified_leads_from_sources([dup1, dup2, new])
+    out = _guided_unverified_leads_from_sources([dup1, dup2, new])
     ids = [item["sourceId"] for item in out]
     assert ids == ["s1", "s2"]
 
 
 def test__guided_unverified_leads_from_sources_caps_at_six() -> None:
     sources = [_src(sourceId=f"s{idx}", verificationStatus="unverified") for idx in range(10)]
-    out = findings_mod._guided_unverified_leads_from_sources(sources)
+    out = _guided_unverified_leads_from_sources(sources)
     assert len(out) == 6
 
 

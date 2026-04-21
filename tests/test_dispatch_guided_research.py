@@ -5,23 +5,29 @@ from __future__ import annotations
 import pytest
 
 from paper_chaser_mcp.dispatch.guided import research as research_mod
+from paper_chaser_mcp.dispatch.guided.research import (
+    _guided_normalization_payload,
+    _guided_normalize_follow_up_arguments,
+    _guided_normalize_inspect_arguments,
+    _guided_normalize_research_arguments,
+)
 
 
 def test__guided_normalization_payload_empty() -> None:
-    out = research_mod._guided_normalization_payload({"repairs": [], "warnings": []})
+    out = _guided_normalization_payload({"repairs": [], "warnings": []})
     assert out is None or isinstance(out, dict)
 
 
 def test__guided_normalize_research_arguments_is_callable() -> None:
-    assert callable(research_mod._guided_normalize_research_arguments)
+    assert callable(_guided_normalize_research_arguments)
 
 
 def test__guided_normalize_follow_up_arguments_is_callable() -> None:
-    assert callable(research_mod._guided_normalize_follow_up_arguments)
+    assert callable(_guided_normalize_follow_up_arguments)
 
 
 def test__guided_normalize_inspect_arguments_is_callable() -> None:
-    assert callable(research_mod._guided_normalize_inspect_arguments)
+    assert callable(_guided_normalize_inspect_arguments)
 
 
 _EXPECTED_EXPORTS = (
