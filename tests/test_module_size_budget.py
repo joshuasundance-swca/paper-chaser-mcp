@@ -5,9 +5,10 @@ notes). Every `.py` file under `paper_chaser_mcp/` must eventually live under
 an 800-line soft cap and a 2,500-line hard cap.
 
 Currently-oversized modules are listed in :data:`OVERSIZE_ALLOWLIST` and are
-marked ``xfail(strict=False)`` so the baseline stays green. Phase 12 will flip
-the xfails to strict and, once each module is split, drop it from the
-allowlist.
+marked ``xfail(strict=True)`` as of Phase 12 so that any allowlisted module
+which is inadvertently shrunk below the soft cap without being dropped from
+the allowlist will fail loudly. Once a module is genuinely split, drop it
+from the allowlist in the same commit.
 
 In addition, :data:`BASELINE_LINE_COUNTS` pins the current line count of every
 allowlisted module so they cannot silently *regrow* while they wait to be
@@ -170,8 +171,14 @@ def _build_params() -> list[Any]:
         elif rel in OVERSIZE_ALLOWLIST:
             marks = (
                 pytest.mark.xfail(
-                    strict=False,
-                    reason="Phase 12 flips strict once module is split",
+                    strict=True,
+                    reason=(
+                        "Phase 12 tightens every remaining allowlist entry to "
+                        "strict=True. If this XPASSes (module now <= soft cap), "
+                        "drop it from PLAN_OVERSIZE_MODULES / "
+                        "BASELINE_OVERSIZE_EXTRAS and BASELINE_LINE_COUNTS in "
+                        "the same commit."
+                    ),
                 ),
             )
         params.append(pytest.param(rel, id=rel, marks=marks))
