@@ -1,476 +1,54 @@
-"""Query understanding, routing, and bounded expansion helpers."""
+"""Query understanding, routing, and bounded expansion helpers.
+
+Phase 6 moved the regex/term-set constants, low-level text normalization,
+regulatory/literature intent helpers, and specificity/ambiguity estimators
+into dedicated submodules (``constants``, ``normalization``, ``regulatory``,
+``specificity``). This module still hosts the async ``classify_query``
+orchestrator, hypothesis/grounded/speculative expansion, variant combining
+and deduplication, evidence-phrase extraction, and the intent reconciliation
+helpers; Phase 7 will split those out further.
+"""
 
 from __future__ import annotations
 
 import re
 from collections import Counter
 from typing import Any, Literal, cast
-from urllib.parse import urlparse
 
-from ..citation_repair import looks_like_citation_query
-from .config import AgenticConfig
-from .models import (
+from ..config import AgenticConfig
+from ..models import (
     RETRIEVAL_MODE_MIXED,
     RETRIEVAL_MODE_TARGETED,
     ExpansionCandidate,
     IntentCandidate,
     IntentLabel,
     PlannerDecision,
-    PlannerQueryType,
     RegulatoryIntentLabel,
 )
-from .providers import COMMON_QUERY_WORDS, ModelProviderBundle
-
-DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:A-Za-z0-9]+", re.IGNORECASE)
-ARXIV_RE = re.compile(r"(?:arxiv:)?\d{4}\.\d{4,5}(?:v\d+)?", re.IGNORECASE)
-FACET_SPLIT_RE = re.compile(
-    r"\b(?:for|in|on|about|into|within|across|via|through|regarding|around)\b",
-    re.IGNORECASE,
+from ..providers import ModelProviderBundle
+from .constants import (
+    GENERIC_EVIDENCE_WORDS,
+    VARIANT_DEDUPE_STOPWORDS,
 )
-GENERIC_EVIDENCE_WORDS = COMMON_QUERY_WORDS | {
-    "with",
-    "were",
-    "from",
-    "into",
-    "using",
-    "use",
-    "used",
-    "their",
-    "this",
-    "that",
-    "these",
-    "those",
-    "they",
-    "them",
-    "within",
-    "across",
-    "based",
-    "approach",
-    "approaches",
-    "method",
-    "methods",
-    "analysis",
-    "results",
-    "finding",
-    "findings",
-    "quality",
-    "different",
-}
-QUERY_FACET_TOKEN_ALLOWLIST = {
-    "agent",
-    "agents",
-    "review",
-    "reviews",
-    "survey",
-    "surveys",
-    "tool",
-    "tools",
-}
-HYPOTHESIS_QUERY_STOPWORDS = {
-    "current",
-    "different",
-    "effective",
-    "effectiveness",
-    "especially",
-    "evidence",
-    "field",
-    "latest",
-    "methods",
-    "most",
-    "recent",
-    "research",
-    "review",
-    "studies",
-    "study",
-}
-LITERATURE_QUERY_TERMS = {
-    "article",
-    "citation",
-    "doi",
-    "evidence",
-    "journal",
-    "literature",
-    "meta-analysis",
-    "paper",
-    "peer-reviewed",
-    "review",
-    "scholarly",
-    "scientific",
-    "study",
-    "systematic review",
-}
-TITLE_STOPWORDS = {
-    "a",
-    "an",
-    "and",
-    "as",
-    "at",
-    "for",
-    "from",
-    "in",
-    "is",
-    "of",
-    "on",
-    "or",
-    "the",
-    "to",
-    "with",
-}
-QUERYISH_TITLE_BLOCKERS = {
-    "aquatic",
-    "bioaccumulation",
-    "biodiversity",
-    "climate",
-    "compare",
-    "contamination",
-    "ecotoxicology",
-    "ecosystem",
-    "effects",
-    "evidence",
-    "exposure",
-    "history",
-    "include",
-    "listing",
-    "marine",
-    "mitigation",
-    "monitoring",
-    "pollution",
-    "regulatory",
-    "review",
-    "status",
-    "studies",
-    "study",
-    "survey",
-    "systematic",
-    "terrestrial",
-    "toxicity",
-    "transport",
-    "trophic",
-    "what",
-}
-STRONG_REGULATORY_TITLE_BLOCKERS = {
-    "critical habitat",
-    "ecos",
-    "esa",
-    "federal register",
-    "final rule",
-    "listing status",
-    "regulatory history",
-    "rulemaking",
-}
-AGENCY_REGULATORY_MARKERS = {
-    "agency",
-    "cdc",
-    "cms",
-    "epa",
-    "fda",
-    "food and drug administration",
-    "hhs",
-    "nih",
-    "usda",
-}
-REGULATORY_QUERY_TERMS = {
-    "106 consultation",
-    "ac hp",
-    "agency guidance",
-    "archaeology",
-    "archaeology guidance",
-    "biological opinion",
-    "cfr",
-    "clinical decision support",
-    "code of federal regulations",
-    "contaminant limit",
-    "critical habitat",
-    "drinking water standard",
-    "ecos",
-    "esa",
-    "fda",
-    "final rule",
-    "food and drug administration",
-    "federal register",
-    "five-year review",
-    "five year review",
-    "guidance for industry",
-    "health advisory",
-    "historic district",
-    "historic preservation",
-    "incidental take",
-    "listing status",
-    "listing history",
-    "maximum contaminant level",
-    "mcl",
-    "nhpa",
-    "proposed rule",
-    "recovery plan",
-    "regulation",
-    "regulatory history",
-    "rulemaking",
-    "safe drinking water act",
-    "sdwa",
-    "section 106",
-    "section 7",
-    "species dossier",
-    "tribal consultation",
-    "thpo",
-    "shpo",
-    "sacred site",
-    "cultural resources",
-    "cultural landscape",
-}
-
-_CULTURAL_RESOURCE_MARKERS = {
-    "archaeological",
-    "archaeology",
-    "cultural resources",
-    "cultural landscape",
-    "historic district",
-    "historic preservation",
-    "historic property",
-    "nhpa",
-    "sacred site",
-    "section 106",
-    "tribal consultation",
-    "thpo",
-    "shpo",
-}
-
-VARIANT_DEDUPE_STOPWORDS = (
-    TITLE_STOPWORDS
-    | GENERIC_EVIDENCE_WORDS
-    | {
-        "florida",
-        "review",
-        "scrub",
-    }
+from .normalization import (
+    looks_like_exact_title,
+    normalize_query,
+    query_facets,
 )
-
-
-def normalize_query(query: str) -> str:
-    """Collapse whitespace and keep the original wording intact."""
-    return " ".join(query.strip().split())
-
-
-def query_facets(query: str) -> list[str]:
-    """Extract compact multi-token facets that should stay visible in results."""
-    normalized = re.sub(r"[-_/]+", " ", normalize_query(query).lower())
-    facets: list[str] = []
-    seen: set[str] = set()
-    for segment in FACET_SPLIT_RE.split(normalized):
-        tokens = [
-            token
-            for token in re.findall(r"[A-Za-z0-9]{3,}", segment)
-            if (token not in GENERIC_EVIDENCE_WORDS or token in QUERY_FACET_TOKEN_ALLOWLIST)
-        ]
-        if len(tokens) >= 2:
-            facet = " ".join(tokens[:3])
-            if facet not in seen:
-                seen.add(facet)
-                facets.append(facet)
-    if facets:
-        return facets[:3]
-
-    fallback_tokens = [
-        token for token in re.findall(r"[A-Za-z0-9]{3,}", normalized) if token not in GENERIC_EVIDENCE_WORDS
-    ]
-    for token in fallback_tokens[:3]:
-        if token not in seen:
-            seen.add(token)
-            facets.append(token)
-    return facets
-
-
-def query_terms(query: str) -> list[str]:
-    """Return distinctive normalized query terms for lightweight coverage checks."""
-    normalized = re.sub(r"[-_/]+", " ", normalize_query(query).lower())
-    terms: list[str] = []
-    seen: set[str] = set()
-    for token in re.findall(r"[A-Za-z0-9]{3,}", normalized):
-        if token in seen:
-            continue
-        if token in GENERIC_EVIDENCE_WORDS and token not in QUERY_FACET_TOKEN_ALLOWLIST:
-            continue
-        seen.add(token)
-        terms.append(token)
-    return terms[:8]
-
-
-def looks_like_url(query: str) -> bool:
-    """Return True when *query* is a plausible URL."""
-    if not query:
-        return False
-    parsed = urlparse(query)
-    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
-
-
-def looks_like_exact_title(query: str) -> bool:
-    """Heuristically identify likely exact-title lookups."""
-    normalized = normalize_query(query)
-    if not normalized or normalized.endswith("?"):
-        return False
-    if detect_regulatory_intent(normalized):
-        return False
-    lowered = normalized.lower()
-    if any(marker in lowered for marker in STRONG_REGULATORY_TITLE_BLOCKERS):
-        return False
-    if re.search(r"\b\d+\s*(?:cfr|f\.?\s*r\.?)\b", lowered):
-        return False
-    if any(phrase in lowered for phrase in ("what does", "what is", "what are", "include representative")):
-        return False
-    stripped = normalized.strip("\"'")
-    words = re.findall(r"[A-Za-z][A-Za-z0-9'/-]*", stripped)
-    if not 2 <= len(words) <= 24:
-        return False
-    significant_words = [word for word in words if len(word) > 2 and word.lower() not in TITLE_STOPWORDS]
-    if len(significant_words) < 2:
-        return False
-    queryish_count = sum(word.lower() in QUERYISH_TITLE_BLOCKERS for word in significant_words)
-    if queryish_count >= 3:
-        return False
-    title_like_words = [word for word in significant_words if word[:1].isupper() or word.isupper() or "-" in word]
-    if len(title_like_words) >= max(2, int(len(significant_words) * 0.45)):
-        return True
-    if (
-        queryish_count == 0
-        and not _query_starts_broad(normalized)
-        and 4 <= len(significant_words) <= 12
-        and any(word.lower() in TITLE_STOPWORDS for word in words)
-    ):
-        return True
-    return bool(re.search(r"\([A-Z][A-Za-z]+(?:\s+[a-z][A-Za-z-]+)+\)", stripped)) and len(significant_words) >= 6
-
-
-def looks_like_near_known_item_query(query: str) -> bool:
-    """Heuristically identify short near-known-item prompts.
-
-    This catches prompts like model/paper/system names (for example CLIP,
-    Toolformer, DSPy, or Med-PaLM M) that are not exact-title lookups but still
-    behave like anchored known-item requests for topical-relevance purposes.
-    """
-
-    normalized = normalize_query(query)
-    if not normalized or normalized.endswith("?"):
-        return False
-    if detect_regulatory_intent(normalized):
-        return False
-    lowered = normalized.lower()
-    if any(marker in lowered for marker in STRONG_REGULATORY_TITLE_BLOCKERS):
-        return False
-    if any(
-        phrase in lowered
-        for phrase in (
-            "what is",
-            "what are",
-            "how does",
-            "how do",
-            "compare",
-            "survey",
-            "review",
-            "literature",
-            "state of the art",
-            "overview",
-            "introduction",
-            "tutorial",
-        )
-    ):
-        return False
-    raw_tokens = re.findall(r"[A-Za-z0-9][A-Za-z0-9+./:-]*", query.strip("\"' "))
-    terms = query_terms(normalized)
-    if not raw_tokens or not terms or len(terms) > 4 or len(raw_tokens) > 5:
-        return False
-    queryish_count = sum(term.lower() in QUERYISH_TITLE_BLOCKERS for term in terms)
-    if queryish_count >= 2:
-        return False
-
-    def _identifierish(token: str) -> bool:
-        stripped = token.strip()
-        if len(stripped) <= 1:
-            return stripped.isupper()
-        upper_count = sum(char.isupper() for char in stripped)
-        lower_count = sum(char.islower() for char in stripped)
-        return bool(
-            stripped.isupper()
-            or "-" in stripped
-            or any(char.isdigit() for char in stripped)
-            or re.search(r"[a-z][A-Z]|[A-Z][a-z]+[A-Z]", stripped)
-            or (upper_count >= 2 and lower_count >= 1)
-        )
-
-    if any(_identifierish(token) for token in raw_tokens):
-        return True
-    return len(raw_tokens) == 1 and raw_tokens[0][:1].isupper() and len(raw_tokens[0]) >= 5
-
-
-def detect_regulatory_intent(query: str, focus: str | None = None) -> bool:
-    """Return True when the ask is more likely a regulatory primary-source workflow."""
-
-    normalized = normalize_query(" ".join(part for part in [query, focus or ""] if part)).lower()
-    if not normalized:
-        return False
-    if any(term in normalized for term in REGULATORY_QUERY_TERMS):
-        return True
-    if any(term in normalized for term in _CULTURAL_RESOURCE_MARKERS):
-        return True
-    if any(term in normalized for term in {"guidance", "policy", "policies"}) and any(
-        marker in normalized for marker in AGENCY_REGULATORY_MARKERS
-    ):
-        return True
-    if any(marker in normalized for marker in {"esa", "listing status", "listing history", "final rule"}) and any(
-        marker in normalized
-        for marker in {
-            "bat",
-            "bird",
-            "condor",
-            "habitat",
-            "listed",
-            "listing",
-            "recovery",
-            "species",
-            "status",
-            "threatened",
-            "wildlife",
-        }
-    ):
-        return True
-    if re.search(r"\b(?:endangered|threatened)\b", normalized) and any(
-        marker in normalized
-        for marker in {
-            "cfr",
-            "critical habitat",
-            "esa",
-            "federal register",
-            "final rule",
-            "listing",
-            "recovery plan",
-            "rulemaking",
-            "species status",
-        }
-    ):
-        return True
-    if re.search(r"\b\d+\s*(?:cfr|f\.?\s*r\.?)\b", normalized):
-        return True
-    if "species" in normalized and any(
-        marker in normalized for marker in {"history", "listing", "recovery", "dossier"}
-    ):
-        return True
-    return False
-
-
-def detect_literature_intent(query: str, focus: str | None = None) -> bool:
-    """Return True when the ask explicitly signals literature or scholarly retrieval."""
-
-    normalized = normalize_query(" ".join(part for part in [query, focus or ""] if part)).lower()
-    if not normalized:
-        return False
-    if any(term in normalized for term in LITERATURE_QUERY_TERMS):
-        return True
-    if "scholarship" in normalized:
-        return True
-    return bool(re.search(r"\b(?:doi|peer-reviewed|systematic review|meta-analysis|scientific reports?)\b", normalized))
-
-
-def _detect_cultural_resource_intent(query: str, focus: str | None = None) -> bool:
-    normalized = normalize_query(" ".join(part for part in [query, focus or ""] if part)).lower()
-    return bool(normalized) and any(term in normalized for term in _CULTURAL_RESOURCE_MARKERS)
+from .regulatory import (
+    _detect_cultural_resource_intent,
+    _infer_entity_card,
+    _infer_regulatory_subintent,
+    _strong_known_item_signal,
+    _strong_regulatory_signal,
+    detect_literature_intent,
+    detect_regulatory_intent,
+)
+from .specificity import (
+    _confidence_rank,
+    _is_definitional_query,
+    _looks_broad_concept_query,
+)
 
 
 def _source_for_intent_candidate(
@@ -487,72 +65,6 @@ def _source_for_intent_candidate(
         "fallback_recovery": "fallback",
     }
     return mapping[intent_source]
-
-
-def _confidence_rank(confidence: Literal["high", "medium", "low"]) -> int:
-    return {"high": 3, "medium": 2, "low": 1}[confidence]
-
-
-def _query_starts_broad(query: str) -> bool:
-    lowered = normalize_query(query).lower()
-    return lowered.startswith(("what ", "which ", "how ", "compare ", "summarize ", "identify ", "find "))
-
-
-_DEFINITIONAL_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bwhat\s+(is|are|does)\b"),
-    re.compile(r"\bdefine\b"),
-    re.compile(r"\bexplain\b"),
-    re.compile(r"\boverview\s+of\b"),
-    re.compile(r"\bintroduction\s+to\b"),
-    re.compile(r"\bguide\s+to\b"),
-    re.compile(r"\bprimer\s+on\b"),
-)
-
-
-def _is_definitional_query(query: str) -> bool:
-    """Return True when the query asks for a definition, overview, or primer.
-
-    Used to bias retrieval and ranking toward canonical/foundational papers and
-    survey articles when the user is seeking conceptual grounding rather than a
-    specific result.
-    """
-
-    normalized = normalize_query(query or "").lower()
-    if not normalized:
-        return False
-    return any(pattern.search(normalized) for pattern in _DEFINITIONAL_PATTERNS)
-
-
-def _infer_regulatory_subintent(query: str, focus: str | None = None) -> str | None:
-    normalized = normalize_query(" ".join(part for part in [query, focus or ""] if part)).lower()
-    if not normalized or not detect_regulatory_intent(query, focus):
-        return None
-    if "cfr" in normalized and any(
-        marker in normalized for marker in {"current text", "codified text", "what does", "under"}
-    ):
-        return "current_cfr_text"
-    if any(marker in normalized for marker in {"guidance", "guideline", "handbook", "manual"}):
-        return "guidance_lookup"
-    if any(
-        marker in normalized for marker in {"species dossier", "recovery plan", "critical habitat", "species profile"}
-    ):
-        return "species_dossier"
-    if detect_literature_intent(query, focus) and (
-        _detect_cultural_resource_intent(query, focus)
-        or any(
-            marker in normalized
-            for marker in {"history", "timeline", "rulemaking", "final rule", "proposed rule", "listing history"}
-        )
-    ):
-        return "hybrid_regulatory_plus_literature"
-    if any(
-        marker in normalized
-        for marker in {"history", "timeline", "rulemaking", "final rule", "proposed rule", "listing history"}
-    ):
-        return "rulemaking_history"
-    if detect_literature_intent(query, focus):
-        return "hybrid_regulatory_plus_literature"
-    return None
 
 
 _VALID_REGULATORY_INTENTS: frozenset[str] = frozenset(
@@ -661,190 +173,6 @@ def _derive_regulatory_intent(
     if inferred and inferred in _VALID_REGULATORY_INTENTS:
         return cast(RegulatoryIntentLabel, inferred)
     return "unspecified"
-
-
-def _infer_entity_card(query: str, focus: str | None = None) -> dict[str, str] | None:
-    normalized = normalize_query(" ".join(part for part in [query, focus or ""] if part))
-    lowered = normalized.lower()
-    if not normalized:
-        return None
-
-    authority_context = None
-    if "esa" in lowered or "endangered species" in lowered:
-        authority_context = "ESA"
-    elif "epa" in lowered or "safe drinking water act" in lowered or "sdwa" in lowered:
-        authority_context = "EPA/SDWA"
-    elif "fda" in lowered:
-        authority_context = "FDA"
-    elif "nhpa" in lowered or "section 106" in lowered or _detect_cultural_resource_intent(query, focus):
-        authority_context = "NHPA/Section 106"
-
-    requested_document_family = None
-    if "critical habitat" in lowered:
-        requested_document_family = "critical_habitat"
-    elif "recovery plan" in lowered:
-        requested_document_family = "recovery_plan"
-    elif any(marker in lowered for marker in {"listing", "final rule", "proposed rule", "rulemaking"}):
-        requested_document_family = "listing_rule"
-    elif "guidance" in lowered:
-        requested_document_family = "guidance"
-    elif _detect_cultural_resource_intent(query, focus):
-        requested_document_family = "consultation_or_preservation"
-
-    scientific_match = re.search(r"\b([A-Z][a-z]+\s+[a-z]{3,})\b", query)
-    scientific_name = scientific_match.group(1) if scientific_match else None
-
-    cultural_subject_match = re.search(
-        (
-            r"\b([A-Z][A-Za-z0-9'’.-]+(?:\s+[A-Z][A-Za-z0-9'’.-]+){0,5}"
-            r"\s+(?:Historic District|National Monument|Cultural Landscape|Sacred Site))\b"
-        ),
-        query,
-    )
-
-    common_name = None
-    if cultural_subject_match:
-        common_name = cultural_subject_match.group(1).strip()
-    subject_match = re.search(
-        r"\b(?:for|about)\s+(?:the\s+)?([a-z][a-z-]+(?:\s+[a-z][a-z-]+){0,3})\s+(?:under|with|in|on)\b",
-        lowered,
-    )
-    if common_name is None and subject_match:
-        candidate_subject = subject_match.group(1).strip()
-        if candidate_subject and candidate_subject not in {"the species", "species dossier", "regulatory history"}:
-            common_name = candidate_subject
-    lowered_tokens = [token for token in re.findall(r"[a-z]{3,}", lowered) if token not in REGULATORY_QUERY_TERMS]
-    species_markers = {
-        "bat",
-        "bird",
-        "condor",
-        "dolphin",
-        "fish",
-        "frog",
-        "habitat",
-        "owl",
-        "species",
-        "tortoise",
-        "wolf",
-    }
-    if common_name is None:
-        for index, token in enumerate(lowered_tokens):
-            if token in species_markers and index > 0:
-                previous = lowered_tokens[index - 1]
-                if previous not in {"the", "for", "about", "under"}:
-                    common_name = f"{previous} {token}"
-                    break
-    if common_name is None and len(lowered_tokens) >= 2 and detect_regulatory_intent(query, focus):
-        common_name = " ".join(lowered_tokens[:2])
-
-    if not any([common_name, scientific_name, authority_context, requested_document_family]):
-        return None
-    card: dict[str, str] = {}
-    if common_name:
-        card["commonName"] = common_name
-    if scientific_name:
-        card["scientificName"] = scientific_name
-    if authority_context:
-        card["authorityContext"] = authority_context
-    if requested_document_family:
-        card["requestedDocumentFamily"] = requested_document_family
-    if _detect_cultural_resource_intent(query, focus):
-        card["subjectArea"] = "cultural_resources"
-        card["documentFamily"] = "consultation_or_preservation"
-    return card
-
-
-def _looks_broad_concept_query(
-    *,
-    normalized_query: str,
-    focus: str | None,
-    year: str | None,
-    venue: str | None,
-    terms: list[str] | None = None,
-) -> bool:
-    terms = terms if terms is not None else query_terms(normalized_query)
-    has_constraints = bool(focus or year or venue)
-    queryish_term_count = sum(term in QUERYISH_TITLE_BLOCKERS for term in terms)
-    if _query_starts_broad(normalized_query) and len(terms) >= 6 and not has_constraints:
-        return True
-    if queryish_term_count >= 3 and len(terms) >= 6:
-        return True
-    if queryish_term_count >= 2 and len(terms) >= 8 and not has_constraints:
-        return True
-    return False
-
-
-def _estimate_query_specificity(
-    *,
-    normalized_query: str,
-    focus: str | None,
-    year: str | None,
-    venue: str | None,
-    planner_query_type: PlannerQueryType | None = None,
-    planner_specificity: Literal["high", "medium", "low"] | None = None,
-) -> Literal["high", "medium", "low"]:
-    """Estimate how specific a query is.
-
-    When the LLM-authored ``planner_query_type`` or ``planner_specificity`` are
-    provided we prefer them over raw text heuristics. The title/citation
-    regex-based "high" promotion is suppressed whenever the LLM signalled a
-    broad-concept query or already chose ``low`` specificity — this avoids the
-    "long conceptual question happens to look title-like" false-positive that
-    used to force those queries into known-item recovery.
-    """
-    terms = query_terms(normalized_query)
-    broad_concept_signal = _looks_broad_concept_query(
-        normalized_query=normalized_query,
-        focus=focus,
-        year=year,
-        venue=venue,
-        terms=terms,
-    )
-    if _strong_known_item_signal(normalized_query) or _strong_regulatory_signal(normalized_query, focus):
-        return "high"
-    llm_disagrees_with_title_heuristic = planner_query_type == "broad_concept" or planner_specificity == "low"
-    if (
-        not broad_concept_signal
-        and not llm_disagrees_with_title_heuristic
-        and (looks_like_exact_title(normalized_query) or looks_like_citation_query(normalized_query))
-    ):
-        return "high"
-    has_constraints = bool(focus or year or venue)
-    if broad_concept_signal:
-        return "low"
-    if planner_specificity is not None:
-        # Honor an explicit low/high label from the planner whenever we have
-        # not already short-circuited above.
-        if planner_specificity == "low":
-            return "low"
-        if planner_specificity == "high":
-            return "high"
-    if has_constraints and len(terms) <= 5:
-        return "high"
-    if _query_starts_broad(normalized_query) and len(terms) >= 6:
-        return "low"
-    return "medium"
-
-
-def _estimate_ambiguity_level(
-    *,
-    candidates: list[IntentCandidate],
-    routing_confidence: Literal["high", "medium", "low"],
-    query_specificity: Literal["high", "medium", "low"],
-) -> Literal["low", "medium", "high"]:
-    if routing_confidence == "low":
-        return "high"
-    if len(candidates) < 2:
-        return "medium" if query_specificity == "low" else "low"
-    primary_rank = _confidence_rank(candidates[0].confidence)
-    secondary_rank = _confidence_rank(candidates[1].confidence)
-    if secondary_rank >= primary_rank:
-        return "high"
-    if primary_rank - secondary_rank == 1:
-        return "high" if query_specificity == "low" else "medium"
-    if query_specificity == "low" and secondary_rank >= 1:
-        return "medium"
-    return "low"
 
 
 def _ordered_provider_plan(base_plan: list[str], preferred_order: list[str]) -> list[str]:
@@ -964,27 +292,6 @@ def _sort_intent_candidates(
             candidate.intent,
         ),
     )
-
-
-def _strong_known_item_signal(normalized_query: str) -> bool:
-    return bool(
-        DOI_RE.search(normalized_query) or ARXIV_RE.search(normalized_query) or looks_like_url(normalized_query)
-    )
-
-
-def _strong_regulatory_signal(normalized_query: str, focus: str | None = None) -> bool:
-    combined = normalize_query(" ".join(part for part in [normalized_query, focus or ""] if part)).lower()
-    if re.search(r"\b\d+\s*(?:f\.?\s*r\.?)\s*\d+\b", combined):
-        return True
-    if re.search(r"\bfederal register\b", combined) and re.search(r"\b\d+\b", combined):
-        return True
-    if re.search(r"\b\d+\s*(?:cfr|f\.?\s*r\.?)\b", combined):
-        return True
-    if "guidance" in combined and any(
-        marker in combined for marker in ("fda", "food and drug administration", "agency", "guidance for industry")
-    ):
-        return True
-    return bool(re.search(r"\b\d{4}-\d{4,6}\b", combined))
 
 
 async def classify_query(
@@ -1189,7 +496,7 @@ async def classify_query(
         # shim happens to populate ``candidateConcepts`` / ``entityCard``.
         # ``intent_source`` is unreliable for this purpose -- explicit mode and
         # heuristic overrides rewrite it independently of planner provenance.
-        from .subject_grounding import resolve_subject_card
+        from ..subject_grounding import resolve_subject_card
 
         planner.subject_card = resolve_subject_card(
             query=query,
