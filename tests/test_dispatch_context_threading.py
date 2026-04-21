@@ -25,88 +25,150 @@ characterization tests, which must stay green without
 
 from __future__ import annotations
 
+import importlib
 import inspect
+from typing import Any
 
 import pytest
 
-from paper_chaser_mcp.dispatch import _core as dispatch_core
 from paper_chaser_mcp.dispatch.context import DispatchContext
 
-BRANCH_ENTRYPOINTS = (
-    "_dispatch_research",
-    "_dispatch_follow_up_research",
-    "_dispatch_search_papers_smart",
-    "_dispatch_ask_result_set",
+# Branch entrypoints pinned as ctx-first. Phase 2 Track C seeded the first
+# four; Phase 4 extended the contract to every extracted smart + expert
+# submodule so no branch can silently reintroduce per-branch kwargs.
+BRANCH_ENTRYPOINTS: tuple[tuple[str, str], ...] = (
+    # Guided (Phase 2/3).
+    ("paper_chaser_mcp.dispatch._core", "_dispatch_research"),
+    ("paper_chaser_mcp.dispatch._core", "_dispatch_follow_up_research"),
+    # Smart (Phase 4).
+    ("paper_chaser_mcp.dispatch.smart.search", "_dispatch_search_papers_smart"),
+    ("paper_chaser_mcp.dispatch.smart.ask", "_dispatch_ask_result_set"),
+    ("paper_chaser_mcp.dispatch.smart.landscape", "_dispatch_map_research_landscape"),
+    ("paper_chaser_mcp.dispatch.smart.graph", "_dispatch_expand_research_graph"),
+    # Expert: regulatory primary sources.
+    ("paper_chaser_mcp.dispatch.expert.regulatory", "_dispatch_search_species_ecos"),
+    ("paper_chaser_mcp.dispatch.expert.regulatory", "_dispatch_get_species_profile_ecos"),
+    ("paper_chaser_mcp.dispatch.expert.regulatory", "_dispatch_list_species_documents_ecos"),
+    ("paper_chaser_mcp.dispatch.expert.regulatory", "_dispatch_get_document_text_ecos"),
+    ("paper_chaser_mcp.dispatch.expert.regulatory", "_dispatch_search_federal_register"),
+    ("paper_chaser_mcp.dispatch.expert.regulatory", "_dispatch_get_federal_register_document"),
+    ("paper_chaser_mcp.dispatch.expert.regulatory", "_dispatch_get_cfr_text"),
+    # Expert: raw Semantic Scholar passthroughs.
+    ("paper_chaser_mcp.dispatch.expert.raw", "_dispatch_search_papers"),
+    ("paper_chaser_mcp.dispatch.expert.raw", "_dispatch_search_papers_match"),
+    ("paper_chaser_mcp.dispatch.expert.raw", "_dispatch_get_paper_details"),
+    ("paper_chaser_mcp.dispatch.expert.raw", "_dispatch_resolve_citation"),
+    ("paper_chaser_mcp.dispatch.expert.raw", "_dispatch_search_papers_bulk"),
+    # Expert: OpenAlex.
+    ("paper_chaser_mcp.dispatch.expert.openalex", "_dispatch_paper_autocomplete_openalex"),
+    ("paper_chaser_mcp.dispatch.expert.openalex", "_dispatch_search_papers_openalex"),
+    ("paper_chaser_mcp.dispatch.expert.openalex", "_dispatch_search_entities_openalex"),
+    ("paper_chaser_mcp.dispatch.expert.openalex", "_dispatch_search_papers_openalex_by_entity"),
+    ("paper_chaser_mcp.dispatch.expert.openalex", "_dispatch_search_papers_openalex_bulk"),
+    ("paper_chaser_mcp.dispatch.expert.openalex", "_dispatch_get_paper_details_openalex"),
+    ("paper_chaser_mcp.dispatch.expert.openalex", "_dispatch_get_paper_citations_openalex"),
+    ("paper_chaser_mcp.dispatch.expert.openalex", "_dispatch_get_paper_references_openalex"),
+    ("paper_chaser_mcp.dispatch.expert.openalex", "_dispatch_search_authors_openalex"),
+    ("paper_chaser_mcp.dispatch.expert.openalex", "_dispatch_get_author_info_openalex"),
+    ("paper_chaser_mcp.dispatch.expert.openalex", "_dispatch_get_author_papers_openalex"),
+    # Expert: ScholarAPI.
+    ("paper_chaser_mcp.dispatch.expert.scholarapi", "_dispatch_search_papers_scholarapi"),
+    ("paper_chaser_mcp.dispatch.expert.scholarapi", "_dispatch_list_papers_scholarapi"),
+    ("paper_chaser_mcp.dispatch.expert.scholarapi", "_dispatch_get_paper_text_scholarapi"),
+    ("paper_chaser_mcp.dispatch.expert.scholarapi", "_dispatch_get_paper_texts_scholarapi"),
+    ("paper_chaser_mcp.dispatch.expert.scholarapi", "_dispatch_get_paper_pdf_scholarapi"),
+    # Expert: SerpApi.
+    ("paper_chaser_mcp.dispatch.expert.serpapi", "_dispatch_search_papers_serpapi_cited_by"),
+    ("paper_chaser_mcp.dispatch.expert.serpapi", "_dispatch_search_papers_serpapi_versions"),
+    ("paper_chaser_mcp.dispatch.expert.serpapi", "_dispatch_get_author_profile_serpapi"),
+    ("paper_chaser_mcp.dispatch.expert.serpapi", "_dispatch_get_author_articles_serpapi"),
+    ("paper_chaser_mcp.dispatch.expert.serpapi", "_dispatch_get_serpapi_account_status"),
+    ("paper_chaser_mcp.dispatch.expert.serpapi", "_dispatch_get_paper_citation_formats"),
+    # Expert: enrichment + provider/non-search helpers.
+    ("paper_chaser_mcp.dispatch.expert.enrichment", "_dispatch_get_paper_metadata_crossref"),
+    ("paper_chaser_mcp.dispatch.expert.enrichment", "_dispatch_get_paper_open_access_unpaywall"),
+    ("paper_chaser_mcp.dispatch.expert.enrichment", "_dispatch_enrich_paper"),
+    ("paper_chaser_mcp.dispatch.expert.enrichment", "_dispatch_provider_search_tool"),
+    ("paper_chaser_mcp.dispatch.expert.enrichment", "_dispatch_non_search_tool"),
 )
 
 
-@pytest.mark.parametrize("name", BRANCH_ENTRYPOINTS)
-def test_branch_entrypoint_exists(name: str) -> None:
+def _load(module_path: str, name: str) -> Any:
+    module = importlib.import_module(module_path)
+    assert hasattr(module, name), (
+        f"{module_path} must define {name!r} as a module-level entrypoint so "
+        f"dispatch_tool can invoke the branch through a stable seam."
+    )
+    return getattr(module, name)
+
+
+@pytest.mark.parametrize(("module_path", "name"), BRANCH_ENTRYPOINTS)
+def test_branch_entrypoint_exists(module_path: str, name: str) -> None:
     """Each branch entrypoint must exist as a module-level async function."""
 
-    assert hasattr(dispatch_core, name), (
-        f"paper_chaser_mcp.dispatch._core must define {name!r} as a module-level "
-        f"entrypoint so Phase 3 can relocate the branch into a sibling submodule "
-        f"without rewiring every caller."
+    func = _load(module_path, name)
+    assert inspect.iscoroutinefunction(func), (
+        f"{module_path}.{name} must be an async function; dispatch_tool awaits the result."
     )
-    func = getattr(dispatch_core, name)
-    assert inspect.iscoroutinefunction(func), f"{name} must be an async function; dispatch_tool awaits the result."
 
 
-@pytest.mark.parametrize("name", BRANCH_ENTRYPOINTS)
-def test_branch_entrypoint_first_parameter_is_ctx(name: str) -> None:
+@pytest.mark.parametrize(("module_path", "name"), BRANCH_ENTRYPOINTS)
+def test_branch_entrypoint_first_parameter_is_ctx(module_path: str, name: str) -> None:
     """The first parameter must be ``ctx: DispatchContext``."""
 
-    func = getattr(dispatch_core, name)
+    func = _load(module_path, name)
     sig = inspect.signature(func)
     params = list(sig.parameters.values())
-    assert params, f"{name} must accept at least one parameter"
+    assert params, f"{module_path}.{name} must accept at least one parameter"
     first = params[0]
     assert first.name == "ctx", (
-        f"{name}'s first parameter must be named 'ctx' (got {first.name!r}). "
+        f"{module_path}.{name}'s first parameter must be named 'ctx' (got {first.name!r}). "
         f"This is the shared dependency-bag convention pinned by Phase 2 Step 2."
     )
     assert first.kind in (
         inspect.Parameter.POSITIONAL_ONLY,
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
-    ), f"{name}'s ctx parameter must be positional-or-keyword, got {first.kind!r}"
+    ), f"{module_path}.{name}'s ctx parameter must be positional-or-keyword, got {first.kind!r}"
 
 
-@pytest.mark.parametrize("name", BRANCH_ENTRYPOINTS)
-def test_branch_entrypoint_ctx_is_dispatch_context(name: str) -> None:
+@pytest.mark.parametrize(("module_path", "name"), BRANCH_ENTRYPOINTS)
+def test_branch_entrypoint_ctx_is_dispatch_context(module_path: str, name: str) -> None:
     """The ``ctx`` parameter must be typed as ``DispatchContext``.
 
-    This pin keeps Phase 3 honest: once branches move to sibling modules they
+    This pin keeps Phase 4 honest: once branches move to sibling modules they
     must continue to accept the same frozen dependency bag rather than
     reintroducing per-branch ad-hoc kwargs.
     """
 
-    func = getattr(dispatch_core, name)
+    func = _load(module_path, name)
     sig = inspect.signature(func)
     ctx_param = sig.parameters["ctx"]
     annotation = ctx_param.annotation
     # Annotations may be stringified under ``from __future__ import annotations``;
     # accept both the real class and its string name.
     assert annotation in (DispatchContext, "DispatchContext"), (
-        f"{name}'s ctx parameter must be typed as DispatchContext, got "
+        f"{module_path}.{name}'s ctx parameter must be typed as DispatchContext, got "
         f"{annotation!r}. Use `ctx: DispatchContext` in the source to keep "
-        f"Phase 3 moves mechanical."
+        f"Phase 4+ moves mechanical."
     )
 
 
-@pytest.mark.parametrize("name", BRANCH_ENTRYPOINTS)
-def test_branch_entrypoint_accepts_arguments_dict(name: str) -> None:
+@pytest.mark.parametrize(("module_path", "name"), BRANCH_ENTRYPOINTS)
+def test_branch_entrypoint_accepts_arguments_dict(module_path: str, name: str) -> None:
     """The entrypoint must also accept an ``arguments`` mapping parameter.
 
     ``dispatch_tool`` normalizes the incoming tool arguments once and then
     forwards the validated dict to the branch. Keeping the parameter name
-    stable (``arguments``) lets Phase 3 grep for call sites safely.
+    stable (``arguments``) lets later phases grep for call sites safely.
     """
 
-    func = getattr(dispatch_core, name)
+    func = _load(module_path, name)
     sig = inspect.signature(func)
     params = list(sig.parameters.values())
-    assert len(params) >= 2, f"{name} must accept at least (ctx, arguments); got {[p.name for p in params]}"
+    assert len(params) >= 2, (
+        f"{module_path}.{name} must accept at least (ctx, arguments); got {[p.name for p in params]}"
+    )
     assert params[1].name == "arguments", (
-        f"{name}'s second parameter must be named 'arguments' (got {params[1].name!r}) to keep call sites greppable."
+        f"{module_path}.{name}'s second parameter must be named 'arguments' "
+        f"(got {params[1].name!r}) to keep call sites greppable."
     )
