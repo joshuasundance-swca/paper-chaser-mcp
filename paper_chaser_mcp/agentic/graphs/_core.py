@@ -4,16 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
-import statistics
 import time
-from difflib import SequenceMatcher
 from typing import Any, Literal, cast
 from uuid import uuid4
 
 from fastmcp import Context
 
-from ...citation_repair import build_match_metadata, parse_citation, resolve_citation
+from ...citation_repair import parse_citation, resolve_citation
 from ...compat import build_agent_hints, build_resource_uris
 from ...enrichment import (
     PaperEnrichmentService,
@@ -70,12 +67,9 @@ from ..planner import (
     grounded_expansion_candidates,
     initial_retrieval_hypotheses,
     normalize_query,
-    query_facets,
-    query_terms,
     speculative_expansion_candidates,
 )
 from ..providers import (
-    COMMON_QUERY_WORDS,
     DeterministicProviderBundle,
     ModelProviderBundle,
 )
@@ -103,11 +97,32 @@ from ..workspace import (
 
 logger = logging.getLogger("paper-chaser-mcp")
 
+from .followup_graph import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7b plan
+    _build_grounded_comparison_answer,
+    _comparison_requested,
+    _comparison_takeaway,
+    _contextualize_follow_up_question,
+    _looks_like_title_venue_list,
+    _paper_focus_phrase,
+    _shared_focus_terms,
+    _should_use_structured_comparison_answer,
+)
 from .hooks import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7a plan
     _consume_background_task,
     _describe_retrieval_batch,
     _skip_context_notifications,
     _truncate_text,
+)
+from .inspect_graph import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7b plan
+    _cluster_papers,
+    _compute_disagreements,
+    _compute_gaps,
+    _finalize_theme_label,
+    _label_tokens,
+    _normalized_theme_label,
+    _suggest_next_searches,
+    _theme_terms_from_papers,
+    _top_terms_for_cluster,
 )
 from .regulatory_routing import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7a plan
     _ECOS_PROVENANCE_RANK,
@@ -136,6 +151,19 @@ from .regulatory_routing import (  # noqa: E402,F401 - preserve legacy call-site
     _regulatory_query_priority_terms,
     _regulatory_query_subject_terms,
     _regulatory_retrieval_hypotheses,
+)
+from .research_graph import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7b plan
+    _filter_graph_frontier,
+    _graph_frontier_scores,
+    _graph_intent_text,
+)
+from .resolve_graph import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7b plan
+    _anchor_strength_for_resolution,
+    _known_item_recovery_warning,
+    _known_item_resolution_queries,
+    _known_item_resolution_state_for_strategy,
+    _known_item_title_similarity,
+    _normalization_metadata,
 )
 from .shared_state import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7a plan
     _AGENCY_AUTHORITY_TERMS,
@@ -181,40 +209,6 @@ from .source_records import (  # noqa: E402,F401 - preserve legacy call-site nam
     _verified_findings_from_source_records,
     _why_matched,
     _year_text,
-)
-from .resolve_graph import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7b plan
-    _anchor_strength_for_resolution,
-    _known_item_recovery_warning,
-    _known_item_resolution_queries,
-    _known_item_resolution_state_for_strategy,
-    _known_item_title_similarity,
-    _normalization_metadata,
-)
-from .research_graph import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7b plan
-    _filter_graph_frontier,
-    _graph_frontier_scores,
-    _graph_intent_text,
-)
-from .followup_graph import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7b plan
-    _build_grounded_comparison_answer,
-    _comparison_requested,
-    _comparison_takeaway,
-    _contextualize_follow_up_question,
-    _looks_like_title_venue_list,
-    _paper_focus_phrase,
-    _shared_focus_terms,
-    _should_use_structured_comparison_answer,
-)
-from .inspect_graph import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7b plan
-    _cluster_papers,
-    _compute_disagreements,
-    _compute_gaps,
-    _finalize_theme_label,
-    _label_tokens,
-    _normalized_theme_label,
-    _suggest_next_searches,
-    _theme_terms_from_papers,
-    _top_terms_for_cluster,
 )
 
 

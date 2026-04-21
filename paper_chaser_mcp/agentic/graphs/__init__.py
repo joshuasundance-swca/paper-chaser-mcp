@@ -67,14 +67,14 @@ from ._core import (
 from ._core import (
     _source_record_from_regulatory_document as _source_record_from_regulatory_document,
 )
-from .research_graph import (
-    _graph_frontier_scores as _graph_frontier_scores,
-)
 from .followup_graph import (
     _build_grounded_comparison_answer as _build_grounded_comparison_answer,
 )
 from .inspect_graph import (
     _finalize_theme_label as _finalize_theme_label,
+)
+from .research_graph import (
+    _graph_frontier_scores as _graph_frontier_scores,
 )
 
 # ---------------------------------------------------------------------------

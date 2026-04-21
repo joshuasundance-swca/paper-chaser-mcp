@@ -92,12 +92,8 @@ TEST_REFERENCED_HELPERS: tuple[str, ...] = (
 
 def test_facade_exports_is_frozen_tuple() -> None:
     """``_FACADE_EXPORTS`` must be a tuple and match the expected set exactly."""
-    assert isinstance(_FACADE_EXPORTS, tuple), (
-        "_FACADE_EXPORTS must be a tuple so the allowlist is immutable."
-    )
-    assert len(_FACADE_EXPORTS) == len(set(_FACADE_EXPORTS)), (
-        "_FACADE_EXPORTS must not contain duplicate entries."
-    )
+    assert isinstance(_FACADE_EXPORTS, tuple), "_FACADE_EXPORTS must be a tuple so the allowlist is immutable."
+    assert len(_FACADE_EXPORTS) == len(set(_FACADE_EXPORTS)), "_FACADE_EXPORTS must not contain duplicate entries."
     assert set(_FACADE_EXPORTS) == EXPECTED_FACADE_EXPORTS, (
         "paper_chaser_mcp.agentic.graphs._FACADE_EXPORTS drifted from the "
         "frozen expected set. Either update EXPECTED_FACADE_EXPORTS "
@@ -159,8 +155,7 @@ def test_facade_matches_allowlist_exactly() -> None:
     facade_attrs = {
         name
         for name in dir(graphs_module)
-        if not name.startswith("__")
-        and not isinstance(getattr(graphs_module, name), types.ModuleType)
+        if not name.startswith("__") and not isinstance(getattr(graphs_module, name), types.ModuleType)
     }
     allowlisted = set(_FACADE_EXPORTS) | {"_FACADE_EXPORTS"}
     unexpected = facade_attrs - allowlisted
