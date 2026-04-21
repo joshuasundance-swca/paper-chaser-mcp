@@ -13,7 +13,6 @@ from ..provider_runtime import ProviderDiagnosticsRegistry
 from ..transport import maybe_close_async_resource
 from .config import AgenticConfig
 from .models import ExpansionCandidate, PlannerDecision
-from .provider_base import DeterministicProviderBundle, classify_relevance_without_llm, relevance_paper_identifier
 from .provider_helpers import (
     AnswerStatusValidation,
     _AdequacyJudgmentSchema,
@@ -36,6 +35,7 @@ from .provider_helpers import (
     _ReviseStrategySchema,
     _sanitize_provider_plan,
 )
+from .providers.base import DeterministicProviderBundle, classify_relevance_without_llm, relevance_paper_identifier
 from .relevance_fallback import annotate_llm_entry, classify_batch_deterministic
 
 logger = logging.getLogger("paper-chaser-mcp")
