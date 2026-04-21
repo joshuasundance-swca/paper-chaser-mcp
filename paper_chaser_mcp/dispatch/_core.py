@@ -7517,61 +7517,10 @@ async def dispatch_tool(
         return _apply_inspect_source_compaction(inspect_response)
 
     if name == "search_papers_smart":
-        smart_args = cast(
-            SmartSearchPapersArgs,
-            TOOL_INPUT_MODELS[name].model_validate(arguments),
-        )
-        if agentic_runtime is None:
-            return {
-                "error": "FEATURE_NOT_CONFIGURED",
-                "message": ("search_papers_smart is not available because the agentic runtime was not initialized."),
-                "fallbackTools": [
-                    "search_papers",
-                    "search_papers_bulk",
-                    "search_papers_match",
-                ],
-            }
-        return await agentic_runtime.search_papers_smart(
-            query=smart_args.query,
-            limit=smart_args.limit,
-            search_session_id=smart_args.search_session_id,
-            mode=smart_args.mode,
-            year=smart_args.year,
-            venue=smart_args.venue,
-            focus=smart_args.focus,
-            latency_profile=smart_args.latency_profile,
-            provider_budget=(
-                smart_args.provider_budget.model_dump(by_alias=False)
-                if smart_args.provider_budget is not None
-                else None
-            ),
-            include_enrichment=smart_args.include_enrichment,
-            ctx=ctx,
-        )
+        return await _dispatch_search_papers_smart(dispatch_ctx, arguments)
 
     if name == "ask_result_set":
-        ask_args = cast(
-            AskResultSetArgs,
-            TOOL_INPUT_MODELS[name].model_validate(arguments),
-        )
-        if agentic_runtime is None:
-            return {
-                "error": "FEATURE_NOT_CONFIGURED",
-                "message": "ask_result_set requires the agentic runtime to be enabled.",
-                "fallbackTools": [
-                    "search_papers",
-                    "get_paper_details",
-                    "get_paper_citations",
-                ],
-            }
-        return await agentic_runtime.ask_result_set(
-            search_session_id=ask_args.search_session_id,
-            question=ask_args.question,
-            top_k=ask_args.top_k,
-            answer_mode=ask_args.answer_mode,
-            latency_profile=ask_args.latency_profile,
-            ctx=ctx,
-        )
+        return await _dispatch_ask_result_set(dispatch_ctx, arguments)
 
     if name == "map_research_landscape":
         landscape_args = cast(
@@ -9032,3 +8981,130 @@ def _refined_query(*, original_query: str, refinement: str) -> str:
     if normalized_refinement.lower() in normalized_original.lower():
         return normalized_original
     return f"{normalized_original} {normalized_refinement}".strip()
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 Track C amendment 3: branch entrypoints accepting ``DispatchContext``.
+# ---------------------------------------------------------------------------
+#
+# These four module-level async functions are the Phase 3 seam for relocating
+# ``dispatch_tool``'s largest branches into sibling submodules. Each entrypoint
+# accepts the frozen ``DispatchContext`` bag plus the already-normalized
+# ``arguments`` dict, so Phase 3 can move a branch body without rewiring any
+# caller or re-spelling the ~40 dispatch kwargs.
+#
+# * ``_dispatch_search_papers_smart`` and ``_dispatch_ask_result_set`` are fully
+#   extracted today: ``dispatch_tool`` delegates to them directly. Their bodies
+#   are small and touch only ``ctx.agentic_runtime`` plus ``ctx.ctx`` (the MCP
+#   request-scoped Context), so the migration was risk-free.
+# * ``_dispatch_research`` and ``_dispatch_follow_up_research`` are Phase 3
+#   preparation shims: they lock the ``(ctx, arguments)`` calling convention
+#   into the module surface so new callers can adopt it now, but the inline
+#   branch inside ``dispatch_tool`` still owns the logic. Phase 3 will move the
+#   body into these entrypoints (and then into sibling submodules) one at a
+#   time. Delegation routes through ``dispatch_tool(name, arguments,
+#   **ctx.as_kwargs())``, which falls into the inline branch and returns —
+#   there is no recursion because the inline branch never calls the shim back.
+
+
+async def _dispatch_search_papers_smart(
+    ctx: DispatchContext,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    """Entrypoint for the ``search_papers_smart`` tool.
+
+    Extracted from ``dispatch_tool`` in Phase 2 Track C amendment 3. The
+    body touches only ``ctx.agentic_runtime`` and the per-call ``ctx.ctx``
+    MCP context, so no additional rewiring was required.
+    """
+    smart_args = cast(
+        SmartSearchPapersArgs,
+        TOOL_INPUT_MODELS["search_papers_smart"].model_validate(arguments),
+    )
+    if ctx.agentic_runtime is None:
+        return {
+            "error": "FEATURE_NOT_CONFIGURED",
+            "message": ("search_papers_smart is not available because the agentic runtime was not initialized."),
+            "fallbackTools": [
+                "search_papers",
+                "search_papers_bulk",
+                "search_papers_match",
+            ],
+        }
+    return await ctx.agentic_runtime.search_papers_smart(
+        query=smart_args.query,
+        limit=smart_args.limit,
+        search_session_id=smart_args.search_session_id,
+        mode=smart_args.mode,
+        year=smart_args.year,
+        venue=smart_args.venue,
+        focus=smart_args.focus,
+        latency_profile=smart_args.latency_profile,
+        provider_budget=(
+            smart_args.provider_budget.model_dump(by_alias=False) if smart_args.provider_budget is not None else None
+        ),
+        include_enrichment=smart_args.include_enrichment,
+        ctx=ctx.ctx,
+    )
+
+
+async def _dispatch_ask_result_set(
+    ctx: DispatchContext,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    """Entrypoint for the ``ask_result_set`` tool.
+
+    Extracted from ``dispatch_tool`` in Phase 2 Track C amendment 3.
+    """
+    ask_args = cast(
+        AskResultSetArgs,
+        TOOL_INPUT_MODELS["ask_result_set"].model_validate(arguments),
+    )
+    if ctx.agentic_runtime is None:
+        return {
+            "error": "FEATURE_NOT_CONFIGURED",
+            "message": "ask_result_set requires the agentic runtime to be enabled.",
+            "fallbackTools": [
+                "search_papers",
+                "get_paper_details",
+                "get_paper_citations",
+            ],
+        }
+    return await ctx.agentic_runtime.ask_result_set(
+        search_session_id=ask_args.search_session_id,
+        question=ask_args.question,
+        top_k=ask_args.top_k,
+        answer_mode=ask_args.answer_mode,
+        latency_profile=ask_args.latency_profile,
+        ctx=ctx.ctx,
+    )
+
+
+async def _dispatch_research(
+    ctx: DispatchContext,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    """Entrypoint for the ``research`` guided tool.
+
+    Phase 2 Track C amendment 3 pins the ``(ctx, arguments)`` calling
+    convention for this branch so Phase 3 can relocate the 685-line body into
+    a sibling submodule without rewiring any caller. The body still lives
+    inline in :func:`dispatch_tool` today; this shim delegates back via
+    ``dispatch_tool(name, arguments, **ctx.as_kwargs())``, which lands in the
+    inline branch and returns. There is no recursion because the inline
+    branch never calls this shim.
+    """
+    return await dispatch_tool("research", arguments, **ctx.as_kwargs())
+
+
+async def _dispatch_follow_up_research(
+    ctx: DispatchContext,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    """Entrypoint for the ``follow_up_research`` guided tool.
+
+    Same Phase 3 prep pattern as :func:`_dispatch_research`: pins the
+    ``(ctx, arguments)`` convention on the module surface and delegates to
+    the inline ``dispatch_tool`` branch until Phase 3 moves the body.
+    """
+    return await dispatch_tool("follow_up_research", arguments, **ctx.as_kwargs())
