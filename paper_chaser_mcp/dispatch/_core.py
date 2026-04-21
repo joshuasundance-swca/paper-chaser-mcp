@@ -986,39 +986,6 @@ _GUIDED_LITERATURE_TERMS = {
     "studies",
     "systematic review",
 }
-def _guided_extract_question(arguments: dict[str, Any]) -> Any:
-    return next(
-        (arguments.get(key) for key in ("question", "prompt", "query") if arguments.get(key) is not None),
-        None,
-    )
-def _guided_compact_source_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
-    """Project a saved-session source candidate to its disambiguation-critical fields.
-
-    Includes inspectability-signaling fields (canonicalUrl / retrievedUrl /
-    fullTextUrlFound / abstractObserved) so agents can verify a candidate
-    would be inspectable without a round trip.
-    """
-    keep_keys = (
-        "sourceId",
-        "title",
-        "topicalRelevance",
-        "canonicalUrl",
-        "retrievedUrl",
-        "fullTextUrlFound",
-        "abstractObserved",
-        "confidence",
-        "accessStatus",
-        "verificationStatus",
-        "publicationYear",
-    )
-    projected: dict[str, Any] = {}
-    for key in keep_keys:
-        value = candidate.get(key)
-        if value not in (None, "", [], {}):
-            projected[key] = value
-    return projected
-
-
 def _candidate_is_inspectable(candidate: dict[str, Any]) -> bool:
     """Mirror graphs._has_inspectable_sources: on-topic AND has URL/abstract."""
     if candidate.get("topicalRelevance") == "off_topic":
@@ -1029,36 +996,6 @@ def _candidate_is_inspectable(candidate: dict[str, Any]) -> bool:
         or candidate.get("fullTextUrlFound")
         or candidate.get("abstractObserved")
     )
-
-
-def _guided_source_resolution_payload(
-    *,
-    requested_source_id: str | None,
-    resolved_source_id: str | None,
-    match_type: str | None,
-    available_source_ids: list[str] | None = None,
-    available_candidates: list[dict[str, Any]] | None = None,
-    candidates_have_inspectable: bool | None = None,
-) -> dict[str, Any]:
-    compact_candidates: list[dict[str, Any]] = []
-    if available_candidates:
-        for candidate in available_candidates:
-            if not isinstance(candidate, dict):
-                continue
-            projection = _guided_compact_source_candidate(candidate)
-            if projection.get("sourceId"):
-                compact_candidates.append(projection)
-    if candidates_have_inspectable is None:
-        candidates_have_inspectable = any(_candidate_is_inspectable(candidate) for candidate in compact_candidates)
-    resolution = SourceResolution(
-        requestedSourceId=_guided_normalize_whitespace(requested_source_id),
-        resolvedSourceId=_guided_normalize_whitespace(resolved_source_id),
-        matchType=match_type,
-        availableSourceIds=available_source_ids or [],
-        availableSourceCandidates=compact_candidates,
-        candidatesHaveInspectable=bool(candidates_have_inspectable) if compact_candidates else False,
-    )
-    return resolution.model_dump(by_alias=True, exclude_none=True)
 def _guided_normalize_research_arguments(arguments: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     normalized_args = dict(arguments)
     repairs: list[dict[str, str]] = []
@@ -2369,36 +2306,11 @@ def _guided_follow_up_introspection_facets(question: str) -> set[str]:
     if explicit_source_reference(question):
         facets.add("specific_source")
     return facets
-
-
-def _guided_extract_source_reference_from_question(question: str) -> str | None:
-    return explicit_source_reference(question)
-
-
 def _guided_is_usable_answer_text(value: Any) -> bool:
     text = str(value or "").strip()
     if not text:
         return False
     return bool(re.search(r"[A-Za-z0-9]", text))
-
-
-def _guided_select_follow_up_source(question: str, sources: list[dict[str, Any]]) -> dict[str, Any] | None:
-    if not sources:
-        return None
-    if len(sources) == 1:
-        return sources[0]
-
-    source_reference = _guided_extract_source_reference_from_question(question)
-    if source_reference:
-        lowered_reference = source_reference.lower()
-        for source in sources:
-            if lowered_reference == _guided_normalize_whitespace(source.get("sourceId")).lower():
-                return source
-            if lowered_reference == _guided_normalize_whitespace(source.get("sourceAlias")).lower():
-                return source
-    return None
-
-
 def _guided_source_metadata_answers(question: str, sources: list[dict[str, Any]]) -> list[str]:
     source = _guided_select_follow_up_source(question, sources)
     if source is None:
@@ -2501,27 +2413,6 @@ def _guided_relevance_triage_answers(
     if not answers:
         answers.append("The saved session did not contain enough source detail to classify relevance confidently.")
     return answers
-def _guided_append_selected_saved_records(
-    current_records: list[dict[str, Any]],
-    saved_records: list[dict[str, Any]],
-    selected_ids: list[Any],
-) -> list[dict[str, Any]]:
-    augmented = list(current_records)
-    for selected_id in selected_ids:
-        normalized_selected_id = _guided_normalize_whitespace(selected_id)
-        if not normalized_selected_id:
-            continue
-        if any(_guided_source_matches_reference(record, normalized_selected_id) for record in augmented):
-            continue
-        matched_saved = next(
-            (saved for saved in saved_records if _guided_source_matches_reference(saved, normalized_selected_id)),
-            None,
-        )
-        if matched_saved is not None:
-            augmented.append(matched_saved)
-    return _guided_dedupe_source_records(augmented)
-
-
 def _guided_requested_metadata_facets(question: str) -> set[str]:
     lowered = _guided_normalize_whitespace(question).lower()
     facets: set[str] = set()
@@ -6550,4 +6441,12 @@ from .guided.trust import (  # noqa: E402,F401 — Phase 3 re-export seam
 from .guided.resolve_reference import (  # noqa: E402,F401 — Phase 3 re-export seam
     _guided_note_repair,
     _guided_underspecified_reference_clarification,
+)
+from .guided.inspect_source import (  # noqa: E402,F401 — Phase 3 re-export seam
+    _guided_append_selected_saved_records,
+    _guided_compact_source_candidate,
+    _guided_extract_question,
+    _guided_extract_source_reference_from_question,
+    _guided_select_follow_up_source,
+    _guided_source_resolution_payload,
 )
