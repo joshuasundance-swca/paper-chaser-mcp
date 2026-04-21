@@ -58,35 +58,39 @@ BASELINE_OVERSIZE_EXTRAS: frozenset[str] = frozenset(
         # Phase 3 leftovers: guided submodules extracted from dispatch/_core.py
         # that exceed the soft cap. Phase 3b will split these further.
         "paper_chaser_mcp/dispatch/guided/trust.py",
-        # Phase 7c-4: ``graphs/_core.search_papers_smart`` orchestration body
-        # was moved to ``graphs/smart_graph.run_search_papers_smart`` as a
-        # Pattern B extraction. The destination file exceeds the 800-line soft
-        # cap until the orchestration is split into per-stage helpers in a
-        # follow-up phase.
+        # Phase 7c-4 / Phase 12 explicit retention decision: the
+        # ``graphs/smart_graph.run_search_papers_smart`` orchestrator stays
+        # in one file because its per-stage helpers share a large amount of
+        # implicit state (query plan, provider selection, cache lookups,
+        # adequacy checks). Splitting it cleanly is a Phase 13+ follow-up,
+        # not deferred Phase 12 work.
         "paper_chaser_mcp/agentic/graphs/smart_graph.py",
-        # Phase 8c: ``provider_openai.py`` was split into the
-        # ``providers/openai/`` subpackage. The OpenAI-compatible bundle class
-        # is deeply self-referential (self._foo state throughout every
-        # method), so the whole class was relocated verbatim into
-        # ``bundle.py`` to preserve behavior. A follow-up phase can split it
-        # further into mix-ins (chat / embeddings / ranking / adequacy) once
-        # the test seam surface is stable.
+        # Phase 8c / Phase 12 explicit retention decision: ``provider_openai.py``
+        # was split into the ``providers/openai/`` subpackage, but the
+        # OpenAI-compatible bundle class is deeply self-referential (self._foo
+        # state throughout every method), so the whole class was relocated
+        # verbatim into ``bundle.py`` to preserve behavior. Phase 12 keeps it
+        # intact on purpose; a Phase 13+ follow-up can split it into mix-ins
+        # (chat / embeddings / ranking / adequacy) once the test seam surface
+        # is stable.
         "paper_chaser_mcp/agentic/providers/openai/bundle.py",
-        # Phase 8d: ``provider_langchain.py`` was split into the
-        # ``providers/langchain/`` subpackage. The shared chat bundle class
-        # (``LangChainChatProviderBundle``) carries the same deep
-        # self-reference pattern as the OpenAI bundle, so it was relocated
+        # Phase 8d / Phase 12 explicit retention decision: ``provider_langchain.py``
+        # was split into the ``providers/langchain/`` subpackage. The shared
+        # chat bundle class (``LangChainChatProviderBundle``) carries the same
+        # deep self-reference pattern as the OpenAI bundle, so it was relocated
         # verbatim into ``bundle.py``. Concrete provider adapters live in
-        # ``adapters.py``. A follow-up phase can split the bundle further.
+        # ``adapters.py``. Phase 12 keeps the bundle intact on purpose; a
+        # Phase 13+ follow-up can split it further.
         "paper_chaser_mcp/agentic/providers/langchain/bundle.py",
-        # Phase 9a: ``citation_repair/_core.py`` was split into ``normalization``,
-        # ``candidates``, and ``api``. ``api.py`` owns the async
-        # ``resolve_citation`` orchestrator plus every provider-layered
-        # ``_resolve_*`` helper, response serialization, abstention filters,
-        # and the famous-paper candidate bridge. Those pieces are tightly
-        # coupled through the resolution state machine and are cheaper to
-        # keep together than to interleave with ``candidates``. A later phase
-        # can peel the serialization helpers into their own module once the
+        # Phase 9a / Phase 12 explicit retention decision: ``citation_repair/_core.py``
+        # was split into ``normalization``, ``candidates``, and ``api``.
+        # ``api.py`` owns the async ``resolve_citation`` orchestrator plus every
+        # provider-layered ``_resolve_*`` helper, response serialization,
+        # abstention filters, and the famous-paper candidate bridge. Those
+        # pieces are tightly coupled through the resolution state machine and
+        # are cheaper to keep together than to interleave with ``candidates``.
+        # Phase 12 keeps them together on purpose; a Phase 13+ follow-up can
+        # peel the serialization helpers into their own module once the
         # Phase 9b ranking rebalance lands and the contract stabilizes.
         "paper_chaser_mcp/citation_repair/api.py",
     }
