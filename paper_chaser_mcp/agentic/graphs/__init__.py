@@ -32,9 +32,6 @@ from ._core import (
     TopicalRelevanceClassification as TopicalRelevanceClassification,
 )
 from ._core import (
-    _build_grounded_comparison_answer as _build_grounded_comparison_answer,
-)
-from ._core import (
     _classify_topical_relevance_with_provenance as _classify_topical_relevance_with_provenance,
 )
 from ._core import (
@@ -42,12 +39,6 @@ from ._core import (
 )
 from ._core import (
     _ecos_query_variants as _ecos_query_variants,
-)
-from ._core import (
-    _finalize_theme_label as _finalize_theme_label,
-)
-from ._core import (
-    _graph_frontier_scores as _graph_frontier_scores,
 )
 from ._core import (
     _has_inspectable_sources as _has_inspectable_sources,
@@ -75,6 +66,15 @@ from ._core import (
 )
 from ._core import (
     _source_record_from_regulatory_document as _source_record_from_regulatory_document,
+)
+from .followup_graph import (
+    _build_grounded_comparison_answer as _build_grounded_comparison_answer,
+)
+from .inspect_graph import (
+    _finalize_theme_label as _finalize_theme_label,
+)
+from .research_graph import (
+    _graph_frontier_scores as _graph_frontier_scores,
 )
 
 # ---------------------------------------------------------------------------

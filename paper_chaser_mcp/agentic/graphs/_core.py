@@ -4,16 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
-import statistics
 import time
-from difflib import SequenceMatcher
 from typing import Any, Literal, cast
 from uuid import uuid4
 
 from fastmcp import Context
 
-from ...citation_repair import build_match_metadata, parse_citation, resolve_citation
+from ...citation_repair import parse_citation, resolve_citation
 from ...compat import build_agent_hints, build_resource_uris
 from ...enrichment import (
     PaperEnrichmentService,
@@ -70,12 +67,9 @@ from ..planner import (
     grounded_expansion_candidates,
     initial_retrieval_hypotheses,
     normalize_query,
-    query_facets,
-    query_terms,
     speculative_expansion_candidates,
 )
 from ..providers import (
-    COMMON_QUERY_WORDS,
     DeterministicProviderBundle,
     ModelProviderBundle,
 )
@@ -103,11 +97,32 @@ from ..workspace import (
 
 logger = logging.getLogger("paper-chaser-mcp")
 
+from .followup_graph import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7b plan
+    _build_grounded_comparison_answer,
+    _comparison_requested,
+    _comparison_takeaway,
+    _contextualize_follow_up_question,
+    _looks_like_title_venue_list,
+    _paper_focus_phrase,
+    _shared_focus_terms,
+    _should_use_structured_comparison_answer,
+)
 from .hooks import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7a plan
     _consume_background_task,
     _describe_retrieval_batch,
     _skip_context_notifications,
     _truncate_text,
+)
+from .inspect_graph import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7b plan
+    _cluster_papers,
+    _compute_disagreements,
+    _compute_gaps,
+    _finalize_theme_label,
+    _label_tokens,
+    _normalized_theme_label,
+    _suggest_next_searches,
+    _theme_terms_from_papers,
+    _top_terms_for_cluster,
 )
 from .regulatory_routing import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7a plan
     _ECOS_PROVENANCE_RANK,
@@ -136,6 +151,19 @@ from .regulatory_routing import (  # noqa: E402,F401 - preserve legacy call-site
     _regulatory_query_priority_terms,
     _regulatory_query_subject_terms,
     _regulatory_retrieval_hypotheses,
+)
+from .research_graph import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7b plan
+    _filter_graph_frontier,
+    _graph_frontier_scores,
+    _graph_intent_text,
+)
+from .resolve_graph import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7b plan
+    _anchor_strength_for_resolution,
+    _known_item_recovery_warning,
+    _known_item_resolution_queries,
+    _known_item_resolution_state_for_strategy,
+    _known_item_title_similarity,
+    _normalization_metadata,
 )
 from .shared_state import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7a plan
     _AGENCY_AUTHORITY_TERMS,
@@ -4192,316 +4220,6 @@ def _initial_retrieval_query_text(*, normalized_query: str, focus: str | None, i
     return combined if combined.lower() != normalized_query.lower() else normalized_query
 
 
-def _comparison_requested(question: str, answer_mode: str) -> bool:
-    if answer_mode == "comparison":
-        return True
-    question_tokens = set(re.findall(r"[a-z0-9]{2,}", question.lower()))
-    return bool(question_tokens & _COMPARISON_MARKERS)
-
-
-def _looks_like_title_venue_list(answer_text: str, evidence_papers: list[dict[str, Any]]) -> bool:
-    lines = [line.strip() for line in answer_text.splitlines() if line.strip()]
-    if not lines:
-        return True
-    bullet_lines = [line for line in lines if line.startswith("- ")]
-    if len(bullet_lines) < min(2, len(evidence_papers)):
-        return False
-    matched_lines = 0
-    normalized_titles = [str(paper.get("title") or paper.get("paperId") or "").strip() for paper in evidence_papers[:4]]
-    for line in bullet_lines[:4]:
-        lower_line = line.lower()
-        has_title = any(title and title in line for title in normalized_titles)
-        has_weak_metadata_pattern = any(marker in lower_line for marker in ("venue", "year", "unknown")) or bool(
-            re.search(r":\s*[^\n,]+,\s*(19|20)\d{2}\b", line)
-        )
-        if has_title and has_weak_metadata_pattern:
-            matched_lines += 1
-    return matched_lines >= min(2, len(bullet_lines))
-
-
-def _should_use_structured_comparison_answer(
-    *,
-    question: str,
-    answer_mode: str,
-    answer_text: str,
-    evidence_papers: list[dict[str, Any]],
-) -> bool:
-    del answer_text, evidence_papers
-    return _comparison_requested(question, answer_mode)
-
-
-def _build_grounded_comparison_answer(
-    *,
-    question: str,
-    evidence_papers: list[dict[str, Any]],
-) -> str:
-    papers = evidence_papers[: min(3, len(evidence_papers))]
-    if not papers:
-        return "The saved result set does not contain enough evidence to make a grounded comparison."
-    shared_terms = _shared_focus_terms(papers, question=question)
-    shared_ground = (
-        ", ".join(term.title() for term in shared_terms[:3])
-        if shared_terms
-        else "closely related problem settings from the saved result set"
-    )
-    detail_lines = []
-    for paper in papers:
-        title = str(paper.get("title") or paper.get("paperId") or "Untitled")
-        year = paper.get("year")
-        venue = str(paper.get("venue") or "venue not stated")
-        descriptor = _paper_focus_phrase(paper, question=question)
-        timing = str(year) if isinstance(year, int) else "year unknown"
-        detail_lines.append(f"- {title} ({timing}; {venue}) emphasizes {descriptor}.")
-    takeaway = _comparison_takeaway(papers, shared_terms)
-    return "\n".join(
-        [
-            "Grounded comparison from the saved result set.",
-            f"Shared ground: these papers converge on {shared_ground}.",
-            "Key differences:",
-            *detail_lines,
-            f"Takeaway: {takeaway}",
-        ]
-    )
-
-
-def _shared_focus_terms(papers: list[dict[str, Any]], *, question: str) -> list[str]:
-    counts: dict[str, int] = {}
-    question_tokens = set(_graph_topic_tokens(question))
-    for paper in papers:
-        for token in _graph_topic_tokens(_paper_text(paper)):
-            if token in _COMPARISON_FOCUS_STOPWORDS or token in question_tokens or token.isdigit():
-                continue
-            counts[token] = counts.get(token, 0) + 1
-    minimum_count = 2 if len(papers) >= 2 else 1
-    return [
-        token for token, count in sorted(counts.items(), key=lambda item: (-item[1], item[0])) if count >= minimum_count
-    ]
-
-
-def _paper_focus_phrase(paper: dict[str, Any], *, question: str) -> str:
-    question_tokens = set(_graph_topic_tokens(question))
-    focus_tokens: list[str] = []
-    for source_text in (str(paper.get("title") or ""), str(paper.get("abstract") or "")):
-        for token in re.findall(r"[a-z0-9]{3,}", source_text.lower()):
-            if token in _COMPARISON_FOCUS_STOPWORDS or token in question_tokens:
-                continue
-            if token in focus_tokens:
-                continue
-            focus_tokens.append(token)
-            if len(focus_tokens) >= 3:
-                break
-        if len(focus_tokens) >= 3:
-            break
-    if focus_tokens:
-        return ", ".join(focus_tokens)
-    abstract = str(paper.get("abstract") or "").strip()
-    if abstract:
-        return _truncate_text(abstract.lower(), limit=96)
-    return "the same core topic from a different angle"
-
-
-def _comparison_takeaway(papers: list[dict[str, Any]], shared_terms: list[str]) -> str:
-    years: list[int] = []
-    for paper in papers:
-        year = paper.get("year")
-        if isinstance(year, int):
-            years.append(year)
-    venues = [str(paper.get("venue") or "").strip() for paper in papers if str(paper.get("venue") or "").strip()]
-    if years and max(years) != min(years):
-        return (
-            f"the papers stay grounded in {', '.join(term.title() for term in shared_terms[:2]) or 'the same topic'}, "
-            "but they span different publication periods, so they likely reflect different stages of the literature."
-        )
-    if len(set(venues)) > 1:
-        venue_list = ", ".join(sorted(set(venues))[:2])
-        return (
-            "the main contrast is not the core topic but the research setting, "
-            f"with evidence spread across {venue_list}."
-        )
-    return (
-        "the papers are topically close, but they contribute different emphases, methods, or evaluation perspectives."
-    )
-
-
-def _label_tokens(text: str) -> list[str]:
-    return re.findall(r"[a-z0-9]{3,}", text.lower())
-
-
-def _theme_terms_from_papers(seed_terms: list[str], papers: list[dict[str, Any]]) -> list[str]:
-    counts: dict[str, int] = {}
-    for paper in papers[:8]:
-        for token in _label_tokens(str(paper.get("title") or "")):
-            if token in _THEME_LABEL_STOPWORDS or token.isdigit():
-                continue
-            counts[token] = counts.get(token, 0) + 3
-        for token in _label_tokens(str(paper.get("abstract") or "")):
-            if token in _THEME_LABEL_STOPWORDS or token.isdigit():
-                continue
-            counts[token] = counts.get(token, 0) + 1
-    for term in seed_terms:
-        for token in _label_tokens(term):
-            if token in _THEME_LABEL_STOPWORDS or token.isdigit():
-                continue
-            counts[token] = counts.get(token, 0) + 2
-    return [term for term, _ in sorted(counts.items(), key=lambda item: (-item[1], item[0]))]
-
-
-def _normalized_theme_label(raw_label: str) -> str:
-    parts = [segment.strip() for segment in re.split(r"[/|,:;\-]+", raw_label) if segment.strip()]
-    if not parts:
-        return ""
-    return " / ".join(part.title() for part in parts[:2])
-
-
-def _finalize_theme_label(
-    *,
-    raw_label: str,
-    seed_terms: list[str],
-    papers: list[dict[str, Any]],
-) -> str:
-    normalized = " ".join(raw_label.split())
-    parts = [segment.strip() for segment in re.split(r"[/|,:;\-]+", normalized) if segment.strip()]
-    if normalized and parts:
-        part_tokens = [_label_tokens(part) for part in parts]
-        part_meaningful = [[token for token in tokens if token not in _THEME_LABEL_STOPWORDS] for tokens in part_tokens]
-        if all(tokens for tokens in part_meaningful):
-            return _normalized_theme_label(normalized)
-    derived_terms = _theme_terms_from_papers(seed_terms, papers)
-    if len(derived_terms) >= 2:
-        return " / ".join(term.title() for term in derived_terms[:2])
-    if derived_terms:
-        return derived_terms[0].title()
-    if normalized:
-        tokens = [token for token in _label_tokens(normalized) if token not in _THEME_LABEL_STOPWORDS]
-        if tokens:
-            return " / ".join(token.title() for token in tokens[:2])
-    return "General theme"
-
-
-def _known_item_title_similarity(query: str, title: str) -> float:
-    normalized_query = " ".join(re.findall(r"[a-z0-9]+", query.lower()))
-    normalized_title = " ".join(re.findall(r"[a-z0-9]+", title.lower()))
-    if not normalized_query or not normalized_title:
-        return 0.0
-    query_tokens = {token for token in normalized_query.split() if len(token) >= 3 and not token.isdigit()}
-    title_tokens = {token for token in normalized_title.split() if len(token) >= 3 and not token.isdigit()}
-    overlap = len(query_tokens & title_tokens) / len(query_tokens) if query_tokens else 0.0
-    return max(SequenceMatcher(None, normalized_query, normalized_title).ratio(), overlap)
-
-
-def _known_item_resolution_queries(query: str, parsed: Any) -> list[str]:
-    queries: list[str] = []
-    normalized_query = normalize_query(query)
-    if normalized_query:
-        queries.append(normalized_query)
-    title_candidates = list(getattr(parsed, "title_candidates", []) or [])
-    author_surnames = list(getattr(parsed, "author_surnames", []) or [])
-    venue_hints = list(getattr(parsed, "venue_hints", []) or [])
-    year = getattr(parsed, "year", None)
-
-    if title_candidates:
-        queries.extend(title_candidates[:3])
-        compact_title_words = [
-            token
-            for token in re.findall(r"[A-Za-z0-9'-]+", title_candidates[0])
-            if len(token) >= 3
-            and token.lower() not in COMMON_QUERY_WORDS
-            and token.lower() not in {"paper", "papers", "article", "articles", "study", "studies"}
-        ]
-        if len(compact_title_words) >= 2:
-            queries.append(" ".join(compact_title_words[:8]))
-        if author_surnames:
-            title_words = re.findall(r"[A-Za-z0-9'-]+", title_candidates[0])[:8]
-            if title_words:
-                queries.append(" ".join([*author_surnames[:2], *title_words]))
-        if venue_hints:
-            queries.append(f"{title_candidates[0]} {venue_hints[0]}")
-    if author_surnames and year is not None:
-        queries.append(" ".join([*author_surnames[:2], str(year)]))
-
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for candidate in queries:
-        normalized_candidate = normalize_query(candidate)
-        if not normalized_candidate:
-            continue
-        lowered = normalized_candidate.lower()
-        if lowered in seen:
-            continue
-        seen.add(lowered)
-        deduped.append(normalized_candidate)
-    return deduped
-
-
-def _normalization_metadata(raw_query: str, normalized_query: str) -> tuple[list[str], dict[str, Any]]:
-    raw_text = str(raw_query or "")
-    normalized_text = str(normalized_query or "")
-    if raw_text == normalized_text:
-        return [], {}
-    return (
-        ["The server normalized the incoming query before routing it."],
-        {
-            "query": {
-                "from": raw_text,
-                "to": normalized_text,
-            }
-        },
-    )
-
-
-def _anchor_strength_for_resolution(resolution_strategy: str) -> Literal["high", "medium", "low"]:
-    if resolution_strategy == "citation_resolution":
-        return "high"
-    if resolution_strategy in {"semantic_title_match", "openalex_autocomplete"}:
-        return "medium"
-    return "low"
-
-
-def _known_item_resolution_state_for_strategy(
-    *,
-    resolution_strategy: str,
-    known_item: dict[str, Any],
-    query: str,
-) -> Literal["resolved_exact", "resolved_probable", "needs_disambiguation"]:
-    """Derive a :data:`KnownItemResolutionState` for a resolved known-item payload.
-
-    Uses the shared citation-repair metadata when available (``citation_resolution``
-    round-trip) and falls back to deterministic title-similarity bands for the
-    secondary resolution strategies.
-    """
-    title = str(known_item.get("title") or "")
-    similarity = _known_item_title_similarity(query, title) if title else 0.0
-    if resolution_strategy == "citation_resolution":
-        metadata = build_match_metadata(
-            query=query,
-            paper=known_item,
-            candidate_count=1,
-            resolution_strategy=resolution_strategy,
-        )
-        state = metadata.get("knownItemResolutionState")
-        if isinstance(state, str) and state in {
-            "resolved_exact",
-            "resolved_probable",
-            "needs_disambiguation",
-        }:
-            return cast(Literal["resolved_exact", "resolved_probable", "needs_disambiguation"], state)
-    if similarity >= 0.9:
-        return "resolved_exact"
-    if similarity >= 0.72:
-        return "resolved_probable"
-    return "needs_disambiguation"
-
-
-def _known_item_recovery_warning(resolution_strategy: str) -> str:
-    if resolution_strategy == "semantic_title_match":
-        return "Known-item recovery used a semantic title match; verify the anchor before treating it as canonical."
-    if resolution_strategy == "openalex_autocomplete":
-        return "Known-item recovery used OpenAlex autocomplete; verify the anchor before treating it as canonical."
-    if resolution_strategy == "openalex_search":
-        return "Known-item recovery used OpenAlex search; verify the anchor before treating it as canonical."
-    return "Known-item fallback used title-style recovery; verify the anchor before treating it as canonical."
-
-
 def _has_inspectable_sources(records: list[StructuredSourceRecord]) -> bool:
     return any(
         record.topical_relevance != "off_topic"
@@ -4524,299 +4242,6 @@ def _best_next_internal_action(*, intent: str, has_sources: bool, result_status:
     if result_status == "partial":
         return "search_papers_smart"
     return "resolve_reference"
-
-
-def _top_terms_for_cluster(papers: list[dict[str, Any]]) -> list[str]:
-    tokens: dict[str, int] = {}
-    for paper in papers[:8]:
-        for token in _paper_text(paper).lower().split():
-            cleaned = "".join(character for character in token if character.isalnum())
-            if len(cleaned) < 4:
-                continue
-            tokens[cleaned] = tokens.get(cleaned, 0) + 1
-    return [
-        term
-        for term, _ in sorted(
-            tokens.items(),
-            key=lambda item: item[1],
-            reverse=True,
-        )[:4]
-    ]
-
-
-async def _cluster_papers(
-    *,
-    papers: list[dict[str, Any]],
-    provider_bundle: ModelProviderBundle,
-    max_themes: int,
-) -> list[list[dict[str, Any]]]:
-    if not papers:
-        return []
-    remaining = list(papers)
-    clusters: list[list[dict[str, Any]]] = []
-    threshold = 0.22
-    while remaining and len(clusters) < max(max_themes, 1):
-        seed = remaining.pop(0)
-        cluster = [seed]
-        seed_text = _paper_text(seed)
-        candidate_texts = [_paper_text(candidate) for candidate in remaining]
-        similarities = await provider_bundle.abatched_similarity(
-            seed_text,
-            candidate_texts,
-        )
-        rest: list[dict[str, Any]] = []
-        for candidate, similarity in zip(remaining, similarities, strict=False):
-            if similarity >= threshold:
-                cluster.append(candidate)
-            else:
-                rest.append(candidate)
-        clusters.append(cluster)
-        remaining = rest
-    if remaining:
-        clusters[-1].extend(remaining)
-    return clusters[:max_themes]
-
-
-def _compute_gaps(papers: list[dict[str, Any]]) -> list[str]:
-    if not papers:
-        return ["No papers were available to analyze for gaps."]
-    years: list[int] = [paper["year"] for paper in papers if isinstance(paper.get("year"), int)]
-    venues: set[str] = {
-        str(paper["venue"]) for paper in papers if isinstance(paper.get("venue"), str) and paper.get("venue")
-    }
-    gaps: list[str] = []
-    if years and max(years) - min(years) <= 1:
-        gaps.append(
-            "The current result set is concentrated in a narrow time window; earlier foundational work may be missing."
-        )
-    if len(venues) <= 1:
-        gaps.append("Most papers cluster around one venue or source, so cross-community coverage may still be thin.")
-    if not gaps:
-        gaps.append(
-            "Methodological diversity looks reasonable, but targeted "
-            "negative-result or benchmark papers may still be underrepresented."
-        )
-    return gaps
-
-
-def _compute_disagreements(papers: list[dict[str, Any]]) -> list[str]:
-    if len(papers) < 3:
-        return ["The result set is still small, so disagreements are not yet obvious."]
-    years: list[int] = [paper["year"] for paper in papers if isinstance(paper.get("year"), int)]
-    if years and statistics.pstdev(years) >= 2.5:
-        return [
-            "The papers span different periods, so assumptions and evaluation "
-            "norms may disagree across older and newer work."
-        ]
-    return [
-        "Evaluation setups and coverage differ across the returned papers, so "
-        "direct comparisons should be made carefully."
-    ]
-
-
-def _suggest_next_searches(
-    papers: list[dict[str, Any]],
-    themes: list[LandscapeTheme],
-) -> list[str]:
-    suggestions: list[str] = []
-    if themes:
-        suggestions.append(f"{themes[0].title} benchmark papers")
-        suggestions.append(f"{themes[0].title} survey")
-    recent_years: list[int] = sorted(
-        {paper["year"] for paper in papers if isinstance(paper.get("year"), int)},
-        reverse=True,
-    )
-    if recent_years:
-        suggestions.append(f"{recent_years[0]} follow-up work")
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for suggestion in suggestions:
-        if suggestion not in seen:
-            seen.add(suggestion)
-            deduped.append(suggestion)
-    return deduped[:3]
-
-
-async def _graph_frontier_scores(
-    *,
-    seed: dict[str, Any],
-    related_papers: list[dict[str, Any]],
-    provider_bundle: ModelProviderBundle,
-    intent_text: str | None = None,
-) -> list[float]:
-    if not related_papers:
-        return []
-    seed_title = str(seed.get("title") or "")
-    seed_terms = [term for term in query_terms(seed_title or _paper_text(seed)) if term not in _GRAPH_GENERIC_TERMS]
-    seed_facets = query_facets(seed_title or _paper_text(seed))
-    seed_term_set = _graph_topic_tokens(seed_title or _paper_text(seed))
-    normalized_intent_text = (intent_text or "").strip()
-    intent_terms = [term for term in query_terms(normalized_intent_text) if term not in _GRAPH_GENERIC_TERMS]
-    intent_facets = query_facets(normalized_intent_text)
-    intent_term_set = _graph_topic_tokens(normalized_intent_text)
-    query_similarities = await provider_bundle.abatched_similarity(
-        _paper_text(seed),
-        [_paper_text(related) for related in related_papers],
-    )
-    if normalized_intent_text:
-        intent_similarities = await provider_bundle.abatched_similarity(
-            normalized_intent_text,
-            [_paper_text(related) for related in related_papers],
-        )
-    else:
-        intent_similarities = query_similarities
-    scores: list[float] = []
-    for related, query_similarity, intent_similarity in zip(
-        related_papers,
-        query_similarities,
-        intent_similarities,
-        strict=False,
-    ):
-        related_title = str(related.get("title") or "")
-        related_text = _paper_text(related).lower()
-        related_tokens = _graph_topic_tokens(related_text)
-        related_title_tokens = _graph_topic_tokens(related_title.lower())
-        anchor_overlap = sum(term in related_tokens for term in seed_terms) / len(seed_terms) if seed_terms else 0.0
-        intent_anchor_overlap = (
-            sum(term in related_tokens for term in intent_terms) / len(intent_terms) if intent_terms else 0.0
-        )
-        facet_overlap = 0.0
-        if seed_facets:
-            matched_facets = 0
-            for facet in seed_facets:
-                facet_tokens = re.findall(r"[a-z0-9]{3,}", facet.lower())
-                if not facet_tokens:
-                    continue
-                required = len(facet_tokens) if len(facet_tokens) <= 2 else 2
-                if sum(token in related_tokens for token in facet_tokens) >= required:
-                    matched_facets += 1
-            facet_overlap = matched_facets / len(seed_facets)
-        intent_facet_overlap = 0.0
-        if intent_facets:
-            matched_intent_facets = 0
-            for facet in intent_facets:
-                facet_tokens = re.findall(r"[a-z0-9]{3,}", facet.lower())
-                if not facet_tokens:
-                    continue
-                required = len(facet_tokens) if len(facet_tokens) <= 2 else 2
-                if sum(token in related_tokens for token in facet_tokens) >= required:
-                    matched_intent_facets += 1
-            intent_facet_overlap = matched_intent_facets / len(intent_facets)
-        title_overlap = 0.0
-        if seed_term_set and related_title_tokens:
-            title_overlap = len(seed_term_set & related_title_tokens) / len(seed_term_set)
-        intent_title_overlap = 0.0
-        if intent_term_set and related_title_tokens:
-            intent_title_overlap = len(intent_term_set & related_title_tokens) / len(intent_term_set)
-
-        citation_count = related.get("citationCount")
-        citation_bonus = 0.0
-        if isinstance(citation_count, int) and citation_count > 0:
-            citation_bonus = min(citation_count / 5000.0, 0.08)
-        year = related.get("year")
-        recency_bonus = 0.0
-        if isinstance(year, int):
-            current_year = time.gmtime().tm_year
-            recency_bonus = max(0.0, 0.03 - max(0, current_year - year) * 0.005)
-        topic_penalty = 0.0
-        if seed_terms and anchor_overlap == 0.0:
-            topic_penalty += 0.26
-        elif seed_terms and anchor_overlap < 0.25:
-            topic_penalty += 0.1
-        if intent_terms and intent_anchor_overlap == 0.0:
-            topic_penalty += 0.24
-        elif intent_terms and intent_anchor_overlap < 0.25:
-            topic_penalty += 0.1
-        if seed_facets and facet_overlap == 0.0:
-            topic_penalty += 0.2
-        elif seed_facets and facet_overlap < 0.5:
-            topic_penalty += 0.08
-        if intent_facets and intent_facet_overlap == 0.0:
-            topic_penalty += 0.2
-        elif intent_facets and intent_facet_overlap < 0.5:
-            topic_penalty += 0.08
-        if title_overlap == 0.0:
-            topic_penalty += 0.12
-        elif title_overlap < 0.2:
-            topic_penalty += 0.05
-        if intent_term_set and intent_title_overlap == 0.0:
-            topic_penalty += 0.14
-        elif intent_term_set and intent_title_overlap < 0.2:
-            topic_penalty += 0.06
-        if seed_terms and intent_terms and anchor_overlap == 0.0 and intent_anchor_overlap == 0.0:
-            topic_penalty += 0.12
-        score = (
-            (query_similarity * 0.28)
-            + (intent_similarity * 0.24)
-            + (anchor_overlap * 0.12)
-            + (intent_anchor_overlap * 0.16)
-            + (facet_overlap * 0.08)
-            + (intent_facet_overlap * 0.12)
-            + (title_overlap * 0.05)
-            + (intent_title_overlap * 0.09)
-            + citation_bonus
-            + recency_bonus
-            - topic_penalty
-        )
-        scores.append(round(max(score, 0.0), 6))
-    return scores
-
-
-def _graph_intent_text(
-    record: Any | None,
-    resolved_seeds: list[dict[str, Any]],
-) -> str:
-    if record is not None:
-        metadata = record.metadata if isinstance(record.metadata, dict) else {}
-        strategy_metadata = metadata.get("strategyMetadata")
-        if isinstance(strategy_metadata, dict):
-            normalized_query = strategy_metadata.get("normalizedQuery")
-            if isinstance(normalized_query, str) and normalized_query.strip():
-                return normalized_query.strip()
-        original_query = metadata.get("originalQuery")
-        if isinstance(original_query, str) and original_query.strip():
-            return original_query.strip()
-        if isinstance(record.query, str) and record.query.strip():
-            return record.query.strip()
-    for seed in resolved_seeds:
-        for candidate in (seed.get("title"), seed.get("paperId")):
-            if isinstance(candidate, str) and candidate.strip():
-                return candidate.strip()
-    return ""
-
-
-def _contextualize_follow_up_question(
-    *,
-    question: str,
-    record: Any | None,
-    question_mode: str,
-) -> str:
-    normalized_question = str(question or "").strip()
-    if question_mode not in {"comparison", "selection"}:
-        return normalized_question
-    session_intent = _graph_intent_text(record, [])
-    if not session_intent:
-        return normalized_question
-    lowered_question = normalized_question.lower()
-    lowered_intent = session_intent.lower()
-    if lowered_intent and lowered_intent in lowered_question:
-        return normalized_question
-    if not normalized_question:
-        return session_intent
-    return f"{normalized_question} about {session_intent}"
-
-
-def _filter_graph_frontier(
-    ranked_related: list[tuple[dict[str, Any], float]],
-) -> list[tuple[dict[str, Any], float]]:
-    if not ranked_related:
-        return []
-    best_score = max(score for _, score in ranked_related)
-    threshold = max(0.18, best_score * 0.45)
-    retained = [(paper, score) for paper, score in ranked_related if score >= threshold]
-    if retained:
-        return retained
-    return ranked_related[: min(3, len(ranked_related))]
 
 
 def _result_coverage_label(candidates: list[dict[str, Any]]) -> str:
