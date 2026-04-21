@@ -14,11 +14,11 @@ that used to live at the top of the flat ``graphs.py``. These tests ensure:
 
 from __future__ import annotations
 
-from paper_chaser_mcp.agentic import graphs as facade
+from paper_chaser_mcp.agentic.graphs import _core as core_module
 from paper_chaser_mcp.agentic.graphs import shared_state
 
 
-def test_constants_are_identical_between_facade_and_submodule() -> None:
+def test_constants_are_identical_between_core_and_submodule() -> None:
     for name in (
         "SMART_SEARCH_PROGRESS_TOTAL",
         "_GRAPH_GENERIC_TERMS",
@@ -37,9 +37,9 @@ def test_constants_are_identical_between_facade_and_submodule() -> None:
         "_CFR_DOC_TYPE_GENERIC",
     ):
         submodule_value = getattr(shared_state, name)
-        facade_value = getattr(facade, name)
-        assert submodule_value is facade_value, (
-            f"{name}: facade and submodule must share the same object "
+        core_value = getattr(core_module, name)
+        assert submodule_value is core_value, (
+            f"{name}: _core and submodule must share the same object "
             "so monkeypatching / identity checks stay consistent"
         )
 

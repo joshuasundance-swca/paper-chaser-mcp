@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from paper_chaser_mcp.agentic import graphs as facade
+from paper_chaser_mcp.agentic.graphs import _core as core_module
 from paper_chaser_mcp.agentic.graphs import regulatory_routing
 
 _EXTRACTED = (
@@ -37,22 +37,22 @@ _EXTRACTED_CONSTANTS = (
 )
 
 
-def test_facade_and_submodule_expose_the_same_callables() -> None:
+def test_core_and_submodule_expose_the_same_callables() -> None:
     for name in _EXTRACTED:
         submodule_value = getattr(regulatory_routing, name)
-        facade_value = getattr(facade, name)
-        assert submodule_value is facade_value, (
-            f"{name}: facade and submodule must share the same object so "
+        core_value = getattr(core_module, name)
+        assert submodule_value is core_value, (
+            f"{name}: _core and submodule must share the same object so "
             "legacy monkeypatch and call sites keep working after Phase 7a"
         )
 
 
-def test_facade_and_submodule_expose_the_same_constants() -> None:
+def test_core_and_submodule_expose_the_same_constants() -> None:
     for name in _EXTRACTED_CONSTANTS:
         submodule_value = getattr(regulatory_routing, name)
-        facade_value = getattr(facade, name)
-        assert submodule_value is facade_value, (
-            f"{name}: facade and submodule must share the same regex so legacy call sites keep working after Phase 7a"
+        core_value = getattr(core_module, name)
+        assert submodule_value is core_value, (
+            f"{name}: _core and submodule must share the same regex so legacy call sites keep working after Phase 7a"
         )
 
 
