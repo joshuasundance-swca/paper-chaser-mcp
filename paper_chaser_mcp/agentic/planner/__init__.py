@@ -20,15 +20,6 @@ from ...citation_repair import (
 )
 from . import _core as _core
 from ._core import (
-    _VALID_REGULATORY_INTENTS as _VALID_REGULATORY_INTENTS,
-)
-from ._core import (
-    _derive_regulatory_intent as _derive_regulatory_intent,
-)
-from ._core import (
-    _has_literature_corroboration as _has_literature_corroboration,
-)
-from ._core import (
     _ordered_provider_plan as _ordered_provider_plan,
 )
 from ._core import (
@@ -114,6 +105,15 @@ from .normalization import (
 )
 from .normalization import (
     query_terms as query_terms,
+)
+from .reconciliation import (
+    _VALID_REGULATORY_INTENTS as _VALID_REGULATORY_INTENTS,
+)
+from .reconciliation import (
+    _derive_regulatory_intent as _derive_regulatory_intent,
+)
+from .reconciliation import (
+    _has_literature_corroboration as _has_literature_corroboration,
 )
 from .regulatory import (
     _detect_cultural_resource_intent as _detect_cultural_resource_intent,
