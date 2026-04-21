@@ -183,6 +183,6 @@ skips = ["B101"]
 source = ["paper_chaser_mcp"]
 
 [tool.coverage.report]
-fail_under = 85
+fail_under = 87
 show_missing = true
 skip_covered = true

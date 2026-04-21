@@ -150,7 +150,7 @@ repos:
 
       - id: pytest-coverage
         name: pytest coverage
-        entry: python -m pytest --cov=paper_chaser_mcp --cov-report=term-missing --cov-fail-under=85
+        entry: python -m pytest --cov=paper_chaser_mcp --cov-report=term-missing --cov-fail-under=87
         language: python
         additional_dependencies:
           - anyio>=4.0.0
