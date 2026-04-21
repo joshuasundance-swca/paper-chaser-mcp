@@ -23,9 +23,10 @@ from typing import TYPE_CHECKING, Any
 from ...models import FailureSummary
 from ..models import IntentLabel
 from ..planner import normalize_query
+from .shared_state import END, START, InMemorySaver, StateGraph
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    pass
+    from ._core import AgenticRuntime
 
 
 __all__: list[str] = [
@@ -33,6 +34,7 @@ __all__: list[str] = [
     "_initial_retrieval_query_text",
     "_result_coverage_label",
     "_smart_failure_summary",
+    "maybe_compile_graphs",
 ]
 
 
@@ -91,3 +93,28 @@ def _smart_failure_summary(
         ),
         recommendedNextAction="review_partial_results",
     )
+
+
+def maybe_compile_graphs(runtime: AgenticRuntime) -> dict[str, Any]:  # noqa: ARG001
+    """Return compiled LangGraph placeholders when the optional dep is present.
+
+    Pattern A extraction: takes ``runtime`` for forward-compat but does not yet
+    depend on any per-instance state. Mirrors the legacy method body verbatim so
+    behavior is unchanged.
+    """
+
+    if StateGraph is None or InMemorySaver is None:
+        return {}
+    compiled: dict[str, Any] = {}
+    for graph_name in (
+        "smart_search",
+        "grounded_answer",
+        "landscape_map",
+        "graph_expand",
+    ):
+        graph = StateGraph(dict)
+        graph.add_node("complete", lambda state: state)
+        graph.add_edge(START, "complete")
+        graph.add_edge("complete", END)
+        compiled[graph_name] = graph.compile(checkpointer=InMemorySaver())
+    return compiled

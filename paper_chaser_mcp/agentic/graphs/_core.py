@@ -97,6 +97,7 @@ from ..workspace import (
 
 logger = logging.getLogger("paper-chaser-mcp")
 
+from . import smart_graph  # noqa: E402 - used by _maybe_compile_graphs delegate
 from .followup_graph import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7b plan
     _build_grounded_comparison_answer,
     _comparison_requested,
@@ -3919,21 +3920,7 @@ class AgenticRuntime:
         )
 
     def _maybe_compile_graphs(self) -> dict[str, Any]:
-        if StateGraph is None or InMemorySaver is None:
-            return {}
-        compiled: dict[str, Any] = {}
-        for graph_name in (
-            "smart_search",
-            "grounded_answer",
-            "landscape_map",
-            "graph_expand",
-        ):
-            graph = StateGraph(dict)
-            graph.add_node("complete", lambda state: state)
-            graph.add_edge(START, "complete")
-            graph.add_edge("complete", END)
-            compiled[graph_name] = graph.compile(checkpointer=InMemorySaver())
-        return compiled
+        return smart_graph.maybe_compile_graphs(self)
 
 
 def _compute_top_recommendation(
