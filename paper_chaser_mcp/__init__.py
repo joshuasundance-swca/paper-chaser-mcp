@@ -30,3 +30,17 @@ def __getattr__(name: str) -> Any:
 
         return _main
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    """Include ``__getattr__``-surfaced names in ``dir(paper_chaser_mcp)``.
+
+    PEP 562 notes that module-level ``__getattr__`` hides lazy names from
+    ``dir()`` unless a sibling ``__dir__`` also exposes them. Phase 7c-1
+    review flagged this as a discoverability gap for tools (Sphinx,
+    IDE autocomplete, ``help(paper_chaser_mcp)``) that rely on ``dir`` to
+    enumerate the public surface. Merging ``globals()`` with ``__all__``
+    keeps eager attributes visible while also advertising ``main``.
+    """
+
+    return sorted(set(globals()) | set(__all__))

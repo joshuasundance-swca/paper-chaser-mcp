@@ -37,3 +37,17 @@ def __getattr__(name: str) -> Any:
 
         return _resolve_provider_bundle
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    """Include ``__getattr__``-surfaced names in ``dir(paper_chaser_mcp.agentic)``.
+
+    PEP 562 notes that module-level ``__getattr__`` hides lazy names from
+    ``dir()`` unless a sibling ``__dir__`` also exposes them. Phase 7c-1
+    review flagged this as a discoverability gap; without this hook,
+    ``resolve_provider_bundle`` would be invisible to ``dir`` / Sphinx /
+    IDE autocomplete, even though it is part of the public surface pinned
+    in ``__all__``.
+    """
+
+    return sorted(set(globals()) | set(__all__))
