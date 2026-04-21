@@ -17,86 +17,71 @@
  1014  1039    26 _guided_compact_source_candidate
  1042  1051    10 _candidate_is_inspectable
  1054  1081    28 _guided_source_resolution_payload
- 1084  1120    37 _guided_execution_provenance_payload
- 1123  1140    18 _guided_live_strategy_metadata
- 1143  1210    68 _guided_abstention_details_payload
- 1213  1214     2 _guided_provider_budget_payload
- 1217  1293    77 _guided_strategy_metadata_from_runs
- 1296  1363    68 _guided_should_add_review_pass
- 1366  1386    21 _guided_review_pass_overrides
- 1389  1393     5 _guided_is_agency_guidance_query
- 1396  1416    21 _guided_should_escalate_research
- 1419  1478    60 _guided_normalize_research_arguments
- 1481  1547    67 _guided_normalize_follow_up_arguments
- 1550  1645    96 _guided_normalize_inspect_arguments
- 1648  1663    16 _guided_normalization_payload
- 1666  1667     2 _guided_is_known_item_query
- 1670  1678     9 _guided_mentions_literature
- 1681  1695    15 _guided_is_mixed_intent_query
- 1698  1706     9 _guided_reference_signal_words
- 1709  1772    64 _guided_underspecified_reference_clarification
- 1773  1837    65 _guided_merge_coverage_summaries
- 1840  1878    39 _guided_merge_failure_summaries
- 1879  1887     9 _normalize_author_key
- 1890  1910    21 _deduplicate_authors
- 1914  1923    10 _is_authoritative_source
- 1926  1975    50 _compose_why_classified_weak_match
- 1978  2012    35 _evidence_quality_detail
- 2015  2039    25 _synthesis_path
- 2042  2070    29 _trust_revision_narrative
- 2073  2095    23 _authoritative_but_weak_source_ids
- 2098  2241   144 _guided_trust_summary
- 2244  2342    99 _guided_confidence_signals
- 2345  2357    13 _guided_sources_all_off_topic
- 2360  2419    60 _guided_failure_summary
- 2422  2453    32 _guided_result_meaning
- 2456  2465    10 _guided_deterministic_fallback_used
- 2468  2480    13 _guided_partial_recovery_possible
- 2483  2584   102 async _guided_research_status
- 2587  2607    21 _guided_deterministic_evidence_gaps
- 2610  2654    45 async _guided_generate_evidence_gaps
- 2657  2734    78 _guided_machine_failure_payload
- 2737  2795    59 _guided_summary
- 2798  2833    36 _guided_next_actions
- 2836  2853    18 _guided_missing_evidence_type
- 2854  2895    42 _guided_best_next_internal_action
- 2898  2970    73 _guided_result_state
- 2973  3028    56 _guided_record_source_candidates
- 3031  3098    68 _find_record_source_with_resolution
- 3101  3125    25 _find_record_source
- 3128  3129     2 _direct_read_recommendations
- 3132  3139     8 _direct_read_recommendation_details
- 3142  3263   122 _direct_read_recommendation_entries
- 3266  3274     9 _guided_follow_up_status
- 3368  3383    16 _compact_coverage_payload
- 3386  3393     8 _is_empty_for_compact
- 3396  3413    18 _compact_record_identifiers
- 3416  3426    11 _dedupe_compact_identifiers
- 3429  3521    93 _apply_follow_up_response_mode
- 3524  3559    36 _apply_inspect_source_compaction
- 3562  3586    25 _guided_compact_response_if_needed
- 3589  3609    21 _guided_finalize_response
- 3612  3627    16 _append_deterministic_fallback_gap
- 3637  3770   134 async _guided_contract_fields
- 3771  3891   121 _guided_follow_up_introspection_facets
- 3894  3895     2 _guided_extract_source_reference_from_question
- 3898  3902     5 _guided_is_usable_answer_text
- 3905  3919    15 _guided_select_follow_up_source
- 3922  3965    44 _guided_source_metadata_answers
- 3968  4023    56 _guided_relevance_triage_answers
- 4024  4042    19 _guided_append_selected_saved_records
- 4045  4068    24 _guided_requested_metadata_facets
- 4071  4152    82 _guided_metadata_answer_is_responsive
- 4155  4211    57 _guided_follow_up_response_mode
- 4214  4220     7 _guided_follow_up_answer_mode
- 4223  4551   329 async _answer_follow_up_from_session_state
- 4554  7643  3090 async dispatch_tool
- 7646  7671    26 _finalize_tool_result
- 7674  7806   133 async _maybe_elicit_and_retry
- 7809  7813     5 _client_supports_extension
- 7816  7835    20 _elicitation_message
- 7838  7847    10 _refined_query
- 7874  7912    39 async _dispatch_search_papers_smart
- 7915  7944    30 async _dispatch_ask_result_set
- 7947  7961    15 async _dispatch_research
- 7964  7974    11 async _dispatch_follow_up_research
+ 1082  1141    60 _guided_normalize_research_arguments
+ 1144  1210    67 _guided_normalize_follow_up_arguments
+ 1213  1308    96 _guided_normalize_inspect_arguments
+ 1311  1326    16 _guided_normalization_payload
+ 1327  1390    64 _guided_underspecified_reference_clarification
+ 1391  1399     9 _normalize_author_key
+ 1402  1422    21 _deduplicate_authors
+ 1426  1435    10 _is_authoritative_source
+ 1438  1487    50 _compose_why_classified_weak_match
+ 1490  1524    35 _evidence_quality_detail
+ 1527  1551    25 _synthesis_path
+ 1554  1582    29 _trust_revision_narrative
+ 1585  1607    23 _authoritative_but_weak_source_ids
+ 1610  1753   144 _guided_trust_summary
+ 1756  1854    99 _guided_confidence_signals
+ 1857  1869    13 _guided_sources_all_off_topic
+ 1872  1931    60 _guided_failure_summary
+ 1934  1965    32 _guided_result_meaning
+ 1968  1977    10 _guided_deterministic_fallback_used
+ 1980  1992    13 _guided_partial_recovery_possible
+ 1995  2096   102 async _guided_research_status
+ 2099  2119    21 _guided_deterministic_evidence_gaps
+ 2122  2166    45 async _guided_generate_evidence_gaps
+ 2169  2246    78 _guided_machine_failure_payload
+ 2249  2307    59 _guided_summary
+ 2310  2345    36 _guided_next_actions
+ 2348  2365    18 _guided_missing_evidence_type
+ 2366  2407    42 _guided_best_next_internal_action
+ 2410  2482    73 _guided_result_state
+ 2485  2540    56 _guided_record_source_candidates
+ 2543  2610    68 _find_record_source_with_resolution
+ 2613  2637    25 _find_record_source
+ 2640  2641     2 _direct_read_recommendations
+ 2644  2651     8 _direct_read_recommendation_details
+ 2654  2775   122 _direct_read_recommendation_entries
+ 2778  2786     9 _guided_follow_up_status
+ 2880  2895    16 _compact_coverage_payload
+ 2898  2905     8 _is_empty_for_compact
+ 2908  2925    18 _compact_record_identifiers
+ 2928  2938    11 _dedupe_compact_identifiers
+ 2941  3033    93 _apply_follow_up_response_mode
+ 3036  3071    36 _apply_inspect_source_compaction
+ 3074  3098    25 _guided_compact_response_if_needed
+ 3101  3121    21 _guided_finalize_response
+ 3124  3139    16 _append_deterministic_fallback_gap
+ 3149  3282   134 async _guided_contract_fields
+ 3283  3403   121 _guided_follow_up_introspection_facets
+ 3406  3407     2 _guided_extract_source_reference_from_question
+ 3410  3414     5 _guided_is_usable_answer_text
+ 3417  3431    15 _guided_select_follow_up_source
+ 3434  3477    44 _guided_source_metadata_answers
+ 3480  3535    56 _guided_relevance_triage_answers
+ 3536  3554    19 _guided_append_selected_saved_records
+ 3557  3580    24 _guided_requested_metadata_facets
+ 3583  3664    82 _guided_metadata_answer_is_responsive
+ 3667  3723    57 _guided_follow_up_response_mode
+ 3726  3732     7 _guided_follow_up_answer_mode
+ 3735  4063   329 async _answer_follow_up_from_session_state
+ 4066  7155  3090 async dispatch_tool
+ 7158  7183    26 _finalize_tool_result
+ 7186  7318   133 async _maybe_elicit_and_retry
+ 7321  7325     5 _client_supports_extension
+ 7328  7347    20 _elicitation_message
+ 7350  7359    10 _refined_query
+ 7386  7424    39 async _dispatch_search_papers_smart
+ 7427  7456    30 async _dispatch_ask_result_set
+ 7459  7473    15 async _dispatch_research
+ 7476  7486    11 async _dispatch_follow_up_research

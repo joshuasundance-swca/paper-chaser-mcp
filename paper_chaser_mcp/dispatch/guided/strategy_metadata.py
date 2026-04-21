@@ -26,10 +26,9 @@ from .._core import (  # noqa: E402 — see note above; forward refs
     _GUIDED_LITERATURE_TERMS,
     _GUIDED_REFERENCE_GENERIC_CANDIDATE_WORDS,
     _GUIDED_REFERENCE_UNCERTAINTY_MARKERS,
-    _guided_missing_evidence_type,
-    _guided_sources_all_off_topic,
     GUIDED_POLICY_NAME,
 )
+from .trust import _guided_missing_evidence_type, _guided_sources_all_off_topic
 
 
 

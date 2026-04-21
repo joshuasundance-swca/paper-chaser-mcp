@@ -32,6 +32,8 @@ from .sources import (
 # partially-initialised ``_core`` module already has the attributes.
 from .._core import (  # noqa: E402 — see note above; lint-exempt forward refs
     _find_record_source_with_resolution,
+)
+from .trust import (
     _guided_failure_summary,
     _guided_follow_up_status,
     _guided_next_actions,
