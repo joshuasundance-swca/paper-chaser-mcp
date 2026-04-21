@@ -107,257 +107,32 @@ from ..workspace import (
 )
 
 logger = logging.getLogger("paper-chaser-mcp")
-SMART_SEARCH_PROGRESS_TOTAL = 100.0
-_GRAPH_GENERIC_TERMS = COMMON_QUERY_WORDS | {
-    "effect",
-    "effects",
-    "environmental",
-    "impact",
-    "impacts",
-    "response",
-    "responses",
-    "review",
-    "wildlife",
-}
-_COMPARISON_MARKERS = {
-    "compare",
-    "compared",
-    "comparing",
-    "comparison",
-    "differences",
-    "different",
-    "tradeoff",
-    "tradeoffs",
-    "versus",
-    "vs",
-}
-_THEME_LABEL_STOPWORDS = _GRAPH_GENERIC_TERMS | {
-    "about",
-    "across",
-    "among",
-    "analysis",
-    "and",
-    "approach",
-    "approaches",
-    "based",
-    "between",
-    "cluster",
-    "clusters",
-    "for",
-    "from",
-    "into",
-    "method",
-    "methods",
-    "model",
-    "models",
-    "or",
-    "that",
-    "the",
-    "these",
-    "theme",
-    "themes",
-    "theory",
-    "those",
-    "using",
-    "with",
-}
+
+from .shared_state import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7a plan
+    _AGENCY_AUTHORITY_TERMS,
+    _AGENCY_GUIDANCE_DISCUSSION_TERMS,
+    _AGENCY_GUIDANCE_DOCUMENT_TERMS,
+    _AGENCY_GUIDANCE_QUERY_NOISE_TERMS,
+    _AGENCY_GUIDANCE_TERMS,
+    _CFR_DOC_TYPE_GENERIC,
+    _COMPARISON_FOCUS_STOPWORDS,
+    _COMPARISON_MARKERS,
+    _CULTURAL_RESOURCE_DOCUMENT_TERMS,
+    _GRAPH_GENERIC_TERMS,
+    _REGULATORY_QUERY_NOISE_TERMS,
+    _REGULATORY_SUBJECT_STOPWORDS,
+    _SPECIES_QUERY_NOISE_TERMS,
+    _THEME_LABEL_STOPWORDS,
+    END,
+    SMART_SEARCH_PROGRESS_TOTAL,
+    START,
+    InMemorySaver,
+    StateGraph,
+)
 
 
 def _paid_providers_used(providers: list[str]) -> list[str]:
     return sorted({provider for provider in providers if provider_is_paywalled(provider)})
-
-
-_COMPARISON_FOCUS_STOPWORDS = _THEME_LABEL_STOPWORDS | {
-    "noise",
-    "paper",
-    "papers",
-    "results",
-    "study",
-    "studies",
-}
-_REGULATORY_SUBJECT_STOPWORDS = {
-    "act",
-    "administration",
-    "agency",
-    "analysis",
-    "code",
-    "codified",
-    "current",
-    "decision",
-    "critical",
-    "document",
-    "documents",
-    "designation",
-    "drug",
-    "endangered",
-    "fda",
-    "federal",
-    "final",
-    "food",
-    "functions",
-    "guidance",
-    "habitat",
-    "history",
-    "industry",
-    "listed",
-    "listing",
-    "notice",
-    "part",
-    "plants",
-    "profile",
-    "profiles",
-    "recovery",
-    "register",
-    "regulatory",
-    "review",
-    "rule",
-    "section",
-    "software",
-    "species",
-    "status",
-    "text",
-    "threatened",
-    "title",
-    "under",
-    "wildlife",
-}
-_AGENCY_GUIDANCE_TERMS = {
-    "guidance",
-    "guideline",
-    "policy",
-    "staff",
-}
-_AGENCY_AUTHORITY_TERMS = {
-    "agency",
-    "cdc",
-    "cms",
-    "epa",
-    "fda",
-    "food and drug administration",
-    "hhs",
-    "nih",
-    "usda",
-}
-_AGENCY_GUIDANCE_QUERY_NOISE_TERMS = {
-    "actual",
-    "agency",
-    "document",
-    "documents",
-    "drug",
-    "food",
-    "guidance",
-    "industry",
-    "management",
-    "most",
-    "policy",
-    "recent",
-    "relevant",
-    "staff",
-    "what",
-}
-_AGENCY_GUIDANCE_DOCUMENT_TERMS = {
-    "advisories",
-    "advisory",
-    "guidance",
-    "guideline",
-    "guidelines",
-    "notice",
-    "notices",
-    "policies",
-    "policy",
-    "recommendation",
-    "recommendations",
-    "roadmap",
-}
-_AGENCY_GUIDANCE_DISCUSSION_TERMS = {
-    "concept",
-    "concepts",
-    "discussion",
-    "framework",
-    "proposal",
-    "proposals",
-    "proposed",
-}
-_CULTURAL_RESOURCE_DOCUMENT_TERMS = {
-    "106",
-    "achp",
-    "archaeological",
-    "archaeology",
-    "consultation",
-    "cultural",
-    "heritage",
-    "historic",
-    "nagpra",
-    "nhpa",
-    "preservation",
-    "sacred",
-    "shpo",
-    "thpo",
-    "tribal",
-}
-_REGULATORY_QUERY_NOISE_TERMS = {
-    "address",
-    "actions",
-    "current",
-    "federal",
-    "recent",
-    "states",
-    "united",
-    "what",
-}
-_SPECIES_QUERY_NOISE_TERMS = {
-    "about",
-    "critical",
-    "current",
-    "cfr",
-    "dossier",
-    "ecos",
-    "endangered",
-    "federal",
-    "final",
-    "history",
-    "listing",
-    "plants",
-    "profile",
-    "register",
-    "regulatory",
-    "rule",
-    "say",
-    "species",
-    "status",
-    "text",
-    "threatened",
-    "under",
-    "what",
-    "wildlife",
-}
-_CFR_DOC_TYPE_GENERIC = {
-    "and",
-    "cfr",
-    "chapter",
-    "part",
-    "section",
-    "subchapter",
-    "title",
-}
-
-InMemorySaver: Any = None
-StateGraph: Any = None
-START: Any = "__start__"
-END: Any = "__end__"
-
-try:  # pragma: no cover - optional dependency
-    from langgraph.checkpoint.memory import InMemorySaver as _InMemorySaver
-    from langgraph.graph import END as _END
-    from langgraph.graph import START as _START
-    from langgraph.graph import StateGraph as _StateGraph
-
-    InMemorySaver = _InMemorySaver
-    StateGraph = _StateGraph
-    START = _START
-    END = _END
-except ImportError:  # pragma: no cover - optional dependency
-    pass
 
 
 class AgenticRuntime:

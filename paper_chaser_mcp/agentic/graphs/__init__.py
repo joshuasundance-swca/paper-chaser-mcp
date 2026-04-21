@@ -15,12 +15,6 @@ its methods) stays in ``_core`` and is slated for Phase 7b/7c.
 
 from __future__ import annotations
 
-# Re-export upstream helpers that the legacy flat module aliased into its
-# namespace. ``classify_query`` and ``resolve_citation`` are monkey-patched by
-# tests through the graphs module, so the facade must expose them as
-# module-level attributes.
-from ...citation_repair import resolve_citation as resolve_citation
-from ..planner import classify_query as classify_query
 from . import _core as _core
 from ._core import (
     _AGENCY_AUTHORITY_TERMS as _AGENCY_AUTHORITY_TERMS,
