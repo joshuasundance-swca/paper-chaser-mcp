@@ -963,45 +963,6 @@ _ACCESS_STATUS_IMPLIES_BODY: frozenset[str] = frozenset(
     {"body_text_embedded", "qa_readable_text", "full_text_verified", "full_text_retrieved"}
 )
 _ACCESS_STATUS_IMPLIES_QA: frozenset[str] = frozenset({"qa_readable_text", "full_text_verified", "full_text_retrieved"})
-def _guided_findings_from_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    findings: list[dict[str, Any]] = []
-    for source in sources:
-        if source.get("topicalRelevance") != "on_topic":
-            continue
-        verification_status = str(source.get("verificationStatus") or "")
-        if verification_status not in {"verified_primary_source", "verified_metadata"}:
-            continue
-        claim = str(source.get("title") or source.get("note") or source.get("sourceId") or "").strip()
-        if not claim:
-            continue
-        findings.append(
-            {
-                "claim": claim,
-                "supportingSourceIds": [source["sourceId"]],
-                "trustLevel": "verified",
-            }
-        )
-    return findings
-
-
-def _guided_unverified_leads_from_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    leads: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for source in sources:
-        if source.get("topicalRelevance") == "on_topic" and source.get("verificationStatus") in {
-            "verified_primary_source",
-            "verified_metadata",
-        }:
-            continue
-        source_id = str(source.get("sourceId") or "").strip()
-        if source_id and source_id in seen:
-            continue
-        if source_id:
-            seen.add(source_id)
-        leads.append(source)
-    return leads[:6]
-
-
 _GUIDED_LITERATURE_TERMS = {
     "article",
     "articles",
@@ -8515,4 +8476,8 @@ from .guided.sources import (  # noqa: E402,F401 — Phase 3 re-export seam
     _guided_source_record_from_structured_source,
     _guided_source_records_share_surface,
     _guided_sources_from_fr_documents,
+)
+from .guided.findings import (  # noqa: E402,F401 — Phase 3 re-export seam
+    _guided_findings_from_sources,
+    _guided_unverified_leads_from_sources,
 )
