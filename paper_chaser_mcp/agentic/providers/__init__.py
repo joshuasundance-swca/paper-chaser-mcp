@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from ..provider_runtime import (
+from ...provider_runtime import (
     ProviderDiagnosticsRegistry,
     execute_provider_call,
     execute_provider_call_sync,
 )
-from .config import AgenticConfig
-from .provider_base import DeterministicProviderBundle, ModelProviderBundle
-from .provider_helpers import (
+from ..config import AgenticConfig
+from ..provider_base import DeterministicProviderBundle, ModelProviderBundle
+from ..provider_helpers import (
     COMMON_QUERY_WORDS,
     _coerce_langchain_structured_response,
     _cosine_similarity,
@@ -22,7 +22,7 @@ from .provider_helpers import (
     _tokenize,
     _top_terms,
 )
-from .provider_langchain import (
+from ..provider_langchain import (
     AnthropicProviderBundle,
     GoogleProviderBundle,
     HuggingFaceProviderBundle,
@@ -31,7 +31,7 @@ from .provider_langchain import (
     NvidiaProviderBundle,
     OpenRouterProviderBundle,
 )
-from .provider_openai import AzureOpenAIProviderBundle, OpenAIProviderBundle
+from ..provider_openai import AzureOpenAIProviderBundle, OpenAIProviderBundle
 
 __all__ = [
     "COMMON_QUERY_WORDS",
