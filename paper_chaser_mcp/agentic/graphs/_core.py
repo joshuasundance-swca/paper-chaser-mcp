@@ -103,6 +103,12 @@ from ..workspace import (
 
 logger = logging.getLogger("paper-chaser-mcp")
 
+from .hooks import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7a plan
+    _consume_background_task,
+    _describe_retrieval_batch,
+    _skip_context_notifications,
+    _truncate_text,
+)
 from .shared_state import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7a plan
     _AGENCY_AUTHORITY_TERMS,
     _AGENCY_GUIDANCE_DISCUSSION_TERMS,
@@ -305,37 +311,15 @@ class AgenticRuntime:
 
     @staticmethod
     def _skip_context_notifications(ctx: Context) -> bool:
-        transport = getattr(ctx, "transport", None)
-        if not isinstance(transport, str):
-            return False
-        return transport.lower() == "stdio"
+        return _skip_context_notifications(ctx)
 
     @staticmethod
     def _consume_background_task(task: asyncio.Task[Any]) -> None:
-        try:
-            task.result()
-        except asyncio.CancelledError:
-            return
-        except Exception:
-            logger.debug(
-                "Best-effort context notification failed.",
-                exc_info=True,
-            )
+        _consume_background_task(task)
 
     @staticmethod
     def _describe_retrieval_batch(batch: RetrievalBatch) -> str:
-        providers_text = ", ".join(batch.providers_used) if batch.providers_used else "none"
-        message = (
-            f"Variant '{_truncate_text(batch.variant)}' finished with "
-            f"{len(batch.candidates)} candidate(s) from {providers_text}."
-        )
-        if batch.provider_errors:
-            errors_text = "; ".join(
-                f"{provider}: {_truncate_text(error, limit=90)}"
-                for provider, error in sorted(batch.provider_errors.items())
-            )
-            message = f"{message} Errors: {errors_text}."
-        return message
+        return _describe_retrieval_batch(batch)
 
     async def search_papers_smart(
         self,
@@ -4762,13 +4746,6 @@ def _initial_retrieval_query_text(*, normalized_query: str, focus: str | None, i
         return normalized_query
     combined = normalize_query(f"{normalized_query} {normalized_focus}")
     return combined if combined.lower() != normalized_query.lower() else normalized_query
-
-
-def _truncate_text(value: str, *, limit: int = 72) -> str:
-    normalized = " ".join(value.split())
-    if len(normalized) <= limit:
-        return normalized
-    return f"{normalized[: max(limit - 3, 1)].rstrip()}..."
 
 
 def _comparison_requested(question: str, answer_mode: str) -> bool:

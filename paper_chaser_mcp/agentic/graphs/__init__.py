@@ -152,6 +152,9 @@ from ._core import (
     _compute_top_recommendation as _compute_top_recommendation,
 )
 from ._core import (
+    _consume_background_task as _consume_background_task,
+)
+from ._core import (
     _contextualize_follow_up_question as _contextualize_follow_up_question,
 )
 from ._core import (
@@ -165,6 +168,9 @@ from ._core import (
 )
 from ._core import (
     _derive_regulatory_query_flags as _derive_regulatory_query_flags,
+)
+from ._core import (
+    _describe_retrieval_batch as _describe_retrieval_batch,
 )
 from ._core import (
     _ecos_query_variants as _ecos_query_variants,
@@ -303,6 +309,9 @@ from ._core import (
 )
 from ._core import (
     _should_use_structured_comparison_answer as _should_use_structured_comparison_answer,
+)
+from ._core import (
+    _skip_context_notifications as _skip_context_notifications,
 )
 from ._core import (
     _smart_coverage_summary as _smart_coverage_summary,
