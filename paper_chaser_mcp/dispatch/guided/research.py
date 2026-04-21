@@ -8,17 +8,16 @@ Helpers that sanitize and repair incoming arguments to guided tools
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from ...models.common import InputNormalization, NormalizationRepair
 from ..normalization import (
     _guided_normalize_citation_surface,
-    _guided_normalize_source_locator,
     _guided_normalize_whitespace,
     _guided_normalize_year_hint,
     _guided_strip_research_prefix,
 )
-
 from .inspect_source import _guided_extract_question
 from .resolve_reference import _guided_note_repair
 from .sessions import (
@@ -29,6 +28,7 @@ from .sessions import (
 )
 from .sources import _guided_extract_source_id
 from .trust import _guided_record_source_candidates
+
 
 def _guided_normalize_research_arguments(arguments: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     normalized_args = dict(arguments)
@@ -90,8 +90,6 @@ def _guided_normalize_research_arguments(arguments: dict[str, Any]) -> tuple[dic
         "warnings": warnings,
     }
     return normalized_args, normalization
-
-
 
 
 def _guided_normalize_follow_up_arguments(
@@ -161,8 +159,6 @@ def _guided_normalize_follow_up_arguments(
         "warnings": warnings,
     }
     return normalized_args, normalization
-
-
 
 
 def _guided_normalize_inspect_arguments(
@@ -263,8 +259,6 @@ def _guided_normalize_inspect_arguments(
     return normalized_args, normalization
 
 
-
-
 def _guided_normalization_payload(normalization: dict[str, Any]) -> dict[str, Any] | None:
     repairs = [repair for repair in normalization.get("repairs") or [] if isinstance(repair, dict)]
     warnings = [warning for warning in normalization.get("warnings") or [] if isinstance(warning, str) and warning]
@@ -281,3 +275,6 @@ def _guided_normalization_payload(normalization: dict[str, Any]) -> dict[str, An
         }
     )
     return payload.model_dump(by_alias=True, exclude_none=True)
+
+logger = logging.getLogger(__name__)
+

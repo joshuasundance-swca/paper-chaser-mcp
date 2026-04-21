@@ -12,15 +12,17 @@ def test__guided_sources_all_off_topic_empty_false() -> None:
 
 
 def test__guided_sources_all_off_topic_all_off_topic_true() -> None:
-    assert trust_mod._guided_sources_all_off_topic(
-        [{"topicalRelevance": "off_topic"}, {"topicalRelevance": "off_topic"}]
-    ) is True
+    assert (
+        trust_mod._guided_sources_all_off_topic([{"topicalRelevance": "off_topic"}, {"topicalRelevance": "off_topic"}])
+        is True
+    )
 
 
 def test__guided_sources_all_off_topic_mixed_false() -> None:
-    assert trust_mod._guided_sources_all_off_topic(
-        [{"topicalRelevance": "off_topic"}, {"topicalRelevance": "on_topic"}]
-    ) is False
+    assert (
+        trust_mod._guided_sources_all_off_topic([{"topicalRelevance": "off_topic"}, {"topicalRelevance": "on_topic"}])
+        is False
+    )
 
 
 def test__guided_trust_summary_empty_returns_schema_shape() -> None:
@@ -51,9 +53,7 @@ def test__guided_trust_summary_counts_primary_sources() -> None:
 
 
 def test__guided_trust_summary_subject_chain_gaps() -> None:
-    out = trust_mod._guided_trust_summary(
-        [], [], subject_chain_gaps=["missing regulator"]
-    )
+    out = trust_mod._guided_trust_summary([], [], subject_chain_gaps=["missing regulator"])
     assert out["subjectChainGaps"] == ["missing regulator"]
 
 
@@ -83,9 +83,7 @@ def test__guided_deterministic_fallback_used_returns_false_for_none() -> None:
 
 
 def test__guided_partial_recovery_possible_returns_bool() -> None:
-    result = trust_mod._guided_partial_recovery_possible(
-        coverage_summary=None, failure_summary=None
-    )
+    result = trust_mod._guided_partial_recovery_possible(coverage_summary=None, failure_summary=None)
     assert isinstance(result, bool)
 
 

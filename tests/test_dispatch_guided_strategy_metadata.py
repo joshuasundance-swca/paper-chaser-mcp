@@ -8,12 +8,8 @@ from paper_chaser_mcp.dispatch.guided import strategy_metadata as sm
 
 
 def test__guided_provider_budget_payload_returns_bool_shape() -> None:
-    assert sm._guided_provider_budget_payload(allow_paid_providers=True) == {
-        "allowPaidProviders": True
-    }
-    assert sm._guided_provider_budget_payload(allow_paid_providers=False) == {
-        "allowPaidProviders": False
-    }
+    assert sm._guided_provider_budget_payload(allow_paid_providers=True) == {"allowPaidProviders": True}
+    assert sm._guided_provider_budget_payload(allow_paid_providers=False) == {"allowPaidProviders": False}
 
 
 def test__guided_execution_provenance_payload_minimum() -> None:
@@ -45,12 +41,15 @@ def test__guided_live_strategy_metadata_preserves_user_metadata() -> None:
 
 
 def test__guided_abstention_details_payload_returns_none_for_settled_status() -> None:
-    assert sm._guided_abstention_details_payload(
-        status="settled",
-        sources=[],
-        evidence_gaps=[],
-        trust_summary={},
-    ) is None
+    assert (
+        sm._guided_abstention_details_payload(
+            status="settled",
+            sources=[],
+            evidence_gaps=[],
+            trust_summary={},
+        )
+        is None
+    )
 
 
 def test__guided_abstention_details_payload_emits_for_abstained() -> None:
@@ -95,10 +94,13 @@ def test__guided_mentions_literature() -> None:
 
 
 def test__guided_is_mixed_intent_query_respects_planner() -> None:
-    assert sm._guided_is_mixed_intent_query(
-        "something",
-        planner_regulatory_intent="hybrid_regulatory_plus_literature",
-    ) is True
+    assert (
+        sm._guided_is_mixed_intent_query(
+            "something",
+            planner_regulatory_intent="hybrid_regulatory_plus_literature",
+        )
+        is True
+    )
 
 
 def test__guided_reference_signal_words_strips_generics() -> None:
@@ -110,27 +112,33 @@ def test__guided_reference_signal_words_strips_generics() -> None:
 
 
 def test__guided_should_escalate_research_disallows_when_sources_present() -> None:
-    assert sm._guided_should_escalate_research(
-        intent="discovery",
-        status="abstained",
-        sources=[{"sourceId": "s"}],
-        verified_findings=[],
-        clarification=None,
-        pass_modes=[],
-        max_passes=2,
-    ) is False
+    assert (
+        sm._guided_should_escalate_research(
+            intent="discovery",
+            status="abstained",
+            sources=[{"sourceId": "s"}],
+            verified_findings=[],
+            clarification=None,
+            pass_modes=[],
+            max_passes=2,
+        )
+        is False
+    )
 
 
 def test__guided_should_escalate_research_escalates_empty_abstained() -> None:
-    assert sm._guided_should_escalate_research(
-        intent="discovery",
-        status="abstained",
-        sources=[],
-        verified_findings=[],
-        clarification=None,
-        pass_modes=["smart"],
-        max_passes=2,
-    ) is True
+    assert (
+        sm._guided_should_escalate_research(
+            intent="discovery",
+            status="abstained",
+            sources=[],
+            verified_findings=[],
+            clarification=None,
+            pass_modes=["smart"],
+            max_passes=2,
+        )
+        is True
+    )
 
 
 _EXPECTED_EXPORTS = (

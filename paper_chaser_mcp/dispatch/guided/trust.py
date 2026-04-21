@@ -14,7 +14,6 @@ from typing import Any, cast
 
 from ...agentic.provider_helpers import generate_evidence_gaps_without_llm
 from ...models.common import ConfidenceSignals, GuidedResultState, MachineFailure
-from ..normalization import _guided_normalize_whitespace
 
 # Forward references to helpers/constants still living in ``_core``. The
 # imports below rely on ``_core``'s bottom-of-module re-export block pulling
@@ -36,7 +35,6 @@ from .sources import (
 )
 
 logger = logging.getLogger(__name__)
-
 
 
 def _guided_trust_summary(
@@ -185,8 +183,6 @@ def _guided_trust_summary(
     return summary
 
 
-
-
 def _guided_confidence_signals(
     *,
     status: str,
@@ -288,8 +284,6 @@ def _guided_confidence_signals(
     return result
 
 
-
-
 def _guided_sources_all_off_topic(sources: list[dict[str, Any]] | None) -> bool:
     """Return True when ``sources`` is non-empty and every entry is ``off_topic``.
 
@@ -303,8 +297,6 @@ def _guided_sources_all_off_topic(sources: list[dict[str, Any]] | None) -> bool:
     if not items:
         return False
     return all(str(source.get("topicalRelevance") or "").strip().lower() == "off_topic" for source in items)
-
-
 
 
 def _guided_failure_summary(
@@ -369,8 +361,6 @@ def _guided_failure_summary(
     }
 
 
-
-
 def _guided_result_meaning(
     *,
     status: str,
@@ -405,8 +395,6 @@ def _guided_result_meaning(
     return summary_line or "This result should be reviewed source by source before relying on it."
 
 
-
-
 def _guided_deterministic_fallback_used(provider_bundle: Any | None) -> bool:
     if provider_bundle is None or not hasattr(provider_bundle, "selection_metadata"):
         return False
@@ -417,8 +405,6 @@ def _guided_deterministic_fallback_used(provider_bundle: Any | None) -> bool:
     configured = str(selection.get("configuredSmartProvider") or "").strip()
     active = str(selection.get("activeSmartProvider") or "").strip()
     return bool(configured and configured != "deterministic" and active == "deterministic")
-
-
 
 
 def _guided_partial_recovery_possible(
@@ -434,8 +420,6 @@ def _guided_partial_recovery_possible(
     return bool(
         failure.get("fallbackAttempted") or failure.get("fallbackMode") or failure.get("primaryPathFailureReason")
     )
-
-
 
 
 async def _guided_research_status(
@@ -542,8 +526,6 @@ async def _guided_research_status(
     return base_status, adequacy_reason
 
 
-
-
 def _guided_deterministic_evidence_gaps(
     *,
     query: str,
@@ -565,8 +547,6 @@ def _guided_deterministic_evidence_gaps(
         timeline=timeline,
         anchor_type=anchor_type,
     )
-
-
 
 
 async def _guided_generate_evidence_gaps(
@@ -614,8 +594,6 @@ async def _guided_generate_evidence_gaps(
     except Exception:
         logger.debug("Guided evidence-gap generation failed; using deterministic fallback.")
     return deterministic_gaps
-
-
 
 
 def _guided_machine_failure_payload(
@@ -692,12 +670,11 @@ def _guided_machine_failure_payload(
     }
     if execution_provenance is not None:
         payload["executionProvenance"] = execution_provenance
+    from .research import _guided_normalization_payload  # noqa: E402 — avoid circular import
     normalization_payload = _guided_normalization_payload(normalization or {})
     if normalization_payload is not None:
         payload["inputNormalization"] = normalization_payload
     return payload
-
-
 
 
 def _guided_summary(
@@ -761,8 +738,6 @@ def _guided_summary(
     return summary
 
 
-
-
 def _guided_next_actions(
     *,
     search_session_id: str | None,
@@ -801,8 +776,6 @@ def _guided_next_actions(
     return actions[:4]
 
 
-
-
 def _guided_missing_evidence_type(
     *,
     status: str,
@@ -821,6 +794,8 @@ def _guided_missing_evidence_type(
     if not sources:
         return "no_sources"
     return "coverage_gap"
+
+
 def _guided_best_next_internal_action(
     *,
     status: str,
@@ -863,8 +838,6 @@ def _guided_best_next_internal_action(
     if normalized_status in weak_statuses:
         return "research"
     return "research"
-
-
 
 
 def _guided_result_state(
@@ -942,8 +915,6 @@ def _guided_result_state(
     return state.model_dump(by_alias=True, exclude_none=True)
 
 
-
-
 def _guided_record_source_candidates(record: Any) -> list[dict[str, Any]]:
     payload = record.payload if isinstance(record.payload, dict) else {}
     has_explicit_source_payload = any(
@@ -1002,8 +973,6 @@ def _guided_record_source_candidates(record: Any) -> list[dict[str, Any]]:
     return _guided_dedupe_source_records(augmented_candidates)
 
 
-
-
 def _guided_follow_up_status(status: str | None) -> str:
     normalized = str(status or "").strip()
     if normalized in {"succeeded", "partial", "needs_disambiguation", "abstained", "failed"}:
@@ -1013,5 +982,3 @@ def _guided_follow_up_status(status: str | None) -> str:
     if normalized == "insufficient_evidence":
         return "partial"
     return "partial"
-
-

@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from ...guided_semantic import build_follow_up_decision, explicit_source_reference
 from ..normalization import _guided_normalize_whitespace
-
 from .inspect_source import (
     _guided_extract_source_reference_from_question,
     _guided_select_follow_up_source,
@@ -143,11 +142,15 @@ def _guided_follow_up_introspection_facets(question: str) -> set[str]:
     if explicit_source_reference(question):
         facets.add("specific_source")
     return facets
+
+
 def _guided_is_usable_answer_text(value: Any) -> bool:
     text = str(value or "").strip()
     if not text:
         return False
     return bool(re.search(r"[A-Za-z0-9]", text))
+
+
 def _guided_source_metadata_answers(question: str, sources: list[dict[str, Any]]) -> list[str]:
     source = _guided_select_follow_up_source(question, sources)
     if source is None:
@@ -192,8 +195,6 @@ def _guided_source_metadata_answers(question: str, sources: list[dict[str, Any]]
             answers.append(f"Matched source title: {title}.")
 
     return answers
-
-
 
 
 def _guided_relevance_triage_answers(
@@ -252,6 +253,8 @@ def _guided_relevance_triage_answers(
     if not answers:
         answers.append("The saved session did not contain enough source detail to classify relevance confidently.")
     return answers
+
+
 def _guided_requested_metadata_facets(question: str) -> set[str]:
     lowered = _guided_normalize_whitespace(question).lower()
     facets: set[str] = set()
@@ -276,8 +279,6 @@ def _guided_requested_metadata_facets(question: str) -> set[str]:
     ):
         facets.add("inventory")
     return facets
-
-
 
 
 def _guided_metadata_answer_is_responsive(
@@ -364,8 +365,6 @@ def _guided_metadata_answer_is_responsive(
     return True
 
 
-
-
 def _guided_follow_up_response_mode(question: str, session_strategy_metadata: dict[str, Any]) -> str:
     lowered = question.lower()
     facets = _guided_follow_up_introspection_facets(question)
@@ -425,8 +424,6 @@ def _guided_follow_up_response_mode(question: str, session_strategy_metadata: di
     return "metadata" if explicit_source_reference(question) else "evidence_planning"
 
 
-
-
 def _guided_follow_up_answer_mode(question: str, session_strategy_metadata: dict[str, Any]) -> str:
     response_mode = _guided_follow_up_response_mode(question, session_strategy_metadata)
     if response_mode == "comparison":
@@ -434,8 +431,6 @@ def _guided_follow_up_answer_mode(question: str, session_strategy_metadata: dict
     if response_mode in {"mechanism_summary", "regulatory_chain", "intervention_tradeoff"}:
         return "claim_check"
     return "qa"
-
-
 
 
 async def _answer_follow_up_from_session_state(
@@ -767,5 +762,3 @@ async def _answer_follow_up_from_session_state(
             ),
         ),
     }
-
-

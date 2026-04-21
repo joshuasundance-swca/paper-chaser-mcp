@@ -47,30 +47,22 @@ def _make_record(
 
 def test__guided_session_exists_returns_false_on_missing() -> None:
     registry = _make_registry({})
-    assert sessions_mod._guided_session_exists(
-        workspace_registry=registry, search_session_id="unknown"
-    ) is False
+    assert sessions_mod._guided_session_exists(workspace_registry=registry, search_session_id="unknown") is False
 
 
 def test__guided_session_exists_returns_true_when_present() -> None:
     record = _make_record(session_id="s1")
     registry = _make_registry({"s1": record})
-    assert sessions_mod._guided_session_exists(
-        workspace_registry=registry, search_session_id="s1"
-    ) is True
+    assert sessions_mod._guided_session_exists(workspace_registry=registry, search_session_id="s1") is True
 
 
 def test__guided_session_exists_rejects_empty_id() -> None:
     registry = _make_registry({"s1": _make_record(session_id="s1")})
-    assert sessions_mod._guided_session_exists(
-        workspace_registry=registry, search_session_id=""
-    ) is False
+    assert sessions_mod._guided_session_exists(workspace_registry=registry, search_session_id="") is False
 
 
 def test__guided_session_exists_handles_none_registry() -> None:
-    assert sessions_mod._guided_session_exists(
-        workspace_registry=None, search_session_id="x"
-    ) is False
+    assert sessions_mod._guided_session_exists(workspace_registry=None, search_session_id="x") is False
 
 
 def test__guided_active_session_ids_sorts_by_created_at_desc() -> None:

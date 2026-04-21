@@ -5,14 +5,11 @@ import re
 import time
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
-from typing import Any, Callable, Literal, cast
+from typing import Any, Callable, cast
 
 from ..agentic.planner import (
-    detect_literature_intent,
     detect_regulatory_intent,
-    looks_like_exact_title,
 )
-from ..agentic.provider_helpers import generate_evidence_gaps_without_llm
 from ..citation_repair import looks_like_citation_query, looks_like_paper_identifier, parse_citation, resolve_citation
 from ..clients.scholarapi import (
     ScholarApiError,
@@ -28,29 +25,13 @@ from ..enrichment import (
     hydrate_paper_for_enrichment,
 )
 from ..guided_semantic import (
-    build_evidence_records,
-    build_follow_up_decision,
-    build_routing_decision,
     classify_answerability,
-    explicit_source_reference,
-    strip_null_fields,
 )
-from ..identifiers import resolve_doi_from_paper_payload
 from ..models import TOOL_INPUT_MODELS, CitationFormatsResponse, RuntimeSummary, dump_jsonable
 from ..models.common import (
-    AbstentionDetails,
     CitationFormat,
-    ConfidenceSignals,
     ExportLink,
-    GuidedExecutionProvenance,
-    GuidedResultState,
-    InputNormalization,
-    MachineFailure,
-    NormalizationRepair,
     RuntimeHealthStatus,
-    SessionCandidate,
-    SessionResolution,
-    SourceResolution,
 )
 from ..models.tools import (
     AskResultSetArgs,
@@ -941,6 +922,8 @@ def _build_provider_diagnostics_snapshot(
         }
     snapshot["runtimeSummary"] = runtime_summary.model_dump(by_alias=True, exclude_none=True)
     return snapshot
+
+
 _REGULATORY_SOURCE_TYPES: frozenset[str] = frozenset(
     {
         "agency_report",
@@ -986,6 +969,8 @@ _GUIDED_LITERATURE_TERMS = {
     "studies",
     "systematic review",
 }
+
+
 def _candidate_is_inspectable(candidate: dict[str, Any]) -> bool:
     """Mirror graphs._has_inspectable_sources: on-topic AND has URL/abstract."""
     if candidate.get("topicalRelevance") == "off_topic":
@@ -996,6 +981,8 @@ def _candidate_is_inspectable(candidate: dict[str, Any]) -> bool:
         or candidate.get("fullTextUrlFound")
         or candidate.get("abstractObserved")
     )
+
+
 def _normalize_author_key(name: str) -> tuple[str, str]:
     """Return (surname_lower, first_initial_lower) for dedup grouping."""
     parts = name.strip().split()
@@ -1028,6 +1015,8 @@ def _deduplicate_authors(authors: list[str]) -> list[str]:
         best = max(group, key=len)
         result.append(best)
     return result
+
+
 _AUTHORITATIVE_PROVIDERS: frozenset[str] = frozenset({"govinfo", "federal_register", "ecos", "gov_info"})
 
 
@@ -1213,6 +1202,8 @@ def _authoritative_but_weak_source_ids(sources: list[dict[str, Any]]) -> list[st
         if source_id:
             ids.append(source_id)
     return ids
+
+
 def _find_record_source_with_resolution(
     *,
     workspace_registry: Any,
@@ -1446,6 +1437,8 @@ def _direct_read_recommendation_entries(source: dict[str, Any], *, tool_profile:
             }
         )
     return entries[:3]
+
+
 _LEGACY_GUIDED_FIELDS = {
     "verifiedFindings",
     "sources",
@@ -1729,6 +1722,8 @@ def _apply_inspect_source_compaction(response: dict[str, Any]) -> dict[str, Any]
         if _is_empty_for_compact(shaped[key]):
             shaped.pop(key, None)
     return shaped
+
+
 def _append_deterministic_fallback_gap(
     evidence_gaps: list[str],
     *,
@@ -1752,6 +1747,8 @@ _LLM_ANSWERABILITY_MAP = {
     "abstained": "insufficient",
     "insufficient_evidence": "insufficient",
 }
+
+
 async def dispatch_tool(
     name: str,
     arguments: dict[str, Any],
@@ -5195,23 +5192,43 @@ from .guided.citations import (  # noqa: E402,F401 — Phase 3 re-export seam
     _guided_open_access_route,
     _guided_year_text,
 )
-from .guided.sources import (  # noqa: E402,F401 — Phase 3 re-export seam
-    _guided_dedupe_source_records,
-    _guided_extract_source_id,
-    _guided_merge_source_record_sets,
-    _guided_merge_source_records,
-    _guided_source_coverage_summary,
-    _guided_source_id,
-    _guided_source_identity,
-    _guided_source_matches_reference,
-    _guided_source_record_from_paper,
-    _guided_source_record_from_structured_source,
-    _guided_source_records_share_surface,
-    _guided_sources_from_fr_documents,
-)
 from .guided.findings import (  # noqa: E402,F401 — Phase 3 re-export seam
     _guided_findings_from_sources,
     _guided_unverified_leads_from_sources,
+)
+from .guided.follow_up import (  # noqa: E402,F401 -- Phase 3 re-export seam
+    _answer_follow_up_from_session_state,
+    _guided_follow_up_answer_mode,
+    _guided_follow_up_introspection_facets,
+    _guided_follow_up_response_mode,
+    _guided_is_usable_answer_text,
+    _guided_metadata_answer_is_responsive,
+    _guided_relevance_triage_answers,
+    _guided_requested_metadata_facets,
+    _guided_source_metadata_answers,
+)
+from .guided.inspect_source import (  # noqa: E402,F401 — Phase 3 re-export seam
+    _guided_append_selected_saved_records,
+    _guided_compact_source_candidate,
+    _guided_extract_question,
+    _guided_extract_source_reference_from_question,
+    _guided_select_follow_up_source,
+    _guided_source_resolution_payload,
+)
+from .guided.research import (  # noqa: E402,F401 — Phase 3 re-export seam
+    _guided_normalization_payload,
+    _guided_normalize_follow_up_arguments,
+    _guided_normalize_inspect_arguments,
+    _guided_normalize_research_arguments,
+)
+from .guided.resolve_reference import (  # noqa: E402,F401 — Phase 3 re-export seam
+    _guided_note_repair,
+    _guided_underspecified_reference_clarification,
+)
+from .guided.response import (  # noqa: E402,F401 -- Phase 3 re-export seam
+    _guided_compact_response_if_needed,
+    _guided_contract_fields,
+    _guided_finalize_response,
 )
 from .guided.sessions import (  # noqa: E402,F401 — Phase 3 re-export seam
     _GUIDED_RECOVERABLE_SESSION_TOOLS,
@@ -5230,6 +5247,20 @@ from .guided.sessions import (  # noqa: E402,F401 — Phase 3 re-export seam
     _guided_session_findings,
     _guided_session_state,
     _guided_unique_compatible_session_id,
+)
+from .guided.sources import (  # noqa: E402,F401 — Phase 3 re-export seam
+    _guided_dedupe_source_records,
+    _guided_extract_source_id,
+    _guided_merge_source_record_sets,
+    _guided_merge_source_records,
+    _guided_source_coverage_summary,
+    _guided_source_id,
+    _guided_source_identity,
+    _guided_source_matches_reference,
+    _guided_source_record_from_paper,
+    _guided_source_record_from_structured_source,
+    _guided_source_records_share_surface,
+    _guided_sources_from_fr_documents,
 )
 from .guided.strategy_metadata import (  # noqa: E402,F401 — Phase 3 re-export seam
     _guided_abstention_details_payload,
@@ -5267,38 +5298,4 @@ from .guided.trust import (  # noqa: E402,F401 — Phase 3 re-export seam
     _guided_sources_all_off_topic,
     _guided_summary,
     _guided_trust_summary,
-)
-from .guided.resolve_reference import (  # noqa: E402,F401 — Phase 3 re-export seam
-    _guided_note_repair,
-    _guided_underspecified_reference_clarification,
-)
-from .guided.inspect_source import (  # noqa: E402,F401 — Phase 3 re-export seam
-    _guided_append_selected_saved_records,
-    _guided_compact_source_candidate,
-    _guided_extract_question,
-    _guided_extract_source_reference_from_question,
-    _guided_select_follow_up_source,
-    _guided_source_resolution_payload,
-)
-from .guided.research import (  # noqa: E402,F401 — Phase 3 re-export seam
-    _guided_normalization_payload,
-    _guided_normalize_follow_up_arguments,
-    _guided_normalize_inspect_arguments,
-    _guided_normalize_research_arguments,
-)
-from .guided.response import (  # noqa: E402,F401 -- Phase 3 re-export seam
-    _guided_compact_response_if_needed,
-    _guided_contract_fields,
-    _guided_finalize_response,
-)
-from .guided.follow_up import (  # noqa: E402,F401 -- Phase 3 re-export seam
-    _answer_follow_up_from_session_state,
-    _guided_follow_up_answer_mode,
-    _guided_follow_up_introspection_facets,
-    _guided_follow_up_response_mode,
-    _guided_is_usable_answer_text,
-    _guided_metadata_answer_is_responsive,
-    _guided_relevance_triage_answers,
-    _guided_requested_metadata_facets,
-    _guided_source_metadata_answers,
 )

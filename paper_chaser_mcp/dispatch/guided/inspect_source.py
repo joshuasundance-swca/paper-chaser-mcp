@@ -11,21 +11,23 @@ from typing import Any
 
 from ...guided_semantic import explicit_source_reference
 from ...models.common import SourceResolution
-from ..normalization import _guided_normalize_whitespace
-
 from .._core import (  # noqa: E402 — forward refs
     _candidate_is_inspectable,
 )
+from ..normalization import _guided_normalize_whitespace
 from .sources import (
     _guided_dedupe_source_records,
     _guided_source_matches_reference,
 )
+
 
 def _guided_extract_question(arguments: dict[str, Any]) -> Any:
     return next(
         (arguments.get(key) for key in ("question", "prompt", "query") if arguments.get(key) is not None),
         None,
     )
+
+
 def _guided_compact_source_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     """Project a saved-session source candidate to its disambiguation-critical fields.
 
@@ -52,8 +54,6 @@ def _guided_compact_source_candidate(candidate: dict[str, Any]) -> dict[str, Any
         if value not in (None, "", [], {}):
             projected[key] = value
     return projected
-
-
 
 
 def _guided_source_resolution_payload(
@@ -88,8 +88,6 @@ def _guided_source_resolution_payload(
 
 def _guided_extract_source_reference_from_question(question: str) -> str | None:
     return explicit_source_reference(question)
-
-
 
 
 def _guided_select_follow_up_source(question: str, sources: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -128,5 +126,3 @@ def _guided_append_selected_saved_records(
         if matched_saved is not None:
             augmented.append(matched_saved)
     return _guided_dedupe_source_records(augmented)
-
-

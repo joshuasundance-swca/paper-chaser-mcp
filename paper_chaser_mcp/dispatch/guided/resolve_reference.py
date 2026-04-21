@@ -18,13 +18,11 @@ from ...citation_repair import (
     looks_like_paper_identifier,
     parse_citation,
 )
-from ..normalization import _guided_normalize_whitespace
-
 from .._core import (  # noqa: E402 — forward refs
     _GUIDED_REFERENCE_UNCERTAINTY_MARKERS,
 )
+from ..normalization import _guided_normalize_whitespace
 from .strategy_metadata import _guided_reference_signal_words
-
 
 
 def _guided_note_repair(
@@ -45,6 +43,8 @@ def _guided_note_repair(
             "reason": reason,
         }
     )
+
+
 def _guided_underspecified_reference_clarification(
     *,
     query: str,

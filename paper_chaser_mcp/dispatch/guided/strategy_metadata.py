@@ -17,7 +17,6 @@ from ...agentic.planner import (
 )
 from ...citation_repair import looks_like_citation_query, looks_like_paper_identifier
 from ...models.common import AbstentionDetails, GuidedExecutionProvenance
-from ..normalization import _guided_normalize_whitespace
 
 # Forward references to helpers/constants still living in ``_core``. Valid
 # because this module is imported at the bottom of ``_core.py`` after all
@@ -28,8 +27,8 @@ from .._core import (  # noqa: E402 — see note above; forward refs
     _GUIDED_REFERENCE_UNCERTAINTY_MARKERS,
     GUIDED_POLICY_NAME,
 )
+from ..normalization import _guided_normalize_whitespace
 from .trust import _guided_missing_evidence_type, _guided_sources_all_off_topic
-
 
 
 def _guided_execution_provenance_payload(
@@ -71,8 +70,6 @@ def _guided_execution_provenance_payload(
     return provenance.model_dump(by_alias=True, exclude_none=True)
 
 
-
-
 def _guided_live_strategy_metadata(
     *,
     agentic_runtime: Any,
@@ -91,8 +88,6 @@ def _guided_live_strategy_metadata(
     if latency_profile and not merged.get("latencyProfile"):
         merged["latencyProfile"] = latency_profile
     return merged
-
-
 
 
 def _guided_abstention_details_payload(
@@ -165,12 +160,8 @@ def _guided_abstention_details_payload(
     return details.model_dump(by_alias=True, exclude_none=True)
 
 
-
-
 def _guided_provider_budget_payload(*, allow_paid_providers: bool) -> dict[str, Any]:
     return {"allowPaidProviders": bool(allow_paid_providers)}
-
-
 
 
 def _guided_strategy_metadata_from_runs(smart_runs: list[dict[str, Any]]) -> dict[str, Any]:
@@ -252,8 +243,6 @@ def _guided_strategy_metadata_from_runs(smart_runs: list[dict[str, Any]]) -> dic
     return merged
 
 
-
-
 def _guided_should_add_review_pass(
     *,
     initial_intent: str,
@@ -324,8 +313,6 @@ def _guided_should_add_review_pass(
     return False, None
 
 
-
-
 def _guided_review_pass_overrides(
     *,
     query: str,
@@ -349,15 +336,11 @@ def _guided_review_pass_overrides(
     return {"focus": merged_focus} if merged_focus else {}
 
 
-
-
 def _guided_is_agency_guidance_query(query: str) -> bool:
     normalized = _guided_normalize_whitespace(query).lower()
     if "guidance" not in normalized:
         return False
     return any(marker in normalized for marker in ("agency", "epa", "fda", "guidance for industry"))
-
-
 
 
 def _guided_should_escalate_research(
@@ -383,12 +366,8 @@ def _guided_should_escalate_research(
     return status in {"abstained", "partial"} and "review" not in pass_modes
 
 
-
-
 def _guided_is_known_item_query(query: str) -> bool:
     return looks_like_paper_identifier(query) or looks_like_citation_query(query) or looks_like_exact_title(query)
-
-
 
 
 def _guided_mentions_literature(query: str, focus: str | None = None) -> bool:
@@ -400,8 +379,6 @@ def _guided_mentions_literature(query: str, focus: str | None = None) -> bool:
     if "scholarship" in normalized:
         return True
     return bool(re.search(r"\b(?:doi|systematic review|meta-analysis|peer-reviewed|scientific reports?)\b", normalized))
-
-
 
 
 def _guided_is_mixed_intent_query(
@@ -419,8 +396,6 @@ def _guided_is_mixed_intent_query(
     if planner_regulatory_intent == "hybrid_regulatory_plus_literature":
         return True
     return detect_regulatory_intent(query, focus) and _guided_mentions_literature(query, focus)
-
-
 
 
 def _guided_reference_signal_words(candidate: str) -> list[str]:
@@ -499,8 +474,6 @@ def _guided_merge_coverage_summaries(*coverages: dict[str, Any] | None) -> dict[
         f"likely completeness: {likely_completeness}."
     )
     return merged
-
-
 
 
 def _guided_merge_failure_summaries(*summaries: dict[str, Any] | None) -> dict[str, Any] | None:

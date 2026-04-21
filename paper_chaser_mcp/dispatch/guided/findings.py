@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+
 def _guided_findings_from_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     for source in sources:
@@ -30,8 +31,6 @@ def _guided_findings_from_sources(sources: list[dict[str, Any]]) -> list[dict[st
     return findings
 
 
-
-
 def _guided_unverified_leads_from_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
     leads: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -48,5 +47,3 @@ def _guided_unverified_leads_from_sources(sources: list[dict[str, Any]]) -> list
             seen.add(source_id)
         leads.append(source)
     return leads[:6]
-
-

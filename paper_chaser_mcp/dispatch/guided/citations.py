@@ -25,7 +25,6 @@ from .._core import (
 )
 
 
-
 def _assign_verification_status(
     *,
     source_type: str,
@@ -55,8 +54,6 @@ def _assign_verification_status(
     if has_doi:
         return "verified_metadata"
     return "unverified"
-
-
 
 
 def _guided_normalize_access_axes(candidate: dict[str, Any]) -> tuple[str, bool, bool, bool, bool]:
@@ -146,8 +143,6 @@ def _guided_normalize_access_axes(candidate: dict[str, Any]) -> tuple[str, bool,
     return access_status, full_text_url_found, full_text_observed, body_text_embedded, qa_readable_text
 
 
-
-
 def _guided_normalize_verification_status(
     candidate: dict[str, Any],
     *,
@@ -174,8 +169,6 @@ def _guided_normalize_verification_status(
     return normalized_verification_status
 
 
-
-
 def _guided_open_access_route(source: dict[str, Any]) -> str:
     explicit = str(source.get("openAccessRoute") or "").strip()
     if explicit:
@@ -194,8 +187,6 @@ def _guided_open_access_route(source: dict[str, Any]) -> str:
     if access_status in {"full_text_verified", "oa_verified", "oa_uncertain", "abstract_only"}:
         return "non_oa_or_unconfirmed"
     return "unknown"
-
-
 
 
 def _guided_citation_from_structured_source(source: dict[str, Any]) -> dict[str, Any] | None:
@@ -218,8 +209,6 @@ def _guided_citation_from_structured_source(source: dict[str, Any]) -> dict[str,
         "sourceType": source.get("sourceType") or "unknown",
         "confidence": source.get("confidence") or "medium",
     }
-
-
 
 
 def _guided_citation_from_paper(paper: dict[str, Any], canonical_url: str | None) -> dict[str, Any] | None:
@@ -248,8 +237,6 @@ def _guided_citation_from_paper(paper: dict[str, Any], canonical_url: str | None
     }
 
 
-
-
 def _guided_year_text(value: Any) -> str | None:
     if value is None:
         return None
@@ -258,8 +245,6 @@ def _guided_year_text(value: Any) -> str | None:
         return None
     match = re.search(r"\b(19|20)\d{2}\b", text)
     return match.group(0) if match else None
-
-
 
 
 def _guided_journal_or_publisher(payload: dict[str, Any]) -> str | None:
@@ -275,5 +260,3 @@ def _guided_journal_or_publisher(payload: dict[str, Any]) -> str | None:
         return venue
     provider = str(payload.get("provider") or payload.get("source") or "").strip()
     return provider or None
-
-

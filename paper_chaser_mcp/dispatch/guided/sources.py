@@ -22,7 +22,6 @@ from .citations import (
 )
 
 
-
 def _guided_source_id(candidate: dict[str, Any], *, fallback_prefix: str, index: int) -> str:
     for key in (
         "sourceId",
@@ -88,8 +87,6 @@ def _guided_source_record_from_structured_source(source: dict[str, Any], *, inde
         "note": source.get("note"),
         "whyClassifiedAsWeakMatch": weak_match_reason,
     }
-
-
 
 
 def _guided_source_record_from_paper(query: str, paper: dict[str, Any], *, index: int) -> dict[str, Any]:
@@ -172,8 +169,6 @@ def _guided_source_record_from_paper(query: str, paper: dict[str, Any], *, index
             "whyClassifiedAsWeakMatch": weak_match_reason,
         }
     )
-
-
 
 
 def _guided_sources_from_fr_documents(query: str, documents: list[Any]) -> list[dict[str, Any]]:
@@ -262,8 +257,6 @@ def _guided_sources_from_fr_documents(query: str, documents: list[Any]) -> list[
     return sources
 
 
-
-
 def _guided_extract_source_id(arguments: dict[str, Any]) -> Any:
     return next(
         (
@@ -273,8 +266,6 @@ def _guided_extract_source_id(arguments: dict[str, Any]) -> Any:
         ),
         None,
     )
-
-
 
 
 def _guided_dedupe_source_records(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -291,8 +282,6 @@ def _guided_dedupe_source_records(sources: list[dict[str, Any]]) -> list[dict[st
         seen.add(key)
         deduped.append(source)
     return deduped
-
-
 
 
 def _guided_source_matches_reference(candidate: dict[str, Any], reference: Any) -> bool:
@@ -319,8 +308,6 @@ def _guided_source_matches_reference(candidate: dict[str, Any], reference: Any) 
     return False
 
 
-
-
 def _guided_source_records_share_surface(left: dict[str, Any], right: dict[str, Any]) -> bool:
     left_titles = {
         _guided_normalize_whitespace(left.get("title")).lower(),
@@ -344,16 +331,12 @@ def _guided_source_records_share_surface(left: dict[str, Any], right: dict[str, 
     return bool(left_locators and right_locators and left_locators & right_locators)
 
 
-
-
 def _guided_source_identity(source: dict[str, Any]) -> tuple[str, str, str]:
     return (
         str(source.get("sourceId") or "").strip(),
         str(source.get("canonicalUrl") or "").strip(),
         str(source.get("title") or "").strip().lower(),
     )
-
-
 
 
 def _guided_merge_source_records(primary: dict[str, Any], secondary: dict[str, Any]) -> dict[str, Any]:
@@ -382,8 +365,6 @@ def _guided_merge_source_records(primary: dict[str, Any], secondary: dict[str, A
     return merged
 
 
-
-
 def _guided_merge_source_record_sets(*record_sets: list[dict[str, Any]]) -> list[dict[str, Any]]:
     merged_by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
     ordered_keys: list[tuple[str, str, str]] = []
@@ -397,8 +378,6 @@ def _guided_merge_source_record_sets(*record_sets: list[dict[str, Any]]) -> list
             else:
                 merged_by_key[key] = _guided_merge_source_records(merged_by_key[key], canonical_record)
     return [merged_by_key[key] for key in ordered_keys]
-
-
 
 
 def _guided_source_coverage_summary(
@@ -418,5 +397,3 @@ def _guided_source_coverage_summary(
         by_access_status[access_status] = by_access_status.get(access_status, 0) + 1
     summary["byAccessStatus"] = by_access_status
     return summary
-
-

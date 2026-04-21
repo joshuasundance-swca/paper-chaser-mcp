@@ -13,6 +13,14 @@ import time
 from typing import Any, cast
 
 from ...models.common import SessionCandidate, SessionResolution
+
+# Forward references to helpers that still live in ``_core.py``. The imports
+# below succeed because this submodule is imported at the bottom of
+# ``_core.py`` (after ``_core``'s top-level defs have executed), so the
+# partially-initialised ``_core`` module already has the attributes.
+from .._core import (  # noqa: E402 — see note above; lint-exempt forward refs
+    _find_record_source_with_resolution,
+)
 from ..normalization import _guided_normalize_whitespace
 from .findings import _guided_findings_from_sources, _guided_unverified_leads_from_sources
 from .sources import (
@@ -24,14 +32,6 @@ from .sources import (
     _guided_source_record_from_paper,
     _guided_source_record_from_structured_source,
     _guided_source_records_share_surface,
-)
-
-# Forward references to helpers that still live in ``_core.py``. The imports
-# below succeed because this submodule is imported at the bottom of
-# ``_core.py`` (after ``_core``'s top-level defs have executed), so the
-# partially-initialised ``_core`` module already has the attributes.
-from .._core import (  # noqa: E402 — see note above; lint-exempt forward refs
-    _find_record_source_with_resolution,
 )
 from .trust import (
     _guided_failure_summary,
@@ -49,7 +49,6 @@ logger = logging.getLogger(__name__)
 _GUIDED_RECOVERABLE_SESSION_TOOLS = {"research", "search_papers_smart"}
 
 
-
 def _guided_session_exists(
     *,
     workspace_registry: Any,
@@ -65,8 +64,6 @@ def _guided_session_exists(
     except Exception:
         return False
     return True
-
-
 
 
 def _guided_active_session_ids(workspace_registry: Any) -> list[str]:
@@ -96,8 +93,6 @@ def _guided_active_session_ids(workspace_registry: Any) -> list[str]:
         active.append((created_at, session_id))
     active.sort(key=lambda item: item[0], reverse=True)
     return [session_id for _, session_id in active]
-
-
 
 
 def _guided_candidate_records(
@@ -131,8 +126,6 @@ def _guided_candidate_records(
     return records
 
 
-
-
 def _guided_latest_compatible_session_id(
     workspace_registry: Any,
     *,
@@ -144,8 +137,6 @@ def _guided_latest_compatible_session_id(
     return str(getattr(records[0], "search_session_id", "") or "") or None
 
 
-
-
 def _guided_unique_compatible_session_id(
     workspace_registry: Any,
     *,
@@ -155,8 +146,6 @@ def _guided_unique_compatible_session_id(
     if len(records) != 1:
         return None
     return str(getattr(records[0], "search_session_id", "") or "") or None
-
-
 
 
 def _guided_resolve_session_id_for_source(
@@ -181,12 +170,8 @@ def _guided_resolve_session_id_for_source(
     return _guided_unique_compatible_session_id(workspace_registry, require_sources=True), None
 
 
-
-
 def _guided_infer_single_session_id(workspace_registry: Any) -> str | None:
     return _guided_unique_compatible_session_id(workspace_registry)
-
-
 
 
 def _guided_extract_search_session_id(arguments: dict[str, Any]) -> Any:
@@ -234,8 +219,6 @@ def _guided_session_candidates(
     return candidates
 
 
-
-
 def _guided_follow_up_session_resolution(
     *,
     arguments: dict[str, Any],
@@ -272,8 +255,6 @@ def _guided_follow_up_session_resolution(
         candidates=visible_candidates,
     )
     return resolution.model_dump(by_alias=True, exclude_none=True)
-
-
 
 
 def _guided_inspect_session_resolution(
@@ -322,8 +303,6 @@ def _guided_inspect_session_resolution(
     return resolution.model_dump(by_alias=True, exclude_none=True)
 
 
-
-
 def _guided_saved_session_topicality(
     candidates: list[dict[str, Any]] | None,
 ) -> tuple[bool, bool]:
@@ -342,8 +321,6 @@ def _guided_saved_session_topicality(
         str(c.get("topicalRelevance") or "").strip().lower() == "off_topic" for c in items
     )
     return has_sources, all_off_topic
-
-
 
 
 def _guided_session_findings(payload: dict[str, Any], sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -374,8 +351,6 @@ def _guided_session_findings(payload: dict[str, Any], sources: list[dict[str, An
                 }
             )
     return findings or _guided_findings_from_sources(sources)
-
-
 
 
 def _guided_session_state(
@@ -504,8 +479,6 @@ def _guided_session_state(
     }
 
 
-
-
 def _guided_enrich_records_from_saved_session(
     current_records: list[dict[str, Any]],
     saved_records: list[dict[str, Any]],
@@ -532,5 +505,3 @@ def _guided_enrich_records_from_saved_session(
                 break
         enriched.append(_guided_merge_source_records(best_match, record) if best_match is not None else record)
     return _guided_dedupe_source_records(enriched)
-
-

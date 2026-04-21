@@ -8,9 +8,7 @@ from paper_chaser_mcp.dispatch.guided import research as research_mod
 
 
 def test__guided_normalization_payload_empty() -> None:
-    out = research_mod._guided_normalization_payload(
-        {"repairs": [], "warnings": []}
-    )
+    out = research_mod._guided_normalization_payload({"repairs": [], "warnings": []})
     assert out is None or isinstance(out, dict)
 
 

@@ -10,7 +10,6 @@ from ...guided_semantic import (
     build_routing_decision,
     classify_answerability,
 )
-
 from .._core import (
     _COMPACT_NULL_OK_FIELDS,
     _FOLLOW_UP_COMPACT_FIELDS,
@@ -19,12 +18,9 @@ from .._core import (
     _RESEARCH_COMPACT_FIELDS,
     _apply_follow_up_response_mode,
 )
-
 from .trust import _guided_confidence_signals, _guided_follow_up_status
 
 logger = logging.getLogger(__name__)
-
-
 
 
 def _guided_compact_response_if_needed(*, tool_name: str, response: dict[str, Any]) -> dict[str, Any]:
@@ -54,8 +50,6 @@ def _guided_compact_response_if_needed(*, tool_name: str, response: dict[str, An
     return compacted
 
 
-
-
 def _guided_finalize_response(
     *,
     tool_name: str,
@@ -77,8 +71,6 @@ def _guided_finalize_response(
     if "legacyFieldsIncluded" not in finalized:
         finalized["legacyFieldsIncluded"] = any(key in finalized for key in _LEGACY_GUIDED_FIELDS)
     return finalized
-
-
 
 
 async def _guided_contract_fields(

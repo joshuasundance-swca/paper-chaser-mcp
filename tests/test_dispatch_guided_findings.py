@@ -62,9 +62,7 @@ def test__guided_unverified_leads_from_sources_deduplicates_by_source_id() -> No
 
 
 def test__guided_unverified_leads_from_sources_caps_at_six() -> None:
-    sources = [
-        _src(sourceId=f"s{idx}", verificationStatus="unverified") for idx in range(10)
-    ]
+    sources = [_src(sourceId=f"s{idx}", verificationStatus="unverified") for idx in range(10)]
     out = findings_mod._guided_unverified_leads_from_sources(sources)
     assert len(out) == 6
 

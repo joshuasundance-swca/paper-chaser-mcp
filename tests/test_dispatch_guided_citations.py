@@ -104,16 +104,11 @@ def test__guided_open_access_route_prefers_explicit_value() -> None:
 
 
 def test__guided_open_access_route_detects_mirror_only() -> None:
-    assert (
-        citations_mod._guided_open_access_route({"retrievedUrl": "https://sci-hub.example/abc"})
-        == "mirror_only"
-    )
+    assert citations_mod._guided_open_access_route({"retrievedUrl": "https://sci-hub.example/abc"}) == "mirror_only"
 
 
 def test__guided_open_access_route_repository_provider() -> None:
-    assert (
-        citations_mod._guided_open_access_route({"provider": "arxiv"}) == "repository_open_access"
-    )
+    assert citations_mod._guided_open_access_route({"provider": "arxiv"}) == "repository_open_access"
 
 
 def test__guided_open_access_route_unknown_default() -> None:
@@ -168,10 +163,7 @@ def test__guided_year_text_extracts_four_digit_year() -> None:
 
 def test__guided_journal_or_publisher_prefers_crossref_publisher() -> None:
     assert (
-        citations_mod._guided_journal_or_publisher(
-            {"enrichments": {"crossref": {"publisher": "Nature"}}}
-        )
-        == "Nature"
+        citations_mod._guided_journal_or_publisher({"enrichments": {"crossref": {"publisher": "Nature"}}}) == "Nature"
     )
 
 

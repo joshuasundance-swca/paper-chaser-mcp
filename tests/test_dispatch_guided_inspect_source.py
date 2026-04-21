@@ -15,9 +15,7 @@ def test__guided_extract_question_pulls_first_nonempty_field() -> None:
 
 
 def test__guided_compact_source_candidate_returns_dict() -> None:
-    out = isrc._guided_compact_source_candidate(
-        {"sourceId": "s1", "title": "t", "bogus": "ignore"}
-    )
+    out = isrc._guided_compact_source_candidate({"sourceId": "s1", "title": "t", "bogus": "ignore"})
     assert out.get("sourceId") == "s1"
 
 

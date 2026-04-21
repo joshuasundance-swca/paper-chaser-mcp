@@ -27,8 +27,7 @@ def test__guided_source_id_prefers_source_id_key() -> None:
 
 def test__guided_source_id_falls_through_keys_then_title_then_fallback() -> None:
     assert (
-        sources_mod._guided_source_id({"title": "Weather Report"}, fallback_prefix="src", index=3)
-        == "Weather Report"
+        sources_mod._guided_source_id({"title": "Weather Report"}, fallback_prefix="src", index=3) == "Weather Report"
     )
     assert sources_mod._guided_source_id({}, fallback_prefix="paper", index=7) == "paper-7"
 
@@ -119,9 +118,11 @@ def test__guided_source_records_share_surface_title_overlap() -> None:
 
 
 def test__guided_source_identity_returns_lowercase_title_tuple() -> None:
-    assert sources_mod._guided_source_identity(
-        {"sourceId": "s", "canonicalUrl": "U", "title": "Foo"}
-    ) == ("s", "U", "foo")
+    assert sources_mod._guided_source_identity({"sourceId": "s", "canonicalUrl": "U", "title": "Foo"}) == (
+        "s",
+        "U",
+        "foo",
+    )
 
 
 def test__guided_merge_source_records_prefers_primary_then_fills() -> None:
