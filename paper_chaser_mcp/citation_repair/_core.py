@@ -9,13 +9,13 @@ from difflib import SequenceMatcher
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-from .models import (
+from ..models import (
     CitationResolutionCandidate,
     CitationResolutionResponse,
     Paper,
     dump_jsonable,
 )
-from .models.tools import DEFAULT_SEARCH_PROVIDER_ORDER
+from ..models.tools import DEFAULT_SEARCH_PROVIDER_ORDER
 
 DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:A-Za-z0-9]+", re.IGNORECASE)
 ARXIV_RE = re.compile(
@@ -654,7 +654,7 @@ async def _enrich_best_match(
     enrichment_service: Any,
     detail_client: Any | None,
 ) -> dict[str, Any]:
-    from .enrichment import (
+    from ..enrichment import (
         attach_enrichments_to_paper_payload,
         hydrate_paper_for_enrichment,
     )
@@ -1153,7 +1153,7 @@ async def _resolve_sparse_metadata_candidates(
     enable_openalex: bool,
     openalex_client: Any,
 ) -> list[RankedCitationCandidate]:
-    from .search_executor import SearchClientBundle, SearchExecutor
+    from ..search_executor import SearchClientBundle, SearchExecutor
 
     search_queries = _sparse_search_queries(parsed)
     ranked: list[RankedCitationCandidate] = []
