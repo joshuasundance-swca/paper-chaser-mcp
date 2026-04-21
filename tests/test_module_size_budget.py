@@ -35,7 +35,6 @@ PLAN_OVERSIZE_MODULES: frozenset[str] = frozenset(
     {
         "paper_chaser_mcp/dispatch/_core.py",
         "paper_chaser_mcp/agentic/graphs/_core.py",
-        "paper_chaser_mcp/agentic/provider_langchain.py",
         "paper_chaser_mcp/citation_repair/_core.py",
         "paper_chaser_mcp/server.py",
         "paper_chaser_mcp/agentic/planner/_core.py",
@@ -81,6 +80,13 @@ BASELINE_OVERSIZE_EXTRAS: frozenset[str] = frozenset(
         # further into mix-ins (chat / embeddings / ranking / adequacy) once
         # the test seam surface is stable.
         "paper_chaser_mcp/agentic/providers/openai/bundle.py",
+        # Phase 8d: ``provider_langchain.py`` was split into the
+        # ``providers/langchain/`` subpackage. The shared chat bundle class
+        # (``LangChainChatProviderBundle``) carries the same deep
+        # self-reference pattern as the OpenAI bundle, so it was relocated
+        # verbatim into ``bundle.py``. Concrete provider adapters live in
+        # ``adapters.py``. A follow-up phase can split the bundle further.
+        "paper_chaser_mcp/agentic/providers/langchain/bundle.py",
     }
 )
 
@@ -106,7 +112,7 @@ BASELINE_LINE_COUNTS: dict[str, int] = {
     "paper_chaser_mcp/agentic/graphs/smart_graph.py": 1_074,
     "paper_chaser_mcp/agentic/models.py": 870,
     "paper_chaser_mcp/agentic/planner/_core.py": 64,
-    "paper_chaser_mcp/agentic/provider_langchain.py": 1_624,
+    "paper_chaser_mcp/agentic/providers/langchain/bundle.py": 1_421,
     "paper_chaser_mcp/agentic/providers/openai/bundle.py": 1_826,
     "paper_chaser_mcp/agentic/ranking.py": 690,
     "paper_chaser_mcp/agentic/workspace.py": 979,

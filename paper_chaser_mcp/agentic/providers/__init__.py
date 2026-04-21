@@ -26,7 +26,7 @@ from .helpers import (
 )
 
 if TYPE_CHECKING:
-    from ..provider_langchain import (
+    from .langchain import (
         AnthropicProviderBundle,
         GoogleProviderBundle,
         HuggingFaceProviderBundle,
@@ -35,18 +35,18 @@ if TYPE_CHECKING:
         NvidiaProviderBundle,
         OpenRouterProviderBundle,
     )
-    from ..provider_openai import AzureOpenAIProviderBundle, OpenAIProviderBundle
+    from .openai import AzureOpenAIProviderBundle, OpenAIProviderBundle
 
 _LAZY_BUNDLES: dict[str, str] = {
-    "AnthropicProviderBundle": "provider_langchain",
-    "GoogleProviderBundle": "provider_langchain",
-    "HuggingFaceProviderBundle": "provider_langchain",
-    "LangChainChatProviderBundle": "provider_langchain",
-    "MistralProviderBundle": "provider_langchain",
-    "NvidiaProviderBundle": "provider_langchain",
-    "OpenRouterProviderBundle": "provider_langchain",
-    "AzureOpenAIProviderBundle": "provider_openai",
-    "OpenAIProviderBundle": "provider_openai",
+    "AnthropicProviderBundle": "langchain",
+    "GoogleProviderBundle": "langchain",
+    "HuggingFaceProviderBundle": "langchain",
+    "LangChainChatProviderBundle": "langchain",
+    "MistralProviderBundle": "langchain",
+    "NvidiaProviderBundle": "langchain",
+    "OpenRouterProviderBundle": "langchain",
+    "AzureOpenAIProviderBundle": "openai",
+    "OpenAIProviderBundle": "openai",
 }
 
 __all__ = [
@@ -85,7 +85,7 @@ def __getattr__(name: str) -> Any:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     from importlib import import_module
 
-    module = import_module(f"..{module_name}", __name__)
+    module = import_module(f".{module_name}", __name__)
     value = getattr(module, name)
     globals()[name] = value
     return value
@@ -117,7 +117,7 @@ def resolve_provider_bundle(
     if config.provider == "deterministic":
         return DeterministicProviderBundle(config)
     if config.provider == "azure-openai":
-        from ..provider_openai import AzureOpenAIProviderBundle
+        from .openai import AzureOpenAIProviderBundle
 
         return AzureOpenAIProviderBundle(
             config,
@@ -129,7 +129,7 @@ def resolve_provider_bundle(
             provider_registry=provider_registry,
         )
     if config.provider == "anthropic":
-        from ..provider_langchain import AnthropicProviderBundle
+        from .langchain import AnthropicProviderBundle
 
         return AnthropicProviderBundle(
             config,
@@ -137,7 +137,7 @@ def resolve_provider_bundle(
             provider_registry=provider_registry,
         )
     if config.provider == "nvidia":
-        from ..provider_langchain import NvidiaProviderBundle
+        from .langchain import NvidiaProviderBundle
 
         return NvidiaProviderBundle(
             config,
@@ -146,7 +146,7 @@ def resolve_provider_bundle(
             provider_registry=provider_registry,
         )
     if config.provider == "google":
-        from ..provider_langchain import GoogleProviderBundle
+        from .langchain import GoogleProviderBundle
 
         return GoogleProviderBundle(
             config,
@@ -154,7 +154,7 @@ def resolve_provider_bundle(
             provider_registry=provider_registry,
         )
     if config.provider == "mistral":
-        from ..provider_langchain import MistralProviderBundle
+        from .langchain import MistralProviderBundle
 
         return MistralProviderBundle(
             config,
@@ -162,7 +162,7 @@ def resolve_provider_bundle(
             provider_registry=provider_registry,
         )
     if config.provider == "huggingface":
-        from ..provider_langchain import HuggingFaceProviderBundle
+        from .langchain import HuggingFaceProviderBundle
 
         return HuggingFaceProviderBundle(
             config,
@@ -171,7 +171,7 @@ def resolve_provider_bundle(
             provider_registry=provider_registry,
         )
     if config.provider == "openrouter":
-        from ..provider_langchain import OpenRouterProviderBundle
+        from .langchain import OpenRouterProviderBundle
 
         return OpenRouterProviderBundle(
             config,
@@ -181,7 +181,7 @@ def resolve_provider_bundle(
             title=openrouter_title,
             provider_registry=provider_registry,
         )
-    from ..provider_openai import OpenAIProviderBundle
+    from .openai import OpenAIProviderBundle
 
     return OpenAIProviderBundle(
         config,
