@@ -107,7 +107,7 @@ BASELINE_LINE_COUNTS: dict[str, int] = {
     "paper_chaser_mcp/agentic/models.py": 870,
     "paper_chaser_mcp/agentic/planner/_core.py": 64,
     "paper_chaser_mcp/agentic/provider_langchain.py": 1_624,
-    "paper_chaser_mcp/agentic/providers/openai/bundle.py": 1_827,
+    "paper_chaser_mcp/agentic/providers/openai/bundle.py": 1_826,
     "paper_chaser_mcp/agentic/ranking.py": 690,
     "paper_chaser_mcp/agentic/workspace.py": 979,
     "paper_chaser_mcp/citation_repair/_core.py": 1_677,

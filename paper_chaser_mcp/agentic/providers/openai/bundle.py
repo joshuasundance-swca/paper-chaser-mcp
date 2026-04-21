@@ -1824,4 +1824,3 @@ class OpenAIProviderBundle(DeterministicProviderBundle):
             evidence_papers=evidence_papers,
             answer_mode=answer_mode,
         )
-
