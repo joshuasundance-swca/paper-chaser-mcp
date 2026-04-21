@@ -36,6 +36,7 @@ KNOWN_TEST_SEAMS: frozenset[tuple[str, str]] = frozenset(
         ("paper_chaser_mcp.agentic.graphs", "_rank_ecos_variant_hits"),
         ("paper_chaser_mcp.agentic.graphs", "_rank_regulatory_documents"),
         ("paper_chaser_mcp.agentic.graphs", "_source_record_from_regulatory_document"),
+        ("paper_chaser_mcp.agentic.graphs.shared_state", "_GRAPH_GENERIC_TERMS"),
         ("paper_chaser_mcp.agentic.planner", "_CULTURAL_RESOURCE_MARKERS"),
         ("paper_chaser_mcp.agentic.planner", "_DEFINITIONAL_PATTERNS"),
         ("paper_chaser_mcp.agentic.planner", "_detect_cultural_resource_intent"),
