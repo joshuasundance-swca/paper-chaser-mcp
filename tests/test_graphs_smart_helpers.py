@@ -96,15 +96,16 @@ def test_has_on_topic_sources_any_non_off_topic_counts() -> None:
     assert _has_on_topic_sources([_make_record(topical_relevance="off_topic")]) is False
     assert _has_on_topic_sources([_make_record(topical_relevance="on_topic")]) is True
     assert (
-        _has_on_topic_sources(
-            [_make_record(topical_relevance="off_topic"), _make_record(topical_relevance="on_topic")]
-        )
+        _has_on_topic_sources([_make_record(topical_relevance="off_topic"), _make_record(topical_relevance="on_topic")])
         is True
     )
 
 
 def test_best_next_internal_action_routes_by_intent() -> None:
-    assert _best_next_internal_action(intent="known_item", has_sources=False, result_status="complete") == "get_paper_details"
+    assert (
+        _best_next_internal_action(intent="known_item", has_sources=False, result_status="complete")
+        == "get_paper_details"
+    )
     assert (
         _best_next_internal_action(intent="regulatory", has_sources=True, result_status="complete") == "inspect_source"
     )
