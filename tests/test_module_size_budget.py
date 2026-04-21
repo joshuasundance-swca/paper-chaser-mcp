@@ -35,7 +35,6 @@ PLAN_OVERSIZE_MODULES: frozenset[str] = frozenset(
     {
         "paper_chaser_mcp/dispatch/_core.py",
         "paper_chaser_mcp/agentic/graphs/_core.py",
-        "paper_chaser_mcp/agentic/provider_openai.py",
         "paper_chaser_mcp/agentic/provider_langchain.py",
         "paper_chaser_mcp/citation_repair/_core.py",
         "paper_chaser_mcp/server.py",
@@ -74,6 +73,14 @@ BASELINE_OVERSIZE_EXTRAS: frozenset[str] = frozenset(
         # cap until the orchestration is split into per-stage helpers in a
         # follow-up phase.
         "paper_chaser_mcp/agentic/graphs/smart_graph.py",
+        # Phase 8c: ``provider_openai.py`` was split into the
+        # ``providers/openai/`` subpackage. The OpenAI-compatible bundle class
+        # is deeply self-referential (self._foo state throughout every
+        # method), so the whole class was relocated verbatim into
+        # ``bundle.py`` to preserve behavior. A follow-up phase can split it
+        # further into mix-ins (chat / embeddings / ranking / adequacy) once
+        # the test seam surface is stable.
+        "paper_chaser_mcp/agentic/providers/openai/bundle.py",
     }
 )
 
@@ -100,7 +107,7 @@ BASELINE_LINE_COUNTS: dict[str, int] = {
     "paper_chaser_mcp/agentic/models.py": 870,
     "paper_chaser_mcp/agentic/planner/_core.py": 64,
     "paper_chaser_mcp/agentic/provider_langchain.py": 1_624,
-    "paper_chaser_mcp/agentic/provider_openai.py": 1_953,
+    "paper_chaser_mcp/agentic/providers/openai/bundle.py": 1_826,
     "paper_chaser_mcp/agentic/ranking.py": 690,
     "paper_chaser_mcp/agentic/workspace.py": 979,
     "paper_chaser_mcp/citation_repair/_core.py": 1_677,
