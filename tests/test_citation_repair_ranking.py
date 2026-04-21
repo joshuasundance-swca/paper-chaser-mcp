@@ -366,12 +366,17 @@ def test_rank_candidate_title_weight_pinned_for_phase_9b() -> None:
 
 
 def test_rank_candidate_match_confidence_high_bonus_pinned_for_phase_9b() -> None:
-    """Pin the upstream ``matchConfidence=="high"`` bonus at 0.15.
+    """Pin the upstream ``matchConfidence=="high"`` bonus for uncorroborated
+    candidates at ``_UNCORROBORATED_CONFIDENCE_CAP`` (0.12).
 
-    With a minimal paper (no title, no identifier, no author overlap, no
-    year, no venue, no snippet) on ``sparse_metadata`` strategy the score
-    should equal the source_confidence component (0.65 * 0.05 = 0.0325)
-    plus the 0.15 high-confidence bonus = 0.1825. No other term can fire.
+    Phase 9b caps the upstream matchConfidence bonus when there is no
+    corroborating signal (no identifier hit, no year match, no author
+    overlap) so a bare upstream "high" label cannot by itself push a
+    candidate into the high-confidence band. With a minimal paper (no
+    title, no identifier, no author overlap, no year, no venue, no
+    snippet) on ``sparse_metadata`` strategy the score equals the
+    source_confidence component (0.65 * 0.05 = 0.0325) plus the capped
+    0.12 uncorroborated bonus = 0.1525.
     """
     parsed = parse_citation("unknown paper")
     paper: dict[str, Any] = {
@@ -389,7 +394,7 @@ def test_rank_candidate_match_confidence_high_bonus_pinned_for_phase_9b() -> Non
         candidate_count=1,
         snippet_text=None,
     )
-    assert ranked.score == pytest.approx(0.65 * 0.05 + 0.15, abs=1e-6)
+    assert ranked.score == pytest.approx(0.65 * 0.05 + 0.12, abs=1e-6)
 
 
 def test_rank_candidate_match_confidence_medium_bonus_pinned_for_phase_9b() -> None:
