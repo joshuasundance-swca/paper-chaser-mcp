@@ -224,8 +224,8 @@ def test_build_provider_diagnostics_snapshot_no_registry_returns_summary() -> No
 
 def test_runtime_helpers_remain_reexported_from_core() -> None:
     """Moved helpers must still be reachable via ``_core`` + facade."""
-    from paper_chaser_mcp.dispatch import _core
     import paper_chaser_mcp.dispatch as facade
+    from paper_chaser_mcp.dispatch import _core
 
     assert _core._runtime_provider_order is _runtime_provider_order
     assert _core._smart_runtime_provider_state is _smart_runtime_provider_state
