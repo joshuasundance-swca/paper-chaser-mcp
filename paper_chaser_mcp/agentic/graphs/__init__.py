@@ -32,9 +32,6 @@ from ._core import (
     TopicalRelevanceClassification as TopicalRelevanceClassification,
 )
 from ._core import (
-    _build_grounded_comparison_answer as _build_grounded_comparison_answer,
-)
-from ._core import (
     _classify_topical_relevance_with_provenance as _classify_topical_relevance_with_provenance,
 )
 from ._core import (
@@ -75,6 +72,9 @@ from ._core import (
 )
 from .research_graph import (
     _graph_frontier_scores as _graph_frontier_scores,
+)
+from .followup_graph import (
+    _build_grounded_comparison_answer as _build_grounded_comparison_answer,
 )
 
 # ---------------------------------------------------------------------------
