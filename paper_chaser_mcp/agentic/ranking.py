@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from .config import AgenticConfig
 from .planner import _is_definitional_query, query_facets, query_terms
-from .provider_base import ModelProviderBundle
+from .providers.base import ModelProviderBundle
 from .retrieval import RetrievedCandidate
 
 PROVIDER_QUALITY_BONUS = {

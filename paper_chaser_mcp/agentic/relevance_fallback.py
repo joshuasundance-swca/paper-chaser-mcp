@@ -11,13 +11,12 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from .provider_base import (
-    _fallback_query_facets,
-    _fallback_query_terms,
+from .provider_helpers import _lexical_similarity, _tokenize
+from .providers.base import (
     classify_relevance_without_llm,
     relevance_paper_identifier,
 )
-from .provider_helpers import _lexical_similarity, _tokenize
+from .providers.base.classification import _fallback_query_facets, _fallback_query_terms
 
 RelevanceLabel = Literal["on_topic", "weak_match", "off_topic"]
 RelevanceSource = Literal["llm", "llm_retry", "deterministic_tier", "hybrid"]
