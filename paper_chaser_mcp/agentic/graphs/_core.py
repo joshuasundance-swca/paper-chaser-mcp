@@ -31,7 +31,6 @@ from ...provider_runtime import (
     ProviderBudgetState,
     ProviderDiagnosticsRegistry,
     execute_provider_call,
-    provider_is_paywalled,
 )
 from ...search import _enrich_ss_paper
 from ..answer_modes import (
@@ -193,6 +192,14 @@ from .smart_graph import (  # noqa: E402,F401 - preserve legacy call-site names;
     _result_coverage_label,
     _smart_failure_summary,
 )
+from .smart_helpers import (  # noqa: E402,F401 - legacy re-export; canonical home is smart_helpers (Phase 7c-3)
+    _best_next_internal_action,
+    _has_inspectable_sources,
+    _has_on_topic_sources,
+    _paid_providers_used,
+    _smart_coverage_summary,
+    _smart_provider_fallback_warnings,
+)
 from .source_records import (  # noqa: E402,F401 - preserve legacy call-site names; see Phase 7a plan
     TopicalRelevanceClassification,
     _answerability_from_source_records,
@@ -217,10 +224,6 @@ from .source_records import (  # noqa: E402,F401 - preserve legacy call-site nam
     _why_matched,
     _year_text,
 )
-
-
-def _paid_providers_used(providers: list[str]) -> list[str]:
-    return sorted({provider for provider in providers if provider_is_paywalled(provider)})
 
 
 class AgenticRuntime:
@@ -4121,110 +4124,3 @@ def _build_top_recommendation_rationale(
     if axis == "coverage":
         return f"{base} Broadest term overlap with the question."
     return base
-
-
-def _smart_coverage_summary(
-    *,
-    providers_used: list[str],
-    provider_outcomes: list[dict[str, Any]],
-    search_mode: str,
-    drift_warnings: list[str],
-) -> CoverageSummary:
-    attempted = [
-        provider
-        for provider in dict.fromkeys(
-            [str(outcome.get("provider") or "").strip() for outcome in provider_outcomes if outcome.get("provider")]
-            + list(providers_used)
-        )
-        if provider
-    ]
-    failed = [
-        provider
-        for provider in dict.fromkeys(
-            str(outcome.get("provider") or "").strip()
-            for outcome in provider_outcomes
-            if str(outcome.get("statusBucket") or "") not in {"success", "empty", "skipped", ""}
-        )
-        if provider
-    ]
-    zero_results = [
-        provider
-        for provider in dict.fromkeys(
-            str(outcome.get("provider") or "").strip()
-            for outcome in provider_outcomes
-            if str(outcome.get("statusBucket") or "") == "empty"
-        )
-        if provider
-    ]
-    # Invariant: providers_succeeded and providers_zero_results must be disjoint
-    zero_results_set = set(zero_results)
-    succeeded = [p for p in providers_used if p not in zero_results_set]
-    return CoverageSummary(
-        providersAttempted=attempted,
-        providersSucceeded=succeeded,
-        providersFailed=failed,
-        providersZeroResults=zero_results,
-        likelyCompleteness=("partial" if providers_used else ("incomplete" if failed else "unknown")),
-        searchMode=search_mode,
-        retrievalNotes=list(drift_warnings),
-        summaryLine=_coverage_summary_line(
-            attempted=attempted,
-            failed=failed,
-            zero_results=zero_results,
-            likely_completeness=("partial" if providers_used else ("incomplete" if failed else "unknown")),
-        ),
-    )
-
-
-def _has_inspectable_sources(records: list[StructuredSourceRecord]) -> bool:
-    return any(
-        record.topical_relevance != "off_topic"
-        and bool(record.canonical_url or record.retrieved_url or record.full_text_url_found or record.abstract_observed)
-        for record in records
-    )
-
-
-def _has_on_topic_sources(records: list[StructuredSourceRecord]) -> bool:
-    return any(record.topical_relevance != "off_topic" for record in records)
-
-
-def _best_next_internal_action(*, intent: str, has_sources: bool, result_status: str) -> str:
-    if intent == "known_item":
-        return "get_paper_details"
-    if intent == "regulatory":
-        return "inspect_source" if has_sources else "search_papers_smart"
-    if has_sources:
-        return "ask_result_set"
-    if result_status == "partial":
-        return "search_papers_smart"
-    return "resolve_reference"
-
-
-def _smart_provider_fallback_warnings(
-    *,
-    provider_selection: dict[str, Any],
-    provider_outcomes: list[dict[str, Any]],
-) -> list[str]:
-    configured = str(provider_selection.get("configuredSmartProvider") or "").strip()
-    active = str(provider_selection.get("activeSmartProvider") or "").strip()
-    if not configured or not active or configured == active:
-        return []
-
-    endpoints = sorted(
-        {
-            str(outcome.get("endpoint") or "").strip()
-            for outcome in provider_outcomes
-            if str(outcome.get("provider") or "").strip() == configured
-            and str(outcome.get("statusBucket") or "").strip() not in {"success", "empty", "skipped"}
-            and str(outcome.get("endpoint") or "").strip()
-        }
-    )
-    if endpoints:
-        return [
-            f"Smart provider '{configured}' fell back to deterministic mode after issues in {', '.join(endpoints)}; "
-            "inspect providerOutcomes before trusting planning or expansion quality."
-        ]
-    return [
-        f"Smart provider '{configured}' fell back to deterministic mode; inspect providerOutcomes before trusting "
-        "planning or expansion quality."
-    ]
