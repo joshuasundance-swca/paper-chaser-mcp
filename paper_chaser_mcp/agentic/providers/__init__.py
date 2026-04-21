@@ -10,7 +10,8 @@ from ...provider_runtime import (
     execute_provider_call_sync,
 )
 from ..config import AgenticConfig
-from ..provider_helpers import (
+from .base import DeterministicProviderBundle, ModelProviderBundle
+from .helpers import (
     COMMON_QUERY_WORDS,
     _coerce_langchain_structured_response,
     _cosine_similarity,
@@ -23,7 +24,6 @@ from ..provider_helpers import (
     _tokenize,
     _top_terms,
 )
-from .base import DeterministicProviderBundle, ModelProviderBundle
 
 if TYPE_CHECKING:
     from ..provider_langchain import (
