@@ -14,15 +14,15 @@ from uuid import uuid4
 
 from fastmcp import Context
 
-from ..citation_repair import build_match_metadata, parse_citation, resolve_citation
-from ..compat import build_agent_hints, build_resource_uris
-from ..enrichment import (
+from ...citation_repair import build_match_metadata, parse_citation, resolve_citation
+from ...compat import build_agent_hints, build_resource_uris
+from ...enrichment import (
     PaperEnrichmentService,
     attach_enrichments_to_paper_payload,
     hydrate_paper_for_enrichment,
 )
-from ..identifiers import resolve_doi_from_paper_payload
-from ..models import (
+from ...identifiers import resolve_doi_from_paper_payload
+from ...models import (
     CitationRecord,
     CoverageSummary,
     FailureSummary,
@@ -33,22 +33,22 @@ from ..models import (
     VerificationStatus,
     dump_jsonable,
 )
-from ..provider_runtime import (
+from ...provider_runtime import (
     ProviderBudgetState,
     ProviderDiagnosticsRegistry,
     execute_provider_call,
     provider_is_paywalled,
 )
-from ..search import _enrich_ss_paper
-from .answer_modes import (
+from ...search import _enrich_ss_paper
+from ..answer_modes import (
     SYNTHESIS_MODES,
     aclassify_question_mode,
     build_evidence_use_plan,
     classify_question_mode,
     evidence_pool_is_weak,
 )
-from .config import AgenticConfig, LatencyProfile
-from .models import (
+from ..config import AgenticConfig, LatencyProfile
+from ..models import (
     AgentHints,
     AskResultSetResponse,
     EvidenceItem,
@@ -66,7 +66,7 @@ from .models import (
     StructuredSourceRecord,
     StructuredToolError,
 )
-from .planner import (
+from ..planner import (
     classify_query,
     combine_variants,
     dedupe_variants,
@@ -79,28 +79,28 @@ from .planner import (
     query_terms,
     speculative_expansion_candidates,
 )
-from .providers import (
+from ..providers import (
     COMMON_QUERY_WORDS,
     DeterministicProviderBundle,
     ModelProviderBundle,
 )
-from .ranking import (
+from ..ranking import (
     evaluate_speculative_variants,
     merge_candidates,
     rerank_candidates,
     summarize_ranking_diagnostics,
 )
-from .retrieval import (
+from ..retrieval import (
     SMART_RETRIEVAL_FIELDS,
     RetrievalBatch,
     RetrievedCandidate,
     retrieve_variant,
 )
-from .selection_scoring import (
+from ..selection_scoring import (
     infer_comparative_axis,
     score_papers_for_comparative_axis,
 )
-from .workspace import (
+from ..workspace import (
     ExpiredSearchSessionError,
     SearchSessionNotFoundError,
     WorkspaceRegistry,
@@ -1653,7 +1653,7 @@ class AgenticRuntime:
                 except Exception:
                     llm_relevance = {}
 
-        from .relevance_fallback import classification_provenance_counts
+        from ..relevance_fallback import classification_provenance_counts
 
         classification_provenance = classification_provenance_counts(llm_relevance)
         degraded_classification = bool(classification_provenance.get("degradedClassification"))
@@ -2647,7 +2647,7 @@ class AgenticRuntime:
         # LLM-first subject-card grounding for document-family ranking and
         # species-dossier weak-match demotion. Prefer the subject_card already
         # resolved by classify_query when available.
-        from .subject_grounding import (
+        from ..subject_grounding import (
             compute_subject_chain_gaps,
             resolve_subject_card,
             species_mentioned,
@@ -5402,7 +5402,7 @@ def _rank_regulatory_documents(
     cultural_resource_boost: bool = False,
     requested_document_family: str | None = None,
 ) -> list[dict[str, Any]]:
-    from .subject_grounding import detect_document_family_match
+    from ..subject_grounding import detect_document_family_match
 
     def _score(document: dict[str, Any]) -> tuple[int, str]:
         title = str(document.get("title") or "")
