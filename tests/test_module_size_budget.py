@@ -33,11 +33,11 @@ HARD_CAP_LINES = 2_500
 # Phase 12 will delete this list.
 PLAN_OVERSIZE_MODULES: frozenset[str] = frozenset(
     {
-        "paper_chaser_mcp/dispatch.py",
+        "paper_chaser_mcp/dispatch/_core.py",
         "paper_chaser_mcp/agentic/graphs.py",
         "paper_chaser_mcp/agentic/provider_openai.py",
         "paper_chaser_mcp/agentic/provider_langchain.py",
-        "paper_chaser_mcp/citation_repair.py",
+        "paper_chaser_mcp/citation_repair/_core.py",
         "paper_chaser_mcp/server.py",
         "paper_chaser_mcp/agentic/planner.py",
         "paper_chaser_mcp/agentic/provider_helpers.py",
@@ -97,11 +97,11 @@ BASELINE_LINE_COUNTS: dict[str, int] = {
     "paper_chaser_mcp/agentic/provider_openai.py": 1_953,
     "paper_chaser_mcp/agentic/ranking.py": 690,
     "paper_chaser_mcp/agentic/workspace.py": 979,
-    "paper_chaser_mcp/citation_repair.py": 1_958,
+    "paper_chaser_mcp/citation_repair/_core.py": 1_677,
     "paper_chaser_mcp/clients/ecos/client.py": 963,
     "paper_chaser_mcp/clients/semantic_scholar/client.py": 1_179,
     "paper_chaser_mcp/compat.py": 690,
-    "paper_chaser_mcp/dispatch.py": 9_344,
+    "paper_chaser_mcp/dispatch/_core.py": 9_344,
     "paper_chaser_mcp/enrichment.py": 816,
     "paper_chaser_mcp/eval_canary.py": 728,
     "paper_chaser_mcp/eval_curation.py": 965,
