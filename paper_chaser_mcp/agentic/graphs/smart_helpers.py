@@ -23,7 +23,6 @@ from ...provider_runtime import provider_is_paywalled
 from ..models import StructuredSourceRecord
 from .source_records import _coverage_summary_line
 
-
 __all__: list[str] = [
     "_best_next_internal_action",
     "_has_inspectable_sources",

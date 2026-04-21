@@ -70,6 +70,12 @@ BASELINE_OVERSIZE_EXTRAS: frozenset[str] = frozenset(
         # Phase 3 leftovers: guided submodules extracted from dispatch/_core.py
         # that exceed the soft cap. Phase 3b will split these further.
         "paper_chaser_mcp/dispatch/guided/trust.py",
+        # Phase 7c-4: ``graphs/_core.search_papers_smart`` orchestration body
+        # was moved to ``graphs/smart_graph.run_search_papers_smart`` as a
+        # Pattern B extraction. The destination file exceeds the 800-line soft
+        # cap until the orchestration is split into per-stage helpers in a
+        # follow-up phase.
+        "paper_chaser_mcp/agentic/graphs/smart_graph.py",
     }
 )
 
@@ -91,7 +97,8 @@ OVERSIZE_ALLOWLIST: frozenset[str] = PLAN_OVERSIZE_MODULES | BASELINE_OVERSIZE_E
 # wins.
 BASELINE_LINE_COUNTS: dict[str, int] = {
     "paper_chaser_mcp/agentic/answer_modes.py": 658,
-    "paper_chaser_mcp/agentic/graphs/_core.py": 4_130,
+    "paper_chaser_mcp/agentic/graphs/_core.py": 3_256,
+    "paper_chaser_mcp/agentic/graphs/smart_graph.py": 1_074,
     "paper_chaser_mcp/agentic/models.py": 870,
     "paper_chaser_mcp/agentic/planner/_core.py": 64,
     "paper_chaser_mcp/agentic/provider_base.py": 840,
