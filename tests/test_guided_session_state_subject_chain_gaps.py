@@ -90,3 +90,44 @@ def test_guided_session_state_omits_subject_chain_gaps_when_none() -> None:
     # Absence is the contract: callers rely on ``subjectChainGaps`` only
     # appearing when upstream recorded it.
     assert "subjectChainGaps" not in session_state["trustSummary"]
+
+
+def test_guided_session_state_preserves_enriched_structured_source_metadata() -> None:
+    registry = WorkspaceRegistry()
+    registry.save_result_set(
+        source_tool="research",
+        search_session_id="ssn-enriched-structured-source",
+        query="desert tortoise recovery plan",
+        payload={
+            "query": "desert tortoise recovery plan",
+            "intent": "regulatory",
+            "structuredSources": [
+                {
+                    "sourceId": "fr-weak",
+                    "title": "Endangered and Threatened Wildlife and Plants; General Notice",
+                    "provider": "federal_register",
+                    "sourceType": "primary_regulatory",
+                    "verificationStatus": "verified_primary_source",
+                    "accessStatus": "full_text_verified",
+                    "topicalRelevance": "weak_match",
+                    "classificationRationale": "Notice mentions endangered species broadly, not desert tortoise.",
+                    "classificationSource": "llm_tiebreaker",
+                    "leadReason": "Retained as context, but not strong enough to ground the answer.",
+                    "documentFamilyMatch": "recovery_plan",
+                    "documentFamilyBoost": 0.25,
+                }
+            ],
+        },
+    )
+
+    session_state = _guided_session_state(
+        workspace_registry=registry,
+        search_session_id="ssn-enriched-structured-source",
+    )
+    assert session_state is not None
+    source = session_state["sources"][0]
+    assert source["classificationRationale"] == "Notice mentions endangered species broadly, not desert tortoise."
+    assert source["classificationSource"] == "llm_tiebreaker"
+    assert source["leadReason"] == "Retained as context, but not strong enough to ground the answer."
+    assert source["documentFamilyMatch"] == "recovery_plan"
+    assert source["documentFamilyBoost"] == 0.25

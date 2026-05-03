@@ -151,6 +151,7 @@ async def test_list_tools_returns_expected_public_contract() -> None:
         "year",
         "venue",
         "focus",
+        "includeLegacyFields",
     }
     assert tool_map["follow_up_research"].inputSchema["required"] == ["question"]
     assert set(tool_map["follow_up_research"].inputSchema["properties"]) == {
@@ -3197,12 +3198,14 @@ async def test_inspect_source_unresolved_inspectable_saved_session_recommends_in
                     "title": "Attention",
                     "topicalRelevance": "on_topic",
                     "canonicalUrl": "https://example.test/paper-a",
+                    "leadReason": "Retained as a saved source candidate because it remains directly on topic.",
                 },
                 {
                     "sourceId": "paper-b",
                     "title": "Transformer",
                     "topicalRelevance": "on_topic",
                     "abstractObserved": True,
+                    "whyNotVerified": "Metadata was present but a canonical full-text URL was not saved.",
                 },
             ]
         },
@@ -3231,6 +3234,7 @@ async def test_inspect_source_unresolved_inspectable_saved_session_recommends_in
     candidates = payload["sourceResolution"]["availableSourceCandidates"]
     assert {c["sourceId"] for c in candidates} == {"paper-a", "paper-b"}
     assert {c.get("title") for c in candidates} == {"Attention", "Transformer"}
+    assert all(c.get("candidateRationale") for c in candidates)
     assert payload["sourceResolution"]["candidatesHaveInspectable"] is True
 
 
@@ -3246,8 +3250,18 @@ async def test_inspect_source_unresolved_all_off_topic_exposes_candidates_withou
         query="Ribbon worms in deep sea vents",
         payload={
             "sources": [
-                {"sourceId": "p-off-1", "title": "Stock analysis", "topicalRelevance": "off_topic"},
-                {"sourceId": "p-off-2", "title": "Macroeconomic policy", "topicalRelevance": "off_topic"},
+                {
+                    "sourceId": "p-off-1",
+                    "title": "Stock analysis",
+                    "topicalRelevance": "off_topic",
+                    "whyNotVerified": "Topical relevance was off_topic.",
+                },
+                {
+                    "sourceId": "p-off-2",
+                    "title": "Macroeconomic policy",
+                    "topicalRelevance": "off_topic",
+                    "leadReason": "Retained only as context showing the saved pool drifted away from the request.",
+                },
             ]
         },
     )
@@ -3272,6 +3286,10 @@ async def test_inspect_source_unresolved_all_off_topic_exposes_candidates_withou
     candidates = resolution["availableSourceCandidates"]
     assert {c["sourceId"] for c in candidates} == {"p-off-1", "p-off-2"}
     assert all(c["topicalRelevance"] == "off_topic" for c in candidates)
+    assert {c["sourceId"]: c.get("candidateRationale") for c in candidates} == {
+        "p-off-1": "Topical relevance was off_topic.",
+        "p-off-2": "Retained only as context showing the saved pool drifted away from the request.",
+    }
     assert resolution["candidatesHaveInspectable"] is False
     # Recommendation stays research because nothing is inspectable.
     assert payload["failureSummary"]["recommendedNextAction"] == "research"
@@ -3647,6 +3665,8 @@ async def test_answer_follow_up_from_session_state_only_answers_metadata_safe_mo
 
     assert metadata_answer is not None
     assert metadata_answer["executionProvenance"]["executionMode"] == "session_introspection"
+    assert metadata_answer["executionProvenance"]["answerSource"] == "saved_session_metadata"
+    assert metadata_answer["executionProvenance"]["answerKind"] == "metadata_answered"
 
 
 @pytest.mark.asyncio
@@ -4450,6 +4470,12 @@ async def test_guided_contract_compat_views_include_unverified_leads(
     monkeypatch.setattr(server, "workspace_registry", isolated_registry)
 
     research = _payload(await server.call_tool("research", {"query": "regulatory history of california condor"}))
+    research_with_legacy = _payload(
+        await server.call_tool(
+            "research",
+            {"query": "regulatory history of california condor", "includeLegacyFields": True},
+        )
+    )
     follow_up = _payload(
         await server.call_tool(
             "follow_up_research",
@@ -4462,9 +4488,12 @@ async def test_guided_contract_compat_views_include_unverified_leads(
         )
     )
 
-    assert research["unverifiedLeads"][0]["sourceId"] == "polar-bear-fr"
-    assert research["unverifiedLeads"][0]["topicalRelevance"] == "off_topic"
-    assert research["verifiedFindings"]
+    assert "unverifiedLeads" not in research
+    assert "verifiedFindings" not in research
+    assert research["legacyFieldsIncluded"] is False
+    assert research_with_legacy["unverifiedLeads"][0]["sourceId"] == "polar-bear-fr"
+    assert research_with_legacy["unverifiedLeads"][0]["topicalRelevance"] == "off_topic"
+    assert research_with_legacy["verifiedFindings"]
     assert "failureSummary" in research
     assert "resultMeaning" in research
     assert "candidateLeads" not in research
@@ -4564,7 +4593,8 @@ async def test_guided_research_blends_regulatory_and_literature_runs(monkeypatch
 
     assert runtime.calls == ["regulatory", "review"]
     assert payload["intent"] == "mixed"
-    assert payload["coverage"]["searchMode"] == "guided_hybrid_research"
+    assert payload["coverageSummary"]["searchMode"] == "guided_hybrid_research"
+    assert "coverage" not in payload
 
 
 @pytest.mark.asyncio
@@ -4662,10 +4692,11 @@ async def test_guided_research_blends_cultural_resource_regulatory_and_literatur
 
     assert runtime.calls == ["regulatory", "review"]
     assert payload["intent"] == "mixed"
-    assert payload["coverage"]["searchMode"] == "guided_hybrid_research"
-    assert any(source["sourceId"] == "nhpa-guidance" for source in payload["sources"])
-    assert any(source["sourceId"] == "heritage-paper" for source in payload["sources"])
-    assert len(payload["sources"]) == 2
+    assert payload["coverageSummary"]["searchMode"] == "guided_hybrid_research"
+    assert "coverage" not in payload
+    assert any(source["evidenceId"] == "nhpa-guidance" for source in payload["evidence"])
+    assert any(source["evidenceId"] == "heritage-paper" for source in payload["evidence"])
+    assert len(payload["evidence"]) == 2
     assert any("inspect_source" in action for action in payload["nextActions"])
     assert payload["timeline"]["events"][0]["title"] == "Section 106 guidance"
 
@@ -4975,6 +5006,7 @@ async def test_follow_up_research_answers_from_saved_session_metadata_when_regul
     assert payload.get("unverifiedLeads", []) == []
     assert payload["resultState"]["status"] == "answered"
     assert payload["executionProvenance"]["executionMode"] == "session_introspection"
+    assert payload["executionProvenance"]["answerSource"] == "saved_session_metadata"
 
 
 @pytest.mark.asyncio
@@ -5069,7 +5101,9 @@ async def test_follow_up_research_classifies_saved_sources_and_leads_for_relevan
     assert "Clinical Decision Support Software Guidance" in payload["answer"]
     assert "off-target" in payload["answer"].lower()
     assert payload["selectedLeadIds"] == ["cds-guidance"]
-    assert payload["executionProvenance"]["executionMode"] == "session_introspection"
+    assert payload["executionProvenance"]["executionMode"] == "session_relevance_triage"
+    assert payload["executionProvenance"]["answerSource"] == "saved_session_source_selection"
+    assert payload["executionProvenance"]["answerKind"] == "relevance_triage_answered"
 
 
 @pytest.mark.asyncio
@@ -5717,6 +5751,9 @@ async def test_follow_up_research_answers_authors_and_venue_from_saved_source_me
     assert payload["answerStatus"] == "answered"
     assert "Ashish Vaswani" in payload["answer"]
     assert "Neural Information Processing Systems" in payload["answer"]
+    assert payload["executionProvenance"]["executionMode"] == "session_source_introspection"
+    assert payload["executionProvenance"]["answerSource"] == "saved_session_source_metadata"
+    assert payload["executionProvenance"]["answerKind"] == "source_metadata_answered"
 
 
 @pytest.mark.asyncio
@@ -5778,7 +5815,8 @@ async def test_follow_up_research_does_not_treat_stopwords_as_source_ids(
     assert "No saved source matched 'is'" not in payload["answer"]
     assert "Saved sources included:" in payload["answer"]
     assert payload["selectedEvidenceIds"] == ["50 CFR 17.11", "2022-25998"]
-    assert payload["executionProvenance"]["answerSource"] == "saved_session_metadata"
+    assert payload["executionProvenance"]["executionMode"] == "session_source_introspection"
+    assert payload["executionProvenance"]["answerSource"] == "saved_session_source_metadata"
 
 
 @pytest.mark.asyncio

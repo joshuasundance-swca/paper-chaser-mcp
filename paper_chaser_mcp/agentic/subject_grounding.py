@@ -106,6 +106,42 @@ def resolve_subject_card(
     authority = entity_card.get("authorityContext")
     entity_family = entity_card.get("requestedDocumentFamily") or entity_card.get("documentFamily")
 
+    aliases: list[str] = []
+    seen_aliases: set[str] = set()
+    for raw_alias in entity_card.get("aliases") or entity_card.get("alias") or []:
+        cleaned = str(raw_alias).strip()
+        lowered = cleaned.lower()
+        if cleaned and lowered not in seen_aliases:
+            aliases.append(cleaned)
+            seen_aliases.add(lowered)
+
+    taxonomy_hints: dict[str, str] = {}
+    raw_taxonomy_hints = entity_card.get("taxonomyHints") or entity_card.get("taxonomy")
+    if isinstance(raw_taxonomy_hints, dict):
+        for raw_key, raw_value in raw_taxonomy_hints.items():
+            key = str(raw_key).strip()
+            value = str(raw_value).strip()
+            if key and value:
+                taxonomy_hints[key] = value
+    for taxonomy_key in ("kingdom", "phylum", "class", "order", "family", "genus"):
+        value = str(entity_card.get(taxonomy_key) or "").strip()
+        if value and taxonomy_key not in taxonomy_hints:
+            taxonomy_hints[taxonomy_key] = value
+
+    primary_source_anchors: list[str] = []
+    seen_anchors: set[str] = set()
+    for raw_anchor in (
+        entity_card.get("primarySourceAnchors")
+        or entity_card.get("primary_source_anchors")
+        or entity_card.get("anchorUrls")
+        or entity_card.get("primarySourceUrls")
+        or []
+    ):
+        cleaned = str(raw_anchor).strip()
+        if cleaned and cleaned not in seen_anchors:
+            primary_source_anchors.append(cleaned)
+            seen_anchors.add(cleaned)
+
     normalized_lower = normalize_query(f"{query} {focus or ''}").lower()
     regulatory_intent = planner.regulatory_intent if planner else None
     requested_family = _derive_document_family(
@@ -168,6 +204,9 @@ def resolve_subject_card(
         agency=authority,
         requestedDocumentFamily=requested_family,
         subjectTerms=subject_terms,
+        aliases=aliases,
+        taxonomyHints=taxonomy_hints,
+        primarySourceAnchors=primary_source_anchors,
         confidence=confidence,
         source=cast(Any, source),
     )
@@ -287,9 +326,12 @@ def compute_subject_chain_gaps(
             has_critical_habitat = True
         if species_mentioned(document, card):
             has_species_mention = True
-    if has_species_mention and not has_recovery_plan:
+    requested_family = str(card.requested_document_family or "").strip()
+    require_recovery_plan = requested_family in {"", "recovery_plan"}
+    require_critical_habitat = requested_family in {"", "critical_habitat"}
+    if has_species_mention and require_recovery_plan and not has_recovery_plan:
         gaps.append("species_evidence_without_recovery_plan")
-    if has_species_mention and not has_critical_habitat:
+    if has_species_mention and require_critical_habitat and not has_critical_habitat:
         gaps.append("species_evidence_without_critical_habitat")
     if not has_species_mention and documents:
         gaps.append("regulatory_documents_without_species_specific_evidence")

@@ -88,6 +88,47 @@ class TestFinalizeResponse:
         )
         assert "extraneous" not in result
 
+    def test_research_default_omits_legacy_success_fields(self) -> None:
+        payload = {
+            "status": "answered",
+            "verifiedFindings": [{"claim": "kept in compatibility view"}],
+            "sources": [{"sourceId": "src-1"}],
+            "unverifiedLeads": [{"sourceId": "lead-1"}],
+            "coverage": {"totalSources": 1},
+            "evidence": [{"evidenceId": "src-1"}],
+            "leads": [{"sourceId": "lead-1"}],
+        }
+        result = _guided_finalize_response(
+            tool_name="research",
+            response=payload,
+        )
+        assert "verifiedFindings" not in result
+        assert "sources" not in result
+        assert "unverifiedLeads" not in result
+        assert "coverage" not in result
+        assert result["legacyFieldsIncluded"] is False
+
+    def test_research_include_legacy_fields_restores_success_fields(self) -> None:
+        payload = {
+            "status": "answered",
+            "verifiedFindings": [{"claim": "kept in compatibility view"}],
+            "sources": [{"sourceId": "src-1"}],
+            "unverifiedLeads": [{"sourceId": "lead-1"}],
+            "coverage": {"totalSources": 1},
+            "evidence": [{"evidenceId": "src-1"}],
+            "leads": [{"sourceId": "lead-1"}],
+        }
+        result = _guided_finalize_response(
+            tool_name="research",
+            response=payload,
+            include_legacy_fields=True,
+        )
+        assert result["verifiedFindings"][0]["claim"] == "kept in compatibility view"
+        assert result["sources"][0]["sourceId"] == "src-1"
+        assert result["unverifiedLeads"][0]["sourceId"] == "lead-1"
+        assert result["coverage"]["totalSources"] == 1
+        assert result["legacyFieldsIncluded"] is True
+
 
 class TestContractFieldsSmoke:
     @pytest.mark.asyncio

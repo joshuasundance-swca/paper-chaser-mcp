@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any, Literal, cast
 
+from ...agentic.answer_modes import classify_question_mode
 from ...guided_semantic import build_follow_up_decision, explicit_source_reference
 from ..normalization import _guided_normalize_whitespace
 from .inspect_source import (
@@ -366,71 +367,45 @@ def _guided_metadata_answer_is_responsive(
 
 
 def _guided_follow_up_response_mode(question: str, session_strategy_metadata: dict[str, Any]) -> str:
-    lowered = question.lower()
+    del session_strategy_metadata
+    question_mode = classify_question_mode(question)
+    if question_mode in {
+        "relevance_triage",
+        "comparison",
+        "selection",
+        "mechanism_summary",
+        "regulatory_chain",
+        "intervention_tradeoff",
+    }:
+        return question_mode
     facets = _guided_follow_up_introspection_facets(question)
     if "relevance_triage" in facets:
         return "relevance_triage"
-    if any(marker in lowered for marker in ("compare", "versus", "vs", "tradeoff", "tradeoffs")):
-        return "comparison"
-    if facets or any(
-        marker in lowered
-        for marker in (
-            "author",
-            "authors",
-            "who wrote",
-            "written by",
-            "venue",
-            "journal",
-            "publisher",
-            "published in",
-            "doi",
-            "identifier",
-            "publication year",
-            "what year",
-            "what venue",
-            "what records",
-            "what sources",
-            "which documents",
-        )
-    ):
+    metadata_facets = _guided_requested_metadata_facets(question)
+    if question_mode == "metadata" or facets or metadata_facets:
         return "metadata"
-    if any(marker in lowered for marker in ("mechanism", "pathway", "causal", "how does")):
-        return "mechanism_summary"
-    if any(
-        marker in lowered for marker in ("regulatory history", "timeline", "rulemaking", "listing", "critical habitat")
-    ):
-        return "regulatory_chain"
-    if any(marker in lowered for marker in ("trade-off", "tradeoff", "tradeoffs", "practical implications")):
-        return "intervention_tradeoff"
-    if any(
-        marker in lowered
-        for marker in (
-            "limitation",
-            "limitations",
-            "validation",
-            "validated",
-            "operationally useful",
-            "most useful",
-            "practical",
-            "implementation",
-        )
-    ):
-        return "evidence_planning"
-    follow_up_mode = str(session_strategy_metadata.get("followUpMode") or "").strip().lower()
-    if follow_up_mode == "comparison":
-        return "comparison"
-    if follow_up_mode == "claim_check":
-        return "evidence_planning"
-    return "metadata" if explicit_source_reference(question) else "evidence_planning"
+    return question_mode
 
 
 def _guided_follow_up_answer_mode(question: str, session_strategy_metadata: dict[str, Any]) -> str:
     response_mode = _guided_follow_up_response_mode(question, session_strategy_metadata)
-    if response_mode == "comparison":
+    if response_mode in {"comparison", "selection"}:
         return "comparison"
     if response_mode in {"mechanism_summary", "regulatory_chain", "intervention_tradeoff"}:
         return "claim_check"
     return "qa"
+
+
+def _guided_session_introspection_provenance(
+    *,
+    facets: set[str],
+    metadata_answers: list[str],
+) -> tuple[str, str, str]:
+    if "relevance_triage" in facets:
+        return "session_relevance_triage", "saved_session_source_selection", "relevance_triage_answered"
+    if {"source_overview", "specific_source"} & facets or metadata_answers:
+        return "session_source_introspection", "saved_session_source_metadata", "source_metadata_answered"
+    return "session_introspection", "saved_session_metadata", "metadata_answered"
 
 
 async def _answer_follow_up_from_session_state(
@@ -706,6 +681,10 @@ async def _answer_follow_up_from_session_state(
     _answer_text = " ".join(answer_parts) if _has_strong_session_evidence else ""
     _selected_evidence_ids = follow_up_decision.selected_evidence_ids if _has_strong_session_evidence else []
     _selected_lead_ids = follow_up_decision.selected_lead_ids if _has_strong_session_evidence else []
+    _execution_mode, _answer_source, _answer_kind = _guided_session_introspection_provenance(
+        facets=facets,
+        metadata_answers=metadata_answers,
+    )
 
     return {
         "searchSessionId": session_state["searchSessionId"],
@@ -745,8 +724,9 @@ async def _answer_follow_up_from_session_state(
             )
         ),
         "executionProvenance": _guided_execution_provenance_payload(
-            execution_mode="session_introspection",
-            answer_source="saved_session_metadata",
+            execution_mode=_execution_mode,
+            answer_source=_answer_source,
+            answer_kind=_answer_kind,
             passes_run=0,
         ),
         "confidenceSignals": _guided_confidence_signals(

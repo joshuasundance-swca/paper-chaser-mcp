@@ -150,13 +150,6 @@ future iterations can address them rather than having docs quietly overclaim.
   `PlannerDecision.subject_card` once and downstream call sites read from that
   field, which functions as an implicit single-resolution-per-request memo —
   but it is not a cache across sessions, tools, or follow-up calls.
-- **Richer subject-card fields.** The shipped `SubjectCard` exposes only
-  `commonName`, `scientificName`, `agency`, `requestedDocumentFamily`,
-  `subjectTerms` (up to six candidate concepts), `confidence`, and `source`.
-  Explicit alias lists, taxonomy trees (order/family/genus), and
-  pre-resolved primary-source anchor URLs are not on the card. Agents that
-  want aliases today can approximate by reading `subjectTerms` or by pivoting
-  into `resolve_reference`.
 - **Per-source LLM-composed weak-match rationale.** `whyClassifiedAsWeakMatch`
   at `inspect_source` time is composed deterministically (see the weak-match
   rationale section above). A future iteration could add an optional

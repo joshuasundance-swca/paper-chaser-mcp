@@ -511,10 +511,21 @@ def _grounded_follow_up_response() -> dict:
         "sources": [{"sourceId": "src-1", "title": "Ragas"}],
         "structuredSources": [
             {"sourceId": "src-1", "title": "Ragas"},
-            {"sourceId": "src-2", "title": "Another"},
+            {
+                "sourceId": "src-2",
+                "title": "Another",
+                "leadReason": "Retained as related context, but not strong enough to ground the answer.",
+                "whyNotVerified": "Topical relevance was off_topic.",
+            },
         ],
         "verifiedFindings": [{"claim": "Ragas supports RAG", "sourceId": "src-1"}],
-        "unverifiedLeads": [{"sourceId": "lead-1"}],
+        "unverifiedLeads": [
+            {
+                "sourceId": "lead-1",
+                "leadReason": "Retained as a lead because it may still help narrow the next question.",
+                "whyNotVerified": "Verification status was unverified.",
+            }
+        ],
         "coverage": {
             "totalSources": 2,
             "byAccessStatus": {"open_access": 1, "access_unverified": 1},
@@ -650,6 +661,19 @@ def test_follow_up_compact_reports_sources_suppressed_int_count() -> None:
     assert shaped["sourcesSuppressed"] == 2
 
 
+def test_follow_up_compact_preserves_suppressed_source_rationales() -> None:
+    shaped = _apply_follow_up_response_mode(
+        _grounded_follow_up_response(),
+        response_mode="compact",
+        include_legacy_fields=False,
+    )
+    assert shaped["suppressedSourceRationales"]
+    assert any(
+        "off_topic" in reason or "best match" in reason or "ground" in reason.lower()
+        for reason in shaped["suppressedSourceRationales"]
+    )
+
+
 def test_follow_up_compact_preserves_top_recommendation() -> None:
     shaped = _apply_follow_up_response_mode(
         _grounded_follow_up_response(),
@@ -742,6 +766,13 @@ def test_follow_up_insufficient_evidence_still_abstains_compactly() -> None:
         "verifiedFindings": [{"claim": "should be dropped"}],
         "unverifiedLeads": [{"sourceId": "lead-x"}],
         "evidence": [{"evidenceId": "ev-1"}],
+        "structuredSources": [
+            {
+                "sourceId": "src-x",
+                "leadReason": "Retained as related context, but not strong enough to ground the answer.",
+                "whyNotVerified": "Topical relevance was off_topic.",
+            }
+        ],
     }
     shaped = _guided_finalize_response(
         tool_name="follow_up_research",
@@ -754,6 +785,10 @@ def test_follow_up_insufficient_evidence_still_abstains_compactly() -> None:
     assert shaped.get("legacyFieldsIncluded") is False
     assert shaped["abstentionDetails"]["reason"] == "weak_pool"
     assert shaped["nextActions"] == ["broaden_search"]
+    assert shaped["suppressedSourceRationales"] == [
+        "Retained as related context, but not strong enough to ground the answer.",
+        "Topical relevance was off_topic.",
+    ]
 
 
 def test_follow_up_args_rejects_invalid_response_mode() -> None:

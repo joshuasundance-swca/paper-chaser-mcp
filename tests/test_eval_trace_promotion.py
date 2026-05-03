@@ -80,3 +80,44 @@ def test_write_promoted_rows_creates_parent_directories(tmp_path: Path) -> None:
     assert output_path.exists()
     contents = output_path.read_text(encoding="utf-8")
     assert "trace_promoted_planner_pfas_001" in contents
+
+
+def test_promote_reviewed_traces_preserves_trace_diagnostics() -> None:
+    rows = [
+        {
+            "trace_id": "trace_diag_001",
+            "run_id": "run_diag_001",
+            "batch_id": "batch_diag_001",
+            "reviewed_at": "2026-05-03T00:00:00Z",
+            "trace": {
+                "source_tool": "follow_up_research",
+                "query_context": "Saved mixed RAG evaluation session",
+                "follow_up_question": "What do these papers actually support?",
+                "evidence_quality": "mixed",
+                "captured_output": {
+                    "rankingDiagnostics": {"status": "insufficient_evidence", "topCandidateCount": 3},
+                    "preFilterCandidates": [{"sourceId": "paper-a"}],
+                    "scoreBreakdown": {"semantic": 0.32, "citation": 0.1},
+                    "classificationProvenance": {"fallback": True},
+                    "synthesisMode": "limited",
+                    "evidenceQualityProfile": "weak",
+                },
+            },
+            "review": {
+                "promote": True,
+                "id": "trace_diag_001",
+                "task_family": "synthesis",
+                "expected": {"expected_answer_status": "insufficient_evidence"},
+                "labels": {"trainingEligibility": "approved"},
+            },
+        }
+    ]
+
+    promoted = promote_reviewed_traces(rows, dataset_version="0.1.0")
+
+    assert promoted[0]["traceDiagnostics"]["rankingDiagnostics"]["topCandidateCount"] == 3
+    assert promoted[0]["traceDiagnostics"]["preFilterCandidates"][0]["sourceId"] == "paper-a"
+    assert promoted[0]["traceDiagnostics"]["scoreBreakdown"]["semantic"] == 0.32
+    assert promoted[0]["traceDiagnostics"]["classificationProvenance"]["fallback"] is True
+    assert promoted[0]["traceDiagnostics"]["synthesisMode"] == "limited"
+    assert promoted[0]["traceDiagnostics"]["evidenceQualityProfile"] == "weak"

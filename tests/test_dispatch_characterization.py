@@ -371,7 +371,20 @@ async def test_characterization_inspect_source(
         await server.call_tool("research", {"query": "transformers"}),
     )
     session_id = initial.get("searchSessionId")
-    sources = initial.get("sources") or initial.get("structuredSources") or []
+    sources = (
+        initial.get("sources")
+        or initial.get("structuredSources")
+        or [
+            {"sourceId": item.get("evidenceId")}
+            for item in (initial.get("evidence") or [])
+            if isinstance(item, dict) and item.get("evidenceId")
+        ]
+        or [
+            {"sourceId": item.get("evidenceId")}
+            for item in (initial.get("leads") or [])
+            if isinstance(item, dict) and item.get("evidenceId")
+        ]
+    )
     assert session_id, "deterministic research must seed a searchSessionId for inspect_source"
     assert sources, "deterministic research must seed inspectable sources; seeding drift is a harness bug."
     source_id = sources[0].get("sourceId")

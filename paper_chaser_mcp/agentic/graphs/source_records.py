@@ -499,6 +499,14 @@ def _candidate_leads_from_source_records(records: list[StructuredSourceRecord]) 
     return _records_with_lead_reasons(_dedupe_structured_sources(leads)[:6])
 
 
+def _structured_sources_with_enriched_leads(records: list[StructuredSourceRecord]) -> list[StructuredSourceRecord]:
+    lead_by_key = {
+        (lead.title, lead.canonical_url, lead.citation_text): lead
+        for lead in _candidate_leads_from_source_records(records)
+    }
+    return [lead_by_key.get((record.title, record.canonical_url, record.citation_text), record) for record in records]
+
+
 def _evidence_from_source_records(records: list[StructuredSourceRecord]) -> list[StructuredSourceRecord]:
     evidence: list[StructuredSourceRecord] = []
     for record in records:

@@ -62,6 +62,27 @@ def test__guided_source_record_from_structured_source_minimum_fields() -> None:
     assert record["verificationStatus"] == "unverified"
 
 
+def test__guided_source_record_from_structured_source_preserves_enriched_metadata() -> None:
+    record = _guided_source_record_from_structured_source(
+        {
+            "sourceId": "fr-1",
+            "title": "Federal Register notice",
+            "sourceType": "primary_regulatory",
+            "classificationRationale": "Notice mentions endangered species broadly, not desert tortoise.",
+            "classificationSource": "llm_tiebreaker",
+            "leadReason": "Retained as context, but not strong enough to ground the answer.",
+            "documentFamilyMatch": "recovery_plan",
+            "documentFamilyBoost": 0.25,
+        },
+        index=1,
+    )
+    assert record["classificationRationale"] == "Notice mentions endangered species broadly, not desert tortoise."
+    assert record["classificationSource"] == "llm_tiebreaker"
+    assert record["leadReason"] == "Retained as context, but not strong enough to ground the answer."
+    assert record["documentFamilyMatch"] == "recovery_plan"
+    assert record["documentFamilyBoost"] == 0.25
+
+
 def test__guided_source_record_from_paper_sets_verification_when_metadata_present() -> None:
     record = _guided_source_record_from_paper(
         "climate change",

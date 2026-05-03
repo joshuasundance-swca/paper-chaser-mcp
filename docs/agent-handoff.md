@@ -189,8 +189,8 @@ following additions on top of `main`:
 - **Docs-drift cleanup** (`4637cde`): aligned overclaims in
   `guided-smart-robustness.md`, `golden-paths.md`, and this handoff with
   actual code behaviour; added a "Known gaps" subsection for honest tech
-  debt (no cross-request SubjectCard cache, no richer SubjectCard fields,
-  no per-source LLM-composed weak-match rationale).
+  debt (no cross-request SubjectCard cache, no per-source LLM-composed
+  weak-match rationale).
 - **Surface strategy signals + LLM-first follow-up gate + provenance fix**
   (`df918df`): extended `routingSummary` with Phase 4/5 fields (additive
   Option C); added LLM-first `classify_question_mode` with async variant,
@@ -747,7 +747,10 @@ modules and made targeted fixes throughout the codebase.
   plan for the latest environmental-science review, especially for follow-up
   degradation, species-specific regulatory grounding, and provenance UX.
 3. Improve `unverifiedLeads` ergonomics so users can see why something was
-   excluded without mistaking it for verified support.
+  excluded without mistaking it for verified support. Guided compact
+  follow-up now preserves a high-signal `suppressedSourceRationales` field,
+  so the remaining work here is tuning and broader UX consistency rather than
+  basic rationale retention.
 4. Continue tightening the expert smart surface until landscape/graph tools
    consistently meet the same trust bar as guided outputs.
 5. If the GitHub agentic workflow needs broader expert coverage, keep the
@@ -772,23 +775,18 @@ modules and made targeted fixes throughout the codebase.
     synthesis-sufficiency check, and a generalized fallback-only gate
     (previously comparison-only). Deferred items worth a near-term follow-up:
 
-    - Replace the keyword heuristic in `classify_question_mode` with a real
-      LLM answer-mode classifier. It is deliberately distinct from the
-      per-paper `llm_relevance` evidence-mode classifier; conflating them is
-      documented tech debt.
-    - Align `dispatch.py::_guided_follow_up_response_mode` (still has its own
-      keyword logic, emits `"evidence_planning"` not in `ANSWER_MODES`) with
-      `classify_question_mode`.
+    - The LLM answer-mode classifier path is already wired in `ask_result_set`.
+      Remaining work is improving classifier quality/coverage rather than
+      plumbing it into the runtime.
     - Empirically tune the weak-pool threshold
       (`PAPER_CHASER_WEAK_EVIDENCE_POOL_THRESHOLD`, default 0.6).
-    - Consider extending the fallback-only gate to `"unknown"` mode. Today
-      generic synthesis-shaped questions that don't keyword-match any
-      synthesis family classify as `"unknown"` and get a permissive plan so
-      downstream `should_abstain` / coverage / unsupported-asks machinery
-      retains ownership.
-    - Real provider-lane bounded recovery (distinct from the current
-      deterministic fallback path) remains unimplemented and is currently
-      dead code.
+    - The fallback-only gate already covers `"unknown"` follow-up mode when
+      the question is synthesis-shaped over a weak evidence pool. Remaining
+      work is threshold/calibration, not extending the gate itself.
+    - Real provider-lane bounded recovery now honors `revisedProviders` on the
+      smart regulatory empty-route and low-result retry paths. Remaining work,
+      if any, is tuning and richer operator-facing diagnostics rather than
+      wiring the recovery lane itself.
 
 ## Ready Handoff Prompt
 

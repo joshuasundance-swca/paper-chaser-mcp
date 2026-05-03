@@ -364,6 +364,7 @@ def build_eval_capture_payload(
                 "answer": result.get("answer"),
                 "selectedEvidenceIds": result.get("selectedEvidenceIds") or [],
                 "selectedLeadIds": result.get("selectedLeadIds") or [],
+                "evidenceUsePlan": result.get("evidenceUsePlan"),
                 "abstentionDetails": result.get("abstentionDetails"),
                 "resultState": result.get("resultState"),
                 "executionProvenance": result.get("executionProvenance"),

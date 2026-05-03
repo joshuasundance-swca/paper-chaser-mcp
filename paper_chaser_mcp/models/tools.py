@@ -176,6 +176,14 @@ class ResearchArgs(ToolArgsModel):
     year: str | None = Field(default=None, description="Optional year or year range hint, e.g. 2022:2025.")
     venue: str | None = Field(default=None, description="Optional venue hint to narrow the request.")
     focus: str | None = Field(default=None, description="Optional focus hint to steer the research goal.")
+    include_legacy_fields: bool = Field(
+        default=False,
+        alias="includeLegacyFields",
+        description=(
+            "Opt-in restore of legacy compatibility views (verifiedFindings, sources, unverifiedLeads, coverage) "
+            "on successful guided research responses. Compact abstention shaping is unchanged."
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod

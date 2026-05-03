@@ -48,10 +48,9 @@ _STABLE_RESEARCH_KEYS_GROUNDED: frozenset[str] = frozenset(
         "searchSessionId",
         "status",
         "intent",
-        "sources",
         "evidenceGaps",
         "trustSummary",
-        "coverage",
+        "coverageSummary",
         "failureSummary",
         "nextActions",
         "resultMeaning",
@@ -61,6 +60,7 @@ _STABLE_RESEARCH_KEYS_GROUNDED: frozenset[str] = frozenset(
         "routingSummary",
         "evidence",
         "leads",
+        "legacyFieldsIncluded",
         "inputNormalization",
         "summary",
     }
@@ -208,7 +208,12 @@ async def test_research_grounded_response_exposes_confidence_and_routing_signals
     )
     monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime(smart_result=smart))
 
-    payload = _payload(await server.call_tool("research", {"query": "desert tortoise recovery plan"}))
+    payload = _payload(
+        await server.call_tool(
+            "research",
+            {"query": "desert tortoise recovery plan", "includeLegacyFields": True},
+        )
+    )
 
     # confidenceSignals wired end-to-end
     cs = payload.get("confidenceSignals")
@@ -265,7 +270,12 @@ async def test_research_weak_match_populates_authoritative_but_weak_bucket(
     )
     monkeypatch.setattr(server, "agentic_runtime", _FakeRuntime(smart_result=smart))
 
-    payload = _payload(await server.call_tool("research", {"query": "desert tortoise recovery plan"}))
+    payload = _payload(
+        await server.call_tool(
+            "research",
+            {"query": "desert tortoise recovery plan", "includeLegacyFields": True},
+        )
+    )
 
     ts = payload.get("trustSummary") or {}
     assert "fr-weak-1" in (ts.get("authoritativeButWeak") or []), (
@@ -653,13 +663,12 @@ async def test_deterministic_provider_bundle_emits_populated_subject_card() -> N
 
 
 @pytest.mark.asyncio
-async def test_research_response_shape_snapshot_keeps_legacy_keys_stable(
+async def test_research_response_shape_snapshot_keeps_default_keys_stable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Snapshot-style test: on the smart-backed research path, the top-level
-    response must continue to expose the set of legacy/stable keys that
-    downstream agents and docs rely on. Phase 4/5 work is additive — it must
-    not silently drop any of these.
+    response must continue to expose the stable default key set that
+    downstream guided agents and docs rely on after the legacy-field migration.
     """
     smart = _smart_result(
         intent="regulatory",

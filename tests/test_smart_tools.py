@@ -852,6 +852,7 @@ async def test_search_papers_smart_recovers_known_item_when_forced_regulatory_mo
     assert payload["resultStatus"] == "succeeded"
     assert payload["hasInspectableSources"] is True
     assert any("known-item recovery" in warning.lower() for warning in payload["strategyMetadata"]["driftWarnings"])
+    assert not any(call[0] == "search" and str(call[1].get("query") or "") == exact_title for call in openalex.calls)
 
 
 @pytest.mark.asyncio
@@ -905,6 +906,7 @@ async def test_search_papers_smart_low_result_recovery_uses_revised_strategy() -
     assert payload["results"][0]["paper"]["title"] == exact_title
     assert payload["strategyMetadata"]["recoveryAttempted"] is True
     assert payload["strategyMetadata"]["recoveryPath"] == ["discovery", "known_item"]
+    assert not any(call[0] == "search" and str(call[1].get("query") or "") == exact_title for call in openalex.calls)
 
 
 @pytest.mark.asyncio
@@ -2709,6 +2711,12 @@ async def test_map_research_landscape_balanced_mode_skips_embedding_clustering()
     )
 
     assert landscape["themes"]
+    assert landscape["candidateLeads"]
+    assert landscape["structuredSources"]
+    assert landscape["candidateLeads"][0]["leadReason"]
+    assert landscape["candidateLeads"][0]["whyNotVerified"]
+    assert landscape["structuredSources"][0]["leadReason"] == landscape["candidateLeads"][0]["leadReason"]
+    assert landscape["structuredSources"][0]["whyNotVerified"] == landscape["candidateLeads"][0]["whyNotVerified"]
 
 
 @pytest.mark.asyncio

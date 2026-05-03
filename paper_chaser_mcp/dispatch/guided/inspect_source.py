@@ -53,6 +53,16 @@ def _guided_compact_source_candidate(candidate: dict[str, Any]) -> dict[str, Any
         value = candidate.get(key)
         if value not in (None, "", [], {}):
             projected[key] = value
+    candidate_rationale = next(
+        (
+            str(candidate.get(key) or "").strip()
+            for key in ("whyClassifiedAsWeakMatch", "whyNotVerified", "leadReason", "note")
+            if str(candidate.get(key) or "").strip()
+        ),
+        "",
+    )
+    if candidate_rationale:
+        projected["candidateRationale"] = candidate_rationale
     return projected
 
 

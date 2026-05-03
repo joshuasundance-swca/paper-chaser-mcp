@@ -17,7 +17,7 @@ Use this alongside:
 - Phase 4.1 compact abstention responses: completed as a safe subset
   Outcome: guided `research` abstention responses and guided `follow_up_research` abstained or insufficient-evidence responses now suppress heavyweight source and legacy payload sections while preserving explicit recovery metadata.
 - Phase 4.2 reduce duplicate serialization and legacy field bloat: partially complete
-  Outcome: empty legacy compatibility fields are no longer serialized unnecessarily, and compact abstention paths now omit duplicate legacy/source sections. Full removal of compatibility views on successful responses remains intentionally deferred for compatibility.
+  Outcome: empty legacy compatibility fields are no longer serialized unnecessarily, compact abstention paths now omit duplicate legacy/source sections, and guided `research` now drops legacy compatibility views on successful responses by default while preserving an explicit `includeLegacyFields=true` escape hatch.
 - Phase 5.3 improve `bestMatch` confidence: completed
   Outcome: very high title-similarity fuzzy or citation-ranked matches are now promoted more aggressively so correct top-ranked papers are less likely to fall into alternatives-only responses.
 - Phase 7.2 live integration tests with graceful skips: completed
@@ -33,9 +33,12 @@ Use this alongside:
 
 ## Compatibility notes
 
-- The repo still preserves compatibility views such as `verifiedFindings`, `sources`, `unverifiedLeads`, and `coverage` on non-abstention success paths.
-- That duplication is still intentional until downstream consumers are ready to rely only on `evidence`, `leads`, `routingSummary`, and `coverageSummary`.
-- The current payload-efficiency work therefore focuses on the highest-value safe subset: abstention and insufficient-evidence paths, where repeated source reserialization costs the most and helps the least.
+- Guided `research` now defaults to the canonical `evidence` / `leads` /
+  `routingSummary` / `coverageSummary` surface on successful responses.
+- Callers that still need `verifiedFindings`, `sources`, `unverifiedLeads`, or
+  `coverage` can opt back in with `includeLegacyFields=true`.
+- Guided `follow_up_research` retains its existing compact-by-default shaping,
+  with `responseMode` and `includeLegacyFields` controlling compatibility views.
 
 ## Validation anchors
 
@@ -56,6 +59,6 @@ python -m pytest tests/test_payload_efficiency.py tests/test_citation_repair_fix
 
 ## Remaining follow-on work
 
-1. Decide when successful guided responses can stop serializing legacy compatibility views by default.
+1. Decide when remaining successful guided surfaces beyond `research` should stop serializing legacy compatibility views by default.
 2. Strengthen entity-grounded regulatory and species routing beyond the schema and eval foundations landed here.
 3. Expand live stress-scenario replay and trace promotion so the in-repo fixtures stay paired with fresh observed failures.
