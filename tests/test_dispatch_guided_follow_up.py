@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from paper_chaser_mcp.agentic.answer_modes import classify_question_mode
 from paper_chaser_mcp.dispatch.guided.follow_up import (
     _answer_follow_up_from_session_state,
     _guided_follow_up_answer_mode,
@@ -70,6 +71,31 @@ class TestFollowUpResponseMode:
     def test_returns_string(self) -> None:
         result = _guided_follow_up_response_mode("what?", {})
         assert isinstance(result, str)
+
+    @pytest.mark.parametrize(
+        ("question", "strategy_metadata", "expected"),
+        [
+            ("Which paper should I read first?", {}, "selection"),
+            (
+                "Which providers were searched, and what specific evidence gap prevented a grounded answer?",
+                {"followUpMode": "claim_check"},
+                "metadata",
+            ),
+        ],
+    )
+    def test_preserves_guided_wrapper_semantics(
+        self,
+        question: str,
+        strategy_metadata: dict[str, str],
+        expected: str,
+    ) -> None:
+        assert _guided_follow_up_response_mode(question, strategy_metadata) == expected
+
+    def test_question_shape_wins_over_saved_claim_check_hint(self) -> None:
+        question = "What limitations or validation issues appear most often in the returned evidence?"
+        assert _guided_follow_up_response_mode(question, {"followUpMode": "claim_check"}) == classify_question_mode(
+            question
+        )
 
 
 class TestFollowUpAnswerMode:

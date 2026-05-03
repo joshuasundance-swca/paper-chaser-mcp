@@ -89,6 +89,9 @@ class _PlannerSubjectCardSchema(BaseModel):
     agency: str | None = None
     requestedDocumentFamily: str | None = None
     subjectTerms: list[str] = Field(default_factory=list)
+    aliases: list[str] = Field(default_factory=list)
+    taxonomyHints: dict[str, str] = Field(default_factory=dict)
+    primarySourceAnchors: list[str] = Field(default_factory=list)
     confidence: str | None = None
 
     def has_signal(self) -> bool:
@@ -101,6 +104,10 @@ class _PlannerSubjectCardSchema(BaseModel):
                 self.requestedDocumentFamily,
             )
         ):
+            return True
+        if any(isinstance(value, str) and value.strip() for value in self.aliases):
+            return True
+        if any(isinstance(value, str) and value.strip() for value in self.primarySourceAnchors):
             return True
         return bool([term for term in self.subjectTerms if isinstance(term, str) and term.strip()])
 
@@ -257,12 +264,45 @@ class _PlannerResponseSchema(BaseModel):
             subject_terms.append(cleaned)
         subject_terms = subject_terms[:6]
 
+        aliases: list[str] = []
+        seen_aliases: set[str] = set()
+        for alias in card.aliases:
+            if not isinstance(alias, str):
+                continue
+            cleaned = alias.strip()
+            lowered = cleaned.lower()
+            if not cleaned or lowered in seen_aliases:
+                continue
+            seen_aliases.add(lowered)
+            aliases.append(cleaned)
+
+        taxonomy_hints: dict[str, str] = {}
+        for raw_key, raw_value in card.taxonomyHints.items():
+            key = str(raw_key).strip()
+            value = str(raw_value).strip()
+            if key and value:
+                taxonomy_hints[key] = value
+
+        primary_source_anchors: list[str] = []
+        seen_anchors: set[str] = set()
+        for anchor in card.primarySourceAnchors:
+            if not isinstance(anchor, str):
+                continue
+            cleaned = anchor.strip()
+            if not cleaned or cleaned in seen_anchors:
+                continue
+            seen_anchors.add(cleaned)
+            primary_source_anchors.append(cleaned)
+
         return SubjectCard(
             commonName=_clean(card.commonName),
             scientificName=_clean(card.scientificName),
             agency=_clean(card.agency),
             requestedDocumentFamily=requested_family,
             subjectTerms=subject_terms,
+            aliases=aliases,
+            taxonomyHints=taxonomy_hints,
+            primarySourceAnchors=primary_source_anchors,
             confidence=confidence,
             source="planner_llm",
         )

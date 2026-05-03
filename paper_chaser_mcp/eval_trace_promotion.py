@@ -104,6 +104,24 @@ def _infer_expected(task_family: str, trace: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _build_trace_diagnostics(trace: dict[str, Any]) -> dict[str, Any] | None:
+    captured_output = _dict(trace.get("captured_output"))
+    diagnostics: dict[str, Any] = {}
+    for key in (
+        "rankingDiagnostics",
+        "preFilterCandidates",
+        "scoreBreakdown",
+        "classificationProvenance",
+        "synthesisMode",
+        "evidenceQualityProfile",
+        "evidenceUsePlan",
+    ):
+        value = captured_output.get(key)
+        if value not in (None, "", [], {}):
+            diagnostics[key] = value
+    return diagnostics or None
+
+
 def apply_yolo_review_defaults(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     updated_rows = copy.deepcopy(rows)
     session_queries: dict[str, str] = {}
@@ -191,6 +209,7 @@ def promote_reviewed_traces(rows: list[dict[str, Any]], *, dataset_version: str)
         if not task_family:
             raise ValueError("review.task_family is required for promoted traces")
         trace = row.get("trace") or {}
+        trace_diagnostics = _build_trace_diagnostics(_dict(trace))
         promoted.append(
             {
                 "meta": {
@@ -215,6 +234,7 @@ def promote_reviewed_traces(rows: list[dict[str, Any]], *, dataset_version: str)
                     "batchId": row.get("batch_id"),
                     "runId": row.get("run_id"),
                 },
+                **({"traceDiagnostics": trace_diagnostics} if trace_diagnostics is not None else {}),
                 **({"live_eval": row.get("live_eval")} if isinstance(row.get("live_eval"), dict) else {}),
             }
         )

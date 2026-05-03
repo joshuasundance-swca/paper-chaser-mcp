@@ -64,6 +64,9 @@ async def test_llm_native_regulatory_intent_and_subject_card_pass_through() -> N
             agency="USFWS",
             requestedDocumentFamily="recovery_plan",
             subjectTerms=["desert tortoise", "recovery plan"],
+            aliases=["Mojave desert tortoise"],
+            taxonomyHints={"family": "Testudinidae", "genus": "Gopherus"},
+            primarySourceAnchors=["https://ecos.fws.gov/ecp/species/3462"],
             confidence="high",
         ),
     )
@@ -88,6 +91,9 @@ async def test_llm_native_regulatory_intent_and_subject_card_pass_through() -> N
     assert planner.subject_card.scientific_name == "Gopherus agassizii"
     assert planner.subject_card.requested_document_family == "recovery_plan"
     assert planner.subject_card.agency == "USFWS"
+    assert planner.subject_card.aliases == ["Mojave desert tortoise"]
+    assert planner.subject_card.taxonomy_hints == {"family": "Testudinidae", "genus": "Gopherus"}
+    assert planner.subject_card.primary_source_anchors == ["https://ecos.fws.gov/ecp/species/3462"]
     assert planner.subject_card.confidence == "high"
     assert planner.subject_card.source == "planner_llm"
 

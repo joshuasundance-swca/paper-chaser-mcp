@@ -198,6 +198,7 @@ async def run_search_papers_smart(
     provider_budget: dict[str, Any] | None = None,
     include_enrichment: bool = False,
     ctx: Context | None = None,
+    _provider_plan_override: list[str] | None = None,
 ) -> dict[str, Any]:
     """Smart concept-level discovery with grounded expansion and fusion."""
     from . import _core  # noqa: PLC0415 - defer for test-monkeypatch visibility
@@ -215,6 +216,9 @@ async def run_search_papers_smart(
     profile_settings = runtime._config.latency_profile_settings(latency_profile)
     provider_bundle = runtime._provider_bundle_for_profile(latency_profile)
     budget_state = ProviderBudgetState.from_mapping(provider_budget)
+    provider_plan_override = [
+        str(provider).strip() for provider in (_provider_plan_override or []) if str(provider).strip()
+    ] or None
     request_id = f"smart-{uuid4().hex[:10]}"
     provider_outcomes: list[dict[str, Any]] = []
     stage_timings_ms: dict[str, int] = {}
@@ -252,7 +256,7 @@ async def run_search_papers_smart(
             query=normalized_query,
             limit=limit,
             planner=planner,
-            provider_plan=planner.provider_plan or None,
+            provider_plan=provider_plan_override or planner.provider_plan or None,
             provider_budget=budget_state,
             search_session_id=search_session_id,
             latency_profile=latency_profile,
@@ -297,6 +301,9 @@ async def run_search_papers_smart(
         )
         revised_query = str(revision.get("revisedQuery") or normalized_query)
         revised_intent = str(revision.get("revisedIntent") or "review")
+        revised_providers = [
+            str(provider).strip() for provider in (revision.get("revisedProviders") or []) if str(provider).strip()
+        ]
         revision_rationale = str(revision.get("rationale") or "")
         await runtime._emit_smart_search_status(
             ctx=ctx,
@@ -321,6 +328,7 @@ async def run_search_papers_smart(
             provider_budget=provider_budget,
             include_enrichment=include_enrichment,
             ctx=ctx,
+            _provider_plan_override=revised_providers or None,
         )
         strategy_metadata = recovered.get("strategyMetadata") if isinstance(recovered, dict) else None
         if isinstance(strategy_metadata, dict):
@@ -378,7 +386,7 @@ async def run_search_papers_smart(
                 scholarapi_client=runtime._scholarapi_client,
                 arxiv_client=runtime._arxiv_client,
                 serpapi_client=runtime._serpapi_client,
-                provider_plan=(candidate.provider_plan or planner.provider_plan or None),
+                provider_plan=(provider_plan_override or candidate.provider_plan or planner.provider_plan or None),
                 widened=planner.intent == "review",
                 is_expansion=False,
                 allow_serpapi=(runtime._enable_serpapi and profile_settings.allow_serpapi_on_input),
@@ -526,7 +534,9 @@ async def run_search_papers_smart(
                         scholarapi_client=runtime._scholarapi_client,
                         arxiv_client=runtime._arxiv_client,
                         serpapi_client=runtime._serpapi_client,
-                        provider_plan=(candidate.provider_plan or planner.provider_plan or None),
+                        provider_plan=(
+                            provider_plan_override or candidate.provider_plan or planner.provider_plan or None
+                        ),
                         widened=planner.intent == "review",
                         is_expansion=True,
                         allow_serpapi=(runtime._enable_serpapi and profile_settings.allow_serpapi_on_expansions),
@@ -586,7 +596,7 @@ async def run_search_papers_smart(
                     scholarapi_client=runtime._scholarapi_client,
                     arxiv_client=runtime._arxiv_client,
                     serpapi_client=runtime._serpapi_client,
-                    provider_plan=(candidate.provider_plan or planner.provider_plan or None),
+                    provider_plan=(provider_plan_override or candidate.provider_plan or planner.provider_plan or None),
                     widened=planner.intent == "review",
                     is_expansion=True,
                     allow_serpapi=(runtime._enable_serpapi and profile_settings.allow_serpapi_on_expansions),
@@ -723,6 +733,9 @@ async def run_search_papers_smart(
         )
         revised_query = normalize_query(str(revision.get("revisedQuery") or normalized_query))
         revised_intent = str(revision.get("revisedIntent") or planner.intent)
+        revised_providers = [
+            str(provider).strip() for provider in (revision.get("revisedProviders") or []) if str(provider).strip()
+        ]
         revision_rationale = str(revision.get("rationale") or "").strip()
         if revised_query.lower() != normalized_query.lower() or revised_intent != planner.intent:
             await runtime._emit_smart_search_status(
@@ -761,6 +774,7 @@ async def run_search_papers_smart(
                 provider_budget=provider_budget,
                 include_enrichment=include_enrichment,
                 ctx=ctx,
+                _provider_plan_override=revised_providers or None,
             )
             strategy_metadata = recovered.get("strategyMetadata") if isinstance(recovered, dict) else None
             if isinstance(strategy_metadata, dict):

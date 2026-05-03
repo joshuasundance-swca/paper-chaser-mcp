@@ -35,6 +35,7 @@ def _guided_execution_provenance_payload(
     *,
     execution_mode: str,
     answer_source: str | None = None,
+    answer_kind: str | None = None,
     latency_profile_applied: str | None = None,
     allow_paid_providers: bool | None = None,
     provider_budget_applied: dict[str, Any] | None = None,
@@ -55,6 +56,7 @@ def _guided_execution_provenance_payload(
     provenance = GuidedExecutionProvenance(
         executionMode=execution_mode,
         answerSource=answer_source,
+        answerKind=answer_kind,
         serverPolicyApplied=GUIDED_POLICY_NAME,
         latencyProfileApplied=latency_profile,
         allowPaidProviders=allow_paid_providers,

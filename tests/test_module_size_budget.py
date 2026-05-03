@@ -122,7 +122,7 @@ BASELINE_LINE_COUNTS: dict[str, int] = {
     "paper_chaser_mcp/citation_repair/api.py": 880,
     "paper_chaser_mcp/clients/ecos/client.py": 963,
     "paper_chaser_mcp/clients/semantic_scholar/client.py": 1_179,
-    "paper_chaser_mcp/dispatch/_core.py": 3_665,
+    "paper_chaser_mcp/dispatch/_core.py": 3_719,
     "paper_chaser_mcp/dispatch/guided/trust.py": 984,
     "paper_chaser_mcp/enrichment.py": 816,
     "paper_chaser_mcp/models/common.py": 1_107,

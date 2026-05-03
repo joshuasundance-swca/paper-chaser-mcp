@@ -83,6 +83,9 @@ class SubjectCard(ApiModel):
         alias="requestedDocumentFamily",
     )
     subject_terms: list[str] = Field(default_factory=list, alias="subjectTerms")
+    aliases: list[str] = Field(default_factory=list)
+    taxonomy_hints: dict[str, str] = Field(default_factory=dict, alias="taxonomyHints")
+    primary_source_anchors: list[str] = Field(default_factory=list, alias="primarySourceAnchors")
     confidence: SubjectCardConfidence = "deterministic_fallback"
     source: Literal["planner_llm", "deterministic_fallback", "hybrid"] = "deterministic_fallback"
 

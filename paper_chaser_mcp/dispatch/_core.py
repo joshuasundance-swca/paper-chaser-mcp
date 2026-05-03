@@ -926,6 +926,7 @@ _FOLLOW_UP_COMPACT_FIELDS = {
     "searchSessionId",
     "answerStatus",
     "answer",
+    "suppressedSourceRationales",
     "unsupportedAsks",
     "followUpQuestions",
     "evidenceGaps",
@@ -1067,6 +1068,32 @@ def _dedupe_compact_identifiers(identifiers: list[str]) -> list[str]:
     return deduped
 
 
+def _compact_suppressed_source_rationales(response: dict[str, Any]) -> list[str]:
+    """Collect short plain-language reasons from source-like payloads being suppressed."""
+
+    rationales: list[str] = []
+    generic_prefixes = ("verification status was ",)
+
+    def _add(value: Any) -> None:
+        text = str(value or "").strip()
+        lowered = text.lower()
+        if text and not any(lowered.startswith(prefix) for prefix in generic_prefixes) and text not in rationales:
+            rationales.append(text)
+
+    for key in ("unverifiedLeads", "structuredSources", "sources", "leads"):
+        records = response.get(key)
+        if not isinstance(records, list):
+            continue
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            _add(record.get("leadReason"))
+            _add(record.get("whyNotVerified"))
+            _add(record.get("lead_reason"))
+            _add(record.get("why_not_verified"))
+    return rationales[:4]
+
+
 def _apply_follow_up_response_mode(
     response: dict[str, Any],
     *,
@@ -1096,6 +1123,7 @@ def _apply_follow_up_response_mode(
     if response_mode == "compact":
         suppressed_count = 0
         dropped_source_payload = False
+        suppressed_rationales = _compact_suppressed_source_rationales(shaped)
         kept_identifiers = _dedupe_compact_identifiers(
             [
                 str(identifier).strip()
@@ -1142,6 +1170,8 @@ def _apply_follow_up_response_mode(
             shaped["sourcesSuppressed"] = suppressed_count
         elif dropped_source_payload:
             shaped["sourcesSuppressed"] = True
+        if suppressed_rationales:
+            shaped["suppressedSourceRationales"] = suppressed_rationales
         shaped["responseMode"] = "compact"
 
     keep_keys = set(shaped.keys())
@@ -1587,7 +1617,11 @@ async def dispatch_tool(
             )
             if abstention_details is not None:
                 response["abstentionDetails"] = abstention_details
-            return _guided_finalize_response(tool_name="research", response=response)
+            return _guided_finalize_response(
+                tool_name="research",
+                response=response,
+                include_legacy_fields=research_args.include_legacy_fields,
+            )
 
         if intent == "known_item":
             resolved = await _dispatch_internal("resolve_reference", {"reference": research_args.query})
@@ -1677,7 +1711,11 @@ async def dispatch_tool(
             )
             if abstention_details is not None:
                 response["abstentionDetails"] = abstention_details
-            return _guided_finalize_response(tool_name="research", response=response)
+            return _guided_finalize_response(
+                tool_name="research",
+                response=response,
+                include_legacy_fields=research_args.include_legacy_fields,
+            )
 
         if agentic_runtime is not None:
             initial_provider_budget = _guided_provider_budget_payload(
@@ -2034,7 +2072,11 @@ async def dispatch_tool(
             )
             if abstention_details is not None:
                 response["abstentionDetails"] = abstention_details
-            return _guided_finalize_response(tool_name="research", response=response)
+            return _guided_finalize_response(
+                tool_name="research",
+                response=response,
+                include_legacy_fields=research_args.include_legacy_fields,
+            )
 
         raw = await _dispatch_internal(
             "search_papers",
@@ -2146,7 +2188,11 @@ async def dispatch_tool(
         )
         if abstention_details is not None:
             response["abstentionDetails"] = abstention_details
-        return _guided_finalize_response(tool_name="research", response=response)
+        return _guided_finalize_response(
+            tool_name="research",
+            response=response,
+            include_legacy_fields=research_args.include_legacy_fields,
+        )
 
     if name == "follow_up_research":
         normalized_follow_up_arguments, follow_up_normalization = _guided_normalize_follow_up_arguments(
@@ -2535,14 +2581,20 @@ async def dispatch_tool(
         )
         answer_status = str(ask.get("answerStatus") or "answered")
         answer_text = ask.get("answer")
-        answer_is_responsive = answer_status != "answered" or _guided_metadata_answer_is_responsive(
-            question=follow_up_args.question,
-            answer_text=answer_text,
-            sources=sources,
-            leads=unverified_leads,
-            selected_evidence_ids=selected_evidence_ids,
-            selected_lead_ids=selected_lead_ids,
+        requested_metadata_facets = _guided_requested_metadata_facets(follow_up_args.question)
+        requires_metadata_responsiveness = follow_up_response_mode in {"metadata", "relevance_triage"} or bool(
+            requested_metadata_facets - {"inventory"}
         )
+        answer_is_responsive = True
+        if answer_status == "answered" and requires_metadata_responsiveness:
+            answer_is_responsive = _guided_metadata_answer_is_responsive(
+                question=follow_up_args.question,
+                answer_text=answer_text,
+                sources=sources,
+                leads=unverified_leads,
+                selected_evidence_ids=selected_evidence_ids,
+                selected_lead_ids=selected_lead_ids,
+            )
         if answer_status == "answered" and (not _guided_is_usable_answer_text(answer_text) or not answer_is_responsive):
             if session_answer is not None:
                 session_answer["inputNormalization"] = _guided_normalization_payload(follow_up_normalization)

@@ -139,6 +139,37 @@ def test_maybe_capture_eval_candidate_records_expert_tool(tmp_path: Path) -> Non
     assert '"durationMs": 601' in text
 
 
+def test_maybe_capture_eval_candidate_records_follow_up_evidence_use_plan(tmp_path: Path) -> None:
+    trace_path = tmp_path / "captured-follow-up.jsonl"
+    registry = WorkspaceRegistry(ttl_seconds=1800, enable_trace_log=False, eval_trace_path=str(trace_path))
+    maybe_capture_eval_candidate(
+        workspace_registry=registry,
+        tool_name="follow_up_research",
+        arguments={"searchSessionId": "ssn_follow", "question": "What do these papers actually support?"},
+        result={
+            "searchSessionId": "ssn_follow",
+            "answerStatus": "insufficient_evidence",
+            "answer": None,
+            "selectedEvidenceIds": [],
+            "selectedLeadIds": [],
+            "evidenceUsePlan": {
+                "answerMode": "unknown",
+                "sufficient": False,
+                "retrievalSufficiency": "insufficient",
+                "onTopicCount": 0,
+                "fallbackOnlyOnTopic": 0,
+            },
+            "sources": [],
+        },
+        duration_ms=88,
+    )
+
+    text = trace_path.read_text(encoding="utf-8")
+    assert '"evidenceUsePlan"' in text
+    assert '"onTopicCount": 0' in text
+    assert '"fallbackOnlyOnTopic": 0' in text
+
+
 def test_build_batch_summary_counts_prompt_families() -> None:
     events = [
         {

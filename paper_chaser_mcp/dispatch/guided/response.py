@@ -17,6 +17,7 @@ from .._core import (
     _LLM_ANSWERABILITY_MAP,
     _RESEARCH_COMPACT_FIELDS,
     _apply_follow_up_response_mode,
+    _compact_suppressed_source_rationales,
 )
 from .trust import _guided_confidence_signals, _guided_follow_up_status
 
@@ -46,6 +47,9 @@ def _guided_compact_response_if_needed(*, tool_name: str, response: dict[str, An
             compacted.pop(key, None)
     if any(key in response for key in ("evidence", "leads", *sorted(_LEGACY_GUIDED_FIELDS))):
         compacted["sourcesSuppressed"] = True
+    suppressed_rationales = _compact_suppressed_source_rationales(response)
+    if suppressed_rationales:
+        compacted["suppressedSourceRationales"] = suppressed_rationales
     compacted["legacyFieldsIncluded"] = False
     return compacted
 
@@ -68,6 +72,10 @@ def _guided_finalize_response(
             response_mode=response_mode,
             include_legacy_fields=include_legacy_fields,
         )
+    elif tool_name == "research" and not include_legacy_fields:
+        for key in _LEGACY_GUIDED_FIELDS:
+            finalized.pop(key, None)
+        finalized["legacyFieldsIncluded"] = False
     if "legacyFieldsIncluded" not in finalized:
         finalized["legacyFieldsIncluded"] = any(key in finalized for key in _LEGACY_GUIDED_FIELDS)
     return finalized

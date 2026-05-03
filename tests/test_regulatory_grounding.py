@@ -209,6 +209,29 @@ def test_subject_card_deterministic_fallback_without_planner() -> None:
     assert card.source == "deterministic_fallback"
 
 
+def test_subject_card_preserves_additive_entity_card_fields() -> None:
+    planner = PlannerDecision(
+        intent="regulatory",
+        followUpMode="qa",
+        entityCard={
+            "commonName": "desert tortoise",
+            "scientificName": "Gopherus agassizii",
+            "authorityContext": "USFWS",
+            "requestedDocumentFamily": "recovery_plan",
+            "aliases": ["Mojave desert tortoise", "desert tortoise"],
+            "taxonomyHints": {"family": "Testudinidae", "genus": "Gopherus"},
+            "primarySourceAnchors": ["https://ecos.fws.gov/ecp/species/3462"],
+        },
+        candidateConcepts=["desert tortoise", "recovery plan"],
+    )
+
+    card = resolve_subject_card(query="desert tortoise recovery plan", planner=planner)
+
+    assert card.aliases == ["Mojave desert tortoise", "desert tortoise"]
+    assert card.taxonomy_hints == {"family": "Testudinidae", "genus": "Gopherus"}
+    assert card.primary_source_anchors == ["https://ecos.fws.gov/ecp/species/3462"]
+
+
 # ---------------------------------------------------------------------------
 # 3 & 4) Document-family ranking and source-record plumbing
 # ---------------------------------------------------------------------------
@@ -300,6 +323,23 @@ def test_compute_subject_chain_gaps_flags_missing_recovery_plan() -> None:
     )
     assert "species_evidence_without_recovery_plan" in gaps
     assert "species_evidence_without_critical_habitat" in gaps
+
+
+def test_compute_subject_chain_gaps_prefers_requested_document_family() -> None:
+    card = SubjectCard(
+        commonName="desert tortoise",
+        scientificName="Gopherus agassizii",
+        requestedDocumentFamily="recovery_plan",
+    )
+    documents = [
+        {"title": "ECOS species profile for desert tortoise", "summary": "Gopherus agassizii"},
+    ]
+    gaps = compute_subject_chain_gaps(
+        card=card,
+        regulatory_intent="species_dossier",
+        documents=documents,
+    )
+    assert gaps == ["species_evidence_without_recovery_plan"]
 
 
 def test_compute_subject_chain_gaps_empty_for_non_species_intent() -> None:

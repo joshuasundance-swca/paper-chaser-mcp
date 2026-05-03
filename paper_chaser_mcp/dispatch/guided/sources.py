@@ -86,6 +86,16 @@ def _guided_source_record_from_structured_source(source: dict[str, Any], *, inde
         "date": source.get("date"),
         "note": source.get("note"),
         "whyClassifiedAsWeakMatch": weak_match_reason,
+        "classificationRationale": source.get("classificationRationale"),
+        "classificationSource": source.get("classificationSource"),
+        "llmClassification": source.get("llmClassification"),
+        "leadReason": source.get("leadReason"),
+        "whyNotVerified": source.get("whyNotVerified"),
+        "relevanceSource": source.get("relevanceSource"),
+        "relevanceConfidence": source.get("relevanceConfidence"),
+        "relevanceReason": source.get("relevanceReason"),
+        "documentFamilyMatch": source.get("documentFamilyMatch"),
+        "documentFamilyBoost": source.get("documentFamilyBoost"),
     }
 
 

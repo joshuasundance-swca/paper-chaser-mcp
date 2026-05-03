@@ -328,6 +328,7 @@ class GuidedExecutionProvenance(ApiModel):
 
     execution_mode: str = Field(alias="executionMode")
     answer_source: str | None = Field(default=None, alias="answerSource")
+    answer_kind: str | None = Field(default=None, alias="answerKind")
     server_policy_applied: str = Field(alias="serverPolicyApplied")
     latency_profile_applied: str | None = Field(default=None, alias="latencyProfileApplied")
     allow_paid_providers: bool | None = Field(default=None, alias="allowPaidProviders")

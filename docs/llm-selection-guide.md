@@ -596,8 +596,10 @@ The relevant entrypoints are:
 - Expert `ask_result_set` in `paper_chaser_mcp/dispatch.py`
 - Expert `map_research_landscape` in `paper_chaser_mcp/dispatch.py`
 
-Guided `follow_up_research` delegates internally to `ask_result_set`, so the
-default public surface already depends on synthesis quality.
+Guided `follow_up_research` still depends on `ask_result_set` for grounded
+synthesis, but the wrapper now classifies the question shape itself and
+preserves explicit metadata / relevance-triage introspection semantics before
+choosing that path.
 
 The main internal methods are defined by the provider bundle contract in
 `paper_chaser_mcp/agentic/provider_base.py`:

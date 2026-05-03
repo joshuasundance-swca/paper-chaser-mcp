@@ -73,6 +73,12 @@ Current compact output telemetry can include:
 - `failureSummary`
 - `abstentionDetails`
 
+For follow-up traces, the capture layer also preserves `evidenceUsePlan` when
+it is present. For terminal non-success outcomes, captured events can include
+ranking and synthesis diagnostics such as `rankingDiagnostics`,
+`preFilterCandidates`, `scoreBreakdown`, `classificationProvenance`,
+`synthesisMode`, and `evidenceQualityProfile`.
+
 This is intentionally not a full low-level trace. It is the compact curation
 surface that feeds triage, promotion, and offline reporting.
 
@@ -102,6 +108,11 @@ the raw event file:
 - trace-level `telemetry.stage_timings_ms`
 - trace-level `telemetry.confidence_signals`
 - trace-level `telemetry.failure_summary`
+
+When present in the captured trace, promotion can now also preserve
+`evidenceUsePlan` and the ranking-diagnostics bundle into the promoted eval
+row so later tuning and regression analysis do not lose the original decision
+signals.
 
 ## Sample reviewed trace format
 

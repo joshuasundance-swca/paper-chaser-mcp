@@ -211,6 +211,7 @@ from .source_records import (  # noqa: E402,F401 - preserve legacy call-site nam
     _routing_summary_from_strategy,
     _source_record_from_paper,
     _source_record_from_regulatory_document,
+    _structured_sources_with_enriched_leads,
     _verified_findings_from_source_records,
     _why_matched,
     _year_text,
@@ -392,6 +393,7 @@ class AgenticRuntime:
         provider_budget: dict[str, Any] | None = None,
         include_enrichment: bool = False,
         ctx: Context | None = None,
+        _provider_plan_override: list[str] | None = None,
     ) -> dict[str, Any]:
         """Smart concept-level discovery with grounded expansion and fusion."""
         from .smart_graph import run_search_papers_smart
@@ -409,6 +411,7 @@ class AgenticRuntime:
             provider_budget=provider_budget,
             include_enrichment=include_enrichment,
             ctx=ctx,
+            _provider_plan_override=_provider_plan_override,
         )
 
     async def ask_result_set(
@@ -1138,6 +1141,7 @@ class AgenticRuntime:
             message="Labelling themes and summarizing gaps",
         )
         source_records = [_source_record_from_paper(paper) for paper in representative_papers[:max_themes]]
+        lead_records = _candidate_leads_from_source_records(source_records)
         response = LandscapeResponse(
             themes=themes,
             representativePapers=representative_papers[:max_themes],
@@ -1157,9 +1161,9 @@ class AgenticRuntime:
             ),
             verifiedFindings=_verified_findings_from_source_records(source_records),
             likelyUnverified=_likely_unverified_from_source_records(source_records),
-            candidateLeads=_candidate_leads_from_source_records(source_records),
+            candidateLeads=lead_records,
             evidenceGaps=gaps,
-            structuredSources=source_records,
+            structuredSources=_structured_sources_with_enriched_leads(source_records),
             coverageSummary=_smart_coverage_summary(
                 providers_used=sorted({str(paper.source or "unknown") for paper in representative_papers[:max_themes]}),
                 provider_outcomes=[],
@@ -2412,7 +2416,7 @@ class AgenticRuntime:
             detail=(f"Attempting direct known-item resolution for '{_truncate_text(query, limit=96)}'."),
         )
         known_item_started = time.perf_counter()
-        known_item, resolution_strategy = await self._resolve_known_item(query)
+        known_item, resolution_strategy = await self._resolve_known_item(query, provider_plan=provider_plan)
         stage_timings_ms["knownItemResolution"] = int((time.perf_counter() - known_item_started) * 1000)
         if known_item is None:
             await self._emit_smart_search_status(
@@ -2613,16 +2617,29 @@ class AgenticRuntime:
         )
         return final_response_dict
 
-    async def _resolve_known_item(self, query: str) -> tuple[dict[str, Any] | None, str]:
+    async def _resolve_known_item(
+        self,
+        query: str,
+        *,
+        provider_plan: list[str] | None = None,
+    ) -> tuple[dict[str, Any] | None, str]:
+        allowed_providers = {str(provider).strip() for provider in (provider_plan or []) if str(provider).strip()}
+        allow_semantic = self._enable_semantic_scholar and (
+            not allowed_providers or "semantic_scholar" in allowed_providers
+        )
+        allow_openalex = self._enable_openalex and (not allowed_providers or "openalex" in allowed_providers)
+        allow_core = self._enable_core and (not allowed_providers or "core" in allowed_providers)
+        allow_arxiv = self._enable_arxiv and (not allowed_providers or "arxiv" in allowed_providers)
+        allow_serpapi = self._enable_serpapi and (not allowed_providers or "serpapi" in allowed_providers)
         result = await resolve_citation(
             citation=query,
             max_candidates=5,
             client=self._client,
-            enable_core=self._enable_core,
-            enable_semantic_scholar=self._enable_semantic_scholar,
-            enable_openalex=self._enable_openalex,
-            enable_arxiv=self._enable_arxiv,
-            enable_serpapi=self._enable_serpapi,
+            enable_core=allow_core,
+            enable_semantic_scholar=allow_semantic,
+            enable_openalex=allow_openalex,
+            enable_arxiv=allow_arxiv,
+            enable_serpapi=allow_serpapi,
             core_client=self._core_client,
             openalex_client=self._openalex_client,
             arxiv_client=self._arxiv_client,
@@ -2635,17 +2652,18 @@ class AgenticRuntime:
         parsed = parse_citation(query)
         resolution_queries = _known_item_resolution_queries(query, parsed)
 
-        for candidate_query in resolution_queries:
-            try:
-                semantic_match = dump_jsonable(
-                    await self._client.search_papers_match(query=candidate_query, fields=None)
-                )
-            except Exception:
-                semantic_match = None
-            if isinstance(semantic_match, dict) and semantic_match.get("paperId"):
-                return semantic_match, str(semantic_match.get("matchStrategy") or "semantic_title_match")
+        if allow_semantic:
+            for candidate_query in resolution_queries:
+                try:
+                    semantic_match = dump_jsonable(
+                        await self._client.search_papers_match(query=candidate_query, fields=None)
+                    )
+                except Exception:
+                    semantic_match = None
+                if isinstance(semantic_match, dict) and semantic_match.get("paperId"):
+                    return semantic_match, str(semantic_match.get("matchStrategy") or "semantic_title_match")
 
-        if self._enable_openalex and self._openalex_client is not None:
+        if allow_openalex and self._openalex_client is not None:
             for candidate_query in resolution_queries:
                 try:
                     autocomplete = await self._openalex_client.paper_autocomplete(query=candidate_query, limit=5)

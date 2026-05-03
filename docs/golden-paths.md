@@ -116,13 +116,12 @@ and grounding cues. Treat them as hints layered on top of `answerability` and
   (`entity_card`, `candidate_concepts`, `regulatory_intent`) with a
   deterministic fallback when no LLM bundle is available. Fields:
   `commonName`, `scientificName`, `agency`, `requestedDocumentFamily`,
-  `subjectTerms` (up to six candidate concepts), `confidence`
+  `subjectTerms` (up to six candidate concepts), `aliases`, `taxonomyHints`,
+  `primarySourceAnchors`, `confidence`
   (`high` / `medium` / `low` / `deterministic_fallback`), and `source`
   (`planner_llm` / `deterministic_fallback` / `hybrid`). Use it to confirm the
   server grounded the right entity before trusting species dossiers or
-  agency-specific summaries. Alias lists, taxonomy trees, and pre-resolved
-  primary-source anchors are *not* on the card today — see the "Known gaps"
-  subsection of `docs/guided-smart-robustness.md`.
+  agency-specific summaries.
 - `searchStrategy.subjectChainGaps` lists missing links in the subject chain
   (for example `missing_species_specific_evidence`,
   `missing_rulemaking_history`, `missing_guidance_anchor`). Treat each gap as
