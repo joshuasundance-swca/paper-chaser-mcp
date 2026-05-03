@@ -218,7 +218,8 @@ class FollowUpResearchArgs(ToolArgsModel):
         description=(
             "Payload shape for the follow-up response. 'compact' (default) is a slim, agent-friendly payload that "
             "drops legacy verifiedFindings/likelyUnverified, collapses coverage to totalSources + byAccessStatus, "
-            "and omits None/empty fields. 'standard' preserves the full legacy shape. 'debug' is 'standard' plus "
+            "omits None/empty fields, and may surface suppressedSourceSummaries for excluded weak/off-topic items. "
+            "'standard' preserves the full legacy shape. 'debug' is 'standard' plus "
             "None/empty fields for deep inspection."
         ),
     )

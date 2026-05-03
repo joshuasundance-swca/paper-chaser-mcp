@@ -315,10 +315,15 @@ async def test_follow_up_insufficient_evidence_payload_is_compact(monkeypatch: p
                         "sourceType": "scholarly_article",
                         "verificationStatus": "verified_metadata",
                         "accessStatus": "abstract_only",
-                        "topicalRelevance": "on_topic",
+                        "topicalRelevance": "on_topic" if index == 1 else "weak_match",
                         "confidence": "medium",
+                        "whyClassifiedAsWeakMatch": (
+                            "Covers PFAS treatment generally, but does not directly compare adsorption and membranes."
+                            if index == 2
+                            else None
+                        ),
                     }
-                    for index in range(1, 6)
+                    for index in range(1, 4)
                 ],
                 "candidateLeads": [
                     {
@@ -330,16 +335,21 @@ async def test_follow_up_insufficient_evidence_payload_is_compact(monkeypatch: p
                         "accessStatus": "access_unverified",
                         "topicalRelevance": "weak_match",
                         "confidence": "low",
+                        "leadReason": (
+                            "Retained as adjacent PFAS context, but not specific "
+                            "enough to ground a winner-take-all comparison."
+                            if index == 1
+                            else None
+                        ),
                     }
-                    for index in range(1, 6)
+                    for index in range(1, 3)
                 ],
                 "evidence": [
                     {
-                        "evidenceId": f"source-{index}",
-                        "paper": {"paperId": f"source-{index}", "title": f"PFAS paper {index}"},
+                        "evidenceId": "source-1",
+                        "paper": {"paperId": "source-1", "title": "PFAS paper 1"},
                         "excerpt": "Short evidence excerpt.",
                     }
-                    for index in range(1, 4)
                 ],
                 "unsupportedAsks": ["Compare adsorption and membranes and name a winner."],
                 "followUpQuestions": ["Would you like a narrower comparison by mechanism instead?"],
@@ -372,8 +382,24 @@ async def test_follow_up_insufficient_evidence_payload_is_compact(monkeypatch: p
         server.workspace_registry = original_registry
 
     encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-    assert len(encoded) < 2200
+    assert len(encoded) < 2800
     assert payload["sourcesSuppressed"] is True
+    assert payload["suppressedSourceSummaries"] == [
+        {
+            "sourceId": "source-2",
+            "title": "PFAS paper 2",
+            "topicalRelevance": "weak_match",
+            "reason": "Covers PFAS treatment generally, but does not directly compare adsorption and membranes.",
+        },
+        {
+            "sourceId": "lead-1",
+            "title": "PFAS lead 1",
+            "topicalRelevance": "weak_match",
+            "reason": (
+                "Retained as adjacent PFAS context, but not specific enough to ground a winner-take-all comparison."
+            ),
+        },
+    ]
     assert payload["legacyFieldsIncluded"] is False
     assert "evidence" not in payload
     assert "sources" not in payload
@@ -674,6 +700,28 @@ def test_follow_up_compact_preserves_suppressed_source_rationales() -> None:
     )
 
 
+def test_follow_up_compact_preserves_suppressed_source_summaries() -> None:
+    shaped = _apply_follow_up_response_mode(
+        _grounded_follow_up_response(),
+        response_mode="compact",
+        include_legacy_fields=False,
+    )
+    assert shaped["suppressedSourceSummaries"] == [
+        {
+            "sourceId": "src-2",
+            "title": "Another",
+            "topicalRelevance": None,
+            "reason": "Retained as related context, but not strong enough to ground the answer.",
+        },
+        {
+            "sourceId": "lead-1",
+            "title": None,
+            "topicalRelevance": None,
+            "reason": "Retained as a lead because it may still help narrow the next question.",
+        },
+    ]
+
+
 def test_follow_up_compact_preserves_top_recommendation() -> None:
     shaped = _apply_follow_up_response_mode(
         _grounded_follow_up_response(),
@@ -788,6 +836,14 @@ def test_follow_up_insufficient_evidence_still_abstains_compactly() -> None:
     assert shaped["suppressedSourceRationales"] == [
         "Retained as related context, but not strong enough to ground the answer.",
         "Topical relevance was off_topic.",
+    ]
+    assert shaped["suppressedSourceSummaries"] == [
+        {
+            "sourceId": "src-x",
+            "title": None,
+            "topicalRelevance": None,
+            "reason": "Retained as related context, but not strong enough to ground the answer.",
+        }
     ]
 
 

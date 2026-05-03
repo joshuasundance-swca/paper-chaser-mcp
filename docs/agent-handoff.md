@@ -19,6 +19,9 @@ next steps without re-discovering project state.
   support belongs in `evidence`; weak, filtered, or off-topic items belong in
   `leads`. Legacy `verifiedFindings` and `unverifiedLeads` are compatibility
   views, not the primary contract.
+- Compact abstention paths can now surface `suppressedSourceSummaries` with
+  minimal `{sourceId, title, topicalRelevance, reason}` records so clients can
+  explain excluded weak/off-topic items without restoring full source arrays.
 - Guided `research` now has a **reference-fragment preflight**. Vague
   citation-like prompts should prefer `needs_disambiguation` plus a bounded
   `clarification` payload over speculative retrieval.
@@ -38,6 +41,9 @@ next steps without re-discovering project state.
   `insufficient_evidence`. Comparative / selection asks emit a structured
   `topRecommendation` with `sourceId`, `recommendationReason`, and inferred
   `comparativeAxis` (e.g. `beginner_friendly`, `recency`, `authority`).
+  Compact insufficient-evidence responses can also surface
+  `suppressedSourceSummaries` with minimal `{sourceId, title,
+  topicalRelevance, reason}` records for excluded weak/off-target items.
   Uniquely anchored "where should I start?" asks can still answer safely with
   a narrow recommendation-first response through that path.
 - `resolve_reference` is now **ambiguity-safe**. Ambiguous title-only matches or
@@ -659,6 +665,9 @@ modules and made targeted fixes throughout the codebase.
 
 - Follow-up responses only include sources referenced in
   `selectedEvidenceIds`.
+- Compact follow-up abstention paths can expose `suppressedSourceSummaries`
+  so clients can explain excluded weak/off-topic items without restoring full
+  source arrays.
 - Evidence and source records stripped of null/empty fields via
   `strip_null_fields()`.
 - Tests: `tests/test_payload_efficiency.py` (9 tests).
@@ -748,9 +757,9 @@ modules and made targeted fixes throughout the codebase.
   degradation, species-specific regulatory grounding, and provenance UX.
 3. Improve `unverifiedLeads` ergonomics so users can see why something was
   excluded without mistaking it for verified support. Guided compact
-  follow-up now preserves a high-signal `suppressedSourceRationales` field,
-  so the remaining work here is tuning and broader UX consistency rather than
-  basic rationale retention.
+  follow-up now preserves high-signal `suppressedSourceRationales` and
+  `suppressedSourceSummaries` fields, so the remaining work here is tuning and
+  broader UX consistency rather than basic rationale retention.
 4. Continue tightening the expert smart surface until landscape/graph tools
    consistently meet the same trust bar as guided outputs.
 5. If the GitHub agentic workflow needs broader expert coverage, keep the

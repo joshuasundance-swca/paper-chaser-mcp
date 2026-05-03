@@ -150,7 +150,9 @@ Default guided workflow:
    Reuse searchSessionId from research to ask one grounded question. The tool abstains
    when the saved evidence is too weak or off-topic.
    Responses are compact by default (sources collapsed to selectedEvidenceIds/
-   selectedLeadIds; diagnostics and legacy verifiedFindings/unverifiedLeads omitted).
+  selectedLeadIds; diagnostics and legacy verifiedFindings/unverifiedLeads omitted).
+  Compact responses can also expose suppressedSourceSummaries with minimal
+  {sourceId, title, topicalRelevance, reason} records for excluded weak/off-topic items.
    Pass responseMode="standard" for full source records, responseMode="debug" for
    full diagnostics, or includeLegacyFields=true to restore legacy compatibility views.
    Grounded answers only land when synthesis is backed by at least one on-topic,
@@ -191,6 +193,9 @@ AGENT_WORKFLOW_GUIDE = """
   Responses are compact by default. Request `responseMode="standard"` when you
   need full source records, `responseMode="debug"` for full diagnostics, or
   `includeLegacyFields=true` to restore `verifiedFindings`/`unverifiedLeads`.
+  Compact abstention paths can also expose `suppressedSourceSummaries` with
+  minimal `{sourceId, title, topicalRelevance, reason}` records for excluded
+  weak/off-topic items.
   Grounded answers require an on-topic, verified source with qa-readable text
   and a non-deterministic synthesis provider; otherwise expect abstention.
   Comparative / selection asks ("which should I start with?", "most recent?",

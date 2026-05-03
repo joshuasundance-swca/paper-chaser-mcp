@@ -61,6 +61,9 @@ environments even though the server still supports those tools in expert mode.
   - `resultStatus`: `succeeded|partial|needs_disambiguation|abstained|failed`
   - `answerability`, `routingSummary`, `coverageSummary`, `evidence`, `leads`,
     `evidenceGaps`, `failureSummary`, `nextActions`, `executionProvenance`
+  - compact abstention paths may expose `suppressedSourceSummaries` with
+    `{sourceId, title, topicalRelevance, reason}` for excluded weak/off-topic
+    items without restoring full source arrays
   - vague citation/reference fragments can preflight directly to
     `needs_disambiguation` with a bounded `clarification` payload instead of a
     speculative retrieval pass
@@ -76,7 +79,10 @@ environments even though the server still supports those tools in expert mode.
     `selectedEvidenceIds`/`selectedLeadIds`, and legacy `verifiedFindings` /
     `unverifiedLeads` are omitted. Pass `responseMode="standard"` or
     `responseMode="debug"` for richer payloads, or `includeLegacyFields=true`
-    to restore the legacy compatibility views.
+    to restore the legacy compatibility views. Compact abstention paths may
+    also expose `suppressedSourceSummaries` with `{sourceId, title,
+    topicalRelevance, reason}` so clients can explain exclusions without
+    receiving the full source arrays.
   - Comparative / selection asks expose a structured `topRecommendation` with
     `sourceId`, `recommendationReason`, and `comparativeAxis`.
   - uniquely anchored recommendation asks can still answer safely with

@@ -53,6 +53,47 @@ class TestCompactResponseIfNeeded:
         assert "unusedField" not in result
         assert result.get("legacyFieldsIncluded") is False
 
+    def test_compacts_research_abstained_with_suppressed_source_summaries(self) -> None:
+        payload = {
+            "status": "abstained",
+            "sources": [
+                {
+                    "sourceId": "src-weak",
+                    "title": "Generic wildlife notice",
+                    "topicalRelevance": "weak_match",
+                    "whyClassifiedAsWeakMatch": (
+                        "Authoritative notice, but not species-specific enough for the requested planning question."
+                    ),
+                }
+            ],
+            "leads": [
+                {
+                    "sourceId": "lead-1",
+                    "title": "Adjacency",
+                    "leadReason": "Retained as adjacent context, but not strong enough to ground the answer.",
+                }
+            ],
+        }
+        result = _guided_compact_response_if_needed(
+            tool_name="research",
+            response=payload,
+        )
+        assert result.get("sourcesSuppressed") is True
+        assert result.get("suppressedSourceSummaries") == [
+            {
+                "sourceId": "src-weak",
+                "title": "Generic wildlife notice",
+                "topicalRelevance": "weak_match",
+                "reason": "Authoritative notice, but not species-specific enough for the requested planning question.",
+            },
+            {
+                "sourceId": "lead-1",
+                "title": "Adjacency",
+                "topicalRelevance": None,
+                "reason": "Retained as adjacent context, but not strong enough to ground the answer.",
+            },
+        ]
+
     def test_research_non_abstained_passthrough(self) -> None:
         payload = {"status": "answered", "evidence": []}
         result = _guided_compact_response_if_needed(

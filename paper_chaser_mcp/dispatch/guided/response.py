@@ -18,6 +18,7 @@ from .._core import (
     _RESEARCH_COMPACT_FIELDS,
     _apply_follow_up_response_mode,
     _compact_suppressed_source_rationales,
+    _compact_suppressed_source_summaries,
 )
 from .trust import _guided_confidence_signals, _guided_follow_up_status
 
@@ -50,6 +51,9 @@ def _guided_compact_response_if_needed(*, tool_name: str, response: dict[str, An
     suppressed_rationales = _compact_suppressed_source_rationales(response)
     if suppressed_rationales:
         compacted["suppressedSourceRationales"] = suppressed_rationales
+    suppressed_summaries = _compact_suppressed_source_summaries(response)
+    if suppressed_summaries:
+        compacted["suppressedSourceSummaries"] = suppressed_summaries
     compacted["legacyFieldsIncluded"] = False
     return compacted
 

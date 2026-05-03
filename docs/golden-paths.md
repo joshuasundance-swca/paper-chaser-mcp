@@ -51,15 +51,18 @@ gh aw compile test-paper-chaser --dir .github/workflows
 2. Inspect `resultStatus`, `answerability`, `evidence`, `leads`,
    `routingSummary`, `coverageSummary`, `evidenceGaps`, `failureSummary`,
    `executionProvenance`, and `nextActions`.
-3. If `resultStatus=needs_disambiguation` and
+3. If a compact abstention path exposes `suppressedSourceSummaries`, treat it
+  as the high-signal explanation for why weak/off-topic items were withheld
+  from the grounded answer without restoring full source arrays.
+4. If `resultStatus=needs_disambiguation` and
    `clarification.reason=underspecified_reference_fragment`, tighten the
    anchor instead of forcing retrieval. Prefer an exact title, author surname,
    agency, venue, or year, or pivot into `resolve_reference`.
-3. When `routingSummary.querySpecificity=low` or
+5. When `routingSummary.querySpecificity=low` or
    `routingSummary.ambiguityLevel=medium|high`, treat
    `routingSummary.retrievalHypotheses` as the server's bounded interpretation
    of the broad ask rather than as final evidence.
-4. Save `searchSessionId` for follow-up steps.
+6. Save `searchSessionId` for follow-up steps.
 
 **Example**
 
@@ -144,7 +147,11 @@ and grounding cues. Treat them as hints layered on top of `answerability` and
    `selectedEvidenceIds` / `selectedLeadIds`, and legacy
    `verifiedFindings`/`unverifiedLeads` are omitted. Pass
    `responseMode="standard"` for full source records, `responseMode="debug"`
-   for full diagnostics, or `includeLegacyFields=true` to restore legacy views.
+  for full diagnostics, or `includeLegacyFields=true` to restore legacy views.
+  When sources are suppressed, compact responses can also surface
+  `suppressedSourceSummaries` with a minimal `{sourceId, title,
+  topicalRelevance, reason}` record so clients can explain exclusions without
+  rehydrating the full source payload.
 6. Comparative / selection asks ("where should I start?", "most recent?",
    "most authoritative?") expose a `topRecommendation` payload with
    `sourceId`, `recommendationReason`, and inferred `comparativeAxis`.
@@ -157,7 +164,7 @@ and grounding cues. Treat them as hints layered on top of `answerability` and
 ```text
 follow_up_research(searchSessionId="...", question="What evaluation tradeoffs show up here?")
 → if answerStatus=answered: use answer + selectedEvidenceIds (resolve to evidence records via the saved session)
-→ if answerStatus=abstained|insufficient_evidence: inspect_source + refine research query
+→ if answerStatus=abstained|insufficient_evidence: inspect `suppressedSourceSummaries`, then inspect_source + refine research query
 → if you need full source records inline: re-run with responseMode="standard"
 → for selection asks: read topRecommendation.sourceId + topRecommendation.recommendationReason
 ```
