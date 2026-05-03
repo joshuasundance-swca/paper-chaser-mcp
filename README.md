@@ -141,6 +141,7 @@ research(query="retrieval-augmented generation for coding agents", limit=5)
 → inspect resultStatus, answerability, summary, evidence, leads, routingSummary
 → if resultStatus=needs_disambiguation with clarification.reason=underspecified_reference_fragment:
   tighten the anchor or pivot to resolve_reference instead of forcing retrieval
+→ if resultStatus=abstained and sources are suppressed: inspect suppressedSourceSummaries before rerunning or escalating
 → save searchSessionId for follow-up or source inspection
 ```
 
@@ -150,7 +151,7 @@ research(query="retrieval-augmented generation for coding agents", limit=5)
 follow_up_research(searchSessionId="...", question="What evaluation tradeoffs show up here?")
 → inspect answerStatus
 → if answered: use answer + evidence (compact default: sources are identified by selectedEvidenceIds)
-→ if abstained/insufficient_evidence: use nextActions and inspect_source
+→ if abstained/insufficient_evidence: use nextActions, suppressedSourceSummaries, and inspect_source
 → mixed saved sessions can still answer relevance-triage questions such as which items are on-topic vs off-target
 → uniquely anchored recommendation asks can also return a safe start-here answer plus topRecommendation
 → if you omit searchSessionId and multiple saved sessions exist: provide it explicitly

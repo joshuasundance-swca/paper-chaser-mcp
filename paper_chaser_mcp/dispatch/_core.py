@@ -927,6 +927,7 @@ _FOLLOW_UP_COMPACT_FIELDS = {
     "answerStatus",
     "answer",
     "suppressedSourceRationales",
+    "suppressedSourceSummaries",
     "unsupportedAsks",
     "followUpQuestions",
     "evidenceGaps",
@@ -1094,6 +1095,54 @@ def _compact_suppressed_source_rationales(response: dict[str, Any]) -> list[str]
     return rationales[:4]
 
 
+def _compact_suppressed_source_summaries(response: dict[str, Any]) -> list[dict[str, Any]]:
+    """Collect compact source summaries for suppressed weak/off-topic items.
+
+    These are additive UX hints: enough identity to connect a suppression
+    reason to a source, without rehydrating the full source payload.
+    """
+
+    summaries: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    generic_prefixes = ("verification status was ",)
+
+    for key in ("structuredSources", "unverifiedLeads", "sources", "leads"):
+        records = response.get(key)
+        if not isinstance(records, list):
+            continue
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            reason = str(
+                record.get("leadReason")
+                or record.get("lead_reason")
+                or record.get("whyClassifiedAsWeakMatch")
+                or record.get("note")
+                or ""
+            ).strip()
+            lowered_reason = reason.lower()
+            if not reason or any(lowered_reason.startswith(prefix) for prefix in generic_prefixes):
+                continue
+            source_id = str(record.get("sourceId") or record.get("sourceAlias") or "").strip() or None
+            title = str(record.get("title") or "").strip() or None
+            topical_relevance = str(record.get("topicalRelevance") or "").strip() or None
+            dedupe_key = (source_id or "", title or "", reason)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            summaries.append(
+                {
+                    "sourceId": source_id,
+                    "title": title,
+                    "topicalRelevance": topical_relevance,
+                    "reason": reason,
+                }
+            )
+            if len(summaries) >= 4:
+                return summaries
+    return summaries
+
+
 def _apply_follow_up_response_mode(
     response: dict[str, Any],
     *,
@@ -1124,6 +1173,7 @@ def _apply_follow_up_response_mode(
         suppressed_count = 0
         dropped_source_payload = False
         suppressed_rationales = _compact_suppressed_source_rationales(shaped)
+        suppressed_summaries = _compact_suppressed_source_summaries(shaped)
         kept_identifiers = _dedupe_compact_identifiers(
             [
                 str(identifier).strip()
@@ -1172,6 +1222,8 @@ def _apply_follow_up_response_mode(
             shaped["sourcesSuppressed"] = True
         if suppressed_rationales:
             shaped["suppressedSourceRationales"] = suppressed_rationales
+        if suppressed_summaries:
+            shaped["suppressedSourceSummaries"] = suppressed_summaries
         shaped["responseMode"] = "compact"
 
     keep_keys = set(shaped.keys())
