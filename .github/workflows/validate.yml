@@ -9,7 +9,7 @@ permissions:
 
 env:
   COVERAGE_FAIL_UNDER: '87'
-  GH_AW_VERSION: v0.65.6
+  GH_AW_VERSION: v0.71.1
 
 jobs:
   validate:

@@ -19,6 +19,8 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    exclude-paths:
+      - "/.github/workflows/test-paper-chaser.lock.yml"
     open-pull-requests-limit: 5
     labels:
       - dependencies
